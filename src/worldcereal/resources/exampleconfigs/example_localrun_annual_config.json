@@ -1,0 +1,27 @@
+{
+	"parameters": {
+		"year": 2019,
+		"season": "annual",
+		"featuresettings": "cropland",
+		"save_confidence": true,
+		"save_features": true,
+		"save_meta": true,
+		"features_dir": "/path/for/feature/blocks",
+		"localmodels": true,
+		"segment": false,
+		"filtersettings": {
+			"kernelsize": 3,
+			"conf_threshold": 0.85
+		}
+	},
+	"inputs": {
+		"OPTICAL": "/data/worldcereal/tmp/kristof/collections/largescaletest_OPTICAL.csv",
+		"SAR": "/data/worldcereal/tmp/kristof/collections/largescaletest_SAR.csv",
+		"TIR": "/data/worldcereal/tmp/kristof/collections/largescaletest_TIR.csv",
+		"DEM": "/data/MEP/DEM/COP-DEM_GLO-30_DTED/S2grid_20m",
+		"METEO": "/data/worldcereal/s3collections/satio_agera5_yearly.csv"
+	},
+	"models": {
+		"annualcropland": "https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms/"
+	}
+}
