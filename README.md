@@ -3,6 +3,9 @@
 This repository contains the code for running the WorldCereal classification module, making use of preprocessed WorldCereal input products.
 The basic invocation is described in the next section.
 
+Required packages can be installed from PyPI, except for the `satio` package which is hosted on VITO's Artifactory. Installing this package can be achieved through:
+```pip install satio --extra-index-url https://artifactory.vgt.vito.be/api/pypi/python-packages/simple```
+
 ## Running classification
 
 Retrieve help (as shown at the bottom of this readme):
