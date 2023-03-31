@@ -39,7 +39,7 @@
             ]
         ]
     },
-    "collection": "esa-worldcereal-temporarycrops",
+    "collection": "esa-worldcereal-annualcropland",
     "links": [
         {
             "rel": "self",
@@ -72,7 +72,7 @@
         ],
         "start_datetime": "YYYY-MM-DD",
         "end_datetime": "YYYY-MM-DD",
-        "season": "tc-maize-main|tc-maize-second|tc-wintercereals",
+        "season": "summer1|summer2|winter",
         "aez_id": "aez_id",
         "aez_group": "aez_group",
         "model": "worldcereal model name/version",
@@ -82,7 +82,7 @@
         "training_refids": {
             "reference_id": 0
         },
-        "product": "temporarycrops|activecropland|activeirrigation|wheat|maize",
+        "product": "annualcropland| activecropland|activeirrigation|wheat|maize",
         "type": "map|conf|meta",
         "public": "true|false",
         "related_products": [
@@ -93,7 +93,7 @@
         "product": {
             "href": "https://storage.googleapis.com/open-cogs/stac-examples/worldcereal_product.tif",
             "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-            "title": "temporarycrops/activecropland/wheat/maize",
+            "title": "annualcropland/activecropland/wheat/maize",
             "roles": [
                 "data"
             ]
@@ -101,7 +101,7 @@
         "metafeatures": {
             "href": "/data/MTDA/.../worldcereal_product.tif",
             "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-            "title": "temporarycrops/activecropland/wheat/maize",
+            "title": "annualcropland/activecropland/wheat/maize",
             "roles": [
                 "data"
             ]
@@ -109,7 +109,7 @@
         "confidence": {
             "href": "/data/MTDA/.../worldcereal_product.tif",
             "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-            "title": "temporarycrops/activecropland/wheat/maize",
+            "title": "annualcropland/activecropland/wheat/maize",
             "roles": [
                 "data"
             ]

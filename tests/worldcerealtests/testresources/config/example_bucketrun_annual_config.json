@@ -1,7 +1,7 @@
 {
 	"parameters": {
 		"year": 2019,
-		"season": "annual",
+		"season": "tc-annual",
 		"featuresettings": "cropland",
 		"save_confidence": true,
 		"save_features": true,
@@ -21,6 +21,6 @@
 		"METEO": "/data/worldcereal/s3collections/satio_agera5_yearly.csv"
 	},
 	"models": {
-		"temporarycrops": "https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v700/cropland_detector_WorldCerealPixelCatBoost_v700-realms"
+		"temporarycrops": "https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms"
 	}
 }

@@ -1,7 +1,7 @@
 {
 	"parameters": {
 		"year": 2021,
-		"season": "tc-maize-main",
+		"season": "summer1",
 		"featuresettings": "croptype",
 		"save_confidence": true,
 		"save_features": true,
