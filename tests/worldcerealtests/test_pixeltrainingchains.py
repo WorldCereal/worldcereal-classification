@@ -203,15 +203,16 @@ def test_pixeltrainingchain_local_winterwheat(L2ATraining_collection,
     trainingchain.train_one_vs_all(trainingdf, targetlabels=targetlabel)
 
 
-def test_pixeltrainingchain_local_summer1(L2ATraining_collection,
-                                          Sigma0Training_collection,
-                                          AgERA5Training_collection,
-                                          dem_collection,
-                                          PatchLabelsTraining_collection,
-                                          worldcereal_training_df,
-                                          selected_features):
+def test_pixeltrainingchain_local_tcmaizemain(
+        L2ATraining_collection,
+        Sigma0Training_collection,
+        AgERA5Training_collection,
+        dem_collection,
+        PatchLabelsTraining_collection,
+        worldcereal_training_df,
+        selected_features):
 
-    season = 'summer1'
+    season = 'tc-maize-main'
     targetlabel = 1200
 
     # Create tmp directory and tmp model file in it
@@ -258,14 +259,15 @@ def test_pixeltrainingchain_local_summer1(L2ATraining_collection,
     trainingchain.train_one_vs_all(trainingdf, targetlabels=targetlabel)
 
 
-def test_pixeltrainingchain_local_summer2(L2ATraining_collection,
-                                          Sigma0Training_collection,
-                                          AgERA5Training_collection,
-                                          dem_collection,
-                                          PatchLabelsTraining_collection,
-                                          worldcereal_training_df):
+def test_pixeltrainingchain_local_tcmaizesecond(
+        L2ATraining_collection,
+        Sigma0Training_collection,
+        AgERA5Training_collection,
+        dem_collection,
+        PatchLabelsTraining_collection,
+        worldcereal_training_df):
 
-    season = 'summer2'
+    season = 'tc-maize-second'
 
     trainingchain = PixelTrainingChain(
         basedir=tempfile.mkdtemp(),
@@ -297,7 +299,7 @@ def test_pixeltrainingchain_local_cropland(L2ATraining_collection,
                                            worldcereal_training_df,
                                            selected_features):
 
-    season = 'annual'
+    season = 'tc-annual'
     targetlabel = 11
 
     # Create tmp directory and tmp model file in it
@@ -351,7 +353,7 @@ def test_pixeltrainingchain_local_cropland_tanzania(
         PatchLabelsTraining_collection,
         worldcereal_training_df):
 
-    season = 'annual'
+    season = 'tc-annual'
 
     # Create tmp directory and tmp model file in it
     basedir = tempfile.TemporaryDirectory().name

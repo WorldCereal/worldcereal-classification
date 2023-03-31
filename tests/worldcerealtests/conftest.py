@@ -561,7 +561,7 @@ def training_df_LC():
 
 
 @ pytest.fixture
-def annualcropland_config():
+def temporarycrops_config():
     return get_test_resource("config/example_bucketrun_annual_config.json")
 
 

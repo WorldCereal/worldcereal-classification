@@ -21,6 +21,6 @@
 		"METEO": "/data/worldcereal/s3collections/satio_agera5_yearly.csv"
 	},
 	"models": {
-		"annualcropland": "https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v700/cropland_detector_WorldCerealPixelCatBoost_v700-realms"
+		"temporarycrops": "https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v700/cropland_detector_WorldCerealPixelCatBoost_v700-realms"
 	}
 }

@@ -6,7 +6,7 @@ def test_conflictresolver(worldcereal_outputs):
     tile = '30TXT'
     aez = 46172
     block_id = 6
-    season = 'summer1'
+    season = 'tc-maize-main'
 
     processor = CropTypeProcessor(
         worldcereal_outputs,

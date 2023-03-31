@@ -25,7 +25,7 @@ def test_doy_to_date_after():
     bounds = (574680, 5621800, 575320, 5622440)
     epsg = 32631
 
-    doy_data = doy_from_tiff('summer1', 'SOS', bounds, epsg,
+    doy_data = doy_from_tiff('tc-maize-main', 'SOS', bounds, epsg,
                              resolution=10000)
 
     after_date = datetime.datetime(2019, 1, 1)
@@ -46,7 +46,7 @@ def test_infer_season_dates_maize1():
 
     closest_date = '2019-06-01'
 
-    start_date, end_date = infer_season_dates('summer1',
+    start_date, end_date = infer_season_dates('tc-maize-main',
                                               bounds, epsg,
                                               closest_date)
 
@@ -61,7 +61,7 @@ def test_infer_season_dates_annual():
 
     closest_date = '2019-06-01'
 
-    start_date, end_date = infer_season_dates('annual',
+    start_date, end_date = infer_season_dates('tc-annual',
                                               bounds, epsg,
                                               closest_date)
 

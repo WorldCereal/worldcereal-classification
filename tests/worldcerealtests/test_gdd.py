@@ -43,7 +43,7 @@ def test_compute_gdd_season(AgERA5Training_collection):
                       end_date='2019-08-31')
 
     # Accumulate GDD with season specification (winter wheat)
-    accumulated_gdd = gdd.compute_accumulated_gdd(season='summer1')
+    accumulated_gdd = gdd.compute_accumulated_gdd(season='tc-maize-main')
 
     assert np.sum(accumulated_gdd.data < 0) == 0
 
@@ -66,7 +66,7 @@ def test_get_sos_date_outside_aez(AgERA5Training_collection):
                       end_date='2019-08-31',
                       aez_id=aez_id)
 
-    sos_date = gdd.get_sos_date('summer1', '2018-10-01')
+    sos_date = gdd.get_sos_date('tc-maize-main', '2018-10-01')
 
     assert sos_date == '2019-04-26'
 
@@ -88,7 +88,7 @@ def test_get_sos_date_outside_aezstats(AgERA5Training_collection):
                       end_date='2019-08-31',
                       aez_id=aez_id)
 
-    sos_date = gdd.get_sos_date('summer1', '2018-10-01')
+    sos_date = gdd.get_sos_date('tc-maize-main', '2018-10-01')
 
     # AEZ SOSmin = 2018-12-28
     # pixel-based SOS = 2018-11-12
@@ -175,7 +175,7 @@ def test_sigma0_gddnormalization(Sigma0Training_collection,
                           epsg=epsg,
                           start_date=S1_settings['composite']['start'],
                           end_date=S1_settings['composite']['end'])
-    accumulated_gdd = gddcomp.compute_accumulated_gdd(season='summer1')
+    accumulated_gdd = gddcomp.compute_accumulated_gdd(season='tc-maize-main')
     S1_settings['normalize_gdd']['accumulated_gdd'] = accumulated_gdd
 
     s1_fp = SARFeaturesProcessor(Sigma0Training_collection,

@@ -105,7 +105,7 @@ def test_load_model_from_url():
         'resources' / 'exampleconfigs' / \
         'example_bucketrun_annual_config.json'
     modelconfig = json.load(open(configfile, 'r'))['models'][
-        'annualcropland']
+        'temporarycrops']
     modelconfig = get_best_model(modelconfig, aez_id=12048,
                                  realm_id=5, use_local_models=True)
 
@@ -126,7 +126,7 @@ def test_load_local_model_from_url():
 #         'resources' / 'exampleconfigs' / \
 #         'example_bucketrun_annual_config.json'
 #     modelconfig = json.load(open(configfile, 'r'))['models'][
-#         'annualcropland']
+#         'temporarycrops']
 #     modelconfig = get_best_model(modelconfig, aez_id=12048,
 #                                  realm_id=5, use_local_models=True)
 

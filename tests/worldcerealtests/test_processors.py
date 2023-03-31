@@ -98,7 +98,7 @@ def get_blockprocessor(WorldCerealOpticalTiled_collection,
     return blockprocessor
 
 
-def test_block_classifier_annualcropland(
+def test_block_classifier_temporarycrops(
         WorldCerealOpticalTiled_collection,
         WorldCerealSigma0Tiled_collection,
         WorldCerealAgERA5Yearly_collection,
@@ -110,13 +110,13 @@ def test_block_classifier_annualcropland(
     # Create tmp directory and tmp model file in it
     output_folder = tempfile.TemporaryDirectory().name
 
-    models = {'annualcropland': 'https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms/Realm_5/config.json'}  # NOQA
+    models = {'temporarycrops': 'https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms/Realm_5/config.json'}  # NOQA
 
     # Setup the classification processor
     chain = ClassificationProcessor(
         output_folder,
         models=models,
-        season='annual',
+        season='tc-annual',
         aez=12048,
         collections=dict(
             OPTICAL=WorldCerealOpticalTiled_collection,
@@ -138,7 +138,7 @@ def test_block_classifier_annualcropland(
     chain.process('36MXB', (661440, 9648800, 661500, 9648860), 32736, 1)
 
 
-def test_block_classifier_annualcropland_nosar(
+def test_block_classifier_temporarycrops_nosar(
         WorldCerealOpticalTiled_collection,
         WorldCerealAgERA5Yearly_collection,
         dem_collection):
@@ -152,13 +152,13 @@ def test_block_classifier_annualcropland_nosar(
     # Create tmp directory and tmp model file in it
     output_folder = tempfile.TemporaryDirectory().name
 
-    models = {'annualcropland': 'https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms/Realm_5/config.json'}  # NOQA
+    models = {'temporarycrops': 'https://artifactory.vgt.vito.be:443/auxdata-public/worldcereal/models/WorldCerealPixelCatBoost/v750/cropland_detector_WorldCerealPixelCatBoost_v750-realms/Realm_5/config.json'}  # NOQA
 
     # Setup the classification processor
     chain = ClassificationProcessor(
         output_folder,
         models=models,
-        season='annual',
+        season='tc-annual',
         aez=12048,
         collections=dict(
             OPTICAL=WorldCerealOpticalTiled_collection,
@@ -180,7 +180,7 @@ def test_block_classifier_annualcropland_nosar(
 
 
 @pytest.mark.xfail
-def test_block_classifier_summer1(
+def test_block_classifier_tcmaizemain(
         WorldCerealOpticalTiled_collection,
         WorldCerealSigma0Tiled_collection,
         WorldCerealAgERA5Yearly_collection,
@@ -201,7 +201,7 @@ def test_block_classifier_summer1(
     chain = CropTypeProcessor(
         output_folder,
         models=models,
-        season='summer1',
+        season='tc-maize-main',
         aez=12048,
         collections=dict(
             OPTICAL=WorldCerealOpticalTiled_collection,
