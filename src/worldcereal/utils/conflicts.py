@@ -74,7 +74,7 @@ class ConflictResolver:
         # from worldcereal.seasons import get_processing_dates
         # from worldcereal import SUPPORTED_SEASONS
         # seasons_to_check = [s for s in SUPPORTED_SEASONS if
-        #  'annual' not in s and 'custom' not in s]
+        #  'tc-annual' not in s and 'custom' not in s]
 
         year_season = f'{self.year}_{self.season}'
         base_folder = self.block_folder / self.tile / year_season

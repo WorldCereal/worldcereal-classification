@@ -685,7 +685,7 @@ def filter_otherlayers(df, season):
     other land cover layers
     '''
 
-    if 'annual' in season or 'cropland' in season:
+    if 'tc-annual' in season or 'cropland' in season:
         label = 'OUTPUT'
     else:
         label = 'LC'
@@ -693,7 +693,7 @@ def filter_otherlayers(df, season):
     # 01 - remove pixels that are urban according to worldcover
     agri_labels = [10, 11, 12]
     ewoc_ignore = [50]
-    if 'annual' in season or 'cropland' in season:
+    if 'tc-annual' in season or 'cropland' in season:
         remove_idx = ((df[label].isin(agri_labels)) &
                       (df['WORLDCOVER-LABEL-10m'].isin(ewoc_ignore)))
     else:  # crop type case
@@ -903,7 +903,7 @@ def get_trainingdata(df, inputfeatures, season, options, aez_zone=None,
     if aez_zone is not None and aez_group is not None:
         raise ValueError('Cannot set both `aez_zone` and `aez_group`')
 
-    elif 'annual' not in season and 'cropland' not in season:
+    elif 'tc-annual' not in season and 'cropland' not in season:
         # No spatial sampling for croptype detectors
         pass
 
@@ -918,7 +918,7 @@ def get_trainingdata(df, inputfeatures, season, options, aez_zone=None,
     # ----------------------------------------------------------------------
     # PART III: Apply various thematic filters
 
-    if 'annual' not in season and 'cropland' not in season:
+    if 'tc-annual' not in season and 'cropland' not in season:
         # If not looking at cropland
         # need to get rid of samples that are not part of cropland or grassland
         # We include grassland to make model aware of what grass looks like
@@ -928,7 +928,7 @@ def get_trainingdata(df, inputfeatures, season, options, aez_zone=None,
 
         logger.info(f'Unique LC labels: {df["LC"].unique()}')
 
-    if 'annual' in season or 'cropland' in season:
+    if 'tc-annual' in season or 'cropland' in season:
         # Rule 1: filter out dirty perennials
         # NOTE: NEEDS TO GO FIRST ALWAYS!
         df = filter_perennial(df)
@@ -1061,7 +1061,7 @@ def get_trainingdata(df, inputfeatures, season, options, aez_zone=None,
 
     # ----------------------------------------------------------------------
     # PART VII: Remove samples with NaN values
-    if 'annual' in season or 'cropland' in season:
+    if 'tc-annual' in season or 'cropland' in season:
         # Remove rows with NaN
         beforenan = df.shape[0]
         df = df.dropna()
@@ -1276,7 +1276,7 @@ def get_pixel_data(season, options, inputfeatures,
                      f'training_df_{options["outputlabel"]}.parquet'))])
 
         # For annual cropland, we need to throw out some unreliable datasets
-        if 'annual' in season or 'cropland' in season:
+        if 'tc-annual' in season or 'cropland' in season:
             ignore_list = [
                 '2017_',    # 2017 contains not enough data
                 '2018_AF',  # Noisy points

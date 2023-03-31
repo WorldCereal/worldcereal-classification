@@ -287,7 +287,7 @@ def main(cib_rootdir, experiment_id, outdir,
          parameters, augment=False,
          filt_loc=None, filt_type=None, filt_cat=None,
          filt_content=None, maxnrpixels=1,
-         limitsamples=None, season='annual', outputlabel='LC',
+         limitsamples=None, season='tc-annual', outputlabel='LC',
          filter_function=None,
          append=False, sc=None, debug=False):
 
@@ -344,88 +344,75 @@ if __name__ == '__main__':
         sc = None
 
     scenario_settings = {
-        # 'annual': {
-        #     'season': 'annual',
-        #     'maxnrpixels': 3,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
-        #     'outputlabel': 'LC',
-        #     'filt_content': None,
-        #     'gddnormalization': False,
-        #     'augment': True,
-        #     'parameters': get_cropland_catboost_parameters()
-        #     },
-        'winter':
+        'tc-annual': {
+            'season': 'tc-annual',
+            'maxnrpixels': 3,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+            'outputlabel': 'LC',
+            'filt_content': None,
+            'gddnormalization': False,
+            'augment': True,
+            'parameters': get_cropland_catboost_parameters()
+            },
+        'tc-wintercereals':
             {
-            'season': 'winter',
-            'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+            'season': 'tc-wintercereals',
+            'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
             'outputlabel': 'CT',
             'filt_content': ['110', '111'],
             'gddnormalization': True,
             'augment': True,
             'parameters': get_croptype_catboost_parameters()
             },
-        # 'summer1-75dayspriorEOS':
-        #     {
-        #     'season': 'summer1',
-        #     'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
-        #     'outputlabel': 'CT',
-        #     'filt_content': ['110', '111'],
-        #     'gddnormalization': True,
-        #     'augment': True,
-        #     'season_post_buffer': -75,  # End the season 75 days earlier
-        #     'parameters': get_croptype_catboost_parameters()
-        #     # },
-        'summer1':
+        'tc-maize-main':
             {
-            'season': 'summer1',
-            'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+            'season': 'tc-maize-main',
+            'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
             'outputlabel': 'CT',
             'filt_content': ['110', '111'],
             'gddnormalization': True,
             'augment': True,
             'parameters': get_croptype_catboost_parameters()
             },
-        'summer2':
+        'tc-maize-second':
             {
-            'season': 'summer2',
-            'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+            'season': 'tc-maize-second',
+            'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
             'outputlabel': 'CT',
             'filt_content': ['110', '111'],
             'gddnormalization': True,
             'augment': True,
             'parameters': get_croptype_catboost_parameters()
             },
-        # 'irr_summer1':
-        #     {
-        #     'season': 'summer1',
-        #     # 'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
-        #     'maxnrpixels': 1,  # for spain datasets
-        #     'outputlabel': 'IRR',
-        #     'filt_content': ['111', '101'],
-        #     'gddnormalization': False,
-        #     'parameters': get_irr_parameters(),
-        #     'filter_function': 'irr_max_ndvi_filter'
-        #     },
-        # 'irr_winter':
-        #     {
-        #         'season': 'winter',
-        #         # 'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
-        #         'maxnrpixels': 1,  # for spain datasets
-        #         'outputlabel': 'IRR',
-        #         'filt_content': ['101', '111'],
-        #         'gddnormalization': False,
-        #         'parameters': get_irr_parameters(),
-        #         'filter_function': 'irr_max_ndvi_filter'
-        #     }
-        # 'irr_summer2':
-        #     {
-        #         'season': 'summer2',
-        #         'maxnrpixels': 5,  # THIS IS NOW THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
-        #         'outputlabel': 'IRR',
-        #         'filt_content': ['111', '101'],
-        #         'gddnormalization': False,
-        #         'parameters': get_irr_parameters(),
-        #         'filter_function': 'irr_max_ndvi_filter'
-        # }
+        'irr_tc-maize-main':
+            {
+            'season': 'tc-maize-main',
+            'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+            'outputlabel': 'IRR',
+            'filt_content': ['111', '101'],
+            'gddnormalization': False,
+            'parameters': get_irr_parameters(),
+            'filter_function': 'irr_max_ndvi_filter'
+            },
+        'irr_tc-wintercereals':
+            {
+                'season': 'tc-wintercereals',
+                'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+                'outputlabel': 'IRR',
+                'filt_content': ['101', '111'],
+                'gddnormalization': False,
+                'parameters': get_irr_parameters(),
+                'filter_function': 'irr_max_ndvi_filter'
+            },
+        'irr_tc-maize-second':
+            {
+                'season': 'tc-maize-second',
+                'maxnrpixels': 5,  # THIS IS THE NR. OF PIXELS PER CLASS IN PATCH!  # NOQA
+                'outputlabel': 'IRR',
+                'filt_content': ['111', '101'],
+                'gddnormalization': False,
+                'parameters': get_irr_parameters(),
+                'filter_function': 'irr_max_ndvi_filter'
+        }
     }
 
     for scenario in scenario_settings.keys():
