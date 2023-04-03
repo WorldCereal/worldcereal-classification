@@ -74,6 +74,9 @@ pip-delete-this-directory.txt
 # Allow resource CSV files to be tracked
 !/src/worldcereal/resources/*.csv
 
+# Allow resource JSON files to be tracked
+!/src/worldcereal/resources/**/*.json
+
 # Allow biomes/realms to be tracked
 !/src/worldcereal/resources/biomes/*.tif
 !/src/worldcereal/resources/realms/*.tif

@@ -155,7 +155,7 @@ class FeatureComputer:
             filter_function=filter_function,
             debug=debug)
 
-        if self.season == 'winter':
+        if self.season == 'tc-wintercereals':
             if self.outputlabel == 'CT':
                 # Correct winter cereal samples
                 training_df = self._correct_wintercereals(training_df)

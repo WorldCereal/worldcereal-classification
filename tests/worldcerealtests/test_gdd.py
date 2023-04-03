@@ -120,7 +120,7 @@ def test_L2A_gddnormalization(L2ATraining_collection,
             tbase=0,
             tlimit=25,
             gdd_bins=100,
-            season='winter'
+            season='tc-wintercereals'
         )
     )
 
@@ -131,7 +131,8 @@ def test_L2A_gddnormalization(L2ATraining_collection,
                           epsg=epsg,
                           start_date=S2_settings['composite']['start'],
                           end_date=S2_settings['composite']['end'])
-    accumulated_gdd = gddcomp.compute_accumulated_gdd(season='winter')
+    accumulated_gdd = gddcomp.compute_accumulated_gdd(
+        season='tc-wintercereals')
     S2_settings['normalize_gdd']['accumulated_gdd'] = accumulated_gdd
 
     s2_fp = L2AFeaturesProcessor(L2ATraining_collection,

@@ -10,7 +10,7 @@ def test_doy_from_tiff():
     bounds = (574680, 5621800, 575320, 5622440)
     epsg = 32631
 
-    doy_data = doy_from_tiff('winter', 'SOS', bounds, epsg,
+    doy_data = doy_from_tiff('tc-wintercereals', 'SOS', bounds, epsg,
                              resolution=10000)
 
     assert doy_data.size == 1

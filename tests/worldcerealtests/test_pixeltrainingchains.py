@@ -93,7 +93,7 @@ def test_pixelchain_local_winterwheat_gdd(L2ATraining_collection,
     gdd normalization
     '''
 
-    season = 'winter'
+    season = 'tc-wintercereals'
     targetlabel = 1110
 
     # Get processing settings
@@ -156,7 +156,7 @@ def test_pixeltrainingchain_local_winterwheat(L2ATraining_collection,
                                               worldcereal_training_df,
                                               selected_features):
 
-    season = 'winter'
+    season = 'tc-wintercereals'
     targetlabel = 1110
 
     # Create tmp directory and tmp model file in it
