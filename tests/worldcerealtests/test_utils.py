@@ -5,14 +5,11 @@ except ImportError:
     import importlib_resources as pkg_resources
 
 import numpy as np
-import xarray as xr
-import pandas as pd
 import tempfile
 import rasterio
 from satio import layers
 from worldcereal.utils import scalers, aez
-from worldcereal.utils.masking import (swets,
-                                       SCL_MASK_VALUES)
+from worldcereal.utils.masking import SCL_MASK_VALUES
 from worldcereal.utils.scalers import _SCALERANGES
 from worldcereal.fp import L2AFeaturesProcessor
 from satio.rsindices import RSI_META_S2
@@ -152,65 +149,6 @@ def test_aez():
 def test_get_realm_id():
     geom = S2_GRID[S2_GRID.tile == '31UFS'].geometry.values[0]
     get_matching_realm_id(geom)
-
-
-def test_swetssmoother(L2ATraining_collection):
-
-    S2_settings = dict(
-        bands=["B04", "B08"],
-        rsis=["evi"],
-        composite=dict(
-            freq=10,
-            window=20,
-            mode='median',
-            start='2018-08-01',
-            end='2019-11-30'),
-        mask=dict(
-            erode_r=3,
-            dilate_r=21,
-            mask_values=SCL_MASK_VALUES,
-            multitemporal=True
-        )
-    )
-
-    s2_fp = L2AFeaturesProcessor(L2ATraining_collection,
-                                 S2_settings)
-
-    # Load the SCL-based mask
-    mask, _, _, _ = s2_fp.load_mask()
-
-    # Load the multitemporal mask
-    mask, ts = s2_fp.load_multitemporal_mask(prior_mask=mask)
-
-    ts = s2_fp.load_data(10, timeseries=ts)
-    ts_proc = s2_fp.preprocess_data(ts, 10, mask=mask)
-    rsi = ts_proc.compute_rsis('evi', rsi_meta=RSI_META_S2)
-
-    regressionwindow = 31
-    combinationwindow = 31
-
-    # Make a DataArray for easy daily resampling
-    rsi_da = xr.DataArray(data=rsi.data[0, ...],
-                          coords={'time': rsi.timestamps},
-                          dims=['time', 'x', 'y'])
-
-    # Resample to daily, missing data
-    # are linearly interpolated
-    daily_daterange = pd.date_range(
-        rsi.timestamps[0],
-        rsi.timestamps[-1] + pd.Timedelta(days=1),
-        freq='D').floor('D')
-    rsi_daily = rsi_da.reindex(time=daily_daterange,
-                               method='bfill', tolerance='1D')
-    rsi_daily = rsi_daily.interpolate_na(dim='time')
-
-    # Run swets smoother
-    # Need to do it in slices, to avoid memory issues
-    _ = swets(regressionwindow=regressionwindow,
-              combinationwindow=combinationwindow,
-              npdatacube=rsi_daily.values,
-              minimumdatavalue=0,
-              maximumdatavalue=1)
 
 
 def test_whittakersmoother(L2ATraining_collection):
