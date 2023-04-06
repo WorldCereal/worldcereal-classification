@@ -155,6 +155,20 @@ class GDDcomputer:
 
         return int(sos_min)
 
+    def get_aez_eos(self, season, which='min'):
+        '''Method to return a specific AEZ EOS [min, avg, max]
+        '''
+
+        if self.aez_id is None:
+            raise ValueError('`aez_id` not specified while we need it.')
+
+        aez_df = aez.load().to_crs(epsg=self.epsg)
+        aez_id = aez_df.set_index('zoneID').loc[self.aez_id]
+
+        eos_min = aez_id[f'{SEASONAL_MAPPING[season].lower()}eos_{which}']
+
+        return int(eos_min)
+
     def get_sos_date(self, season, after_date):
         '''Method to retrieve the actual SOS date from
         which to start accumulating GDD
@@ -207,12 +221,20 @@ class GDDcomputer:
             if self.aez_id is not None:
                 # Get the closest AEZ SOS
                 aez_sos_min = self.get_aez_sos(season, which='min')
+                aez_eos_max = self.get_aez_eos(season, which='max')
                 aez_sos_date = doy_to_date_after(aez_sos_min, after_date)
+                aez_eos_date = doy_to_date_after(aez_eos_max, after_date)
 
                 if pd.to_datetime(sos_date) < pd.to_datetime(aez_sos_date):
                     logger.warning((f'Pixel-based SOS ({sos_date}) is before '
                                     f'AEZ SOSmin ({aez_sos_date}). '
                                     'Taking AEZ version!'))
+                    sos_date = aez_sos_date
+
+                if pd.to_datetime(sos_date) > pd.to_datetime(aez_eos_date):
+                    logger.warning((f'Pixel-based SOS ({sos_date}) is after '
+                                    f'AEZ EOSmax ({aez_eos_date}). '
+                                    'Taking AEZ SOS version!'))
                     sos_date = aez_sos_date
 
         return sos_date
@@ -247,7 +269,7 @@ class GDDcomputer:
 
             # Get SOS date to start GDD accumulation
             sos_date = self.get_sos_date(season=season,
-                                         after_date=temperature_ts.timestamps[0])
+                                         after_date=self.start_date)
 
             logger.info(f'Accumulating GDD from: {sos_date}')
 

@@ -96,6 +96,32 @@ def test_get_sos_date_outside_aezstats(AgERA5Training_collection):
     assert sos_date == '2018-12-28'
 
 
+def test_get_sos_date_outside_aezstats_2(AgERA5Training_collection):
+    '''This version has a block inside the AEZ but with a pixel-based
+    crop calendar which is BEFORE the AEZ SOSmin, appearing to be
+    way after the actual SOS due to year shift.
+    '''
+
+    bounds = (300000, 2589800, 310240, 2600040)
+    epsg = 32645
+    aez_id = 48180
+
+    gdd = GDDcomputer(AgERA5Training_collection,
+                      tbase=10,
+                      bounds=bounds,
+                      epsg=epsg,
+                      start_date='2021-01-23',
+                      end_date='2021-09-07',
+                      aez_id=aez_id)
+
+    sos_date = gdd.get_sos_date('tc-maize-main', '2021-01-01')
+
+    # AEZ SOSmin = 2021-02-07
+    # pixel-based SOS = 2021-12-18
+    # in this case AEZ SOSmin needs to override pixel-based SOSmin
+    assert sos_date == '2021-02-07'
+
+
 def test_L2A_gddnormalization(L2ATraining_collection,
                               AgERA5Training_collection):
 
