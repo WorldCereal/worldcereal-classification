@@ -7,6 +7,9 @@ Required packages can be installed from PyPI, except for the `satio` package whi
 
 ```pip install satio --extra-index-url https://artifactory.vgt.vito.be/api/pypi/python-packages/simple```
 
+|:exclamation:  Note that the end-to-end functionality described below will not work out of the box, as this classification repository is part of a larger dockerized workflow taking care of input data gathering and preprocessing (released soon). |
+|:-----------------------------------------|
+
 ## Running classification
 
 Retrieve help (as shown at the bottom of this readme):
