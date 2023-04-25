@@ -1,4 +1,5 @@
 # WorldCereal classification module
+[![DOI](https://zenodo.org/badge/621251443.svg)](https://zenodo.org/badge/latestdoi/621251443)
 
 This repository contains the code for running the WorldCereal classification module, making use of preprocessed WorldCereal input products.
 The basic invocation is described in the next section.
