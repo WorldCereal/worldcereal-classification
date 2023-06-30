@@ -984,8 +984,8 @@ def get_trainingdata(df, inputfeatures, season, options, aez_zone=None,
         df['lon'] = df['lon'] + (
             (np.random.rand(df.shape[0]) * 20 - 10))
 
-        df.loc[df['lon'] < -180, 'lon'] += 180
-        df.loc[df['lon'] > 180, 'lon'] -= 180
+        df.loc[df['lon'] < -180, 'lon'] += 360
+        df.loc[df['lon'] > 180, 'lon'] -= 360
 
     # Perturb DEM by a max of 100m
     np.random.seed(3)
