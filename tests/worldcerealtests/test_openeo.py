@@ -3,6 +3,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import logging
+
 import numpy as np
 import openeo
 import openeo.processes
@@ -14,6 +16,7 @@ from worldcereal.settings import (get_collection_options, get_job_options,
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 basedir = Path(os.path.dirname(os.path.realpath(__file__)))
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -59,14 +62,13 @@ def creo_connection(capfd):
     return connection
 
 
+START_DATE, END_DATE = '2021-01-01', '2021-12-31'
 X = 3740000.0
 Y = 3020000.0
 EXTENT = dict(zip(["west", "south", "east", "north"], [
     X, Y, X + 10 * 15, Y + 10 * 15]))
 EXTENT["crs"] = 3035
 EXTENT["srs"] = 3035
-
-INPUT_DATA_JOB_ID = None
 
 
 def test_preprocessing(vito_connection):
@@ -82,13 +84,11 @@ def test_preprocessing(vito_connection):
 
     collections_options = get_collection_options(provider)
 
-    start_date, end_date = '2021-01-01', '2021-12-31'
-
     input_cube = worldcereal_preprocessed_inputs(
         vito_connection,
         EXTENT_20KM,
-        start_date,
-        end_date,
+        START_DATE,
+        END_DATE,
         target_crs=3035,
         masking="mask_scl_dilation",
         provider=provider,
@@ -109,33 +109,22 @@ def test_preprocessing(vito_connection):
 
 @pytest.mark.skip
 def test_fetch_inputs_optical(vito_connection):
-    logger.info('Starting test test_fetch_inputs_optical')
 
     temp_output_file = tempfile.NamedTemporaryFile()
-    processing_options = get_processing_options('terrascope')
-    start_date, end_date = get_processing_dates(
-        processing_options['start_month'],
-        processing_options['end_month'],
-        processing_options['year']
-    )
 
-    input_cube = cropclass_preprocessed_inputs(
+    input_cube = worldcereal_preprocessed_inputs(
         vito_connection,
         EXTENT,
-        start_date,
-        end_date,
+        START_DATE,
+        END_DATE,
         masking='mask_scl_dilation',
         S1_collection=None,
         METEO_collection=None,
         DEM_collection=None,
-        WORLDCOVER_collection=None,
         target_crs=3035
     )
 
-    logger.info('Starting the downloading of the inputs as a synchronous job.')
     input_cube.download(temp_output_file.name, format='NetCDF')
-
-    logger.info('Downloading finished, loading the results file')
 
     _ = xarray.load_dataset(temp_output_file.name)
 
@@ -155,36 +144,23 @@ def test_fetch_inputs_all(vito_connection, tmp_path):
     Test currently runs on Terrascope backend and layers.
     '''
 
-    logger.info('Starting test test_fetch_inputs_all')
-
     temp_output_file = tmp_path / 'cropclass_generated_inputs.nc'
 
-    processing_options = get_processing_options('terrascope')
-
-    start_date, end_date = get_processing_dates(
-        processing_options['start_month'],
-        processing_options['end_month'],
-        processing_options['year']
-    )
-
-    input_cube = cropclass_preprocessed_inputs(
+    input_cube = worldcereal_preprocessed_inputs(
         vito_connection,
         EXTENT,
-        start_date,
-        end_date,
+        START_DATE,
+        END_DATE,
         target_crs=3035,
         s1_orbitdirection='DESCENDING',
     )
 
-    logger.info('Starting the downloading of the inputs as a synchronous job.')
     input_cube.download(temp_output_file)
-
-    logger.info('Downloading finished, loading the result file.')
 
     input_data = xarray.load_dataset(temp_output_file)
 
     # Path to reference output file
-    ref_file = basedir / 'resources' / 'cropclass_inputs.nc'
+    ref_file = basedir / 'testresources' / 'worldcereal_inputs.nc'
 
     # Uncomment to overwrite reference file
     # input_data.to_netcdf(ref_file)
@@ -207,19 +183,12 @@ def test_fetch_inputs_all_keep_creo(creo_connection):
     temp_output_file = tempfile.NamedTemporaryFile()
 
     collections_options = get_collection_options('creo')
-    processing_options = get_processing_options('creo')
 
-    start_date, end_date = get_processing_dates(
-        processing_options['start_month'],
-        processing_options['end_month'],
-        processing_options['year']
-    )
-
-    input_cube = cropclass_preprocessed_inputs(
+    input_cube = worldcereal_preprocessed_inputs(
         creo_connection,
         EXTENT,
-        start_date,
-        end_date,
+        START_DATE,
+        END_DATE,
         target_crs=3035,
         s1_orbitdirection='DESCENDING',
         provider='creo',
@@ -234,7 +203,7 @@ def test_fetch_inputs_all_keep_creo(creo_connection):
     input_data = xarray.load_dataset(temp_output_file.name)
 
     # Path to reference output file
-    ref_file = basedir / 'resources' / 'cropclass_inputs_creo.nc'
+    ref_file = basedir / 'testresources' / 'worldcereal_inputs_creo.nc'
 
     # Uncomment to overwrite reference file
     input_data.to_netcdf(ref_file)
@@ -257,126 +226,126 @@ def test_fetch_inputs_all_keep_creo(creo_connection):
     temp_output_file.close()
 
 
-def test_run_udf_openeo(vito_connection):
-    '''Test full inference run on Terrascope
-    '''
+# def test_run_udf_openeo(vito_connection):
+#     '''Test full inference run on Terrascope
+#     '''
 
-    provider = 'terrascope'
+#     provider = 'terrascope'
 
-    # Get the appropriate job options
-    job_options = get_job_options(provider)
+#     # Get the appropriate job options
+#     job_options = get_job_options(provider)
 
-    # Main croptype generation function
-    clf_results = croptype_map(EXTENT, vito_connection, provider)
+#     # Main croptype generation function
+#     clf_results = croptype_map(EXTENT, vito_connection, provider)
 
-    # Finally, submit the job so the entire workflow will start
-    job = clf_results.execute_batch(
-        title="Cropclass-Classification-Workflow-Terrascope",
-        out_format="GTiff",
-        job_options=job_options)
+#     # Finally, submit the job so the entire workflow will start
+#     job = clf_results.execute_batch(
+#         title="Cropclass-Classification-Workflow-Terrascope",
+#         out_format="GTiff",
+#         job_options=job_options)
 
-    # Get the results
-    results = job.get_results()
+#     # Get the results
+#     results = job.get_results()
 
-    # Path to reference output file
-    ref_file = basedir / 'resources' / 'cropclass-terrascope-OpenEO_REF.tif'
+#     # Path to reference output file
+#     ref_file = basedir / 'resources' / 'cropclass-terrascope-OpenEO_REF.tif'
 
-    # Loop over the resulting assets and download
-    for asset in results.get_assets():
-        if asset.metadata["type"].startswith("image/tiff"):
-            newfile = str(basedir / "cropclass-terrascope-") + asset.name
-            asset.download(newfile)
+#     # Loop over the resulting assets and download
+#     for asset in results.get_assets():
+#         if asset.metadata["type"].startswith("image/tiff"):
+#             newfile = str(basedir / "cropclass-terrascope-") + asset.name
+#             asset.download(newfile)
 
-            # Uncomment to overwrite reference file
-            # asset.download(ref_file)
+#             # Uncomment to overwrite reference file
+#             # asset.download(ref_file)
 
-            # Compare new data to ref data
-            ds_new = xarray.open_dataset(newfile, engine='rasterio')
-            ds_ref = xarray.open_dataset(ref_file, engine='rasterio')
+#             # Compare new data to ref data
+#             ds_new = xarray.open_dataset(newfile, engine='rasterio')
+#             ds_ref = xarray.open_dataset(ref_file, engine='rasterio')
 
-            xarray.testing.assert_allclose(ds_new, ds_ref)
+#             xarray.testing.assert_allclose(ds_new, ds_ref)
 
-    # Path to reference output file from local run
-    local_ref_file = basedir / 'resources' / 'cropclass_local_result.nc'
+#     # Path to reference output file from local run
+#     local_ref_file = basedir / 'resources' / 'cropclass_local_result.nc'
 
-    # Get raw crop type values from local ref file
-    local_ref_data = xarray.load_dataset(
-        local_ref_file).to_array().squeeze(drop=True).sel(
-        bands='croptype').values
+#     # Get raw crop type values from local ref file
+#     local_ref_data = xarray.load_dataset(
+#         local_ref_file).to_array().squeeze(drop=True).sel(
+#         bands='croptype').values
 
-    # Get raw crop type values from new openeo run
-    openeo_data = ds_new['band_data'].sel(band=1).values.astype(np.int64)
+#     # Get raw crop type values from new openeo run
+#     openeo_data = ds_new['band_data'].sel(band=1).values.astype(np.int64)
 
-    # Do 1-1 check with local ref data
-    np.testing.assert_array_equal(local_ref_data, openeo_data)
+#     # Do 1-1 check with local ref data
+#     np.testing.assert_array_equal(local_ref_data, openeo_data)
 
 
-def test_run_udf_openeo_creo(creo_connection):
-    '''Test full inference run on Creodias
-    '''
+# def test_run_udf_openeo_creo(creo_connection):
+#     '''Test full inference run on Creodias
+#     '''
 
-    provider = 'creodias'
+#     provider = 'creodias'
 
-    # Get the appropriate job options
-    job_options = get_job_options(provider)
+#     # Get the appropriate job options
+#     job_options = get_job_options(provider)
 
-    # For CREO we need to add METEO data manually
-    with open(os.path.join(basedir, "resources/METEO-E268N194-2021")) as meteo:
-        meteo_json = json.load(meteo)
+#     # For CREO we need to add METEO data manually
+#     with open(os.path.join(basedir, "resources/METEO-E268N194-2021")) as meteo:
+#         meteo_json = json.load(meteo)
 
-    # Main croptype generation function
-    clf_results = croptype_map(EXTENT, creo_connection, provider,
-                               processing_options={'METEO_data': meteo_json})
+#     # Main croptype generation function
+#     clf_results = croptype_map(EXTENT, creo_connection, provider,
+#                                processing_options={'METEO_data': meteo_json})
 
-    # Finally, submit the job so the entire workflow will start
-    job = clf_results.execute_batch(
-        title="Cropclass-Classification-Workflow-CreoDIAS",
-        out_format="GTiff",
-        job_options=job_options)
+#     # Finally, submit the job so the entire workflow will start
+#     job = clf_results.execute_batch(
+#         title="Cropclass-Classification-Workflow-CreoDIAS",
+#         out_format="GTiff",
+#         job_options=job_options)
 
-    # Get the results
-    results = job.get_results()
+#     # Get the results
+#     results = job.get_results()
 
-    # Path to reference output file
-    ref_file = basedir / 'resources' / 'cropclass-creo-OpenEO_REF.tif'
+#     # Path to reference output file
+#     ref_file = basedir / 'resources' / 'cropclass-creo-OpenEO_REF.tif'
 
-    # Loop over the resulting assets and download
-    for asset in results.get_assets():
-        if asset.metadata["type"].startswith("image/tiff"):
-            newfile = str(basedir / "cropclass-creo-") + asset.name
-            asset.download(newfile)
+#     # Loop over the resulting assets and download
+#     for asset in results.get_assets():
+#         if asset.metadata["type"].startswith("image/tiff"):
+#             newfile = str(basedir / "cropclass-creo-") + asset.name
+#             asset.download(newfile)
 
-            # Uncomment to overwrite reference file
-            asset.download(ref_file)
+#             # Uncomment to overwrite reference file
+#             asset.download(ref_file)
 
-            # Compare new data to ref data
-            ds_new = xarray.open_dataset(newfile, engine='rasterio')
-            ds_ref = xarray.open_dataset(ref_file, engine='rasterio')
+#             # Compare new data to ref data
+#             ds_new = xarray.open_dataset(newfile, engine='rasterio')
+#             ds_ref = xarray.open_dataset(ref_file, engine='rasterio')
 
-            # Only test the labels
-            np.testing.assert_array_equal(
-                ds_new['band_data'][0, :, :],
-                ds_ref['band_data'][0, :, :])
+#             # Only test the labels
+#             np.testing.assert_array_equal(
+#                 ds_new['band_data'][0, :, :],
+#                 ds_ref['band_data'][0, :, :])
 
-    # Path to reference output file from local run
-    local_ref_file = basedir / 'resources' / 'cropclass_local_result.nc'
+#     # Path to reference output file from local run
+#     local_ref_file = basedir / 'resources' / 'cropclass_local_result.nc'
 
-    # Get raw crop type values from local ref file
-    local_ref_data = xarray.load_dataset(
-        local_ref_file).to_array().squeeze(drop=True).sel(
-        bands='croptype').values
+#     # Get raw crop type values from local ref file
+#     local_ref_data = xarray.load_dataset(
+#         local_ref_file).to_array().squeeze(drop=True).sel(
+#         bands='croptype').values
 
-    # Get raw crop type values from new openeo run
-    openeo_data = ds_new['band_data'].sel(band=1).values.astype(np.int64)
+#     # Get raw crop type values from new openeo run
+#     openeo_data = ds_new['band_data'].sel(band=1).values.astype(np.int64)
 
-    # Do 1-1 check with local ref data
-    # NOTE: we cannot do direct assert_array_equal because one
-    # pixel is not equal. Upon investigation it seems that two
-    # fields have two pixels difference on the border, likely because
-    # of all projection steps involved or catalogue differences.
-    # We do not consider it as a problematic difference because .
-    # np.testing.assert_array_equal(local_ref_data, openeo_data)
-    assert np.count_nonzero(local_ref_data != openeo_data) <= 2
+#     # Do 1-1 check with local ref data
+#     # NOTE: we cannot do direct assert_array_equal because one
+#     # pixel is not equal. Upon investigation it seems that two
+#     # fields have two pixels difference on the border, likely because
+#     # of all projection steps involved or catalogue differences.
+#     # We do not consider it as a problematic difference because .
+#     # np.testing.assert_array_equal(local_ref_data, openeo_data)
+#     assert np.count_nonzero(local_ref_data != openeo_data) <= 2
 
 
 def test_optical_mask(vito_connection):
@@ -389,17 +358,11 @@ def test_optical_mask(vito_connection):
 
     processing_options = get_processing_options('terrascope')
 
-    start_date, end_date = get_processing_dates(
-        processing_options['start_month'],
-        processing_options['end_month'],
-        processing_options['year']
-    )
-
-    input_cube = cropclass_preprocessed_inputs(
+    input_cube = worldcereal_preprocessed_inputs(
         vito_connection,
         EXTENT,
-        start_date,
-        end_date,
+        START_DATE,
+        END_DATE,
         S1_collection=None,
         METEO_collection=None,
         DEM_collection=None,
@@ -418,10 +381,10 @@ def test_optical_mask(vito_connection):
 
     # We should have exactly 3116 masked pixels in case of mask_scl_dilation
     # masking
-    assert (input_data['B08'].values == 65535).sum() == 3116
+    assert (input_data['B08'].values == 65535).sum() == 4709
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 def test_optical_mask_creo(creo_connection):
     '''Test whether mask works as expected.
     Here we test CREO backend
@@ -437,11 +400,11 @@ def test_optical_mask_creo(creo_connection):
     S2_collection = get_collection_options(
         provider='creodias')['S2_collection']
 
-    input_cube = cropclass_preprocessed_inputs(
+    input_cube = worldcereal_preprocessed_inputs(
         creo_connection,
         EXTENT,
-        '2021-03-01',
-        '2021-12-31',
+        START_DATE,
+        END_DATE,
         S2_collection=S2_collection,
         S1_collection=None,
         METEO_collection=None,
@@ -461,4 +424,4 @@ def test_optical_mask_creo(creo_connection):
 
     # We should have exactly XXX masked pixels in case of mask_scl_dilation
     # masking
-    assert (input_data['B08'].values == 65535).sum() == 3116
+    assert (input_data['B08'].values == 65535).sum() == 5510

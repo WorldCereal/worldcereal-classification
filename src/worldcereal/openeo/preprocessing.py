@@ -1,7 +1,11 @@
-from openeo.processes import array_create, power
+from openeo.processes import array_create, if_, is_nodata, power
 from openeo.rest.datacube import DataCube
-from cropclass.openeo.masking import scl_mask_erode_dilate
-from cropclass.utils import laea20km_id_to_extent
+
+from worldcereal.openeo.masking import scl_mask_erode_dilate
+from worldcereal.openeo.compositing import max_ndvi_composite
+
+
+COMPOSITE_WINDOW = 'month'
 
 
 def add_S1_bands(connection, S1_collection,
@@ -18,13 +22,16 @@ def add_S1_bands(connection, S1_collection,
         provider
         target_crs
     """
-
+    isCreo = "creo" in processing_options.get("provider", "").lower()
     orbit_direction = processing_options.get('s1_orbitdirection', None)
+    composite_window = processing_options.get(
+        'composite_window', COMPOSITE_WINDOW)
+
+    # TODO: implement as needed
+    # if isCreo:
+    #     orbit_direction = catalogue_check_S1(orbit_direction, start, end, bbox)
 
     if orbit_direction is not None:
-        if orbit_direction not in ['ASCENDING', 'DESCENDING']:
-            raise ValueError(
-                f'`orbit_direction` value `{orbit_direction}` not recognized.')
         properties = {"sat:orbit_state": lambda orbdir: orbdir == orbit_direction}  # NOQA
     else:
         properties = {}
@@ -39,29 +46,19 @@ def add_S1_bands(connection, S1_collection,
     )
 
     if S1_collection == "SENTINEL1_GRD":
-        isCreo = "creo" in processing_options.get("provider", "").lower()
         # compute backscatter if starting from raw GRD,
         # otherwise assume preprocessed backscatter
         S1bands = S1bands.sar_backscatter(
             coefficient='sigma0-ellipsoid',
             local_incidence_angle=False,
             # DO NOT USE MAPZEN
-            elevation_model='srtmgl1' if isCreo else None,
+            elevation_model='COPERNICUS_30' if isCreo else None,
             options={"implementation_version": "2",
-                     "tile_size": 256, "otb_memory": 768, "debug": False,
+                     "tile_size": 256, "otb_memory": 1024, "debug": False,
                      "elev_geoid": "/opt/openeo-vito-aux-data/egm96.tif"}
         )
     else:
         pass
-        # temporal_partition_options = {
-        #     "indexreduction": 2,
-        #     "temporalresolution": "ByDay",
-        #     "tilesize": 512
-        # }
-        # S1bands.result_node().update_arguments(
-        #     featureflags=temporal_partition_options)
-
-    # S1bands._pg.arguments['featureflags'] = {'experimental': True}
 
     # Resample to the S2 spatial resolution
     target_crs = processing_options.get("target_crs", None)
@@ -71,24 +68,35 @@ def add_S1_bands(connection, S1_collection,
 
     if preprocess:
 
-        # Composite 10-daily
-        S1bands = S1bands.aggregate_temporal_period(period="dekad",
+        # Composite to compositing window
+        S1bands = S1bands.aggregate_temporal_period(period=composite_window,
                                                     reducer="mean")
 
         # Linearly interpolate missing values
         S1bands = S1bands.apply_dimension(dimension="t",
                                           process="array_interpolate_linear")
 
-    # scale to int16
-    # rescaling also replaces nodata introduced by orfeo with a low value
-    # https://github.com/Open-EO/openeo-geopyspark-driver/issues/293
-    # TODO: check if nodata is correctly handled in Orfeo
-    S1bands = S1bands.apply_dimension(
-        dimension="bands",
-        process=lambda x: array_create(
-            [power(base=10, p=(10.0 * x[0].log(base=10) + 83.) / 20.),
-                power(base=10, p=(10.0 * x[1].log(base=10) + 83.) / 20.)]))
-    S1bands = S1bands.linear_scale_range(0, 65534, 0, 65534)
+    # Scale to int16
+    if isCreo:
+        # for CREO, rescaling also replaces nodata introduced by orfeo
+        # with a low value
+        # https://github.com/Open-EO/openeo-geopyspark-driver/issues/293
+        # TODO: check if nodata is correctly handled in Orfeo
+        S1bands = S1bands.apply_dimension(
+            dimension="bands",
+            process=lambda x: array_create(
+                [if_(is_nodata(x[0]), 1, power(
+                    base=10, p=(10.0 * x[0].log(base=10) + 83.) / 20.)),
+                    if_(is_nodata(x[1]), 1, power(
+                        base=10, p=(10.0 * x[1].log(base=10) + 83.) / 20.))]))
+    else:
+        S1bands = S1bands.apply_dimension(
+            dimension="bands",
+            process=lambda x: array_create(
+                [power(base=10, p=(10.0 * x[0].log(base=10) + 83.) / 20.),
+                 power(base=10, p=(10.0 * x[1].log(base=10) + 83.) / 20.)]))
+
+    S1bands = S1bands.linear_scale_range(1, 65534, 1, 65534)
 
     # --------------------------------------------------------------------
     # Merge cubes
@@ -102,30 +110,24 @@ def add_S1_bands(connection, S1_collection,
 
 def add_DEM(connection, DEM_collection, other_bands, bbox,
             **processing_options):
+    """Method to add DEM to datacube
+
+    Args:
+        connection (_type_): _description_
+        DEM_collection (str): Name of DEM collection
+        other_bands (DataCube): DataCube to merge DEM into
+        bbox (_type_): _description_
+
+    Returns:
+        DataCube: merged datacube
+    """
 
     dem = connection.load_collection(
         DEM_collection,
         spatial_extent=bbox,
     )
 
-    # if "creo" in processing_options.get("provider", ""):
-
-    #     temporal_partition_options = {
-    #         "indexreduction": 0,
-    #         "temporalresolution": "ByDay",
-    #         "tilesize": 1024
-    #     }
-    #     dem.result_node().update_arguments(
-    #         featureflags=temporal_partition_options)
-
-    # For now, add this experimental option to avoid gaps near bbox edges
-    # as a result, only nearest neighbor resampling is possible right now
-
-    # dem.result_node().update_arguments(featureflags={"experimental": True})
-
     # Resample to the S2 spatial resolution
-    # TODO: check interpolation method
-    # TODO: check no-data near edges of cube
     target_crs = processing_options.get("target_crs", None)
     if (target_crs is not None):
         dem = dem.resample_spatial(projection=target_crs, resolution=10.0,
@@ -144,8 +146,12 @@ def add_DEM(connection, DEM_collection, other_bands, bbox,
 
 
 def add_meteo(connection, METEO_collection, other_bands, bbox,
-              start, end, target_crs=None):
+              start, end, target_crs=None, **processing_options):
     # AGERA5
+    # TODO: add precipitation with sum compositor
+
+    composite_window = processing_options.get(
+        'composite_window', COMPOSITE_WINDOW)
 
     meteo = connection.load_collection(
         METEO_collection,
@@ -157,8 +163,8 @@ def add_meteo(connection, METEO_collection, other_bands, bbox,
     if (target_crs is not None):
         meteo = meteo.resample_spatial(projection=target_crs, resolution=10.0)
 
-    # Composite 10-daily
-    meteo = meteo.aggregate_temporal_period(period="dekad",
+    # Composite to compositing window
+    meteo = meteo.aggregate_temporal_period(period=composite_window,
                                             reducer="mean")
 
     # Linearly interpolate missing values.
@@ -171,7 +177,10 @@ def add_meteo(connection, METEO_collection, other_bands, bbox,
 
     # --------------------------------------------------------------------
     # Merge cubes
+    # or return just meteo
     # --------------------------------------------------------------------
+    if other_bands is None:
+        return meteo
 
     merged_inputs = other_bands.merge_cubes(meteo)
 
@@ -179,7 +188,7 @@ def add_meteo(connection, METEO_collection, other_bands, bbox,
 
 
 def worldcereal_preprocessed_inputs(
-        connection, bbox, start, end,
+        connection, bbox, start: str, end: str,
         S2_collection='TERRASCOPE_S2_TOC_V2',
         S1_collection='SENTINEL1_GRD_SIGMA0',
         DEM_collection='COPERNICUS_30',
@@ -188,22 +197,26 @@ def worldcereal_preprocessed_inputs(
         masking='mask_scl_dilation',
         **processing_options) -> DataCube:
     """Main method to get preprocessed inputs from OpenEO for
-    downstream WorldCereal crop type mapping.
+    downstream crop type mapping.
 
     Args:
         connection: OpenEO connection instance
         bbox (_type_): _description_
-        start (_type_): _description_
-        end (_type_): _description_
-        S2_collection (str, optional): _description_. Defaults to
+        start (str): Start date for requested input data (yyyy-mm-dd)
+        end (str): Start date for requested input data (yyyy-mm-dd)
+        S2_collection (str, optional): Collection name for S2 data.
+                        Defaults to
                         'TERRASCOPE_S2_TOC_V2'.
-        S1_collection (str, optional): _description_. Defaults to
+        S1_collection (str, optional): Collection name for S1 data.
+                        Defaults to
                         'SENTINEL1_GRD'.
-        DEM_collection (str, optional): _description_. Defaults to
+        DEM_collection (str, optional): Collection name for DEM data.
+                        Defaults to
                         'COPERNICUS_30'.
-        METEO_collection (str, optional): _description_. Defaults to
-                        'AGERA5'.
-        preprocess (bool, optional): _description_. Defaults to True.
+        METEO_collection (str, optional): Collection name for
+                        meteo data. Defaults to 'AGERA5'.
+        preprocess (bool, optional): Apply compositing and interpolation.
+                        Defaults to True.
         masking (str, optional): Masking method to be applied.
                                 One of ['satio', 'mask_scl_dilation', None]
                                 Defaults to 'mask_scl_dilation'.
@@ -211,6 +224,9 @@ def worldcereal_preprocessed_inputs(
     Returns:
         DataCube: OpenEO DataCube wich the requested inputs
     """
+
+    composite_window = processing_options.get('composite_window',
+                                              COMPOSITE_WINDOW)
 
     # --------------------------------------------------------------------
     # Optical data
@@ -232,15 +248,11 @@ def worldcereal_preprocessed_inputs(
         max_cloud_cover=95
     )
 
-    # NOTE: currently the tunings are disabled.
-    #
-    # temporal_partition_options = {
-    #     "indexreduction": 2,
-    #     "temporalresolution": "ByDay",
-    #     "tilesize": 1024
-    # }
-    # bands.result_node().update_arguments(
-    #     featureflags=temporal_partition_options)
+    # TODO: implement as needed
+    # S2URL creo only accepts request in EPSG:4326
+    # isCreo = "creo" in processing_options.get("provider", "").lower()
+    # if isCreo:
+    #     catalogue_check_S2(start, end, bbox)
 
     target_crs = processing_options.get("target_crs", None)
     if (target_crs is not None):
@@ -270,9 +282,10 @@ def worldcereal_preprocessed_inputs(
         bands = bands.mask(mask)
 
     if preprocess:
-        # Composite 10-daily
-        bands = bands.aggregate_temporal_period(period="dekad",
-                                                reducer="median")
+        # Composite to compositing window
+        # bands = bands.aggregate_temporal_period(period=composite_window,
+        #                                         reducer="median")
+        bands = max_ndvi_composite(bands, composite_window=composite_window)
 
         # TODO: if we would disable it here, nodata values
         # will be 65535 and we need to cope with that later
@@ -280,12 +293,17 @@ def worldcereal_preprocessed_inputs(
         bands = bands.apply_dimension(dimension="t",
                                       process="array_interpolate_linear")
 
+    # Force UINT16 to avoid overflow issue with S2 data
+    bands = bands.linear_scale_range(0, 65534, 0, 65534)
+
     # --------------------------------------------------------------------
     # AGERA5 Meteo data
     # --------------------------------------------------------------------
     if METEO_collection is not None:
         bands = add_meteo(connection, METEO_collection,
-                          bands, bbox, start, end, target_crs)
+                          bands, bbox, start, end,
+                          target_crs=target_crs,
+                          composite_window=composite_window)
 
     # --------------------------------------------------------------------
     # SAR data
@@ -293,6 +311,7 @@ def worldcereal_preprocessed_inputs(
     if S1_collection is not None:
         bands = add_S1_bands(connection, S1_collection,
                              bands, bbox, start, end,
+                             composite_window=composite_window,
                              **processing_options)
 
     bands = bands.filter_temporal(start, end)
