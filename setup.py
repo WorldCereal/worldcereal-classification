@@ -49,7 +49,7 @@ setup(
         'numba<0.57',
         'numexpr==2.8.3',
         'numpy==1.18.5',
-        'openeo==0.12.1',
+        'openeo',
         'pandas==1.4.4',
         'pyarrow==9.0.0',
         'pyod==1.0.0',
