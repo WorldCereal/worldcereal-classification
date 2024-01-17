@@ -15,7 +15,7 @@ tmp
 *.npy
 *.png
 *.kml
-*.csv
+# *.csv
 *.tsv
 *.tfevents
 *.nc
@@ -53,6 +53,7 @@ experimental/**
 
 # don't track catboost training info
 src/worldcereal/train/catboost_info
+catboost_info
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
