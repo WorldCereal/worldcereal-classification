@@ -16,7 +16,7 @@ from pathlib import Path
 from catboost import CatBoostClassifier, Pool
 from sklearn.metrics import f1_score, confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
-# from sklearn.utils.validation import check_is_fitted, check_array
+from sklearn.utils.validation import check_is_fitted, check_array
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 # from sklearn.svm import SVC 
@@ -26,6 +26,8 @@ from hiclass import LocalClassifierPerParentNode, LocalClassifierPerNode
 
 from tqdm.auto import tqdm
 tqdm.pandas()
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 from load import get_satclip
 
