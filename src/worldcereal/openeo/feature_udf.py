@@ -3,40 +3,57 @@ import sys
 from typing import Dict
 
 import numpy as np
-from openeo.udf import XarrayDataCube
 import pandas as pd
-from satio.collections import XArrayTrainingCollection
 import xarray as xr
+from openeo.udf import XarrayDataCube
+from satio.collections import XArrayTrainingCollection
 
 from worldcereal.features.settings import (
     get_cropland_features_meta,
-    get_default_rsi_meta)
+    get_default_rsi_meta,
+)
 from worldcereal.fp import L2AFeaturesProcessor
 
-sys.path.append('/data/users/Public/driesj/openeo/deps/satio')
-sys.path.append('/data/users/Public/driesj/openeo/deps/wc-classification/src')
+sys.path.append("/data/users/Public/driesj/openeo/deps/satio")
+sys.path.append("/data/users/Public/driesj/openeo/deps/wc-classification/src")
 # sys.path.insert(0,'/data/users/Public/driesj/openeo/deps/tf230')
 
-wheels = ['loguru-0.5.3-py3-none-any.whl',
-          'aiocontextvars-0.2.2-py2.py3-none-any.whl', 'contextvars-2.4',
-          'immutables-0.14-cp36-cp36m-manylinux1_x86_64.whl',
-          'importlib_resources-3.3.0-py2.py3-none-any.whl']
+wheels = [
+    "loguru-0.5.3-py3-none-any.whl",
+    "aiocontextvars-0.2.2-py2.py3-none-any.whl",
+    "contextvars-2.4",
+    "immutables-0.14-cp36-cp36m-manylinux1_x86_64.whl",
+    "importlib_resources-3.3.0-py2.py3-none-any.whl",
+]
 for wheel in wheels:
-    sys.path.append('/data/users/Public/driesj/openeo/deps/' + wheel)
+    sys.path.append("/data/users/Public/driesj/openeo/deps/" + wheel)
 
 
-classifier_file = ('/tmp/worldcereal_croplandextent_lpis_unet.h5')
+classifier_file = "/tmp/worldcereal_croplandextent_lpis_unet.h5"
 
 
 features_meta = get_cropland_features_meta()
 
 
 class L2AFeaturesProcessor10m(L2AFeaturesProcessor):
-    L2A_BANDS_10M = ['B02', 'B03', 'B04', 'B08', 'B05', 'B06',
-                     'B07', 'B8A', 'B11', 'B12', 'SCL',
-                     'sunAzimuthAngles', 'sunZenithAngles',
-                     'viewAzimuthMean', 'viewZenithMean']
-    L2A_BANDS_DICT_ALL_10M = {10: L2A_BANDS_10M, 20: {'DUMMY'}}
+    L2A_BANDS_10M = [
+        "B02",
+        "B03",
+        "B04",
+        "B08",
+        "B05",
+        "B06",
+        "B07",
+        "B8A",
+        "B11",
+        "B12",
+        "SCL",
+        "sunAzimuthAngles",
+        "sunZenithAngles",
+        "viewAzimuthMean",
+        "viewZenithMean",
+    ]
+    L2A_BANDS_DICT_ALL_10M = {10: L2A_BANDS_10M, 20: {"DUMMY"}}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -60,51 +77,55 @@ def apply_datacube(cube: XarrayDataCube, context: Dict) -> XarrayDataCube:
     inarr = cube.get_array()
 
     # translate openEO dim name into satio convention
-    inarr = inarr.rename({'t': 'timestamp'})
+    inarr = inarr.rename({"t": "timestamp"})
     # satio expects uint16!
     inarr = inarr.astype(np.uint16)
 
     settings = context["satio_settings"]
-    settings['OPTICAL']['composite']['start'] = np.datetime_as_string(
-        inarr.coords['timestamp'].values.min(), unit='D')
-    settings['OPTICAL']['composite']['end'] = np.datetime_as_string(
-        inarr.coords['timestamp'].values.max(), unit='D')
+    settings["OPTICAL"]["composite"]["start"] = np.datetime_as_string(
+        inarr.coords["timestamp"].values.min(), unit="D"
+    )
+    settings["OPTICAL"]["composite"]["end"] = np.datetime_as_string(
+        inarr.coords["timestamp"].values.max(), unit="D"
+    )
 
     classify = context["classify"]
 
-    collection = XArrayTrainingCollection(sensor="S2", processing_level="L2A",
-                                          df=pd.DataFrame(), array=inarr)
+    collection = XArrayTrainingCollection(
+        sensor="S2", processing_level="L2A", df=pd.DataFrame(), array=inarr
+    )
 
     from satio.rsindices import RSI_META_S2
+
     default_rsi_meta = RSI_META_S2.copy()
-    rsi_meta = get_default_rsi_meta()['OPTICAL']
+    rsi_meta = get_default_rsi_meta()["OPTICAL"]
 
     # in openEO, all bands are provided in 10m for now
     # so we need to modify satio defaults
-    rsi_meta['brightness'] = default_rsi_meta['brightness']
-    rsi_meta['brightness']['native_res'] = 10
+    rsi_meta["brightness"] = default_rsi_meta["brightness"]
+    rsi_meta["brightness"]["native_res"] = 10
 
-    if 'sen2agri_temp_feat' in features_meta.get('OPTICAL', {}):
-        features_meta['OPTICAL'][
-            'sen2agri_temp_feat'][
-                'parameters']['time_start'] = settings['OPTICAL'][
-                    'composite']['start']
+    if "sen2agri_temp_feat" in features_meta.get("OPTICAL", {}):
+        features_meta["OPTICAL"]["sen2agri_temp_feat"]["parameters"][
+            "time_start"
+        ] = settings["OPTICAL"]["composite"]["start"]
 
-    processor = L2AFeaturesProcessor10m(collection,
-                                        settings['OPTICAL'],
-                                        rsi_meta=rsi_meta,
-                                        features_meta=features_meta['OPTICAL'])
+    processor = L2AFeaturesProcessor10m(
+        collection,
+        settings["OPTICAL"],
+        rsi_meta=rsi_meta,
+        features_meta=features_meta["OPTICAL"],
+    )
     features = processor.compute_features()
 
     # Extracted core from worldcereal ClassificationProcessor,
     # to be seen what we need to keep
 
-    if(classify):
-
+    if classify:
         windowsize = 64
         import tensorflow as tf
-        #  from worldcereal.classification.models import WorldCerealUNET
 
+        #  from worldcereal.classification.models import WorldCerealUNET
         #  unetmodel = WorldCerealUNET(windowsize=64, features= 60)
         #  unetmodel.model.load_weights(classifier_file)
         #  classifier = unetmodel.model
@@ -133,21 +154,20 @@ def apply_datacube(cube: XarrayDataCube, context: Dict) -> XarrayDataCube:
                 else:
                     yEnd = yStart + windowsize
 
-                features_patch = features.data[:,
-                                               xStart:xEnd,
-                                               yStart:yEnd]
-                patchprediction = classifier.predict(
-                    features_patch.transpose((1, 2, 0)).reshape(
-                        (1,
-                         windowsize * windowsize,
-                         -1))).squeeze().reshape((windowsize, windowsize))
+                features_patch = features.data[:, xStart:xEnd, yStart:yEnd]
+                patchprediction = (
+                    classifier.predict(
+                        features_patch.transpose((1, 2, 0)).reshape(
+                            (1, windowsize * windowsize, -1)
+                        )
+                    )
+                    .squeeze()
+                    .reshape((windowsize, windowsize))
+                )
 
                 prediction[xStart:xEnd, yStart:yEnd] = patchprediction
 
-        prediction_xarray = xr.DataArray(
-            prediction.astype(np.float32),
-            dims=['x', 'y']
-        )
+        prediction_xarray = xr.DataArray(prediction.astype(np.float32), dims=["x", "y"])
 
         # wrap back to datacube and return
         return XarrayDataCube(prediction_xarray)
@@ -155,9 +175,10 @@ def apply_datacube(cube: XarrayDataCube, context: Dict) -> XarrayDataCube:
     else:
         features_xarray = xr.DataArray(
             features.data.astype(np.float32),
-            dims=['bands', 'x', 'y'],
-            coords={'bands': features.names}
+            dims=["bands", "x", "y"],
+            coords={"bands": features.names},
         )
 
         # wrap back to datacube and return
+        return XarrayDataCube(features_xarray)
         return XarrayDataCube(features_xarray)
