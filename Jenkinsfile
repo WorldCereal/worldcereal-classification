@@ -9,15 +9,13 @@
 @Library('lib')_
 
 pythonPipeline {
-  package_name = 'worldcereal'
+  package_name = 'worldcereal-classification'
   wipeout_workspace = true
-  python_version = ["3.8"]
-  upload_dev_wheels = true
-  hadoop = true
+  python_version = ["3.10"]
+  upload_dev_wheels = false
   pipeline_triggers = [cron('H H(0-6) * * *')]
   wheel_repo = 'python-packages-public'
   wheel_repo_dev = 'python-packages-public-snapshot'
-  system_site_packages = 'nope'
   pep440 = true
   venv_rpm_deps = ['gcc', 'gcc-c++']
   extra_env_variables = [
