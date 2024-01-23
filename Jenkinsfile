@@ -14,13 +14,23 @@ pythonPipeline {
   python_version = ["3.8"]
   upload_dev_wheels = true
   hadoop = true
-  extra_container_volumes = [
-    '/data/worldcereal:/data/worldcereal:ro',
-    '/data/MTDA/AgERA5:/data/MTDA/AgERA5:ro']
-  pipeline_triggers = [cron('H 1 * * *')]
+  pipeline_triggers = [cron('H H(0-6) * * *')]
   wheel_repo = 'python-packages-public'
   wheel_repo_dev = 'python-packages-public-snapshot'
   system_site_packages = 'nope'
   pep440 = true
   venv_rpm_deps = ['gcc', 'gcc-c++']
+  extra_env_variables = [
+    'OPENEO_AUTH_METHOD=client_credentials',
+  ]
+  extra_env_secrets = [
+    // Secrets for Terrascope openEO backend (openeo.vito.be)
+    'OPENEO_AUTH_PROVIDER_ID': 'TAP/big_data_services/openeo/openeo-cropclass-service-account provider_id',
+    'OPENEO_AUTH_CLIENT_ID': 'TAP/big_data_services/openeo/openeo-cropclass-service-account client_id',
+    'OPENEO_AUTH_CLIENT_SECRET': 'TAP/big_data_services/openeo/openeo-cropclass-service-account client_secret',
+    // Secrets for CDSE openEO backend (openeo-staging.dataspace.copernicus.eu)
+    'OPENEO_AUTH_CDSE_PROVIDER_ID': 'TAP/big_data_services/openeo/openeo-cropclass-service-account-cdse provider_id',
+    'OPENEO_AUTH_CDSE_CLIENT_ID': 'TAP/big_data_services/openeo/openeo-cropclass-service-account-cdse client_id',
+    'OPENEO_AUTH_CDSE_CLIENT_SECRET': 'TAP/big_data_services/openeo/openeo-cropclass-service-account-cdse client_secret',
+  ]
 }
