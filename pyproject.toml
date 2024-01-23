@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/dist",
+  "/notebooks",
+  "/scripts",
+  "/bin",
+  "/tests",
+]
+
+[project]
+name = "worldcereal"
+version = "1.1.2"
+authors = [
+  { name="Kristof Van Tricht" },
+  { name="Jeroen Degerickx" },
+  { name="Darius Couchard" },
+  { name="Christina Butsko" },
+]
+description = "WorldCereal classification module"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "openeo>=0.22.0",
+    "xarray>=2022.3.0",
+    "rioxarray>=0.13.0",
+    "loguru>=0.7.2",
+    "h5netcdf>=1.2.0",
+    "openeo[localprocessing]",
+    "cftime",
+    "pytest-depends",
+    "pyarrow",
+    "pandas"]
+
+[project.urls]
+"Homepage" = "https://github.com/WorldCereal/worldcereal-classification"
+"Bug Tracker" = "https://github.com/WorldCereal/worldcereal-classification/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4.0",
+  "matplotlib>=3.3.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+  "tests",
+]
+addopts = [
+  "--import-mode=prepend",
+]
+
+[tool.isort]
+profile = "black"
+
+
+[tool.ruff]
+# line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = [
+  "E501",  # Ignore "line-too-long" issues, let black handle that.
+]

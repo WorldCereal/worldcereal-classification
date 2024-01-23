@@ -1,0 +1,31 @@
+name: Pytest-collect
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tests/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tests/**'
+
+jobs:
+  pytest-collect:
+    name: "Pytest: check test collection"
+    runs-on: ubuntu-latest
+    steps:
+    - name: Clone repo
+      uses: actions/checkout@v2
+    - name: Set up python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+        cache: 'pip'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest
+        python -m pip install .[dev]
+    - name: "pytest: check test collection"
+      run: pytest --collect-only
