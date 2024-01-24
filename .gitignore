@@ -15,7 +15,7 @@ tmp
 *.npy
 *.png
 *.kml
-# *.csv
+*.csv
 *.tsv
 *.tfevents
 *.nc
@@ -53,7 +53,10 @@ experimental/**
 
 # don't track catboost training info
 src/worldcereal/train/catboost_info
-catboost_info
+notebooks/catboost_info
+
+# don't track WiP notebook
+notebooks/_wip_notebook.ipynb
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -74,6 +77,9 @@ pip-delete-this-directory.txt
 
 # Allow resource CSV files to be tracked
 !/src/worldcereal/resources/*.csv
+
+# Allow crop legend mapping CSV files to be tracked
+!/notebooks/resources/*.csv
 
 # Allow resource JSON files to be tracked
 !/src/worldcereal/resources/**/*.json

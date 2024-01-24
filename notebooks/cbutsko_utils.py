@@ -3,13 +3,15 @@ sys.path.append('/home/cbutsko/Desktop/cbutsko_experiments/satclip/satclip')
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import itertools
 import gc
 import re
 import torch
 import glob
-import rioxarray as rio
+import rioxarray as rxr
 import xarray as xr
+import rasterio as rio
 from typing import Callable, Dict, List, Optional, Union
 from pathlib import Path
 
@@ -337,17 +339,18 @@ def process_raw_features_input_df(
     wc2ec_map: pd.DataFrame,
     ec_map: pd.DataFrame,
     label_columns: List,
+    add_countries: bool=False,
     ) -> pd.DataFrame:
     
     tdf = pd.read_parquet(fpath)
-    tdf['CT'].replace(0, np.nan, inplace=True)
-    tdf['CT'].fillna(tdf['OUTPUT'], inplace=True)
+    tdf['CROPTYPE_LABEL'].replace(0, np.nan, inplace=True)
+    tdf['CROPTYPE_LABEL'].fillna(tdf['LANDCOVER_LABEL'], inplace=True)
 
-    tdf['ec_code'] = tdf['CT'].map(wc2ec_map.set_index('croptype')['ec_code'])
-    tdf['CT_name'] = tdf['CT'].map(wc2ec_map.set_index('croptype')['name'])
-    tdf['landcover_wc'] = tdf['CT'].map(wc2ec_map.set_index('croptype')['landcover'])
+    tdf['ec_code'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['ec_code'])
+    tdf['CROPTYPE_NAME'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['name'])
+    tdf['landcover_wc'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['landcover'])
     
-    tdf = tdf[tdf.isna().sum(axis=1)==0]
+    tdf = tdf[tdf.isna().sum(axis=1)<3]
     for tlevel in label_columns:
         tdf[tlevel] = tdf['ec_code'].map(ec_map['{}_label'.format(tlevel)]).astype('int32')
         tdf['{}_name'.format(tlevel)] = tdf['ec_code'].map(ec_map['{}_name'.format(tlevel)])
@@ -360,11 +363,19 @@ def process_raw_features_input_df(
     tdf['cropland_wc'] = tdf['landcover_wc']==11
     tdf['cropland_ec'] = tdf['landcover']==1
 
-    tdf.set_index(['location_id','ref_id','pixelids'], inplace=True)
+    tdf.set_index(['sample_id'], inplace=True)
+
+    if add_countries:
+        world_bounds_vector = gpd.read_file('resources/world-administrative-boundaries/world-administrative-boundaries.shp')
+        world_bounds_raster = rio.open('resources/world-administrative-boundaries/world-administrative-boundaries.tif')
+        _country_inds = [xx[0] for xx in world_bounds_raster.sample(tdf[['lon','lat']].values)]
+        tdf['country_code'] = [world_bounds_vector['color_code'].iloc[int(xx-1)] if xx>0 else 'None' for xx in _country_inds]
+        # tdf = tdf[~tdf['country_code'].isna()]
 
     return tdf 
 
 def prepare_satclip_embeddings(satclip_model, target_df: pd.DataFrame, max_chunk_size: int = 10000) -> pd.DataFrame:
+    satclip_model.eval()
     df_chunks = np.array_split(target_df[['lat','lon']], np.ceil(len(target_df)/max_chunk_size))
     embeddings_df = pd.DataFrame()
     pbar = tqdm(total=len(df_chunks))
@@ -375,7 +386,7 @@ def prepare_satclip_embeddings(satclip_model, target_df: pd.DataFrame, max_chunk
             emb = satclip_model(latlon_batch).numpy()
         emb = pd.DataFrame(
             emb, 
-            columns=['emb{}'.format(ii) for ii in range(emb.shape[-1])],
+            columns=['satclip_ft_{}'.format(ii) for ii in range(emb.shape[-1])],
             index=chunk.index)
         embeddings_df = pd.concat([embeddings_df,emb], axis=0)
     gc.collect()
