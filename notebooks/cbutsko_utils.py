@@ -361,7 +361,7 @@ def process_raw_features_input_df(
             tdf[tcol] = pd.to_datetime(tdf[tcol])
 
     tdf['cropland_wc'] = tdf['landcover_wc']==11
-    tdf['cropland_ec'] = tdf['landcover']==1
+    tdf['cropland_ec'] = tdf['landcover']==11
 
     tdf.set_index(['sample_id'], inplace=True)
 
