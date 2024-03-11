@@ -280,54 +280,75 @@ def plot_confusion_matrix(cm,
     plt.show()
 
 
-def patch2feats(patch: xr.Dataset, tfeatures: List, get_satclip: bool = False) -> pd.DataFrame:
+def patch2feats(
+    patch: xr.Dataset, 
+    tfeatures: List, 
+    get_satclip: bool = False,
+    features_type=np.nan,
+    satclip_model=np.nan,
+    satclip_model_name=np.nan,
+    satclip_pca_model=np.nan,
+    scaler=np.nan,
+    n_pcs: int = 32
+    ) -> pd.DataFrame:
     patch_df = pd.DataFrame()
     for feature_name in ['B02','B03','B04','B08']:
         _feature_colnames = ['OPTICAL-{}-ts{}-10m'.format(feature_name,xx) for xx in range(12)]
         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames)
+        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     for feature_name in ['B05','B06','B07','B8A','B11','B12']:
         _feature_colnames = ['OPTICAL-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames)
+        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     for feature_name in ['VV','VH']:
         _feature_colnames = ['SAR-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames)
+        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     _feature_colnames = ['METEO-temperature_mean-ts{}-100m'.format(xx) for xx in range(12)]
     feature_df = patch['temperature-mean'].values.reshape(12,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames)
+    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     _feature_colnames = ['METEO-precipitation_flux-ts{}-100m'.format(xx) for xx in range(12)]
     feature_df = patch['precipitation-flux'].values.reshape(12,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames)
+    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     feature_df = patch['altitude'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['DEM-alt-20m'])
+    feature_df = pd.DataFrame(feature_df, columns=['DEM-alt-20m']).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     feature_df = patch['slope'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['DEM-slo-20m'])
+    feature_df = pd.DataFrame(feature_df, columns=['DEM-slo-20m']).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
     feature_df = np.repeat(patch['x'].values.reshape(-1,1), patch['y'].shape[0], axis=1).reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['lon'])
+    feature_df = pd.DataFrame(feature_df, columns=['lon']).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    feature_df = np.repeat(patch['y'].values.reshape(1,-1), patch['y'].shape[0], axis=0).reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['lat'])
+    feature_df = np.repeat(patch['y'].values.reshape(1,-1), patch['x'].shape[0], axis=0).reshape(1,-1).swapaxes(0,1)
+    feature_df = pd.DataFrame(feature_df, columns=['lat']).reset_index()
     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    # if get_satclip:
-        # ...
+    if get_satclip:
+        satclip_df = prepare_satclip_embeddings(satclip_model, satclip_model_name, patch_df)
+        if features_type=='emb':
+            patch_df = pd.concat([patch_df,satclip_df], join='inner', axis=1)
+        if features_type=='pca':
+            satclip_emb_norm = scaler.transform(satclip_df.values)
+            satclip_pca = satclip_pca_model.transform(satclip_emb_norm)
+            satclip_pca_feats = ['satclip_{}_PC{}'.format(satclip_model_name,jj) for jj in range(n_pcs)]
+            satclip_pca_df = pd.DataFrame(
+                satclip_pca, 
+                columns=satclip_pca_feats, 
+                index=patch_df.index)
+            patch_df = pd.concat([patch_df,satclip_pca_df], join='inner', axis=1)
 
     patch_df = patch_df[tfeatures]
 
@@ -374,7 +395,12 @@ def process_raw_features_input_df(
 
     return tdf 
 
-def prepare_satclip_embeddings(satclip_model, target_df: pd.DataFrame, max_chunk_size: int = 10000) -> pd.DataFrame:
+def prepare_satclip_embeddings(
+    satclip_model,
+    model_name, 
+    target_df: pd.DataFrame, 
+    max_chunk_size: 
+    int = 10000) -> pd.DataFrame:
     satclip_model.eval()
     df_chunks = np.array_split(target_df[['lat','lon']], np.ceil(len(target_df)/max_chunk_size))
     embeddings_df = pd.DataFrame()
@@ -386,7 +412,7 @@ def prepare_satclip_embeddings(satclip_model, target_df: pd.DataFrame, max_chunk
             emb = satclip_model(latlon_batch).numpy()
         emb = pd.DataFrame(
             emb, 
-            columns=['satclip_ft_{}'.format(ii) for ii in range(emb.shape[-1])],
+            columns=['satclip_{}_ft_{}'.format(model_name,ii) for ii in range(emb.shape[-1])],
             index=chunk.index)
         embeddings_df = pd.concat([embeddings_df,emb], axis=0)
     gc.collect()
