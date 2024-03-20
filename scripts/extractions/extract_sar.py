@@ -24,10 +24,7 @@ from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_hex
 from openeo_gfmap.stac import AUXILIARY
-from pyproj import CRS, Transformer
-from rasterio.features import rasterize
-from rasterio.transform import from_bounds
-from shapely.geometry import Point, box
+from shapely.geometry import Point
 
 # Logger for this current pipeline
 _pipeline_log: Optional[logging.Logger] = None
@@ -58,7 +55,9 @@ def _setup_logger(level=logging.INFO) -> None:
     stream_handler.addFilter(ManagerLoggerFilter())
 
 
-def _buffer_geometry(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
+def _buffer_geometry(
+    geometries: geojson.FeatureCollection, distance_m: int = 320
+) -> gpd.GeoDataFrame:
     """For each geometry of the colleciton, perform a square buffer of 320
     meters on the centroid and return the GeoDataFrame. Before buffering,
     the centroid is clipped to the closest 20m multiplier in order to stay
@@ -72,7 +71,7 @@ def _buffer_geometry(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
     gdf["geometry"] = gdf.centroid.apply(
         lambda point: Point(round(point.x / 20.0) * 20.0, round(point.y / 20.0) * 20.0)
     ).buffer(
-        distance=320, cap_style=3
+        distance=distance_m, cap_style=3
     )  # Square buffer
 
     return gdf
@@ -117,26 +116,60 @@ def _upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
     return upload_url
 
 
-def generate_job_df(
-    backend: Backend, split_dataframes: List[gpd.GeoDataFrame]
+def _get_job_nb_polygons(row: pd.Series) -> int:
+    """Get the number of polygons in the geometry."""
+    return len(
+        list(
+            filter(
+                lambda feat: feat.properties.get("extract"),
+                geojson.loads(row.geometry)["features"],
+            )
+        )
+    )
+
+
+def generate_output_path(
+    root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
+):
+    features = geojson.loads(row.geometry)
+    sample_id = features[geometry_index].properties.get("sample_id", None)
+    if sample_id is None:
+        sample_id = features[geometry_index].properties["sampleID"]
+    ref_id = features[geometry_index].properties["ref_id"]
+
+    s2_tile_id = row.s2_tile
+    h3index = row.h3index
+    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
+
+    subfolder = root_folder / ref_id / h3index / sample_id
+    return (
+        subfolder
+        / f"{row.out_prefix}_{sample_id}_{epsg}_{row.start_date}_{row.end_date}{row.out_extension}"
+    )
+
+
+def create_job_dataframe(
+    backend: Backend, split_jobs: List[gpd.GeoDataFrame], prefix: str = "S1-SIGMA0-10m"
 ) -> pd.DataFrame:
-    """Generates a dataframe for each job that will be executed by the GFMAPJobManager.
-    This step also includes additional information that will be used later in other steps.
-    """
+    """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
     columns = [
         "backend_name",
         "out_prefix",
         "out_extension",
         "start_date",
         "end_date",
+        "s2_tile",
+        "h3index",
         "geometry",
     ]
     rows = []
-    for job in split_dataframes:
+    for job in split_jobs:
         # Compute the average in the valid date and make a buffer of 1.5 year around
         median_time = pd.to_datetime(job.valid_date).mean()
         start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
         end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
+        s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
+        h3index = job.h3index.iloc[0]
 
         rows.append(
             pd.Series(
@@ -145,16 +178,19 @@ def generate_job_df(
                         columns,
                         [
                             backend.value,
-                            "S1-SIGMA0-20m",
+                            prefix,
                             ".nc",
                             start_date.strftime("%Y-%m-%d"),
                             end_date.strftime("%Y-%m-%d"),
+                            s2_tile,
+                            h3index,
                             job.to_json(),
                         ],
                     )
                 )
             )
         )
+
     return pd.DataFrame(rows)
 
 
@@ -226,57 +262,6 @@ def create_datacube_sar(
     )
 
 
-def generate_output_path(
-    root_folder: Path,
-    tmp_path: Path,
-    geometry_index: int,
-    row: pd.Series,
-    s2_grid: gpd.GeoDataFrame,
-) -> Path:
-    """Generates a path where to save the output result, using the root folder"""
-    features = geojson.loads(row.geometry)
-    sample_id = features[geometry_index].properties["sample_id"]
-    ref_id = features[geometry_index].properties["ref_id"]
-    try:
-        # Loads the centroid of the tile in latlon coordinates
-        inds = xr.open_dataset(tmp_path, chunks="auto")
-
-        source_crs = CRS.from_wkt(inds.crs.attrs["crs_wkt"])
-        dst_crs = CRS.from_epsg(4326)
-        transformer = Transformer.from_crs(source_crs, dst_crs, always_xy=True)
-
-        # Get the center point of the tile
-        centroid_utm = box(
-            inds.x.min().item(),
-            inds.y.min().item(),
-            inds.x.max().item(),
-            inds.y.max().item(),
-        ).centroid
-        centroid_latlon = Point(*transformer.transform(centroid_utm.x, centroid_utm.y))
-
-        # Intersecting with the s2 grid, take the tile that is the closest from this centroid
-        intersecting = s2_grid.geometry.intersects(centroid_latlon)
-
-        # Select the intersecting cell that has a centroid the closest from the point
-        intersecting_cells = s2_grid[intersecting]
-        intersecting_cells["distance"] = intersecting_cells.distance(centroid_latlon)
-        intersecting_cells.sort_values("distance", inplace=True)
-        s2_tile = intersecting_cells.iloc[0]
-
-        s2_tile_id = s2_tile.tile
-
-        subfolder = (
-            root_folder / ref_id / str(source_crs.to_epsg()) / s2_tile_id / sample_id
-        )
-    except:  # NOQA
-        subfolder = root_folder / "unsortable"
-
-    return (
-        subfolder
-        / f"{row.out_prefix}_{sample_id}_{source_crs.to_epsg()}_{row.start_date}_{row.end_date}{row.out_extension}"
-    )
-
-
 def add_item_asset(related_item: pystac.Item, path: Path):
     asset = AUXILIARY.create_asset(href=path.as_posix())
     related_item.add_asset("auxiliary", asset)
@@ -288,17 +273,16 @@ def post_job_action(
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
-    assert (
-        len(base_gpd[base_gpd.extract == True]) == len(job_items),
-        "The number of result paths should be the same as the number of geometries",
-    )
-    extracted_gpd = base_gpd[base_gpd.extract == True].reset_index(drop=True)
+    assert len(base_gpd[base_gpd.extract]) == len(
+        job_items
+    ), "The number of result paths should be the same as the number of geometries"
+    extracted_gpd = base_gpd[base_gpd.extract].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for idx, item in enumerate(job_items):
         sample_id = extracted_gpd.iloc[idx].sample_id
         ref_id = extracted_gpd.iloc[idx].ref_id
-        confidence = extracted_gpd.iloc[idx].confidence
         valid_date = extracted_gpd.iloc[idx].valid_date
+        h3index = extracted_gpd.iloc[idx].h3index
 
         item_asset_path = Path(list(item.assets.values())[0].href)
         # Read information from the item file (could also read it from the item object metadata)
@@ -312,74 +296,15 @@ def post_job_action(
                 "valid_date": valid_date,
                 "GFMAP_version": version("openeo_gfmap"),
                 "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "description": f"Sentinel2 L2A observations for sample: {sample_id}, unprocessed.",
-                "title": f"Sentinel2 L2A - {sample_id}",
+                "description": f"Sentinel1 GRD observations for sample: {sample_id}, unprocessed.",
+                "title": f"Sentinel1 GRD - {sample_id}",
                 "sample_id": sample_id,
+                "ref_id": ref_id,
                 "spatial_resolution": "10m",
+                "h3index": h3index,
             }
         )
-        result_ds.to_netcdf(item_asset_path, format="NETCDF4", engine="h5netcdf")
-
-        target_crs = CRS.from_wkt(result_ds.crs.attrs["crs_wkt"])
-
-        # Get the surrounding polygons around our extracted center geometry to rastetize them
-        bounds = (
-            result_ds.x.min().item(),
-            result_ds.y.min().item(),
-            result_ds.x.max().item(),
-            result_ds.y.max().item(),
-        )
-        bbox = box(*bounds)
-        surround_gpd = base_gpd.to_crs(target_crs).clip(bbox)
-
-        # Burn the polygon croptypes
-        transform = from_bounds(*bounds, result_ds.x.size, result_ds.y.size)
-        croptype_shapes = list(zip(surround_gpd.geometry, surround_gpd.croptype_label))
-
-        fill_value = 0
-        croptype = rasterize(
-            croptype_shapes,
-            out_shape=(result_ds.y.size, result_ds.x.size),
-            transform=transform,
-            all_touched=False,
-            fill=fill_value,
-            default_value=0,
-            dtype="int64",
-        )
-
-        # Create the attributes to add to the metadata
-        attributes = {
-            "ref_id": ref_id,
-            "sample_id": sample_id,
-            "confidence": str(confidence),
-            "valid_date": valid_date,
-            "_FillValue": fill_value,
-            "Conventions": "CF-1.9",
-            "GFMAP_version": version("openeo_gfmap"),
-            "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": f"Contains rasterized WorldCereal labels for sample: {sample_id}.",
-            "title": f"WORLDCEREAL Auxiliary file for sample: {sample_id}",
-            "spatial_resolution": "10m",
-        }
-
-        aux_dataset = xr.Dataset(
-            {"LABEL": (("y", "x"), croptype), "crs": result_ds["crs"]},
-            coords={"y": result_ds.y, "x": result_ds.x},
-            attrs=attributes,
-        )
-        # Required to map the 'crs' layer as geo-reference for the 'LABEL' layer.
-        aux_dataset["LABEL"].attrs["grid_mapping"] = "crs"
-
-        # Save the metadata in the same folder as the S2 product
-        metadata_path = (
-            item_asset_path.parent
-            / f"WORLDCEREAL_10m_{sample_id}_{target_crs.to_epsg()}_{valid_date}.nc"
-        )
-        aux_dataset.to_netcdf(metadata_path, format="NETCDF4", engine="h5netcdf")
-        aux_dataset.close()
-
-        # Adds this metadata as a new asset
-        add_item_asset(item, metadata_path)
+        result_ds.to_netcdf(item_asset_path)
 
     return job_items
 
@@ -388,7 +313,7 @@ if __name__ == "__main__":
     _setup_logger()
 
     parser = argparse.ArgumentParser(
-        description="S1 data sampling with OpenEO-GFMAP package."
+        description="S1 samples extraction with OpenEO-GFMAP package."
     )
     parser.add_argument(
         "output_path", type=Path, help="Path where to save the extraction results."
@@ -419,18 +344,18 @@ if __name__ == "__main__":
     # Load the input dataframe, and perform dataset splitting using the h3 tile
     # to respect the area of interest. Also filters out the jobs that have
     # no location with the extract=True flag.
-    _pipeline_log.info(f"Loading input dataframe from {args.input_df}.")
+    _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
+
     input_df = gpd.read_file(args.input_df)
 
     split_dfs = split_job_hex(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = generate_job_df(Backend.CDSE, split_dfs)
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs)
 
     _pipeline_log.warning(
-        f"Sub-sampling the job dataframe for testing. Remove this for production."
+        "Sub-sampling the job dataframe for testing. Remove this for production."
     )
-    job_df = job_df.iloc[[0, 2, 3, -6]].reset_index(drop=True)
 
     # Setup the memory parameters for the job creator.
     create_datacube_sar = partial(
@@ -449,6 +374,8 @@ if __name__ == "__main__":
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
         post_job_action=None,  # No post-job action required for S1
+        collection_id="SENTINEL2-EXTRACTION",
+        collection_description=("Sentinel-2 and Auxiliary data extraction example."),
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
