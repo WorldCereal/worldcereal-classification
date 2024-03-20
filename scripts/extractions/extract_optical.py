@@ -329,6 +329,7 @@ if __name__ == "__main__":
     _pipeline_log.warning(
         "Sub-sampling the job dataframe for testing. Remove this for production."
     )
+    job_df = job_df.iloc[[0]]
 
     # Setup the memory parameters for the job creator.
     create_datacube_optical = partial(
