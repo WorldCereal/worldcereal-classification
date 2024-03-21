@@ -22,7 +22,11 @@ from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import split_job_hex
+from openeo_gfmap.manager.job_splitters import (
+    _append_h3_index,
+    _load_s2_grid,
+    split_job_s2grid,
+)
 from openeo_gfmap.stac import AUXILIARY
 from shapely.geometry import Point
 
@@ -235,7 +239,7 @@ def create_datacube_sar(
     # backscatter computation.
     extractor = build_sentinel1_grd_extractor(
         backend_context=backend_context,
-        bands=["S1-VV", "S1-VH"],
+        bands=["S1-SIGMA0-VV", "S1-SIGMA0-VH"],
         fetch_type=FetchType.POLYGON,
         **extraction_parameters,
     )
@@ -249,6 +253,10 @@ def create_datacube_sar(
     # Additional values to generate the BatcJob name
     h3index = geometry.features[0].properties["h3index"]
     valid_date = geometry.features[0].properties["valid_date"]
+
+    # Increase the memory of the jobs depending on the number of polygons to extract
+    number_polygons = _get_job_nb_polygons(row)
+    _log.debug("Number of polygons to extract %s", number_polygons)
 
     job_options = {
         "executor-memory": executor_memory,
@@ -300,7 +308,7 @@ def post_job_action(
                 "title": f"Sentinel1 GRD - {sample_id}",
                 "sample_id": sample_id,
                 "ref_id": ref_id,
-                "spatial_resolution": "10m",
+                "spatial_resolution": "20m",
                 "h3index": h3index,
             }
         )
@@ -324,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_locations",
         type=int,
-        default=50,
+        default=100,
         help="Maximum number of locations to extract per job.",
     )
     parser.add_argument(
@@ -347,8 +355,9 @@ if __name__ == "__main__":
     _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
     input_df = gpd.read_file(args.input_df)
+    input_df = _append_h3_index(input_df)
 
-    split_dfs = split_job_hex(input_df, max_points=args.max_locations)
+    split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
     job_df = create_job_dataframe(Backend.CDSE, split_dfs)
@@ -368,15 +377,15 @@ if __name__ == "__main__":
     # Setup the s2 grid for the output path generation function
     generate_output_path = partial(
         generate_output_path,
-        s2_grid=gpd.read_file("/data/users/Public/couchard/s2grid_bounds.geojson"),
+        s2_grid=_load_s2_grid(),
     )
 
     manager = GFMAPJobManager(
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
         post_job_action=None,  # No post-job action required for S1
-        collection_id="SENTINEL2-EXTRACTION",
-        collection_description=("Sentinel-2 and Auxiliary data extraction example."),
+        collection_id="SENTINEL1-EXTRACTION",
+        collection_description="Sentinel-1 data extraction example.",
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
@@ -386,3 +395,6 @@ if __name__ == "__main__":
 
     _pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_sar, tracking_df_path)
+
+    _pipeline_log.info("Jobs are finished, creating the STAC catalogue...")
+    manager.create_stac()

@@ -33,11 +33,23 @@ from openeo_gfmap.manager.job_splitters import (
     _load_s2_grid,
     split_job_s2grid,
 )
-from openeo_gfmap.stac import AUXILIARY
 from pyproj import CRS
 from rasterio.features import rasterize
 from rasterio.transform import from_bounds
 from shapely.geometry import box
+
+AUXILIARY = pystac.extensions.item_assets.AssetDefinition(
+    {
+        "title": "ground truth data",
+        "description": "This asset contains the crop type codes.",
+        "type": "application/x-netcdf",
+        "roles": ["data"],
+        "proj:shape": [64, 64],
+        "raster:bands": [
+            {"name": "CROPTYPE", "data_type": "uint16", "bits_per_sample": 16}
+        ],
+    }
+)
 
 
 def create_datacube_optical(
@@ -85,7 +97,7 @@ def create_datacube_optical(
         "S2-L2A-SCL",
     ]
 
-    # Compute the SCL dilation and add it to the cube
+    # Extract the SCL collection only
     sub_collection = connection.load_collection(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
@@ -95,6 +107,8 @@ def create_datacube_optical(
             "tileId": lambda val: val == row.s2_tile,
         },
     )
+
+    # Compute the SCL dilation mask
     scl_dilated_mask = sub_collection.process(
         "to_scl_dilation_mask",
         data=sub_collection,
@@ -106,27 +120,8 @@ def create_datacube_optical(
         erosion_kernel_size=3,
     ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
 
-    # Create the job to extract S2
-    extraction_parameters = {
-        "target_resolution": 10,
-        "load_collection": {
-            "eo:cloud_cover": lambda val: val <= 95.0,
-            "tileId": lambda val: val == row.s2_tile,
-        },
-        "additional_mask": scl_dilated_mask,  # Add an additional mask computed from the SCL layer
-    }
-    extractor = build_sentinel2_l2a_extractor(
-        backend_context,
-        bands=bands_to_download,
-        fetch_type=fetch_type.POLYGON,
-        **extraction_parameters,
-    )
-
-    cube = extractor.get_cube(connection, spatial_extent_url, temporal_context)
-
     # Compute the distance to cloud and add it to the cube
-    scl = cube.filter_bands(["S2-L2A-SCL"])
-    distance_to_cloud = scl.apply_neighborhood(
+    distance_to_cloud = sub_collection.apply_neighborhood(
         process=openeo.UDF.from_file(
             Path(__file__).parent / "udf_distance_to_cloud.py"
         ),
@@ -139,7 +134,27 @@ def create_datacube_optical(
             {"dimension": "y", "unit": "px", "value": 16},
         ],
     ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
-    cube = cube.merge_cubes(distance_to_cloud)
+
+    additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
+
+    # Create the job to extract S2
+    extraction_parameters = {
+        "target_resolution": None,  # Disable target resolution
+        "load_collection": {
+            "eo:cloud_cover": lambda val: val <= 95.0,
+            "tileId": lambda val: val == row.s2_tile,
+        },
+        "pre_merge": additional_masks,  # Add an additional mask computed from the SCL layer
+        "pre_mask": scl_dilated_mask,
+    }
+    extractor = build_sentinel2_l2a_extractor(
+        backend_context,
+        bands=bands_to_download,
+        fetch_type=fetch_type.POLYGON,
+        **extraction_parameters,
+    )
+
+    cube = extractor.get_cube(connection, spatial_extent_url, temporal_context)
 
     cube = cube.linear_scale_range(0, 65534, 0, 65534)
 
@@ -298,11 +313,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_locations",
         type=int,
-        default=100,
+        default=500,
         help="Maximum number of locations to extract per job.",
     )
     parser.add_argument(
-        "--memory", type=str, default="5G", help="Memory to allocate for the executor."
+        "--memory", type=str, default="3G", help="Memory to allocate for the executor."
     )
     parser.add_argument(
         "--memory-overhead",
@@ -361,3 +376,5 @@ if __name__ == "__main__":
 
     _pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
+
+    manager.create_stac(asset_definitions={"auxiliary": AUXILIARY})

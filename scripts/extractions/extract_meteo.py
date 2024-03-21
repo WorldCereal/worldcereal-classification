@@ -2,7 +2,6 @@
 import argparse
 from functools import partial
 from pathlib import Path
-from typing import List
 
 import geojson
 import geopandas as gpd
