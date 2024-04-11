@@ -15,6 +15,9 @@ import rasterio as rio
 from typing import Callable, Dict, List, Optional, Union
 from pathlib import Path
 
+from h3 import h3
+from shapely import Point, Polygon, buffer
+
 from catboost import CatBoostClassifier, Pool
 from sklearn.metrics import f1_score, confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
@@ -31,7 +34,7 @@ tqdm.pandas()
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from load import get_satclip
+# from load import get_satclip
 
 # device = 'cpu'
 
@@ -418,7 +421,4 @@ def prepare_satclip_embeddings(
     gc.collect()
 
     return embeddings_df
-
-
-
 
