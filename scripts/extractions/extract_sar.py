@@ -29,8 +29,6 @@ from openeo_gfmap.manager.job_splitters import (
 )
 from shapely.geometry import Point
 
-from worldcereal.openeo.preprocessing import raw_datacube_S1
-
 # Logger for this current pipeline
 _pipeline_log: Optional[logging.Logger] = None
 
