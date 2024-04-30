@@ -66,7 +66,7 @@ def create_datacube_meteo(
     )
 
     h3index = geometry.features[0].properties["h3index"]
-    valid_date = geometry.features[0].properties["valid_date"]
+    valid_time = geometry.features[0].properties["valid_time"]
 
     job_options = {
         "executor-memory": executor_memory,
@@ -74,7 +74,7 @@ def create_datacube_meteo(
     }
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_date}",
+        title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_time}",
         sample_by_feature=True,
         job_options=job_options,
     )

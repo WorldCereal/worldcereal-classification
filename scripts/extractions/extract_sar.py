@@ -13,6 +13,7 @@ from typing import List, Optional
 import geojson
 import geopandas as gpd
 import openeo
+from openeo.extra.job_management import _log as _log_openeo
 import pandas as pd
 import pystac
 import requests
@@ -34,15 +35,17 @@ _pipeline_log: Optional[logging.Logger] = None
 
 
 def _setup_logger(level=logging.INFO) -> None:
-    global _pipeline_log
+    global _pipeline_log, _log_openeo
     """Setup the logger from the openeo_gfmap package to the assigned level."""
     _pipeline_log = logging.getLogger("pipeline_sar")
 
     _pipeline_log.setLevel(level)
     _log.setLevel(level)
+    _log_openeo.setLevel(level)
 
     stream_handler = logging.StreamHandler()
     _log.addHandler(stream_handler)
+    _log_openeo.addHandler(stream_handler)
     _pipeline_log.addHandler(stream_handler)
 
     formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
@@ -53,7 +56,7 @@ def _setup_logger(level=logging.INFO) -> None:
         """Filter to only accept the OpenEO-GFMAP manager logs."""
 
         def filter(self, record):
-            return record.name in [_log.name, _pipeline_log.name]
+            return record.name in [_log.name, _pipeline_log.name, _log_openeo.name]
 
     stream_handler.addFilter(ManagerLoggerFilter())
 
@@ -83,7 +86,7 @@ def _buffer_geometry(
 def _filter_extract_true(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
     """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
     return geojson.FeatureCollection(
-        [f for f in geometries.features if f.properties.get("extract", False)]
+        [f for f in geometries.features if f.properties.get("extract", 0) == 1]
     )
 
 
@@ -141,10 +144,10 @@ def generate_output_path(
     ref_id = features[geometry_index].properties["ref_id"]
 
     s2_tile_id = row.s2_tile
-    h3index = row.h3index
+    h3_l3_cell = row.h3_l3_cell
     epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
-    subfolder = root_folder / ref_id / h3index / sample_id
+    subfolder = root_folder / ref_id / h3_l3_cell / sample_id
     return (
         subfolder
         / f"{row.out_prefix}_{sample_id}_{epsg}_{row.start_date}_{row.end_date}{row.out_extension}"
@@ -162,17 +165,17 @@ def create_job_dataframe(
         "start_date",
         "end_date",
         "s2_tile",
-        "h3index",
+        "h3_l3_cell",
         "geometry",
     ]
     rows = []
     for job in split_jobs:
         # Compute the average in the valid date and make a buffer of 1.5 year around
-        median_time = pd.to_datetime(job.valid_date).mean()
+        median_time = pd.to_datetime(job.valid_time).mean()
         start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
         end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
-        h3index = job.h3index.iloc[0]
+        h3_l3_cell = job.h3_l3_cell.iloc[0]
 
         rows.append(
             pd.Series(
@@ -186,7 +189,7 @@ def create_job_dataframe(
                             start_date.strftime("%Y-%m-%d"),
                             end_date.strftime("%Y-%m-%d"),
                             s2_tile,
-                            h3index,
+                            h3_l3_cell,
                             job.to_json(),
                         ],
                     )
@@ -251,7 +254,7 @@ def create_datacube_sar(
 
     # Additional values to generate the BatcJob name
     s2_tile = row.s2_tile
-    valid_date = geometry.features[0].properties["valid_date"]
+    valid_time = geometry.features[0].properties["valid_time"]
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_polygons = _get_job_nb_polygons(row)
@@ -263,7 +266,7 @@ def create_datacube_sar(
     }
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_date}",
+        title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=job_options,
     )
@@ -283,8 +286,8 @@ def post_job_action(
     for idx, item in enumerate(job_items):
         sample_id = extracted_gpd.iloc[idx].sample_id
         ref_id = extracted_gpd.iloc[idx].ref_id
-        valid_date = extracted_gpd.iloc[idx].valid_date
-        h3index = extracted_gpd.iloc[idx].h3index
+        valid_time = extracted_gpd.iloc[idx].valid_time
+        h3_l3_cell = extracted_gpd.iloc[idx].h3_l3_cell
 
         item_asset_path = Path(list(item.assets.values())[0].href)
         # Read information from the item file (could also read it from the item object metadata)
@@ -295,7 +298,7 @@ def post_job_action(
             {
                 "start_date": row.start_date,
                 "end_date": row.end_date,
-                "valid_date": valid_date,
+                "valid_time": valid_time,
                 "GFMAP_version": version("openeo_gfmap"),
                 "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "description": f"Sentinel1 GRD observations for sample: {sample_id}, unprocessed.",
@@ -303,7 +306,7 @@ def post_job_action(
                 "sample_id": sample_id,
                 "ref_id": ref_id,
                 "spatial_resolution": "20m",
-                "h3index": h3index,
+                "h3_l3_cell": h3_l3_cell,
             }
         )
         result_ds.to_netcdf(item_asset_path)

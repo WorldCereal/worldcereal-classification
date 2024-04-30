@@ -10,6 +10,7 @@ from typing import List
 import geojson
 import geopandas as gpd
 import openeo
+from openeo.extra.job_management import _log as _log_openeo
 import pandas as pd
 import pystac
 from extract_sar import (
@@ -23,11 +24,10 @@ from extract_sar import (
     generate_output_path,
 )
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
-from openeo_gfmap.backend import cdse_staging_connection
+from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import (
-    _append_h3_index,
     _load_s2_grid,
     split_job_s2grid,
 )
@@ -35,19 +35,127 @@ from openeo_gfmap.utils.netcdf import update_nc_attributes
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
 
-AUXILIARY = pystac.extensions.item_assets.AssetDefinition(
+# Define the sentinel 2 asset
+sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
     {
-        "title": "ground truth data",
-        "description": "This asset contains the crop type codes.",
+        "gsd": 10,
+        "title": "Sentinel2",
+        "description": "Sentinel-2 bands",
         "type": "application/x-netcdf",
         "roles": ["data"],
         "proj:shape": [64, 64],
-        "raster:bands": [
-            {"name": "ewoc_code", "data_type": "int64", "bits_per_sample": 64}
+        "raster:bands": [{"name": "S2-L2A-B01"}, 
+                         {"name": "S2-L2A-B02"},
+                         {"name": "S2-L2A-B03"},
+                         {"name": "S2-L2A-B04"},
+                         {"name": "S2-L2A-B05"},
+                         {"name": "S2-L2A-B06"},
+                         {"name": "S2-L2A-B07"},
+                         {"name": "S2-L2A-B8A"},
+                         {"name": "S2-L2A-B08"},
+                         {"name": "S2-L2A-B11"},
+                         {"name": "S2-L2A-B12"},
+                         {"name": "S2-L2A-SCL"},
+                         {"name": "S2-L2A-SCL_DILATED_MASK"},
+                         {"name": "S2-L2A-DISTANCE_TO_CLOUD"}],
+        "cube:variables": {
+            "S2-L2A-B01": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B02": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B03": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B04": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B05": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B06": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B07": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B8A": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B08": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B11": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B12": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-SCL": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-SCL_DILATED_MASK": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-DISTANCE_TO_CLOUD": {"dimensions": ["time", "y", "x"], "type": "data"},
+        },
+        "eo:bands": [
+            {
+                "name": "S2-L2A-B01",
+                "common_name": "coastal",
+                "center_wavelength": 0.443,
+                "full_width_half_max": 0.027,
+            },
+            {
+                "name": "S2-L2A-B02",
+                "common_name": "blue",
+                "center_wavelength": 0.49,
+                "full_width_half_max": 0.098,
+            },
+            {
+                "name": "S2-L2A-B03",
+                "common_name": "green",
+                "center_wavelength": 0.56,
+                "full_width_half_max": 0.045,
+            },
+            {
+                "name": "S2-L2A-B04",
+                "common_name": "red",
+                "center_wavelength": 0.665,
+                "full_width_half_max": 0.038,
+            },
+            {
+                "name": "S2-L2A-B05",
+                "common_name": "rededge",
+                "center_wavelength": 0.704,
+                "full_width_half_max": 0.019,
+            },
+            {
+                "name": "S2-L2A-B06",
+                "common_name": "rededge",
+                "center_wavelength": 0.74,
+                "full_width_half_max": 0.018,
+            },
+            {
+                "name": "S2-L2A-B07",
+                "common_name": "rededge",
+                "center_wavelength": 0.783,
+                "full_width_half_max": 0.028,
+            },
+            {
+                "name": "S2-L2A-B08",
+                "common_name": "nir",
+                "center_wavelength": 0.842,
+                "full_width_half_max": 0.145,
+            },
+            {
+                "name": "S2-L2A-B8A",
+                "common_name": "nir08",
+                "center_wavelength": 0.865,
+                "full_width_half_max": 0.033,
+            },
+            {
+                "name": "S2-L2A-B11",
+                "common_name": "swir16",
+                "center_wavelength": 1.61,
+                "full_width_half_max": 0.143,
+            },
+            {
+                "name": "S2-L2A-B12",
+                "common_name": "swir16",
+                "center_wavelength": 1.61,
+                "full_width_half_max": 0.143,
+            },
+            {
+                "name": "S2-L2A-SCL",
+                "common_name": "swir16",
+                "center_wavelength": 1.61,
+                "full_width_half_max": 0.143,
+            },
+            {
+                "name": "S2-L2A-SCL_DILATED_MASK",
+            },
+            {
+                "name": "S2-L2A-DISTANCE_TO_CLOUD",
+            },
         ],
     }
 )
-
 
 def create_datacube_optical(
     row: pd.Series,
@@ -79,7 +187,7 @@ def create_datacube_optical(
 
     # Get the h3index to use in the tile
     s2_tile = row.s2_tile
-    valid_date = geometry.features[0].properties["valid_date"]
+    valid_time = geometry.features[0].properties["valid_time"]
 
     bands_to_download = [
         "S2-L2A-B01",
@@ -129,7 +237,7 @@ def create_datacube_optical(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_date}",
+        title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=job_options,
     )
@@ -141,11 +249,11 @@ def post_job_action(
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
-    assert len(base_gpd[base_gpd.extract]) == len(
+    assert len(base_gpd[base_gpd.extract == 1]) == len(
         job_items
     ), "The number of result paths should be the same as the number of geometries"
 
-    extracted_gpd = base_gpd[base_gpd.extract].reset_index(drop=True)
+    extracted_gpd = base_gpd[base_gpd.extract == 1].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for idx, item in enumerate(job_items):
         if "sample_id" in extracted_gpd.columns:
@@ -154,8 +262,8 @@ def post_job_action(
             sample_id = extracted_gpd.iloc[idx].sampleID
 
         ref_id = extracted_gpd.iloc[idx].ref_id
-        valid_date = extracted_gpd.iloc[idx].valid_date
-        h3index = extracted_gpd.iloc[idx].h3index
+        valid_time = extracted_gpd.iloc[idx].valid_time
+        h3_l3_cell = extracted_gpd.iloc[idx].h3_l3_cell
         s2_tile = row.s2_tile
 
         item_asset_path = Path(list(item.assets.values())[0].href)
@@ -164,7 +272,7 @@ def post_job_action(
         new_attributes = {
             "start_date": row.start_date,
             "end_date": row.end_date,
-            "valid_date": valid_date,
+            "valid_time": valid_time,
             "GFMAP_version": version("openeo_gfmap"),
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "description": f"Sentinel2 L2A observations for sample: {sample_id}, unprocessed.",
@@ -173,7 +281,7 @@ def post_job_action(
             "ref_id": ref_id,
             "spatial_resolution": "10m",
             "s2_tile": s2_tile,
-            "h3index": h3index,
+            "h3_l3_cell": h3_l3_cell,
         }
 
         # Saves the new attributes in the netcdf file
@@ -194,7 +302,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "input_df",
-        type=str,
+        type=Path,
         help="Path or URL to the input dataframe for the training data.",
     )
     parser.add_argument(
@@ -206,7 +314,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--memory",
         type=str,
-        default="600m",
+        default="1800m",
         help="Memory to allocate for the executor.",
     )
     parser.add_argument(
@@ -223,13 +331,15 @@ if __name__ == "__main__":
     # Load the input dataframe
     _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
-    input_df = gpd.read_file(args.input_df)
-    input_df = _append_h3_index(input_df, grid_resolution=3)
+    if args.input_df.name.endswith('.geoparquet'):
+        input_df = gpd.read_parquet(args.input_df)
+    else:
+        input_df = gpd.read_file(args.input_df)
 
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
-    split_dfs = [df for df in split_dfs if df.extract.any()]
+    split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
 
-    job_df = create_job_dataframe(Backend.CDSE_STAGING, split_dfs, prefix="S2-L2A-10m")
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs, prefix="S2-L2A-10m")
 
     # Setup the memory parameters for the job creator.
     create_datacube_optical = partial(
@@ -256,19 +366,12 @@ if __name__ == "__main__":
     )
 
     manager.add_backend(
-        Backend.CDSE_STAGING.value, cdse_staging_connection, parallel_jobs=6
+        Backend.CDSE.value, cdse_connection, parallel_jobs=6
+    )
+    manager.setup_stac(
+        constellation="sentinel2",
+        item_assets={"sentinel2": sentinel2_asset},
     )
 
     _pipeline_log.info("Launching the jobs from the manager.")
-
-    try:
-        manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
-        manager.create_stac(
-            constellation="sentinel2", item_assets={"auxiliary": AUXILIARY}
-        )
-    except Exception as e:
-        _pipeline_log.error("Error during the job execution: %s", e)
-        manager.create_stac(
-            constellation="sentinel2", item_assets={"auxiliary": AUXILIARY}
-        )
-        raise e
+    manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)

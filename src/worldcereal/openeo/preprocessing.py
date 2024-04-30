@@ -117,15 +117,15 @@ def raw_datacube_S2(
             "eo:cloud_cover": lambda val: val <= 95.0,
         },
     }
-    if (backend_context.backend is Backend.CDSE_STAGING) and (
-        fetch_type == FetchType.POLYGON
-    ):  # At the moment only available in CDSE staging
-        extraction_parameters["update_arguments"] = {
-            "featureflags": {
-                "tile_size": 128,
-                "load_per_product": True,
-            }
-        }
+    # if (backend_context.backend is Backend.CDSE_STAGING) and (
+    #     fetch_type == FetchType.POLYGON
+    # ):  # At the moment only available in CDSE staging
+    #     extraction_parameters["update_arguments"] = {
+    #         "featureflags": {
+    #             "tile_size": 128,
+    #             "load_per_product": True,
+    #         }
+    #     }
     if additional_masks:
         extraction_parameters["pre_merge"] = additional_masks
     if filter_tile:
