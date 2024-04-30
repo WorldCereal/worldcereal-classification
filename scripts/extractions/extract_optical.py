@@ -12,7 +12,6 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
-import xarray as xr
 from extract_sar import (
     _buffer_geometry,
     _filter_extract_true,
@@ -25,7 +24,6 @@ from extract_sar import (
 )
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_staging_connection
-from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import (
@@ -33,10 +31,9 @@ from openeo_gfmap.manager.job_splitters import (
     _load_s2_grid,
     split_job_s2grid,
 )
-from pyproj import CRS
-from rasterio.features import rasterize
-from rasterio.transform import from_bounds
-from shapely.geometry import box
+from openeo_gfmap.utils.netcdf import update_nc_attributes
+
+from worldcereal.openeo.preprocessing import raw_datacube_S2
 
 AUXILIARY = pystac.extensions.item_assets.AssetDefinition(
     {
@@ -46,7 +43,7 @@ AUXILIARY = pystac.extensions.item_assets.AssetDefinition(
         "roles": ["data"],
         "proj:shape": [64, 64],
         "raster:bands": [
-            {"name": "CROPTYPE", "data_type": "uint16", "bits_per_sample": 16}
+            {"name": "ewoc_code", "data_type": "int64", "bits_per_sample": 64}
         ],
     }
 )
@@ -80,7 +77,10 @@ def create_datacube_optical(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    fetch_type = FetchType.POLYGON
+    # Get the h3index to use in the tile
+    s2_tile = row.s2_tile
+    valid_date = geometry.features[0].properties["valid_date"]
+
     bands_to_download = [
         "S2-L2A-B01",
         "S2-L2A-B02",
@@ -97,78 +97,34 @@ def create_datacube_optical(
         "S2-L2A-SCL",
     ]
 
-    # Extract the SCL collection only
-    sub_collection = connection.load_collection(
-        collection_id="SENTINEL2_L2A",
-        bands=["SCL"],
-        temporal_extent=[start_date, end_date],
-        properties={
-            "eo:cloud_cover": lambda val: val <= 95.0,
-            "tileId": lambda val: val == row.s2_tile,
-        },
-    )
-
-    # Compute the SCL dilation mask
-    scl_dilated_mask = sub_collection.process(
-        "to_scl_dilation_mask",
-        data=sub_collection,
-        scl_band_name="SCL",
-        kernel1_size=17,  # 17px dilation on a 20m layer
-        kernel2_size=77,  # 77px dilation on a 20m layer
-        mask1_values=[2, 4, 5, 6, 7],
-        mask2_values=[3, 8, 9, 10, 11],
-        erosion_kernel_size=3,
-    ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
-
-    # Compute the distance to cloud and add it to the cube
-    distance_to_cloud = sub_collection.apply_neighborhood(
-        process=openeo.UDF.from_file(
-            Path(__file__).parent / "udf_distance_to_cloud.py"
-        ),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 256},
-            {"dimension": "y", "unit": "px", "value": 256},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 16},
-            {"dimension": "y", "unit": "px", "value": 16},
-        ],
-    ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
-
-    additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
-
-    # Create the job to extract S2
-    extraction_parameters = {
-        "target_resolution": None,  # Disable target resolution
-        "load_collection": {
-            "eo:cloud_cover": lambda val: val <= 95.0,
-            "tileId": lambda val: val == row.s2_tile,
-        },
-        "pre_merge": additional_masks,  # Add an additional mask computed from the SCL layer
-        "pre_mask": scl_dilated_mask,
-    }
-    extractor = build_sentinel2_l2a_extractor(
+    cube = raw_datacube_S2(
+        connection,
         backend_context,
-        bands=bands_to_download,
-        fetch_type=fetch_type.POLYGON,
-        **extraction_parameters,
+        spatial_extent_url,
+        temporal_context,
+        bands_to_download,
+        FetchType.POLYGON,
+        filter_tile=s2_tile,
+        apply_mask=False,
+        additional_masks=True,
     )
-
-    cube = extractor.get_cube(connection, spatial_extent_url, temporal_context)
-
-    cube = cube.linear_scale_range(0, 65534, 0, 65534)
-
-    # Get the h3index to use in the tile
-    s2_tile = row.s2_tile
-    valid_date = geometry.features[0].properties["valid_date"]
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_polygons = _get_job_nb_polygons(row)
     _log.debug("Number of polygons to extract %s", number_polygons)
 
     job_options = {
+        "driver-memory": "2G",
+        "driver-memoryOverhead": "2G",
+        "driver-cores": "1",
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
+        "executor-cores": "1",
+        "max-executors": "34",
+        "soft-errors": "true",
+        "gdal-dataset-cache-size": 2,
+        "gdal-cachemax": 120,
+        "executor-threads-jvm": 1,
     }
 
     return cube.create_job(
@@ -177,11 +133,6 @@ def create_datacube_optical(
         sample_by_feature=True,
         job_options=job_options,
     )
-
-
-def add_item_asset(related_item: pystac.Item, path: Path):
-    asset = AUXILIARY.create_asset(href=path.as_posix())
-    related_item.add_asset("auxiliary", asset)
 
 
 def post_job_action(
@@ -203,94 +154,30 @@ def post_job_action(
             sample_id = extracted_gpd.iloc[idx].sampleID
 
         ref_id = extracted_gpd.iloc[idx].ref_id
-        confidence = extracted_gpd.iloc[idx].confidence
         valid_date = extracted_gpd.iloc[idx].valid_date
         h3index = extracted_gpd.iloc[idx].h3index
         s2_tile = row.s2_tile
 
         item_asset_path = Path(list(item.assets.values())[0].href)
-        # Read information from the item file (could also read it from the item object metadata)
-        result_ds = xr.open_dataset(item_asset_path)
 
         # Add some metadata to the result_df netcdf file
-        result_ds.attrs.update(
-            {
-                "start_date": row.start_date,
-                "end_date": row.end_date,
-                "valid_date": valid_date,
-                "GFMAP_version": version("openeo_gfmap"),
-                "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "description": f"Sentinel2 L2A observations for sample: {sample_id}, unprocessed.",
-                "title": f"Sentinel2 L2A - {sample_id}",
-                "sample_id": sample_id,
-                "ref_id": ref_id,
-                "spatial_resolution": "10m",
-                "s2_tile": s2_tile,
-                "h3index": h3index,
-            }
-        )
-        result_ds.to_netcdf(item_asset_path)
-
-        target_crs = CRS.from_wkt(result_ds.crs.attrs["crs_wkt"])
-
-        # Get the surrounding polygons around our extracted center geometry to rastetize them
-        bounds = (
-            result_ds.x.min().item(),
-            result_ds.y.min().item(),
-            result_ds.x.max().item(),
-            result_ds.y.max().item(),
-        )
-        bbox = box(*bounds)
-        surround_gpd = base_gpd.to_crs(target_crs).clip(bbox)
-
-        # Burn the polygon croptypes
-        transform = from_bounds(*bounds, result_ds.x.size, result_ds.y.size)
-        croptype_shapes = list(zip(surround_gpd.geometry, surround_gpd.croptype_label))
-
-        fill_value = 0
-        croptype = rasterize(
-            croptype_shapes,
-            out_shape=(result_ds.y.size, result_ds.x.size),
-            transform=transform,
-            all_touched=False,
-            fill=fill_value,
-            default_value=0,
-            dtype="int64",
-        )
-
-        # Create the attributes to add to the metadata
-        attributes = {
-            "ref_id": ref_id,
-            "sample_id": sample_id,
-            "confidence": str(confidence),
+        new_attributes = {
+            "start_date": row.start_date,
+            "end_date": row.end_date,
             "valid_date": valid_date,
-            "_FillValue": fill_value,
-            "Conventions": "CF-1.9",
             "GFMAP_version": version("openeo_gfmap"),
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": f"Contains rasterized WorldCereal labels for sample: {sample_id}.",
-            "title": f"WORLDCEREAL Auxiliary file for sample: {sample_id}",
+            "description": f"Sentinel2 L2A observations for sample: {sample_id}, unprocessed.",
+            "title": f"Sentinel2 L2A - {sample_id}",
+            "sample_id": sample_id,
+            "ref_id": ref_id,
             "spatial_resolution": "10m",
+            "s2_tile": s2_tile,
+            "h3index": h3index,
         }
 
-        aux_dataset = xr.Dataset(
-            {"LABEL": (("y", "x"), croptype), "crs": result_ds["crs"]},
-            coords={"y": result_ds.y, "x": result_ds.x},
-            attrs=attributes,
-        )
-        # Required to map the 'crs' layer as geo-reference for the 'LABEL' layer.
-        aux_dataset["LABEL"].attrs["grid_mapping"] = "crs"
-
-        # Save the metadata in the same folder as the S2 product
-        metadata_path = (
-            item_asset_path.parent
-            / f"WORLDCEREAL-10m_{sample_id}_{target_crs.to_epsg()}_{valid_date}.nc"
-        )
-        aux_dataset.to_netcdf(metadata_path, format="NETCDF4", engine="h5netcdf")
-        aux_dataset.close()
-
-        # Adds this metadata as a new asset
-        add_item_asset(item, metadata_path)
+        # Saves the new attributes in the netcdf file
+        update_nc_attributes(item_asset_path, new_attributes)
 
     return job_items
 
@@ -317,12 +204,15 @@ if __name__ == "__main__":
         help="Maximum number of locations to extract per job.",
     )
     parser.add_argument(
-        "--memory", type=str, default="3G", help="Memory to allocate for the executor."
+        "--memory",
+        type=str,
+        default="600m",
+        help="Memory to allocate for the executor.",
     )
     parser.add_argument(
-        "--memory-overhead",
+        "--memory_overhead",
         type=str,
-        default="3G",
+        default="1900m",
         help="Memory overhead to allocate for the executor.",
     )
 
@@ -340,11 +230,6 @@ if __name__ == "__main__":
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
     job_df = create_job_dataframe(Backend.CDSE_STAGING, split_dfs, prefix="S2-L2A-10m")
-
-    _pipeline_log.warning(
-        "Sub-sampling the job dataframe for testing. Remove this for production."
-    )
-    job_df = job_df.iloc[[0]]
 
     # Setup the memory parameters for the job creator.
     create_datacube_optical = partial(
@@ -375,6 +260,15 @@ if __name__ == "__main__":
     )
 
     _pipeline_log.info("Launching the jobs from the manager.")
-    manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
 
-    manager.create_stac(asset_definitions={"auxiliary": AUXILIARY})
+    try:
+        manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
+        manager.create_stac(
+            constellation="sentinel2", item_assets={"auxiliary": AUXILIARY}
+        )
+    except Exception as e:
+        _pipeline_log.error("Error during the job execution: %s", e)
+        manager.create_stac(
+            constellation="sentinel2", item_assets={"auxiliary": AUXILIARY}
+        )
+        raise e

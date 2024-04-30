@@ -7,7 +7,7 @@ from skimage.morphology import binary_erosion, footprints
 
 def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
     cube_array: xr.DataArray = cube.get_array()
-    cube_array = cube_array.transpose("t", "bands", "y", "x")
+    cube_array = cube_array.transpose("bands", "y", "x")
 
     clouds = np.logical_or(
         np.logical_and(cube_array < 11, cube_array >= 8), cube_array == 3
@@ -47,11 +47,10 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
     distance_da = xr.DataArray(
         distance,
         coords={
-            "t": cube_array.coords["t"],
             "y": cube_array.coords["y"],
             "x": cube_array.coords["x"],
         },
-        dims=["t", "y", "x"],
+        dims=["y", "x"],
     )
 
     distance_da = distance_da.expand_dims(
@@ -60,6 +59,6 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
         },
     )
 
-    distance_da = distance_da.transpose("t", "bands", "y", "x")
+    distance_da = distance_da.transpose("bands", "y", "x")
 
     return XarrayDataCube(distance_da)

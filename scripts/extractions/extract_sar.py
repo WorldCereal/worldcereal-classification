@@ -18,7 +18,7 @@ import pystac
 import requests
 import xarray as xr
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
-from openeo_gfmap.backend import cdse_connection
+from openeo_gfmap.backend import cdse_staging_connection
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
@@ -27,8 +27,9 @@ from openeo_gfmap.manager.job_splitters import (
     _load_s2_grid,
     split_job_s2grid,
 )
-from openeo_gfmap.stac import AUXILIARY
 from shapely.geometry import Point
+
+from worldcereal.openeo.preprocessing import raw_datacube_S1
 
 # Logger for this current pipeline
 _pipeline_log: Optional[logging.Logger] = None
@@ -223,7 +224,7 @@ def create_datacube_sar(
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
-    geometry_df = _buffer_geometry(geometry)
+    geometry_df = _buffer_geometry(geometry, distance_m=310)
     spatial_extent_url = _upload_geoparquet_artifactory(geometry_df, row.name)
 
     # Backend name and fetching type
@@ -251,7 +252,7 @@ def create_datacube_sar(
     )
 
     # Additional values to generate the BatcJob name
-    h3index = geometry.features[0].properties["h3index"]
+    s2_tile = row.s2_tile
     valid_date = geometry.features[0].properties["valid_date"]
 
     # Increase the memory of the jobs depending on the number of polygons to extract
@@ -264,15 +265,10 @@ def create_datacube_sar(
     }
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S1_{h3index}_{valid_date}",
+        title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_date}",
         sample_by_feature=True,
         job_options=job_options,
     )
-
-
-def add_item_asset(related_item: pystac.Item, path: Path):
-    asset = AUXILIARY.create_asset(href=path.as_posix())
-    related_item.add_asset("auxiliary", asset)
 
 
 def post_job_action(
@@ -332,16 +328,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_locations",
         type=int,
-        default=100,
+        default=500,
         help="Maximum number of locations to extract per job.",
     )
     parser.add_argument(
-        "--memory", type=str, default="5G", help="Memory to allocate for the executor."
+        "--memory", type=str, default="3G", help="Memory to allocate for the executor."
     )
     parser.add_argument(
         "--memory-overhead",
         type=str,
-        default="2G",
+        default="1G",
         help="Memory overhead to allocate for the executor.",
     )
 
@@ -360,7 +356,7 @@ if __name__ == "__main__":
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = create_job_dataframe(Backend.CDSE, split_dfs)
+    job_df = create_job_dataframe(Backend.CDSE_STAGING, split_dfs)
 
     _pipeline_log.warning(
         "Sub-sampling the job dataframe for testing. Remove this for production."
@@ -391,7 +387,9 @@ if __name__ == "__main__":
         post_job_params={},
     )
 
-    manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=6)
+    manager.add_backend(
+        Backend.CDSE_STAGING.value, cdse_staging_connection, parallel_jobs=6
+    )
 
     _pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_sar, tracking_df_path)
