@@ -168,3 +168,16 @@ notebooks/S1A_IW_GRDH_1SDV_20191026T153410_20191026T153444_029631_035FDA_2640.SA
 scripts/classification/tenpercent_sparse/.nfs00000000c35c9cfd00000035
 download.zip
 catboost_info/catboost_training.json
+
+*.cbm
+*.pt
+*.onnx
+*.nc
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
