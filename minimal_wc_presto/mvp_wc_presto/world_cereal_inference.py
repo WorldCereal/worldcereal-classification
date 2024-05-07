@@ -82,7 +82,7 @@ class WorldCerealPredictor:
             raise ValueError("Model has not been loaded. Please load a model first.")
         
         # Prepare input data for ONNX model
-        outputs = self.onnx_session.run(None, {'features': features.to_numpy().astype(np.float32)})
+        outputs = self.onnx_session.run(None, {'features': features})
         
         # Threshold for binary conversion
         threshold = 0.5
@@ -92,9 +92,7 @@ class WorldCerealPredictor:
         binary_labels = np.array(prediction_values) >= threshold
         binary_labels = binary_labels.astype(int)
 
-        # Create DataFrame with binary labels
-        preds_df = pd.DataFrame(index=features.index, columns=["label"], data=binary_labels)
-        return preds_df
+        return binary_labels
 
        
 
@@ -331,6 +329,7 @@ class PrestoFeatureExtractor:
 
         features = self._get_encodings(dl)
         features = self.combine_encodings(latlons, features)
+        features = features.to_numpy()
 
         return features
     
@@ -354,13 +353,13 @@ def get_presto_features(inarr: xr.DataArray, presto_path: str) -> xr.DataArray:
                 return features
 
 
-def classify_with_catboost(features: np.ndarray, orig_dims: list, model_path: str) -> xr.DataArray:
+def classify_with_catboost(features: np.ndarray, map_dims: tuple, model_path: str) -> xr.DataArray:
     """
     Classifies features using the WorldCereal CatBoost model.
 
     Args:
         features (np.ndarray): Features to be classified.
-        orig_dims (list): Original dimensions of the input data.
+        map_dims (tuple): Original x, y dimensions of the input data.
         model_path (str): Path to the trained CatBoost model.
 
     Returns:
@@ -373,7 +372,7 @@ def classify_with_catboost(features: np.ndarray, orig_dims: list, model_path: st
 
     predictor.load_model(catboost_model)
     predictions = predictor.predict(features)
-    result_da = predictions.to_xarray().to_array(dim="bands").rename({"lon": "x", "lat": "y"})
-    result_da = result_da.transpose(*orig_dims)
+    predictions = np.flip(np.array(predictions.reshape(map_dims)),axis=0)
 
-    return result_da
+
+    return predictions

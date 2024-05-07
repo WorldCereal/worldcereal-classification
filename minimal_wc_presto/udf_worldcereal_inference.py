@@ -53,10 +53,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     logger = _setup_logging() 
 
 
-# Install PyTorch using pip
-
-    orig_dims = list(cube.dims)
-    orig_dims.remove("t")
+    map_dims = cube.shape[2:]
 
     logger.info("Unzipping dependencies")
     base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
@@ -64,7 +61,11 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     logger.info("Appending depencency")
     dep_dir = extract_dependencies(base_url, dependency_name)
+    
+
+    #directly add a path to the older pandas version
     sys.path.append(str(dep_dir))
+    sys.path.append(str(dep_dir) + '/pandas')
 
 
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features, classify_with_catboost
@@ -77,7 +78,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     logger.info("Catboost classification")
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
-    classification = classify_with_catboost(features, orig_dims, CATBOOST_PATH)
+    classification = classify_with_catboost(features, map_dims, CATBOOST_PATH)
 
 
     return classification
