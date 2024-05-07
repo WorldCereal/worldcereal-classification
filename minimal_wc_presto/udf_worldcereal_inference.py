@@ -6,7 +6,10 @@ import sys
 import functools
 import xarray as xr
 from typing import Dict
-from openeo.metadata import  CollectionMetadata
+from openeo.metadata import  CollectionMetadata, Band
+import numpy as np
+from pyproj import Transformer
+import openeo
 
 
 def _setup_logging():
@@ -34,17 +37,20 @@ def extract_dependencies(base_url: str, dependency_name: str):
 
     return(abs_path)
 
+def apply_metadata(metadata:CollectionMetadata, context:dict) -> CollectionMetadata:
 
-def apply_metadata(input_metadata:CollectionMetadata, context:dict) -> CollectionMetadata:
-
-    xstep = input_metadata.get('x','step')
-    ystep = input_metadata.get('y','step')
-
+    xstep = metadata.get('x','step')
+    ystep = metadata.get('y','step')
 
     new_metadata = {
           "x": {"type": "spatial", "axis": "x", "step": xstep, "reference_system": 4326},
           "y": {"type": "spatial", "axis": "y", "step": ystep, "reference_system": 4326},
-    }
+          "t": {"type": "temporal", "extend": "2020-01-01"}
+                }
+
+    inserted_band = [openeo.metadata.Band("classification", None, None)]
+    new_metadata.band_dimension.bands = Band(inserted_band)
+    
     return CollectionMetadata(new_metadata)
 
 
@@ -52,7 +58,8 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     
     logger = _setup_logging() 
 
-
+    # shape and indiches for output
+    orig_dims = list(cube.dims)
     map_dims = cube.shape[2:]
 
     logger.info("Unzipping dependencies")
@@ -67,7 +74,6 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     sys.path.append(str(dep_dir))
     sys.path.append(str(dep_dir) + '/pandas')
 
-
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features, classify_with_catboost
 
     logger.info("Reading in required libs")
@@ -80,8 +86,17 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
     classification = classify_with_catboost(features, map_dims, CATBOOST_PATH)
 
+    logger.info("Revert to 4D xarray")
+    transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
+    longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
-    return classification
+    output = np.expand_dims(np.expand_dims(classification, axis = 0) ,axis = 0)
+    output = xr.DataArray(output, dims=orig_dims, coords={'y': longitudes, 'x': latitudes})
+
+    return output
+
+
+
 
 
 

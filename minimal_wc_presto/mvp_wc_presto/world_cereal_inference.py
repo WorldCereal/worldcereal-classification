@@ -68,7 +68,7 @@ class WorldCerealPredictor:
         # Load the dependency into an InferenceSession
         self.onnx_session = onnxruntime.InferenceSession(model)
 
-    def predict(self, features: pd.DataFrame) -> pd.DataFrame:
+    def predict(self, features: np.ndarray) -> np.ndarray:
         """
         Predicts labels using the provided features DataFrame.
 
@@ -323,7 +323,7 @@ class PrestoFeatureExtractor:
         return pd.DataFrame(data=data_dict).set_index(["lat", "lon"])
     
     
-    def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326):
+    def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> tuple:
         eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
         dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
@@ -334,7 +334,7 @@ class PrestoFeatureExtractor:
         return features
     
 
-def get_presto_features(inarr: xr.DataArray, presto_path: str) -> xr.DataArray:
+def get_presto_features(inarr: xr.DataArray, presto_path: str) -> tuple:
                 """
                 Extracts features from input data using Presto.
 
@@ -372,7 +372,9 @@ def classify_with_catboost(features: np.ndarray, map_dims: tuple, model_path: st
 
     predictor.load_model(catboost_model)
     predictions = predictor.predict(features)
-    predictions = np.flip(np.array(predictions.reshape(map_dims)),axis=0)
+    predictions = np.flip(predictions.reshape(map_dims),axis=0)
+
+    output = xr.DataArray(predictions)
 
 
-    return predictions
+    return output
