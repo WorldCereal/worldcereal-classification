@@ -94,9 +94,7 @@ class WorldCerealPredictor:
 
         return binary_labels
 
-       
-
-
+    
 
 class PrestoFeatureExtractor:
 
@@ -177,8 +175,6 @@ class PrestoFeatureExtractor:
                 mask[:, :, IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
 
         return eo_data, mask
-
-
 
     
     @staticmethod
@@ -323,7 +319,7 @@ class PrestoFeatureExtractor:
         return pd.DataFrame(data=data_dict).set_index(["lat", "lon"])
     
     
-    def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> tuple:
+    def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> np.ndarray:
         eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
         dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
@@ -334,7 +330,7 @@ class PrestoFeatureExtractor:
         return features
     
 
-def get_presto_features(inarr: xr.DataArray, presto_path: str) -> tuple:
+def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
                 """
                 Extracts features from input data using Presto.
 
@@ -353,7 +349,7 @@ def get_presto_features(inarr: xr.DataArray, presto_path: str) -> tuple:
                 return features
 
 
-def classify_with_catboost(features: np.ndarray, map_dims: tuple, model_path: str) -> xr.DataArray:
+def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarray:
     """
     Classifies features using the WorldCereal CatBoost model.
 
@@ -367,14 +363,11 @@ def classify_with_catboost(features: np.ndarray, map_dims: tuple, model_path: st
     """
 
     predictor = WorldCerealPredictor()
-    response = requests.get(model_path)
+    response = requests.get(catboost_path)
     catboost_model = response.content
 
     predictor.load_model(catboost_model)
     predictions = predictor.predict(features)
-    predictions = np.flip(predictions.reshape(map_dims),axis=0)
-
-    output = xr.DataArray(predictions)
 
 
-    return output
+    return predictions

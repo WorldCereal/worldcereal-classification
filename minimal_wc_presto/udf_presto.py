@@ -44,39 +44,37 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     orig_dims = list(cube.dims)
     map_dims = cube.shape[2:]
 
-    # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
     base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
     dependency_name = "wc_presto_onnx_dependencies.zip"
-    dep_dir = extract_dependencies(base_url, dependency_name)
 
-    # Append the dependencies
+    logger.info("Appending depencency")
+    dep_dir = extract_dependencies(base_url, dependency_name)
+    
+
+    #directly add a path to the older pandas version
     sys.path.append(str(dep_dir))
     sys.path.append(str(dep_dir) + '/pandas')
-    from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features, classify_with_catboost
 
-    # Run presto inference
+    from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
+
+    logger.info("Reading in required libs")
+
     logger.info("Extracting presto features")
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
     features = get_presto_features(cube, PRESTO_PATH)
-    logger.info(str(features.shape))
 
-    # run catboost classification
-    logger.info("Catboost classification")
-    CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
-    classification = classify_with_catboost(features, CATBOOST_PATH)
-    logger.info(str(classification.shape))
+    # go to 128,1,100,100
+    presto_dim = map_dims + (128,)
+    features = features.reshape(presto_dim)
+    features = np.transpose(features, (3, 0, 1, 2))
 
-    # revert to 4D shape for openEO
-    logger.info("Revert to 4D xarray")
+
     transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
     longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
-    classification = np.flip(classification.reshape(map_dims),axis = 0)
-    classification = np.expand_dims(np.expand_dims(classification, axis=0),axis = 0)
-    output = xr.DataArray(classification, dims=orig_dims,  coords={'y': longitudes, 'x': latitudes})
-    logger.info(str(output.shape))
-
+    features = np.expand_dims(features, axis = 0)
+    output = xr.DataArray(features, dims=orig_dims, coords={'y': longitudes, 'x': latitudes})
     return output
 
 
