@@ -255,6 +255,7 @@ def plot_confusion_matrix(cm,
     if normalize:
         cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
+    plt.rcParams.update({'font.size': 22,})
     plt.figure(figsize=(20, 20))
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
     plt.title(title)
@@ -270,10 +271,12 @@ def plot_confusion_matrix(cm,
         if normalize:
             plt.text(j, i, "{:.2f}".format(cm[i, j]),
                      horizontalalignment="center",
+                     size=22,
                      color="white" if cm[i, j] > thresh else "black")
         else:
             plt.text(j, i, "{:.2f}".format(cm[i, j]),
                      horizontalalignment="center",
+                     size=22,
                      color="white" if cm[i, j] > thresh else "black")
 
 
@@ -374,7 +377,7 @@ def process_raw_features_input_df(
     tdf['CROPTYPE_NAME'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['name'])
     tdf['landcover_wc'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['landcover'])
     
-    tdf = tdf[tdf.isna().sum(axis=1)<3]
+    # tdf = tdf[tdf.isna().sum(axis=1)<3]
     for tlevel in label_columns:
         tdf[tlevel] = tdf['ec_code'].map(ec_map['{}_label'.format(tlevel)]).astype('int32')
         tdf['{}_name'.format(tlevel)] = tdf['ec_code'].map(ec_map['{}_name'.format(tlevel)])
@@ -390,8 +393,8 @@ def process_raw_features_input_df(
     tdf.set_index(['sample_id'], inplace=True)
 
     if add_countries:
-        world_bounds_vector = gpd.read_file('resources/world-administrative-boundaries/world-administrative-boundaries.shp')
-        world_bounds_raster = rio.open('resources/world-administrative-boundaries/world-administrative-boundaries.tif')
+        world_bounds_vector = gpd.read_file('/home/cbutsko/Desktop/worldcereal-classification/notebooks/resources/world-administrative-boundaries/world-administrative-boundaries.shp')
+        world_bounds_raster = rio.open('/home/cbutsko/Desktop/worldcereal-classification/notebooks/resources/world-administrative-boundaries/world-administrative-boundaries.tif')
         _country_inds = [xx[0] for xx in world_bounds_raster.sample(tdf[['lon','lat']].values)]
         tdf['country_code'] = [world_bounds_vector['color_code'].iloc[int(xx-1)] if xx>0 else 'None' for xx in _country_inds]
         # tdf = tdf[~tdf['country_code'].isna()]
