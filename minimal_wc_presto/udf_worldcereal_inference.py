@@ -39,10 +39,11 @@ def extract_dependencies(base_url: str, dependency_name: str):
 def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     
     logger = _setup_logging() 
+    logger.info("Shape of input: {}".format(cube.shape))
 
     # shape and indiches for output
     orig_dims = list(cube.dims)
-    map_dims = cube.shape[2:]
+    map_dims = (100,100)
 
     # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
@@ -59,23 +60,23 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     logger.info("Extracting presto features")
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
     features = get_presto_features(cube, PRESTO_PATH)
-    logger.info(str(features.shape))
+    logger.info("Shape of presto output: {}".format(features.shape))
 
     # run catboost classification
     logger.info("Catboost classification")
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
     classification = classify_with_catboost(features, CATBOOST_PATH)
-    logger.info(str(classification.shape))
+    logger.info("Shape of classification output: {}".format(classification.shape))
 
     # revert to 4D shape for openEO
-    logger.info("Revert to 4D xarray")
-    transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
-    longitudes, latitudes = transformer.transform(cube.x, cube.y)
+    #logger.info("Revert to 4D xarray") 
+    #transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
+    #longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
     classification = np.flip(classification.reshape(map_dims),axis = 0)
-    classification = np.expand_dims(np.expand_dims(classification, axis=0),axis = 0)
-    output = xr.DataArray(classification, dims=orig_dims,  coords={'y': longitudes, 'x': latitudes})
-    logger.info(str(output.shape))
+    classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
+    output = xr.DataArray(classification, dims=orig_dims)
+    logger.info("Shape of output: {}".format(output.shape))
 
     return output
 

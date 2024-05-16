@@ -1,6 +1,6 @@
 from openeo.processes import array_create, if_, is_nodata, power
 from openeo.rest.datacube import DataCube
-
+import openeo
 COMPOSITE_WINDOW = "month"
 
 
@@ -285,6 +285,9 @@ def get_meteo(
         bands=["temperature-mean", "precipitation-flux"],
         temporal_extent=[start, end],
     )
+
+    meteo.result_node().update_arguments(featureflags={"tilesize": 1})
+
 
     if target_epsg is not None:
         meteo = meteo.resample_spatial(

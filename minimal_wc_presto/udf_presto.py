@@ -65,15 +65,16 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     features = get_presto_features(cube, PRESTO_PATH)
 
     # go to 128,1,100,100
-    presto_dim = map_dims + (128,)
+    presto_dim = map_dims + (128,)    
     features = features.reshape(presto_dim)
+    features = np.expand_dims(features, axis = 0)
     features = np.transpose(features, (3, 0, 1, 2))
 
 
     transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
     longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
-    features = np.expand_dims(features, axis = 0)
+    
     output = xr.DataArray(features, dims=orig_dims, coords={'y': longitudes, 'x': latitudes})
     return output
 
