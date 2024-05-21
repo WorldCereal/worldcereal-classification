@@ -16,30 +16,32 @@ def _setup_logging():
     logger = logging.getLogger(__name__)
     return logger
 
+
 @functools.lru_cache(maxsize=6)
 def extract_dependencies(base_url: str, dependency_name: str):
 
     # Generate absolute path for the dependencies folder
-    dependencies_dir = Path.cwd() / 'dependencies'
+    dependencies_dir = Path.cwd() / "dependencies"
 
     # Create the directory if it doesn't exist
     dependencies_dir.mkdir(exist_ok=True, parents=True)
 
-
     # Download and extract the model file
     modelfile_url = f"{base_url}/{dependency_name}"
-    modelfile, _ = urllib.request.urlretrieve(modelfile_url, filename=dependencies_dir / Path(modelfile_url).name)
+    modelfile, _ = urllib.request.urlretrieve(
+        modelfile_url, filename=dependencies_dir / Path(modelfile_url).name
+    )
     shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)
 
     # Add the model directory to system path if it's not already there
-    abs_path = str(dependencies_dir / Path(modelfile_url).name.split('.zip')[0])
+    abs_path = str(dependencies_dir / Path(modelfile_url).name.split(".zip")[0])
 
-    return(abs_path)
+    return abs_path
 
 
-def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
-    
-    logger = _setup_logging() 
+def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
+
+    logger = _setup_logging()
     logger.info("Shape of input: {}".format(cube.shape))
 
     # shape and indiches for output
@@ -53,7 +55,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     # Append the dependencies
     sys.path.append(str(dep_dir))
-    sys.path.append(str(dep_dir) + '/pandas')
+    sys.path.append(str(dep_dir) + "/pandas")
 
     ###################################################################################################################
 
@@ -73,22 +75,8 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     )
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.presto import Presto
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.utils import device
-    from einops import rearrange, repeat
+    from einops import rearrange
     from torch.utils.data import DataLoader, TensorDataset
-        "B03": "B3",
-        "B04": "B4",
-        "B05": "B5",
-        "B06": "B6",
-        "B07": "B7",
-        "B08": "B8",
-        "B8A": "B8A",
-        "B11": "B11",
-        "B12": "B12",
-        "VH": "VH",
-        "VV": "VV",
-        "precipitation-flux": "total_precipitation",
-        "temperature-mean": "temperature_2m",
-    }
 
     # Index to band groups mapping
     IDX_TO_BAND_GROUPS = {
@@ -96,7 +84,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
         for band_group_idx, (_, val) in enumerate(BANDS_GROUPS_IDX.items())
         for idx in val
     }
-        
+
     class WorldCerealPredictor:
         def __init__(self):
             """
@@ -113,6 +101,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             """
             # Load the dependency into an InferenceSession
             import onnxruntime
+
             self.onnx_session = onnxruntime.InferenceSession(model)
 
         def predict(self, features: np.ndarray) -> np.ndarray:
@@ -126,22 +115,22 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
                 pd.DataFrame: DataFrame containing the predicted labels.
             """
             if self.onnx_session is None:
-                raise ValueError("Model has not been loaded. Please load a model first.")
-            
+                raise ValueError(
+                    "Model has not been loaded. Please load a model first."
+                )
+
             # Prepare input data for ONNX model
-            outputs = self.onnx_session.run(None, {'features': features})
-            
+            outputs = self.onnx_session.run(None, {"features": features})
+
             # Threshold for binary conversion
             threshold = 0.5
 
             # Extract all prediction values and convert them to binary labels
-            prediction_values = [sublist['True'] for sublist in outputs[1]] 
+            prediction_values = [sublist["True"] for sublist in outputs[1]]
             binary_labels = np.array(prediction_values) >= threshold
             binary_labels = binary_labels.astype(int)
 
             return binary_labels
-
-        
 
     class PrestoFeatureExtractor:
 
@@ -174,7 +163,9 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
         }
 
         @classmethod
-        def _preprocess_band_values(cls, values: np.ndarray, presto_band: str) -> np.ndarray:
+        def _preprocess_band_values(
+            cls, values: np.ndarray, presto_band: str
+        ) -> np.ndarray:
             """
             Preprocesses the band values based on the given presto_val.
 
@@ -195,7 +186,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
                 # Remove scaling
                 values = values / 100
             return values
-        
+
         @classmethod
         def _extract_eo_data(cls, inarr: xr.DataArray) -> Tuple[np.ndarray, np.ndarray]:
             """
@@ -214,8 +205,12 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             mask = np.zeros((num_pixels, num_timesteps, len(BANDS_GROUPS_IDX)))
 
             for org_band, presto_band in cls.BAND_MAPPING.items():
-                if org_band in inarr.coords['bands']:
-                    values = np.swapaxes(inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)), 0, 1)
+                if org_band in inarr.coords["bands"]:
+                    values = np.swapaxes(
+                        inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)),
+                        0,
+                        1,
+                    )
                     idx_valid = values != cls._NODATAVALUE
                     values = cls._preprocess_band_values(values, presto_band)
                     eo_data[:, :, BANDS.index(presto_band)] = values
@@ -223,7 +218,6 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
             return eo_data, mask
 
-        
         @staticmethod
         def _extract_latlons(inarr: xr.DataArray, epsg: int) -> np.ndarray:
             """
@@ -238,15 +232,17 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             """
             # EPSG:4326 is the supported crs for presto
             lon, lat = np.meshgrid(inarr.x, inarr.y)
-            transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+            transformer = Transformer.from_crs(
+                f"EPSG:{epsg}", "EPSG:4326", always_xy=True
+            )
             lon, lat = transformer.transform(lon, lat)
             latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
 
             #  2D array where each row represents a pair of latitude and longitude coordinates.
             return latlons
-        
+
         @staticmethod
-        def _extract_months( inarr: xr.DataArray) -> np.ndarray:
+        def _extract_months(inarr: xr.DataArray) -> np.ndarray:
             """
             Calculate the start month based on the first timestamp in the input array,
             and create an array of the same length filled with that start month value.
@@ -267,8 +263,15 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
             months = np.ones((num_instances)) * start_month
             return months
-        
-        def _create_dataloader(self, eo:np.ndarray, dynamic_world:np.ndarray, months:np.ndarray, latlons:np.ndarray, mask:np.ndarray) -> DataLoader:
+
+        def _create_dataloader(
+            self,
+            eo: np.ndarray,
+            dynamic_world: np.ndarray,
+            months: np.ndarray,
+            latlons: np.ndarray,
+            mask: np.ndarray,
+        ) -> DataLoader:
             """
             Create a PyTorch DataLoader for encoding features.
 
@@ -313,10 +316,9 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
                 dynamic_world,
                 months,
                 latlons,
-                np.repeat(mask, BAND_EXPANSION, axis=-1)
+                np.repeat(mask, BAND_EXPANSION, axis=-1),
             )
-        
-        
+
         def _get_encodings(self, dl: DataLoader) -> np.ndarray:
             """
             Get encodings from DataLoader.
@@ -327,7 +329,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             Returns:
                 np.ndarray: Array containing encoded features.
             """
-            
+
             all_encodings = []
 
             for x, dw, latlons, month, variable_mask in dl:
@@ -351,7 +353,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
                 all_encodings.append(encodings)
 
             return np.concatenate(all_encodings, axis=0)
-        
+
         def extract_presto_features(
             self, inarr: xr.DataArray, epsg: int = 4326
         ) -> np.ndarray:
@@ -370,26 +372,26 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             )
 
             return features
-        
 
     def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
-                    """
-                    Extracts features from input data using Presto.
+        """
+        Extracts features from input data using Presto.
 
-                    Args:
-                        inarr (xr.DataArray): Input data as xarray DataArray.
-                        presto_path (str): Path to the pretrained Presto model.
+        Args:
+            inarr (xr.DataArray): Input data as xarray DataArray.
+            presto_path (str): Path to the pretrained Presto model.
 
-                    Returns:
-                        xr.DataArray: Extracted features as xarray DataArray.
-                    """
-                    # Load the model
+        Returns:
+            xr.DataArray: Extracted features as xarray DataArray.
+        """
+        # Load the model
 
-                    presto_model = Presto.load_pretrained_artifactory(presto_url = presto_path, strict=False)
-                    presto_extractor = PrestoFeatureExtractor(presto_model)
-                    features = presto_extractor.extract_presto_features(inarr, epsg=32631)
-                    return features
-
+        presto_model = Presto.load_pretrained_artifactory(
+            presto_url=presto_path, strict=False
+        )
+        presto_extractor = PrestoFeatureExtractor(presto_model)
+        features = presto_extractor.extract_presto_features(inarr, epsg=32631)
+        return features
 
     def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarray:
         """
@@ -411,12 +413,9 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
         predictor.load_model(catboost_model)
         predictions = predictor.predict(features)
 
-
         return predictions
 
-
     ###################################################################################################################
-
 
     # Run presto inference
     logger.info("Extracting presto features")
@@ -427,15 +426,20 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     # run catboost classification
     logger.info("Catboost classification")
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
-    stacked_features = features.stack(xy=['x', 'y']).transpose()
+    stacked_features = features.stack(xy=["x", "y"]).transpose()
     classification = classify_with_catboost(stacked_features.values, CATBOOST_PATH)
-    classification = xr.DataArray(classification, coords={'xy': stacked_features.xy}).unstack().expand_dims(dim='bands').expand_dims(dim='t')
+    classification = (
+        xr.DataArray(classification, coords={"xy": stacked_features.xy})
+        .unstack()
+        .expand_dims(dim="bands")
+        .expand_dims(dim="t")
+    )
     logger.info("Shape of classification output: {}".format(classification.shape))
 
     # revert to 4D shape for openEO
-    #logger.info("Revert to 4D xarray") 
-    #transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
-    #longitudes, latitudes = transformer.transform(cube.x, cube.y)
+    # logger.info("Revert to 4D xarray")
+    # transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
+    # longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
     # classification = np.flip(classification.reshape(map_dims),axis = 0)
     # classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
@@ -444,19 +448,3 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     logger.info("Shape of output: {}".format(output.shape))
 
     return output
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
