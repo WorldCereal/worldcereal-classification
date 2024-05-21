@@ -127,7 +127,7 @@ class PrestoFeatureExtractor:
     }
 
     @classmethod
-    def _preprocess_band_values(cls, values: np.ndarray, presto_band: str) -> np.ndarray:
+    def _preprocess_band_values(self, values: np.ndarray, presto_band: str) -> np.ndarray:
         """
         Preprocesses the band values based on the given presto_val.
 
@@ -150,7 +150,7 @@ class PrestoFeatureExtractor:
         return values
     
     @classmethod
-    def _extract_eo_data(cls, inarr: xr.DataArray) -> Tuple[np.ndarray, np.ndarray]:
+    def _extract_eo_data(self, inarr: xr.DataArray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Extracts EO data and mask arrays from the input xarray.DataArray.
 
@@ -166,11 +166,11 @@ class PrestoFeatureExtractor:
         eo_data = np.zeros((num_pixels, num_timesteps, len(BANDS)))
         mask = np.zeros((num_pixels, num_timesteps, len(BANDS_GROUPS_IDX)))
 
-        for org_band, presto_band in cls.BAND_MAPPING.items():
+        for org_band, presto_band in self.BAND_MAPPING.items():
             if org_band in inarr.coords['bands']:
                 values = np.swapaxes(inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)), 0, 1)
-                idx_valid = values != cls._NODATAVALUE
-                values = cls._preprocess_band_values(values, presto_band)
+                idx_valid = values != self._NODATAVALUE
+                values = self._preprocess_band_values(values, presto_band)
                 eo_data[:, :, BANDS.index(presto_band)] = values
                 mask[:, :, IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
 
@@ -251,13 +251,13 @@ class PrestoFeatureExtractor:
 
         return dl
 
-    def create_presto_input(
-        cls, inarr: xr.DataArray, epsg: int = 4326
+    def _create_presto_input(
+        self, inarr: xr.DataArray, epsg: int
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
-        eo_data, mask = cls._extract_eo_data(inarr)
-        latlons = cls._extract_latlons(inarr, epsg)
-        months = cls._extract_months(inarr)
+        eo_data, mask = self._extract_eo_data(inarr)
+        latlons = self._extract_latlons(inarr, epsg)
+        months = self._extract_months(inarr)
         dynamic_world = np.ones((eo_data.shape[0], eo_data.shape[1])) * (
             DynamicWorld2020_2021.class_amount
         )
@@ -307,7 +307,7 @@ class PrestoFeatureExtractor:
         return np.concatenate(all_encodings, axis=0)
     
     @staticmethod
-    def combine_encodings(latlons: np.ndarray, encodings: np.ndarray) -> pd.DataFrame:
+    def _combine_encodings(latlons: np.ndarray, encodings: np.ndarray) -> pd.DataFrame:
         flat_lat, flat_lon = latlons[:, 0], latlons[:, 1]
         if len(encodings.shape) == 1:
             encodings = np.expand_dims(encodings, axis=-1)
@@ -319,18 +319,18 @@ class PrestoFeatureExtractor:
         return pd.DataFrame(data=data_dict).set_index(["lat", "lon"])
     
     
-    def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> np.ndarray:
-        eo, dynamic_world, months, latlons, mask = self.create_presto_input(inarr, epsg)
+    def extract_presto_features(self, inarr: xr.DataArray, epsg: int)-> np.ndarray:
+        eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
         dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
         features = self._get_encodings(dl)
-        features = self.combine_encodings(latlons, features)
+        features = self._combine_encodings(latlons, features)
         features = features.to_numpy()
 
         return features
     
 
-def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
+def get_presto_features(inarr: xr.DataArray, presto_path: str, espg = 32631) -> np.ndarray:
                 """
                 Extracts features from input data using Presto.
 
@@ -345,7 +345,7 @@ def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
 
                 presto_model = Presto.load_pretrained_artifactory(presto_url = presto_path, strict=False)
                 presto_extractor = PrestoFeatureExtractor(presto_model)
-                features = presto_extractor.extract_presto_features(inarr, epsg=32631)
+                features = presto_extractor.extract_presto_features(inarr, espg)
                 return features
 
 

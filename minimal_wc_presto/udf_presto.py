@@ -38,11 +38,13 @@ def extract_dependencies(base_url: str, dependency_name: str):
 
 def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     
-    logger = _setup_logging() 
+    logger = _setup_logging()
+     
 
     # shape and indiches for output
     orig_dims = list(cube.dims)
     map_dims = cube.shape[2:]
+    cube = cube.fillna(65535)
 
     logger.info("Unzipping dependencies")
     base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
@@ -62,7 +64,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     logger.info("Extracting presto features")
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
-    features = get_presto_features(cube, PRESTO_PATH)
+    features = get_presto_features(cube, PRESTO_PATH, 32631)
 
     # go to 128,1,100,100
     presto_dim = map_dims + (128,)    
@@ -71,7 +73,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     features = np.transpose(features, (3, 0, 1, 2))
 
 
-    transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
+    transformer = Transformer.from_crs(f"EPSG:{32631}", "EPSG:4326", always_xy=True)
     longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
     

@@ -43,7 +43,8 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     # shape and indiches for output
     orig_dims = list(cube.dims)
-    map_dims = (100,100)
+    map_dims = cube.shape[2:]
+    cube = cube.fillna(65535)
 
     # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
