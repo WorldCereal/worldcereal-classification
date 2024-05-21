@@ -1,17 +1,14 @@
-import logging
-import urllib.request
-import shutil
-from pathlib import Path
-import sys
 import functools
-import xarray as xr
-import numpy as np
-from pyproj import Transformer
-
+import logging
+import shutil
+import sys
+import urllib.request
+from pathlib import Path
 from typing import Dict, Tuple
 
 import numpy as np
-
+import xarray as xr
+from pyproj import Transformer
 
 
 def _setup_logging():
@@ -47,7 +44,6 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     # shape and indiches for output
     orig_dims = list(cube.dims)
-    map_dims = (100,100)
 
     # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
@@ -61,6 +57,10 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
     ###################################################################################################################
 
+    import onnxruntime
+    import pandas as pd
+    import requests
+    import torch
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.dataops import (
         BANDS,
         BANDS_GROUPS_IDX,
@@ -68,24 +68,13 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
         S1_S2_ERA5_SRTM,
         DynamicWorld2020_2021,
     )
-    from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.masking import BAND_EXPANSION
+    from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.masking import (
+        BAND_EXPANSION,
+    )
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.presto import Presto
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.utils import device
-
-    import pandas as pd
-
-    import torch
+    from einops import rearrange, repeat
     from torch.utils.data import DataLoader, TensorDataset
-
-    from einops import repeat
-    import onnxruntime
-    import requests
-
-
-
-    #% Mapping from original band names to Presto names
-    BAND_MAPPING = {
-        "B02": "B2",
         "B03": "B3",
         "B04": "B4",
         "B05": "B5",
@@ -123,6 +112,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
                 model_path (str): The path to the ONNX model file.
             """
             # Load the dependency into an InferenceSession
+            import onnxruntime
             self.onnx_session = onnxruntime.InferenceSession(model)
 
         def predict(self, features: np.ndarray) -> np.ndarray:
@@ -246,17 +236,14 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
             Returns:
                 np.ndarray: Array containing extracted latitudes and longitudes.
             """
-            #EPSG:4326 is the supported crs for presto
+            # EPSG:4326 is the supported crs for presto
+            lon, lat = np.meshgrid(inarr.x, inarr.y)
             transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
-            lon, lat = transformer.transform(inarr.x, inarr.y)
-
-            
+            lon, lat = transformer.transform(lon, lat)
+            latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
 
             #  2D array where each row represents a pair of latitude and longitude coordinates.
-            return np.stack(
-                [np.repeat(lat, repeats=len(lon)), repeat(lon, "c -> (h c)", h=len(lat))],
-                axis=-1,
-            )
+            return latlons
         
         @staticmethod
         def _extract_months( inarr: xr.DataArray) -> np.ndarray:
@@ -365,26 +352,22 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
 
             return np.concatenate(all_encodings, axis=0)
         
-        @staticmethod
-        def combine_encodings(latlons: np.ndarray, encodings: np.ndarray) -> pd.DataFrame:
-            flat_lat, flat_lon = latlons[:, 0], latlons[:, 1]
-            if len(encodings.shape) == 1:
-                encodings = np.expand_dims(encodings, axis=-1)
-
-            data_dict: Dict[str, np.ndarray] = {"lat": flat_lat, "lon": flat_lon}
-            for i in range(encodings.shape[1]):
-                encodings_label = f"presto_ft_{i}"
-                data_dict[encodings_label] = encodings[:, i]
-            return pd.DataFrame(data=data_dict).set_index(["lat", "lon"])
-        
-        
-        def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> np.ndarray:
-            eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
+        def extract_presto_features(
+            self, inarr: xr.DataArray, epsg: int = 4326
+        ) -> np.ndarray:
+            eo, dynamic_world, months, latlons, mask = self._create_presto_input(
+                inarr, epsg
+            )
             dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
             features = self._get_encodings(dl)
-            features = self.combine_encodings(latlons, features)
-            features = features.to_numpy()
+            features = rearrange(
+                features, "(x y) c -> x y c", x=len(inarr.x), y=len(inarr.y)
+            )
+            ft_names = [f"presto_ft_{i}" for i in range(128)]
+            features = xr.DataArray(
+                features, coords={"x": inarr.x, "y": inarr.y, "bands": ft_names}
+            )
 
             return features
         
@@ -444,7 +427,9 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     # run catboost classification
     logger.info("Catboost classification")
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
-    classification = classify_with_catboost(features, CATBOOST_PATH)
+    stacked_features = features.stack(xy=['x', 'y']).transpose()
+    classification = classify_with_catboost(stacked_features.values, CATBOOST_PATH)
+    classification = xr.DataArray(classification, coords={'xy': stacked_features.xy}).unstack().expand_dims(dim='bands').expand_dims(dim='t')
     logger.info("Shape of classification output: {}".format(classification.shape))
 
     # revert to 4D shape for openEO
@@ -452,9 +437,10 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     #transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
     #longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
-    classification = np.flip(classification.reshape(map_dims),axis = 0)
-    classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
-    output = xr.DataArray(classification, dims=orig_dims)
+    # classification = np.flip(classification.reshape(map_dims),axis = 0)
+    # classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
+    # output = xr.DataArray(classification, dims=orig_dims)
+    output = classification.transpose(*orig_dims)
     logger.info("Shape of output: {}".format(output.shape))
 
     return output
