@@ -251,7 +251,7 @@ class PrestoFeatureExtractor:
 
         return dl
 
-    def _create_presto_input(
+    def create_presto_input(
         cls, inarr: xr.DataArray, epsg: int = 4326
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
@@ -320,7 +320,7 @@ class PrestoFeatureExtractor:
     
     
     def extract_presto_features(self, inarr: xr.DataArray, epsg: int = 4326)-> np.ndarray:
-        eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
+        eo, dynamic_world, months, latlons, mask = self.create_presto_input(inarr, epsg)
         dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
         features = self._get_encodings(dl)
