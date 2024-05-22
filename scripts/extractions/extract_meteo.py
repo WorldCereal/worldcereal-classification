@@ -8,13 +8,13 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 from extract_sar import (
-    _buffer_geometry,
-    _filter_extract_true,
-    _pipeline_log,
-    _setup_logger,
-    _upload_geoparquet_artifactory,
+    buffer_geometry,
     create_job_dataframe,
+    filter_extract_true,
     generate_output_path,
+    pipeline_log,
+    setup_logger,
+    upload_geoparquet_artifactory,
 )
 from openeo_gfmap import Backend, TemporalContext
 from openeo_gfmap.backend import vito_connection
@@ -43,14 +43,14 @@ def create_datacube_meteo(
     assert isinstance(geometry, geojson.FeatureCollection)
 
     # Filter the geometry to the rows with the extract only flag
-    geometry = _filter_extract_true(geometry)
+    geometry = filter_extract_true(geometry)
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
-    geometry_df = _buffer_geometry(geometry, distance_m=5)
-    spatial_extent_url = _upload_geoparquet_artifactory(geometry_df, row.name)
+    geometry_df = buffer_geometry(geometry, distance_m=5)
+    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
 
-    bands_to_download = ["temperature-mean"]
+    bands_to_download = ["temperature-mean", "precipitation-flux"]
 
     cube = connection.load_collection(
         "AGERA5",
@@ -61,8 +61,8 @@ def create_datacube_meteo(
     cube = cube.filter_spatial(filter_geometry)
     cube.rename_labels(
         dimension="bands",
-        target=["AGERA5-temperature-mean"],
-        source=["temperature-mean"],
+        target=["AGERA5-temperature-mean", "AGERA5-precipitation-flux"],
+        source=["temperature-mean", "precipitation-flux"],
     )
 
     h3index = geometry.features[0].properties["h3index"]
@@ -81,8 +81,8 @@ def create_datacube_meteo(
 
 
 if __name__ == "__main__":
-    _setup_logger()
-    from extract_sar import _pipeline_log
+    setup_logger()
+    from extract_sar import pipeline_log
 
     parser = argparse.ArgumentParser(
         description="AGERA5 samples extraction with OpenEO-GFMAP package."
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     tracking_df_path = Path(args.output_path) / "job_tracking.csv"
 
     # Load the input dataframe
-    _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
+    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
     input_df = gpd.read_file(args.input_df)
     input_df = _append_h3_index(input_df, grid_resolution=3)
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
     job_df = create_job_dataframe(Backend.TERRASCOPE, split_dfs, prefix="AGERA5")
 
-    _pipeline_log.warning(
+    pipeline_log.warning(
         "Sub-sampling the job dataframe for testing. Remove this for production."
     )
     # job_df = job_df.iloc[[0, 2, 3, -6]].reset_index(drop=True)
@@ -158,5 +158,5 @@ if __name__ == "__main__":
 
     manager.add_backend(Backend.TERRASCOPE.value, vito_connection, parallel_jobs=6)
 
-    _pipeline_log.info("Launching the jobs from the manager.")
+    pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_meteo, tracking_df_path)

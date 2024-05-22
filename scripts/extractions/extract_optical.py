@@ -10,27 +10,23 @@ from typing import List
 import geojson
 import geopandas as gpd
 import openeo
-from openeo.extra.job_management import _log as _log_openeo
 import pandas as pd
 import pystac
 from extract_sar import (
-    _buffer_geometry,
-    _filter_extract_true,
-    _get_job_nb_polygons,
-    _pipeline_log,
-    _setup_logger,
-    _upload_geoparquet_artifactory,
+    buffer_geometry,
     create_job_dataframe,
+    filter_extract_true,
     generate_output_path,
+    get_job_nb_polygons,
+    pipeline_log,
+    setup_logger,
+    upload_geoparquet_artifactory,
 )
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import (
-    _load_s2_grid,
-    split_job_s2grid,
-)
+from openeo_gfmap.manager.job_splitters import _load_s2_grid, split_job_s2grid
 from openeo_gfmap.utils.netcdf import update_nc_attributes
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
@@ -44,20 +40,22 @@ sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
         "type": "application/x-netcdf",
         "roles": ["data"],
         "proj:shape": [64, 64],
-        "raster:bands": [{"name": "S2-L2A-B01"}, 
-                         {"name": "S2-L2A-B02"},
-                         {"name": "S2-L2A-B03"},
-                         {"name": "S2-L2A-B04"},
-                         {"name": "S2-L2A-B05"},
-                         {"name": "S2-L2A-B06"},
-                         {"name": "S2-L2A-B07"},
-                         {"name": "S2-L2A-B8A"},
-                         {"name": "S2-L2A-B08"},
-                         {"name": "S2-L2A-B11"},
-                         {"name": "S2-L2A-B12"},
-                         {"name": "S2-L2A-SCL"},
-                         {"name": "S2-L2A-SCL_DILATED_MASK"},
-                         {"name": "S2-L2A-DISTANCE_TO_CLOUD"}],
+        "raster:bands": [
+            {"name": "S2-L2A-B01"},
+            {"name": "S2-L2A-B02"},
+            {"name": "S2-L2A-B03"},
+            {"name": "S2-L2A-B04"},
+            {"name": "S2-L2A-B05"},
+            {"name": "S2-L2A-B06"},
+            {"name": "S2-L2A-B07"},
+            {"name": "S2-L2A-B8A"},
+            {"name": "S2-L2A-B08"},
+            {"name": "S2-L2A-B11"},
+            {"name": "S2-L2A-B12"},
+            {"name": "S2-L2A-SCL"},
+            {"name": "S2-L2A-SCL_DILATED_MASK"},
+            {"name": "S2-L2A-DISTANCE_TO_CLOUD"},
+        ],
         "cube:variables": {
             "S2-L2A-B01": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B02": {"dimensions": ["time", "y", "x"], "type": "data"},
@@ -71,8 +69,14 @@ sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
             "S2-L2A-B11": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B12": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-SCL": {"dimensions": ["time", "y", "x"], "type": "data"},
-            "S2-L2A-SCL_DILATED_MASK": {"dimensions": ["time", "y", "x"], "type": "data"},
-            "S2-L2A-DISTANCE_TO_CLOUD": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-SCL_DILATED_MASK": {
+                "dimensions": ["time", "y", "x"],
+                "type": "data",
+            },
+            "S2-L2A-DISTANCE_TO_CLOUD": {
+                "dimensions": ["time", "y", "x"],
+                "type": "data",
+            },
         },
         "eo:bands": [
             {
@@ -157,6 +161,7 @@ sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
     }
 )
 
+
 def create_datacube_optical(
     row: pd.Series,
     connection: openeo.DataCube,
@@ -174,12 +179,12 @@ def create_datacube_optical(
     assert isinstance(geometry, geojson.FeatureCollection)
 
     # Filter the geometry to the rows with the extract only flag
-    geometry = _filter_extract_true(geometry)
+    geometry = filter_extract_true(geometry)
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
-    geometry_df = _buffer_geometry(geometry)
-    spatial_extent_url = _upload_geoparquet_artifactory(geometry_df, row.name)
+    geometry_df = buffer_geometry(geometry)
+    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
@@ -218,7 +223,7 @@ def create_datacube_optical(
     )
 
     # Increase the memory of the jobs depending on the number of polygons to extract
-    number_polygons = _get_job_nb_polygons(row)
+    number_polygons = get_job_nb_polygons(row)
     _log.debug("Number of polygons to extract %s", number_polygons)
 
     job_options = {
@@ -291,8 +296,8 @@ def post_job_action(
 
 
 if __name__ == "__main__":
-    _setup_logger()
-    from extract_sar import _pipeline_log
+    setup_logger()
+    from extract_sar import pipeline_log
 
     parser = argparse.ArgumentParser(
         description="S2 samples extraction with OpenEO-GFMAP package."
@@ -329,9 +334,9 @@ if __name__ == "__main__":
     tracking_df_path = Path(args.output_path) / "job_tracking.csv"
 
     # Load the input dataframe
-    _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
+    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
-    if args.input_df.name.endswith('.geoparquet'):
+    if args.input_df.name.endswith(".geoparquet"):
         input_df = gpd.read_parquet(args.input_df)
     else:
         input_df = gpd.read_file(args.input_df)
@@ -365,13 +370,11 @@ if __name__ == "__main__":
         post_job_params={},
     )
 
-    manager.add_backend(
-        Backend.CDSE.value, cdse_connection, parallel_jobs=6
-    )
+    manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=6)
     manager.setup_stac(
         constellation="sentinel2",
         item_assets={"sentinel2": sentinel2_asset},
     )
 
-    _pipeline_log.info("Launching the jobs from the manager.")
+    pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)

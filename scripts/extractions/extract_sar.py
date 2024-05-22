@@ -13,7 +13,6 @@ from typing import List, Optional
 import geojson
 import geopandas as gpd
 import openeo
-from openeo.extra.job_management import _log as _log_openeo
 import pandas as pd
 import pystac
 import requests
@@ -21,7 +20,6 @@ import xarray as xr
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_staging_connection
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
-from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import (
     _append_h3_index,
@@ -31,22 +29,18 @@ from openeo_gfmap.manager.job_splitters import (
 from shapely.geometry import Point
 
 # Logger for this current pipeline
-_pipeline_log: Optional[logging.Logger] = None
+pipeline_log: Optional[logging.Logger] = None
 
 
-def _setup_logger(level=logging.INFO) -> None:
-    global _pipeline_log, _log_openeo
+def setup_logger(level=logging.INFO) -> None:
     """Setup the logger from the openeo_gfmap package to the assigned level."""
-    _pipeline_log = logging.getLogger("pipeline_sar")
+    global pipeline_log
+    pipeline_log = logging.getLogger("pipeline_sar")
 
-    _pipeline_log.setLevel(level)
-    _log.setLevel(level)
-    _log_openeo.setLevel(level)
+    pipeline_log.setLevel(level)
 
     stream_handler = logging.StreamHandler()
-    _log.addHandler(stream_handler)
-    _log_openeo.addHandler(stream_handler)
-    _pipeline_log.addHandler(stream_handler)
+    pipeline_log.addHandler(stream_handler)
 
     formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
     stream_handler.setFormatter(formatter)
@@ -56,12 +50,12 @@ def _setup_logger(level=logging.INFO) -> None:
         """Filter to only accept the OpenEO-GFMAP manager logs."""
 
         def filter(self, record):
-            return record.name in [_log.name, _pipeline_log.name, _log_openeo.name]
+            return record.name in [pipeline_log.name]
 
     stream_handler.addFilter(ManagerLoggerFilter())
 
 
-def _buffer_geometry(
+def buffer_geometry(
     geometries: geojson.FeatureCollection, distance_m: int = 320
 ) -> gpd.GeoDataFrame:
     """For each geometry of the colleciton, perform a square buffer of 320
@@ -83,14 +77,14 @@ def _buffer_geometry(
     return gdf
 
 
-def _filter_extract_true(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
+def filter_extract_true(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
     """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
     return geojson.FeatureCollection(
         [f for f in geometries.features if f.properties.get("extract", 0) == 1]
     )
 
 
-def _upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
+def upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
     """Upload the given GeoDataFrame to artifactory and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
     using custom CRS.
@@ -122,7 +116,7 @@ def _upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
     return upload_url
 
 
-def _get_job_nb_polygons(row: pd.Series) -> int:
+def get_job_nb_polygons(row: pd.Series) -> int:
     """Get the number of polygons in the geometry."""
     return len(
         list(
@@ -221,12 +215,12 @@ def create_datacube_sar(
     assert isinstance(geometry, geojson.FeatureCollection)
 
     # Filter the geometry to the rows with the extract only flag
-    geometry = _filter_extract_true(geometry)
+    geometry = filter_extract_true(geometry)
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
-    geometry_df = _buffer_geometry(geometry, distance_m=310)
-    spatial_extent_url = _upload_geoparquet_artifactory(geometry_df, row.name)
+    geometry_df = buffer_geometry(geometry, distance_m=310)
+    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
@@ -257,7 +251,7 @@ def create_datacube_sar(
     valid_time = geometry.features[0].properties["valid_time"]
 
     # Increase the memory of the jobs depending on the number of polygons to extract
-    number_polygons = _get_job_nb_polygons(row)
+    number_polygons = get_job_nb_polygons(row)
     _log.debug("Number of polygons to extract %s", number_polygons)
 
     job_options = {
@@ -315,7 +309,7 @@ def post_job_action(
 
 
 if __name__ == "__main__":
-    _setup_logger()
+    setup_logger()
 
     parser = argparse.ArgumentParser(
         description="S1 samples extraction with OpenEO-GFMAP package."
@@ -349,7 +343,7 @@ if __name__ == "__main__":
     # Load the input dataframe, and perform dataset splitting using the h3 tile
     # to respect the area of interest. Also filters out the jobs that have
     # no location with the extract=True flag.
-    _pipeline_log.info("Loading input dataframe from %s.", args.input_df)
+    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
     input_df = gpd.read_file(args.input_df)
     input_df = _append_h3_index(input_df)
@@ -359,7 +353,7 @@ if __name__ == "__main__":
 
     job_df = create_job_dataframe(Backend.CDSE_STAGING, split_dfs)
 
-    _pipeline_log.warning(
+    pipeline_log.warning(
         "Sub-sampling the job dataframe for testing. Remove this for production."
     )
     job_df = job_df.iloc[[0]]
@@ -392,8 +386,8 @@ if __name__ == "__main__":
         Backend.CDSE_STAGING.value, cdse_staging_connection, parallel_jobs=6
     )
 
-    _pipeline_log.info("Launching the jobs from the manager.")
+    pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube_sar, tracking_df_path)
 
-    _pipeline_log.info("Jobs are finished, creating the STAC catalogue...")
+    pipeline_log.info("Jobs are finished, creating the STAC catalogue...")
     manager.create_stac()
