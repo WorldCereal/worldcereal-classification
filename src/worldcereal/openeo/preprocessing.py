@@ -3,7 +3,6 @@ from typing import List, Optional
 
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
-    Backend,
     BackendContext,
     BoundingBoxExtent,
     FetchType,

@@ -252,7 +252,7 @@ def create_datacube_sar(
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_polygons = get_job_nb_polygons(row)
-    _log.debug("Number of polygons to extract %s", number_polygons)
+    pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
     job_options = {
         "executor-memory": executor_memory,

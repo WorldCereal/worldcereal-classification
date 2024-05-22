@@ -65,6 +65,10 @@ def create_datacube_meteo(
         source=["temperature-mean", "precipitation-flux"],
     )
 
+    # Rescale to uint16, multiplying by 100 first
+    cube = cube * 100
+    cube = cube.linear_scale_range(0, 65534, 0, 65534)
+
     h3index = geometry.features[0].properties["h3index"]
     valid_time = geometry.features[0].properties["valid_time"]
 
