@@ -26,7 +26,7 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import _load_s2_grid, split_job_s2grid
+from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
 from openeo_gfmap.utils.netcdf import update_nc_attributes
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Setup the s2 grid for the output path generation function
     generate_output_path = partial(
         generate_output_path,
-        s2_grid=_load_s2_grid(),
+        s2_grid=load_s2_grid(),
     )
 
     manager = GFMAPJobManager(

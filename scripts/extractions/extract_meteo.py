@@ -20,8 +20,8 @@ from openeo_gfmap import Backend, TemporalContext
 from openeo_gfmap.backend import vito_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import (
-    _append_h3_index,
-    _load_s2_grid,
+    append_h3_index,
+    load_s2_grid,
     split_job_s2grid,
 )
 
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
     input_df = gpd.read_file(args.input_df)
-    input_df = _append_h3_index(input_df, grid_resolution=3)
+    input_df = append_h3_index(input_df, grid_resolution=3)
 
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     # Setup the s2 grid for the output path generation function
     generate_output_path = partial(
         generate_output_path,
-        s2_grid=_load_s2_grid(),
+        s2_grid=load_s2_grid(),
     )
 
     manager = GFMAPJobManager(
