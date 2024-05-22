@@ -76,7 +76,7 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
     classification = classification.reshape(map_dims)
-    classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
+    classification = np.flip(np.expand_dims(np.expand_dims(classification, axis=0), axis=0))
     output = xr.DataArray(classification, dims=orig_dims, coords={'x': longitudes, 'y': latitudes})
     logger.info("Shape of output: {}".format(output.shape))
 
