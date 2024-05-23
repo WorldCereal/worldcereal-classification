@@ -34,33 +34,33 @@ def extract_dependencies(base_url: str, dependency_name: str):
     shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)
 
     # Add the model directory to system path if it's not already there
-    abs_path = str(dependencies_dir / Path(modelfile_url).name.split(".zip")[0])
+    abs_path = str(dependencies_dir / Path(modelfile_url).name.split(".zip")[0])  # NOQA
 
-    return abs_path
+    # Append the dependencies
+    sys.path.append(str(abs_path))
+    sys.path.append(str(abs_path) + "/pandas")
+
+    return
 
 
 def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
 
-    logger = _setup_logging()
-    logger.info("Shape of input: {}".format(cube.shape))
+    CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
+    PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
+    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
+    DEPENDENCY_NAME = "wc_presto_onnx_dependencies.zip"
 
-    # shape and indiches for output
-    orig_dims = list(cube.dims)
+    logger = _setup_logging()
+
+    # Handle NaN values in Presto compatible way
+    cube = cube.fillna(65535)
 
     # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
-    base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
-    dependency_name = "wc_presto_onnx_dependencies.zip"
-    dep_dir = extract_dependencies(base_url, dependency_name)
+    extract_dependencies(BASE_URL, DEPENDENCY_NAME)
 
-    # Append the dependencies
-    sys.path.append(str(dep_dir))
-    sys.path.append(str(dep_dir) + "/pandas")
-
-    ###################################################################################################################
-
+    ##########################################################################
     import onnxruntime
-    import pandas as pd
     import requests
     import torch
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.dataops import (
@@ -100,8 +100,6 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
                 model_path (str): The path to the ONNX model file.
             """
             # Load the dependency into an InferenceSession
-            import onnxruntime
-
             self.onnx_session = onnxruntime.InferenceSession(model)
 
         def predict(self, features: np.ndarray) -> np.ndarray:
@@ -109,7 +107,7 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
             Predicts labels using the provided features DataFrame.
 
             Args:
-                features (pd.DataFrame): DataFrame containing the features for prediction.
+                features (pd.ndarray): 2D array containing the features
 
             Returns:
                 pd.DataFrame: DataFrame containing the predicted labels.
@@ -133,7 +131,6 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
             return binary_labels
 
     class PrestoFeatureExtractor:
-
         def __init__(self, model: Presto):
             """
             Initialize the PrestoFeatureExtractor with a Presto model.
@@ -303,7 +300,6 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
         def _create_presto_input(
             cls, inarr: xr.DataArray, epsg: int = 4326
         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-
             eo_data, mask = cls._extract_eo_data(inarr)
             latlons = cls._extract_latlons(inarr, epsg)
             months = cls._extract_months(inarr)
@@ -368,7 +364,9 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
             )
             ft_names = [f"presto_ft_{i}" for i in range(128)]
             features = xr.DataArray(
-                features, coords={"x": inarr.x, "y": inarr.y, "bands": ft_names}
+                features,
+                coords={"x": inarr.x, "y": inarr.y, "bands": ft_names},
+                dims=["x", "y", "bands"],
             )
 
             return features
@@ -393,12 +391,14 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
         features = presto_extractor.extract_presto_features(inarr, epsg=32631)
         return features
 
-    def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarray:
+    def classify_with_catboost(
+        features: xr.DataArray, catboost_path: str
+    ) -> np.ndarray:
         """
         Classifies features using the WorldCereal CatBoost model.
 
         Args:
-            features (np.ndarray): Features to be classified.
+            features (xr.DataArray): Features to be classified [x, y, fts]
             map_dims (tuple): Original x, y dimensions of the input data.
             model_path (str): Path to the trained CatBoost model.
 
@@ -406,45 +406,33 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
             xr.DataArray: Classified data as xarray DataArray.
         """
 
+        # Stack the features and transpose for feeding to CatBoost
+        stacked_features = features.stack(xy=["x", "y"]).transpose()
+
         predictor = WorldCerealPredictor()
         response = requests.get(catboost_path)
         catboost_model = response.content
 
         predictor.load_model(catboost_model)
-        predictions = predictor.predict(features)
+        predictions = predictor.predict(stacked_features.values)
+
+        predictions = (
+            xr.DataArray(predictions, coords={"xy": stacked_features.xy}, dims=["xy"])
+            .unstack()
+            .expand_dims(dim="bands")
+        )
 
         return predictions
 
     ###################################################################################################################
 
-    # Run presto inference
+    # Run presto feature extraction
     logger.info("Extracting presto features")
-    PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
     features = get_presto_features(cube, PRESTO_PATH)
-    logger.info("Shape of presto output: {}".format(features.shape))
 
-    # run catboost classification
+    # Run catboost classification
     logger.info("Catboost classification")
-    CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"
-    stacked_features = features.stack(xy=["x", "y"]).transpose()
-    classification = classify_with_catboost(stacked_features.values, CATBOOST_PATH)
-    classification = (
-        xr.DataArray(classification, coords={"xy": stacked_features.xy})
-        .unstack()
-        .expand_dims(dim="bands")
-        .expand_dims(dim="t")
-    )
-    logger.info("Shape of classification output: {}".format(classification.shape))
+    classification = classify_with_catboost(features, CATBOOST_PATH)
 
-    # revert to 4D shape for openEO
-    # logger.info("Revert to 4D xarray")
-    # transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
-    # longitudes, latitudes = transformer.transform(cube.x, cube.y)
-
-    # classification = np.flip(classification.reshape(map_dims),axis = 0)
-    # classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
-    # output = xr.DataArray(classification, dims=orig_dims)
-    output = classification.transpose(*orig_dims)
-    logger.info("Shape of output: {}".format(output.shape))
-
-    return output
+    # Add time dimension and return result
+    return classification.expand_dims(dim="t")
