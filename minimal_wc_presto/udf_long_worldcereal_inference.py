@@ -203,8 +203,12 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
 
             for org_band, presto_band in cls.BAND_MAPPING.items():
                 if org_band in inarr.coords["bands"]:
+                    # Use order "F" to make it work on OpenEO backend!
+                    # TODO: VERIFY WHY THIS IS NEEDED
                     values = np.swapaxes(
-                        inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)),
+                        inarr.sel(bands=org_band).values.reshape(
+                            (num_timesteps, -1), order="F"
+                        ),
                         0,
                         1,
                     )
