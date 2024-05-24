@@ -52,9 +52,9 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
 
     logger = _setup_logging()
 
-    # Deterministic ordering
+    # The below is required to avoid flipping of the result
+    # when running on OpenEO backend!
     cube = cube.transpose("bands", "t", "x", "y")
-    orig_dims = list(cube.dims)
 
     # Handle NaN values in Presto compatible way
     cube = cube.fillna(65535)
@@ -438,4 +438,5 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
 
     # Add time dimension
     classification = classification.expand_dims(dim="t")
+
     return classification
