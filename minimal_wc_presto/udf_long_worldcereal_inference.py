@@ -75,7 +75,6 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
     )
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.presto import Presto
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.utils import device
-    from einops import rearrange
     from torch.utils.data import DataLoader, TensorDataset
 
     # Index to band groups mapping
@@ -206,9 +205,7 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
                     # Use order "F" to make it work on OpenEO backend!
                     # TODO: VERIFY WHY THIS IS NEEDED
                     values = np.swapaxes(
-                        inarr.sel(bands=org_band).values.reshape(
-                            (num_timesteps, -1), order="F"
-                        ),
+                        inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)),
                         0,
                         1,
                     )
@@ -237,7 +234,9 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
                 f"EPSG:{epsg}", "EPSG:4326", always_xy=True
             )
             lon, lat = transformer.transform(lon, lat)
-            latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
+            num_pixels = len(inarr.x) * len(inarr.y)
+            latlons = np.swapaxes(np.stack([lat, lon]), 0, 2).reshape((num_pixels, 2))
+            # latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
 
             #  2D array where each row represents a pair of latitude and longitude coordinates.
             return latlons
@@ -363,9 +362,11 @@ def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
             dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
             features = self._get_encodings(dl)
-            features = rearrange(
-                features, "(x y) c -> x y c", x=len(inarr.x), y=len(inarr.y)
-            )
+            features = features.reshape((len(inarr.x), len(inarr.y), 128))
+
+            # features = rearrange(
+            #     features, "(x y) c -> x y c", x=len(inarr.x), y=len(inarr.y)
+            # )
             ft_names = [f"presto_ft_{i}" for i in range(128)]
             features = xr.DataArray(
                 features,
