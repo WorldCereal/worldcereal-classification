@@ -245,6 +245,7 @@ def create_datacube_optical(
         title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=job_options,
+        feature_id_property="sample_id",
     )
 
 
@@ -328,6 +329,11 @@ if __name__ == "__main__":
         default="1900m",
         help="Memory overhead to allocate for the executor.",
     )
+    parser.add_argument(
+        "--restart_failed",
+        action="store_true",
+        help="Restart the jobs that previously failed.",
+    )
 
     args = parser.parse_args()
 
@@ -368,6 +374,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
+        restart_failed=args.restart_failed,
     )
 
     manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=6)
