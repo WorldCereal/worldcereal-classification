@@ -42,12 +42,14 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     logger.info("Shape of input: {}".format(cube.shape))
 
     # shape and indiches for output
+    cube = cube.transpose('bands', 't', 'x', 'y')
+    cube = cube.fillna(65535)
     orig_dims = list(cube.dims)
-    map_dims = (100,100)
+    map_dims = cube.shape[2:]
 
     # Unzip de dependencies on the backend
     logger.info("Unzipping dependencies")
-    base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
+    base_url = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"
     dependency_name = "wc_presto_onnx_dependencies.zip"
     dep_dir = extract_dependencies(base_url, dependency_name)
 
@@ -69,13 +71,13 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     logger.info("Shape of classification output: {}".format(classification.shape))
 
     # revert to 4D shape for openEO
-    #logger.info("Revert to 4D xarray") 
-    #transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
-    #longitudes, latitudes = transformer.transform(cube.x, cube.y)
+    logger.info("Revert to 4D xarray") 
+    transformer = Transformer.from_crs(f"EPSG:{32631}", "EPSG:4326", always_xy=True)
+    longitudes, latitudes = transformer.transform(cube.x, cube.y)
 
-    classification = np.flip(classification.reshape(map_dims),axis = 0)
-    classification = np.expand_dims(np.expand_dims(classification, axis=0), axis=0)
-    output = xr.DataArray(classification, dims=orig_dims)
+    classification = classification.reshape(map_dims)
+    classification = np.flip(np.expand_dims(np.expand_dims(classification, axis=0), axis=0))
+    output = xr.DataArray(classification, dims=orig_dims, coords={'x': longitudes, 'y': latitudes})
     logger.info("Shape of output: {}".format(output.shape))
 
     return output

@@ -62,6 +62,7 @@ class WorldCerealPredictor:
         """
         # Load the dependency into an InferenceSession
         import onnxruntime
+
         self.onnx_session = onnxruntime.InferenceSession(model)
 
     def predict(self, features: np.ndarray) -> np.ndarray:
@@ -256,12 +257,12 @@ class PrestoFeatureExtractor:
         return dl
 
     def _create_presto_input(
-        cls, inarr: xr.DataArray, epsg: int = 4326
+        self, inarr: xr.DataArray, epsg: int = 4326
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
-        eo_data, mask = cls._extract_eo_data(inarr)
-        latlons = cls._extract_latlons(inarr, epsg)
-        months = cls._extract_months(inarr)
+        eo_data, mask = self._extract_eo_data(inarr)
+        latlons = self._extract_latlons(inarr, epsg)
+        months = self._extract_months(inarr)
         dynamic_world = np.ones((eo_data.shape[0], eo_data.shape[1])) * (
             DynamicWorld2020_2021.class_amount
         )

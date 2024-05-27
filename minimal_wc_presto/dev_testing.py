@@ -9,17 +9,17 @@ import xarray as xr
 
 
 #%% GET DEPENDENCIES
-
+import urllib
 # Generate absolute path for the dependencies folder
 dependencies_dir = Path.cwd() / 'dependencies'
 dependencies_dir.mkdir(exist_ok=True, parents=True)
 
-base_url = 'https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference'
+base_url = 'https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies'
 dependency_name = "wc_presto_onnx_dependencies.zip"
 
 # Download and extract the model file
 modelfile_url = f"{base_url}/{dependency_name}"
-#modelfile, _ = urllib.request.urlretrieve(modelfile_url, filename=dependencies_dir / Path(modelfile_url).name)
+modelfile, _ = urllib.request.urlretrieve(modelfile_url, filename=dependencies_dir / Path(modelfile_url).name)
 #shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)
 
 #Add the model directory to system path if it's not already there
@@ -43,6 +43,7 @@ ds = xr.open_dataset('data/belgium_good_2020-12-01_2021-11-30.nc')
 
 
 arr = ds.drop('crs').to_array(dim='bands')
+arr[:,:,50:,50:] = np.nan 
 orig_dims = list(arr.dims)
 map_dims = arr.shape[2:]
 
@@ -64,12 +65,10 @@ from mvp_wc_presto.world_cereal_inference import  classify_with_catboost
 CATBOOST_PATH = 'https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx'
 classification = classify_with_catboost(features, CATBOOST_PATH)
 
+#%%
 
-
-#%%revert to xarray
+#%%plot output
 import matplotlib.pyplot as plt
-
-
 
 transformer = Transformer.from_crs(f"EPSG:{4326}", "EPSG:4326", always_xy=True)
 longitudes, latitudes = transformer.transform(arr.x, arr.y)
@@ -81,3 +80,4 @@ output = output.to_numpy().squeeze()
 plt.imshow(output)
 
 output.shape
+# %%
