@@ -2,16 +2,12 @@ from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
-
-import torch
-from torch.utils.data import DataLoader, TensorDataset
-from pyproj import Transformer
-
-import xarray as xr
-from einops import repeat
-import onnxruntime
 import requests
-
+import torch
+import xarray as xr
+from einops import rearrange
+from pyproj import Transformer
+from torch.utils.data import DataLoader, TensorDataset
 
 from .dataops import (
     BANDS,
@@ -24,9 +20,7 @@ from .masking import BAND_EXPANSION
 from .presto import Presto
 from .utils import device
 
-
-
-#% Mapping from original band names to Presto names
+# Mapping from original band names to Presto names
 BAND_MAPPING = {
     "B02": "B2",
     "B03": "B3",
@@ -50,7 +44,8 @@ IDX_TO_BAND_GROUPS = {
     for band_group_idx, (_, val) in enumerate(BANDS_GROUPS_IDX.items())
     for idx in val
 }
-    
+
+
 class WorldCerealPredictor:
     def __init__(self):
         """
@@ -66,6 +61,8 @@ class WorldCerealPredictor:
             model_path (str): The path to the ONNX model file.
         """
         # Load the dependency into an InferenceSession
+        import onnxruntime
+
         self.onnx_session = onnxruntime.InferenceSession(model)
 
     def predict(self, features: np.ndarray) -> np.ndarray:
@@ -80,21 +77,20 @@ class WorldCerealPredictor:
         """
         if self.onnx_session is None:
             raise ValueError("Model has not been loaded. Please load a model first.")
-        
+
         # Prepare input data for ONNX model
-        outputs = self.onnx_session.run(None, {'features': features})
-        
+        outputs = self.onnx_session.run(None, {"features": features})
+
         # Threshold for binary conversion
         threshold = 0.5
 
         # Extract all prediction values and convert them to binary labels
-        prediction_values = [sublist['True'] for sublist in outputs[1]] 
+        prediction_values = [sublist["True"] for sublist in outputs[1]]
         binary_labels = np.array(prediction_values) >= threshold
         binary_labels = binary_labels.astype(int)
 
         return binary_labels
 
-    
 
 class PrestoFeatureExtractor:
 
@@ -127,7 +123,9 @@ class PrestoFeatureExtractor:
     }
 
     @classmethod
-    def _preprocess_band_values(self, values: np.ndarray, presto_band: str) -> np.ndarray:
+    def _preprocess_band_values(
+        cls, values: np.ndarray, presto_band: str
+    ) -> np.ndarray:
         """
         Preprocesses the band values based on the given presto_val.
 
@@ -148,9 +146,9 @@ class PrestoFeatureExtractor:
             # Remove scaling
             values = values / 100
         return values
-    
+
     @classmethod
-    def _extract_eo_data(self, inarr: xr.DataArray) -> Tuple[np.ndarray, np.ndarray]:
+    def _extract_eo_data(cls, inarr: xr.DataArray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Extracts EO data and mask arrays from the input xarray.DataArray.
 
@@ -166,17 +164,18 @@ class PrestoFeatureExtractor:
         eo_data = np.zeros((num_pixels, num_timesteps, len(BANDS)))
         mask = np.zeros((num_pixels, num_timesteps, len(BANDS_GROUPS_IDX)))
 
-        for org_band, presto_band in self.BAND_MAPPING.items():
-            if org_band in inarr.coords['bands']:
-                values = np.swapaxes(inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)), 0, 1)
-                idx_valid = values != self._NODATAVALUE
-                values = self._preprocess_band_values(values, presto_band)
+        for org_band, presto_band in cls.BAND_MAPPING.items():
+            if org_band in inarr.coords["bands"]:
+                values = np.swapaxes(
+                    inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)), 0, 1
+                )
+                idx_valid = values != cls._NODATAVALUE
+                values = cls._preprocess_band_values(values, presto_band)
                 eo_data[:, :, BANDS.index(presto_band)] = values
                 mask[:, :, IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
 
         return eo_data, mask
 
-    
     @staticmethod
     def _extract_latlons(inarr: xr.DataArray, epsg: int) -> np.ndarray:
         """
@@ -189,18 +188,17 @@ class PrestoFeatureExtractor:
         Returns:
             np.ndarray: Array containing extracted latitudes and longitudes.
         """
-        #EPSG:4326 is the supported crs for presto
+        # EPSG:4326 is the supported crs for presto
+        lon, lat = np.meshgrid(inarr.x, inarr.y)
         transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
-        lon, lat = transformer.transform(inarr.x, inarr.y)
+        lon, lat = transformer.transform(lon, lat)
+        latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
 
         #  2D array where each row represents a pair of latitude and longitude coordinates.
-        return np.stack(
-            [np.repeat(lat, repeats=len(lon)), repeat(lon, "c -> (h c)", h=len(lat))],
-            axis=-1,
-        )
-    
+        return latlons
+
     @staticmethod
-    def _extract_months( inarr: xr.DataArray) -> np.ndarray:
+    def _extract_months(inarr: xr.DataArray) -> np.ndarray:
         """
         Calculate the start month based on the first timestamp in the input array,
         and create an array of the same length filled with that start month value.
@@ -221,8 +219,15 @@ class PrestoFeatureExtractor:
 
         months = np.ones((num_instances)) * start_month
         return months
-    
-    def _create_dataloader(self, eo:np.ndarray, dynamic_world:np.ndarray, months:np.ndarray, latlons:np.ndarray, mask:np.ndarray) -> DataLoader:
+
+    def _create_dataloader(
+        self,
+        eo: np.ndarray,
+        dynamic_world: np.ndarray,
+        months: np.ndarray,
+        latlons: np.ndarray,
+        mask: np.ndarray,
+    ) -> DataLoader:
         """
         Create a PyTorch DataLoader for encoding features.
 
@@ -252,7 +257,7 @@ class PrestoFeatureExtractor:
         return dl
 
     def _create_presto_input(
-        self, inarr: xr.DataArray, epsg: int
+        self, inarr: xr.DataArray, epsg: int = 4326
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
         eo_data, mask = self._extract_eo_data(inarr)
@@ -267,10 +272,9 @@ class PrestoFeatureExtractor:
             dynamic_world,
             months,
             latlons,
-            np.repeat(mask, BAND_EXPANSION, axis=-1)
+            np.repeat(mask, BAND_EXPANSION, axis=-1),
         )
-    
-    
+
     def _get_encodings(self, dl: DataLoader) -> np.ndarray:
         """
         Get encodings from DataLoader.
@@ -281,7 +285,7 @@ class PrestoFeatureExtractor:
         Returns:
             np.ndarray: Array containing encoded features.
         """
-        
+
         all_encodings = []
 
         for x, dw, latlons, month, variable_mask in dl:
@@ -305,48 +309,46 @@ class PrestoFeatureExtractor:
             all_encodings.append(encodings)
 
         return np.concatenate(all_encodings, axis=0)
-    
-    @staticmethod
-    def _combine_encodings(latlons: np.ndarray, encodings: np.ndarray) -> pd.DataFrame:
-        flat_lat, flat_lon = latlons[:, 0], latlons[:, 1]
-        if len(encodings.shape) == 1:
-            encodings = np.expand_dims(encodings, axis=-1)
 
-        data_dict: Dict[str, np.ndarray] = {"lat": flat_lat, "lon": flat_lon}
-        for i in range(encodings.shape[1]):
-            encodings_label = f"presto_ft_{i}"
-            data_dict[encodings_label] = encodings[:, i]
-        return pd.DataFrame(data=data_dict).set_index(["lat", "lon"])
-    
-    
-    def extract_presto_features(self, inarr: xr.DataArray, epsg: int)-> np.ndarray:
-        eo, dynamic_world, months, latlons, mask = self._create_presto_input(inarr, epsg)
+    def extract_presto_features(
+        self, inarr: xr.DataArray, epsg: int = 4326
+    ) -> np.ndarray:
+        eo, dynamic_world, months, latlons, mask = self._create_presto_input(
+            inarr, epsg
+        )
         dl = self._create_dataloader(eo, dynamic_world, months, latlons, mask)
 
         features = self._get_encodings(dl)
-        features = self._combine_encodings(latlons, features)
-        features = features.to_numpy()
+        features = rearrange(
+            features, "(x y) c -> x y c", x=len(inarr.x), y=len(inarr.y)
+        )
+        ft_names = [f"presto_ft_{i}" for i in range(128)]
+        features = xr.DataArray(
+            features, coords={"x": inarr.x, "y": inarr.y, "bands": ft_names}
+        )
 
         return features
-    
 
-def get_presto_features(inarr: xr.DataArray, presto_path: str, espg = 32631) -> np.ndarray:
-                """
-                Extracts features from input data using Presto.
 
-                Args:
-                    inarr (xr.DataArray): Input data as xarray DataArray.
-                    presto_path (str): Path to the pretrained Presto model.
+def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
+    """
+    Extracts features from input data using Presto.
 
-                Returns:
-                    xr.DataArray: Extracted features as xarray DataArray.
-                """
-                # Load the model
+    Args:
+        inarr (xr.DataArray): Input data as xarray DataArray.
+        presto_path (str): Path to the pretrained Presto model.
 
-                presto_model = Presto.load_pretrained_artifactory(presto_url = presto_path, strict=False)
-                presto_extractor = PrestoFeatureExtractor(presto_model)
-                features = presto_extractor.extract_presto_features(inarr, espg)
-                return features
+    Returns:
+        xr.DataArray: Extracted features as xarray DataArray.
+    """
+    # Load the model
+
+    presto_model = Presto.load_pretrained_artifactory(
+        presto_url=presto_path, strict=False
+    )
+    presto_extractor = PrestoFeatureExtractor(presto_model)
+    features = presto_extractor.extract_presto_features(inarr, epsg=32631)
+    return features
 
 
 def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarray:
@@ -368,6 +370,5 @@ def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarr
 
     predictor.load_model(catboost_model)
     predictions = predictor.predict(features)
-
 
     return predictions
