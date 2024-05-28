@@ -13,10 +13,10 @@ from openeo_gfmap.fetching.generic import build_generic_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.preprocessing.compositing import (
-    max_ndvi_compositing,
+    median_compositing,
     mean_compositing,
+    sum_compositing
 )
-from openeo_gfmap.preprocessing.interpolation import linear_interpolation
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 
 COMPOSITE_WINDOW = "month"
@@ -66,6 +66,14 @@ def raw_datacube_S2(
     if filter_tile:
         scl_cube_properties["tileId"] = lambda val: val == filter_tile
 
+    # Create the job to extract S2
+    extraction_parameters = {
+        "target_resolution": None,  # Disable target resolution
+        "load_collection": {
+            "eo:cloud_cover": lambda val: val <= 95.0,
+        },
+    }
+
     scl_cube = connection.load_collection(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
@@ -89,35 +97,29 @@ def raw_datacube_S2(
         erosion_kernel_size=3,
     ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
 
-    # Compute the distance to cloud and add it to the cube
-    distance_to_cloud = scl_cube.apply_neighborhood(
-        process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 256},
-            {"dimension": "y", "unit": "px", "value": 256},
-            {"dimension": "t", "unit": "null", "value": "P1D"},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 16},
-            {"dimension": "y", "unit": "px", "value": 16},
-        ],
-    ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
-
-    additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
-
-    # Try filtering using the geometry
-    if fetch_type == FetchType.TILE:
-        additional_masks = additional_masks.filter_spatial(spatial_extent.to_geojson())
-
-    # Create the job to extract S2
-    extraction_parameters = {
-        "target_resolution": None,  # Disable target resolution
-        "load_collection": {
-            "eo:cloud_cover": lambda val: val <= 95.0,
-        },
-    }
     if additional_masks:
+        # Compute the distance to cloud and add it to the cube
+        distance_to_cloud = scl_cube.apply_neighborhood(
+            process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
+            size=[
+                {"dimension": "x", "unit": "px", "value": 256},
+                {"dimension": "y", "unit": "px", "value": 256},
+                {"dimension": "t", "unit": "null", "value": "P1D"},
+            ],
+            overlap=[
+                {"dimension": "x", "unit": "px", "value": 16},
+                {"dimension": "y", "unit": "px", "value": 16},
+            ],
+        ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
+
+        additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
+
+        # Try filtering using the geometry
+        if fetch_type == FetchType.TILE:
+            additional_masks = additional_masks.filter_spatial(spatial_extent.to_geojson())
+
         extraction_parameters["pre_merge"] = additional_masks
+
     if filter_tile:
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
@@ -193,6 +195,22 @@ def raw_datacube_DEM(
     return extractor.get_cube(connection, spatial_extent, None)
 
 
+def raw_datacube_METEO(
+    connection: Connection,
+    backend_context: BackendContext,
+    spatial_extent: SpatialContext,
+    temporal_extent: TemporalContext,
+    fetch_type: FetchType,
+) -> DataCube:
+    extractor = build_generic_extractor(
+        backend_context=backend_context,
+        bands=["A5-tmean", "A5-precip"],
+        fetch_type=fetch_type,
+        collection_name="AGERA5",
+    )
+    return extractor.get_cube(connection, spatial_extent, temporal_extent)
+
+
 def worldcereal_preprocessed_inputs_gfmap(
     connection: Connection,
     backend_context: BackendContext,
@@ -223,8 +241,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         apply_mask=True,
     )
 
-    s2_data = max_ndvi_compositing(s2_data, period="month")
-    s2_data = linear_interpolation(s2_data)
+    s2_data = median_compositing(s2_data, period="month")
 
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
@@ -245,7 +262,6 @@ def worldcereal_preprocessed_inputs_gfmap(
     )
 
     s1_data = mean_compositing(s1_data, period="month")
-    s1_data = linear_interpolation(s1_data)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
     dem_data = raw_datacube_DEM(
@@ -255,10 +271,26 @@ def worldcereal_preprocessed_inputs_gfmap(
         fetch_type=FetchType.TILE,
     )
 
-    dem_data = dem_data.resample_cube_spatial(s2_data, method="cubic")
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
+
+    # meteo_data = raw_datacube_METEO(
+    #     connection=connection,
+    #     backend_context=backend_context,
+    #     spatial_extent=spatial_extent,
+    #     temporal_extent=temporal_extent,
+    #     fetch_type=FetchType.TILE,
+    # )
+
+    # # Perform compositing differently depending on the bands
+    # mean_temperature = meteo_data.band("A5-tmean")
+    # mean_temperature = mean_compositing(mean_temperature, period="month")
+
+    # total_precipitation = meteo_data.band("A5-precip")
+    # total_precipitation = sum_compositing(total_precipitation, period="month")
 
     data = s2_data.merge_cubes(s1_data)
     data = data.merge_cubes(dem_data)
+    # data = data.merge_cubes(mean_temperature)
+    # data = data.merge_cubes(total_precipitation)
 
     return data

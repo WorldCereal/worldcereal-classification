@@ -181,3 +181,5 @@ catboost_info/catboost_training.json
 *.rar
 *.tar
 *.zip
+
+.notebook-tests/
