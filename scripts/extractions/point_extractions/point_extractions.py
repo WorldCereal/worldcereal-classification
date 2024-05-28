@@ -1,35 +1,21 @@
-"""Extract S1 data using OpenEO-GFMAP package."""
+"""Extract point data using OpenEO-GFMAP package."""
 import argparse
-import json
 import logging
-import os
-from datetime import datetime
 from functools import partial
-from importlib.metadata import version
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import List, Optional, Union
 
 import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-import pystac
-import requests
-import xarray as xr
 from openeo.processes import ProcessBuilder, array_create
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import (
-    split_job_s2grid,
-)
-from openeo_gfmap.preprocessing import (
-     median_compositing, 
-     linear_interpolation
-)
-from shapely.geometry import Point
+from openeo_gfmap.manager.job_splitters import split_job_s2grid
+from openeo_gfmap.preprocessing import linear_interpolation, median_compositing
 
 # Logger for this current pipeline
 pipeline_log: Optional[logging.Logger] = None
@@ -57,7 +43,10 @@ def setup_logger(level=logging.INFO) -> None:
 
     stream_handler.addFilter(ManagerLoggerFilter())
 
-def filter_extract_true(geometries: geojson.FeatureCollection) -> geojson.FeatureCollection:
+
+def filter_extract_true(
+    geometries: geojson.FeatureCollection,
+) -> geojson.FeatureCollection:
     """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
     return geojson.FeatureCollection(
         [f for f in geometries.features if f.properties.get("extract", 0) == 1]
@@ -75,22 +64,18 @@ def get_job_nb_points(row: pd.Series) -> int:
         )
     )
 
+
 # TODO: this is an example output_path. Adjust this function to your needs for production.
-def generate_output_path(
-    root_folder: Path, geometry_index: int, row: pd.Series
-):
+def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series):
     features = geojson.loads(row.geometry)
     sample_id = features[geometry_index].properties.get("sample_id", None)
     if sample_id is None:
         sample_id = features[geometry_index].properties["sampleID"]
 
     s2_tile_id = row.s2_tile
-    
-    subfolder = root_folder / s2_tile_id 
-    return (
-        subfolder
-        / f"{row.out_prefix}_{sample_id}{row.out_extension}"
-    )
+
+    subfolder = root_folder / s2_tile_id
+    return subfolder / f"{row.out_prefix}_{sample_id}{row.out_extension}"
 
 
 def create_job_dataframe(
@@ -111,7 +96,7 @@ def create_job_dataframe(
         median_time = pd.to_datetime(job.valid_date).mean()
         start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
         end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
-        s2_tile = job.tile.iloc[0] 
+        s2_tile = job.tile.iloc[0]
         rows.append(
             pd.Series(
                 dict(
@@ -132,15 +117,16 @@ def create_job_dataframe(
 
     return pd.DataFrame(rows)
 
+
 # TODO: this is a temporary function. It will be replaced by worldcereal_preprocessed_inputs_gfmap in preprocessing.py from worldcereal-classification.openeo
 def masked_cube(
-        connection: openeo.Connection,
-        bands: List[str],
-        temporal_extent: TemporalContext,
-        spatial_extent: Union[geojson.FeatureCollection, dict],
-        backend_context: BackendContext,
-        fetch_type: FetchType
-)-> openeo.DataCube:
+    connection: openeo.Connection,
+    bands: List[str],
+    temporal_extent: TemporalContext,
+    spatial_extent: Union[geojson.FeatureCollection, dict],
+    backend_context: BackendContext,
+    fetch_type: FetchType,
+) -> openeo.DataCube:
     """Create an openeo Datacube with the SCL dilation mask applied to the S2 data."""
 
     # Extract the SCL collection only and calculate the dilation mask
@@ -171,13 +157,13 @@ def masked_cube(
 
     # Create the job to extract S2
     extraction_parameters = {
-        "target_resolution": 10,  
+        "target_resolution": 10,
         "load_collection": {
             "eo:cloud_cover": lambda val: val <= 95.0,
         },
     }
 
-    # Immediately apply the mask 
+    # Immediately apply the mask
     extraction_parameters["pre_mask"] = scl_dilated_mask
 
     extractor = build_sentinel2_l2a_extractor(
@@ -189,6 +175,7 @@ def masked_cube(
 
     return extractor.get_cube(connection, spatial_extent, temporal_extent)
 
+
 def create_datacube(
     row: pd.Series,
     connection: openeo.DataCube,
@@ -197,8 +184,7 @@ def create_datacube(
     executor_memory: str = "5G",
     executor_memory_overhead: str = "2G",
 ):
-    """Creates an OpenEO BatchJob from the given row information.
-    """
+    """Creates an OpenEO BatchJob from the given row information."""
 
     # Load the temporal and spatial extent
     temporal_extent = TemporalContext(row.start_date, row.end_date)
@@ -226,35 +212,37 @@ def create_datacube(
         "S2-L2A-B12",
     ]
 
-    fetch_type = FetchType.POINT 
+    fetch_type = FetchType.POINT
 
-    cube = masked_cube(connection=connection,
-                       bands=bands_to_download,
-                       temporal_extent=temporal_extent,
-                       spatial_extent=spatial_extent,
-                       backend_context=backend_context,
-                       fetch_type=fetch_type)
-    
+    cube = masked_cube(
+        connection=connection,
+        bands=bands_to_download,
+        temporal_extent=temporal_extent,
+        spatial_extent=spatial_extent,
+        backend_context=backend_context,
+        fetch_type=fetch_type,
+    )
+
     # Create monthly median composites
-    cube = median_compositing(cube=cube,
-                              period="month")
+    cube = median_compositing(cube=cube, period="month")
     # Perform linear interpolation
     cube = linear_interpolation(cube)
 
     # In this case the features will be the average of the bands/NDVI, so just take the average:
     # cube = cube.reduce_dimension(dimension="t", reducer="mean")
-    
 
-    def time_to_bands(input_timeseries:ProcessBuilder):
-        tsteps = array_create(data=[input_timeseries.array_element(i) for i in range(20)])
+    def time_to_bands(input_timeseries: ProcessBuilder):
+        tsteps = array_create(
+            data=[input_timeseries.array_element(i) for i in range(20)]
+        )
         return tsteps
 
-    cube = cube.apply_dimension(dimension='t',
-                                target_dimension='bands',
-                                process=time_to_bands)
+    cube = cube.apply_dimension(
+        dimension="t", target_dimension="bands", process=time_to_bands
+    )
 
-    tstep_labels = [f'{band}_t{i}' for band in bands_to_download for i in range(20)]
-    cube = cube.rename_labels('bands', tstep_labels)
+    tstep_labels = [f"{band}_t{i}" for band in bands_to_download for i in range(20)]
+    cube = cube.rename_labels("bands", tstep_labels)
 
     # Finally, create a vector cube based on the Point geometries
     cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
@@ -270,7 +258,7 @@ def create_datacube(
     return cube.create_job(
         out_format="Parquet",
         title=f"GFMAP_Feature_Extraction_S2_{row.s2_tile}",
-        job_options=job_options
+        job_options=job_options,
     )
 
 
@@ -334,7 +322,7 @@ if __name__ == "__main__":
     manager = GFMAPJobManager(
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
-        post_job_action=None,  
+        post_job_action=None,
         collection_id="SENTINEL2-POINT-FEATURE-EXTRACTION",
         collection_description="Sentinel-2 basic point feature extraction.",
         poll_sleep=60,
@@ -342,10 +330,7 @@ if __name__ == "__main__":
         post_job_params={},
     )
 
-    manager.add_backend(
-        Backend.CDSE.value, cdse_connection, parallel_jobs=2
-    )
+    manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)
 
     pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube, tracking_df_path)
-
