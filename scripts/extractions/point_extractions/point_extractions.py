@@ -120,64 +120,6 @@ def create_job_dataframe(
     return pd.DataFrame(rows)
 
 
-# TODO: this is a temporary function. It will be replaced by worldcereal_preprocessed_inputs_gfmap in preprocessing.py from worldcereal-classification.openeo
-def masked_cube(
-    connection: openeo.Connection,
-    bands: List[str],
-    temporal_extent: TemporalContext,
-    spatial_extent: Union[geojson.FeatureCollection, dict],
-    backend_context: BackendContext,
-    fetch_type: FetchType,
-) -> openeo.DataCube:
-    """Create an openeo Datacube with the SCL dilation mask applied to the S2 data."""
-
-    # Extract the SCL collection only and calculate the dilation mask
-    scl_cube_properties = {"eo:cloud_cover": lambda val: val <= 95.0}
-
-    scl_cube = connection.load_collection(
-        collection_id="SENTINEL2_L2A",
-        bands=["SCL"],
-        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        spatial_extent=dict(spatial_extent) if fetch_type == FetchType.TILE else None,
-        properties=scl_cube_properties,
-    )
-
-    # Resample to 10m resolution for the SCL layer
-    scl_cube = scl_cube.resample_spatial(10)
-
-    # Compute the SCL dilation mask
-    scl_dilated_mask = scl_cube.process(
-        "to_scl_dilation_mask",
-        data=scl_cube,
-        scl_band_name="SCL",
-        kernel1_size=17,  # 17px dilation on a 10m layer
-        kernel2_size=77,  # 77px dilation on a 10m layer
-        mask1_values=[2, 4, 5, 6, 7],
-        mask2_values=[3, 8, 9, 10, 11],
-        erosion_kernel_size=3,
-    ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
-
-    # Create the job to extract S2
-    extraction_parameters = {
-        "target_resolution": 10,
-        "load_collection": {
-            "eo:cloud_cover": lambda val: val <= 95.0,
-        },
-    }
-
-    # Immediately apply the mask
-    extraction_parameters["pre_mask"] = scl_dilated_mask
-
-    extractor = build_sentinel2_l2a_extractor(
-        backend_context,
-        bands=bands,
-        fetch_type=fetch_type,
-        **extraction_parameters,
-    )
-
-    return extractor.get_cube(connection, spatial_extent, temporal_extent)
-
-
 def create_datacube(
     row: pd.Series,
     connection: openeo.DataCube,
