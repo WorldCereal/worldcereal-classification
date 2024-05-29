@@ -30,8 +30,9 @@ def raw_datacube_S2(
     bands: List[str],
     fetch_type: FetchType,
     filter_tile: Optional[str] = None,
-    additional_masks: bool = True,
-    apply_mask: bool = False,
+    distance_to_cloud_flag: Optional[bool] = True,
+    additional_masks_flag: bool = True,
+    apply_mask_flag: bool = False,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -57,7 +58,12 @@ def raw_datacube_S2(
     filter_tile : Optional[str], optional
         Filter by tile ID, by default disabled. This forces the process to only
         one tile ID from the Sentinel-2 collection.
-    apply_mask : bool, optional
+    distance_to_cloud_flag : Optional[bool], optional
+        Compute the distance to cloud, by default True.
+    additional_masks_flag : bool, optional
+        Add the additional masks to the cube, by default True. This includes the
+        distance to cloud and the SCL dilation mask.
+    apply_mask_flag : bool, optional
         Apply cloud masking, by default False. Can be enabled for high
         optimization of memory usage.
     """
@@ -89,21 +95,24 @@ def raw_datacube_S2(
         erosion_kernel_size=3,
     ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
 
-    # Compute the distance to cloud and add it to the cube
-    distance_to_cloud = scl_cube.apply_neighborhood(
-        process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 256},
-            {"dimension": "y", "unit": "px", "value": 256},
-            {"dimension": "t", "unit": "null", "value": "P1D"},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 16},
-            {"dimension": "y", "unit": "px", "value": 16},
-        ],
-    ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
+    additional_masks = scl_dilated_mask
 
-    additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
+    if distance_to_cloud_flag:
+        # Compute the distance to cloud and add it to the cube
+        distance_to_cloud = scl_cube.apply_neighborhood(
+            process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
+            size=[
+                {"dimension": "x", "unit": "px", "value": 256},
+                {"dimension": "y", "unit": "px", "value": 256},
+                {"dimension": "t", "unit": "null", "value": "P1D"},
+            ],
+            overlap=[
+                {"dimension": "x", "unit": "px", "value": 16},
+                {"dimension": "y", "unit": "px", "value": 16},
+            ],
+        ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
+
+        additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
 
     # Try filtering using the geometry
     if fetch_type == FetchType.TILE:
@@ -116,13 +125,13 @@ def raw_datacube_S2(
             "eo:cloud_cover": lambda val: val <= 95.0,
         },
     }
-    if additional_masks:
+    if additional_masks_flag:
         extraction_parameters["pre_merge"] = additional_masks
     if filter_tile:
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
         )
-    if apply_mask:
+    if apply_mask_flag:
         extraction_parameters["pre_mask"] = scl_dilated_mask
 
     extractor = build_sentinel2_l2a_extractor(

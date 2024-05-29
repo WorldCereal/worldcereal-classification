@@ -17,6 +17,8 @@ from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from openeo_gfmap.preprocessing import linear_interpolation, median_compositing
 
+from worldcereal.openeo.preprocessing import raw_datacube_S2
+
 # Logger for this current pipeline
 pipeline_log: Optional[logging.Logger] = None
 
@@ -214,13 +216,16 @@ def create_datacube(
 
     fetch_type = FetchType.POINT
 
-    cube = masked_cube(
+    cube = raw_datacube_S2(
         connection=connection,
-        bands=bands_to_download,
-        temporal_extent=temporal_extent,
-        spatial_extent=spatial_extent,
         backend_context=backend_context,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        bands=bands_to_download,
         fetch_type=fetch_type,
+        distance_to_cloud_flag=True,
+        additional_masks_flag=False,
+        apply_mask_flag=True,
     )
 
     # Create monthly median composites
@@ -228,9 +233,7 @@ def create_datacube(
     # Perform linear interpolation
     cube = linear_interpolation(cube)
 
-    # In this case the features will be the average of the bands/NDVI, so just take the average:
-    # cube = cube.reduce_dimension(dimension="t", reducer="mean")
-
+    # Map the time dimension to the bands dimension
     def time_to_bands(input_timeseries: ProcessBuilder):
         tsteps = array_create(
             data=[input_timeseries.array_element(i) for i in range(20)]
@@ -271,6 +274,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "output_path", type=Path, help="Path where to save the extraction results."
     )
+
+    # TODO: get the reference data from the RDM API.
     parser.add_argument(
         "input_df", type=str, help="Path to the input dataframe for the training data."
     )
@@ -312,12 +317,6 @@ if __name__ == "__main__":
         executor_memory=args.memory,
         executor_memory_overhead=args.memory_overhead,
     )
-
-    # Setup the s2 grid for the output path generation function
-    # generate_output_path = partial(
-    #     generate_output_path,
-    #     s2_grid=load_s2_grid(),
-    # )
 
     manager = GFMAPJobManager(
         output_dir=args.output_path,
