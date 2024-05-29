@@ -40,52 +40,32 @@ def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     
     logger = _setup_logging()
     
-     
 
-    # shape and indiches for output
-    cube = cube.transpose('bands', 't', 'x', 'y')
+    # The below is required to avoid flipping of the result
+    # when running on OpenEO backend!
+    cube = cube.transpose("bands", "t", "x", "y")
+
+    # Handle NaN values in Presto compatible way
     cube = cube.fillna(65535)
-    orig_dims = list(cube.dims)
-    map_dims = cube.shape[2:]
 
     logger.info("Unzipping dependencies")
     #base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
     base_url  = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"
-
     dependency_name = "wc_presto_onnx_dependencies.zip"
 
     logger.info("Appending depencency")
     dep_dir = extract_dependencies(base_url, dependency_name)
-    
+    sys.path.append(str(dep_dir))
 
     #directly add a path to the older pandas version
-    sys.path.append(str(dep_dir))
-    sys.path.append(str(dep_dir) + '/pandas')
-
     from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
 
-    logger.info("Reading in required libs")
 
     logger.info("Extracting presto features")
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
-    features = get_presto_features(cube, PRESTO_PATH, 32631)
+    output = get_presto_features(cube, PRESTO_PATH)
 
-    # go to 128, 1,100,100 (time, bands, x, y)
-    presto_dim = map_dims + (128,)   
-    logger.info(str(features.shape)) 
-    features = features.reshape(presto_dim) #100,100,128
-    logger.info(str(features.shape))
-    features = np.expand_dims(features, axis = 0) #1,100,100,128
-    logger.info(str(features.shape))
-    features = np.transpose(features, (3, 0, 1, 2)) #128,1,100,100
-    logger.info(str(features.shape))
-
-
-    transformer = Transformer.from_crs(f"EPSG:{32631}", "EPSG:4326", always_xy=True)
-    longitudes, latitudes = transformer.transform(cube.x, cube.y)
-
-    
-    output = xr.DataArray(features, dims=orig_dims, coords={'x': longitudes, 'y': latitudes})
+ 
     return output
 
 

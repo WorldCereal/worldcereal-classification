@@ -1,13 +1,15 @@
 from typing import Dict, Tuple
 
 import numpy as np
-import pandas as pd
 import requests
 import torch
+from torch.utils.data import DataLoader, TensorDataset
+
 import xarray as xr
 from einops import rearrange
 from pyproj import Transformer
-from torch.utils.data import DataLoader, TensorDataset
+
+import onnxruntime as ort
 
 from .dataops import (
     BANDS,
@@ -61,22 +63,22 @@ class WorldCerealPredictor:
             model_path (str): The path to the ONNX model file.
         """
         # Load the dependency into an InferenceSession
-        import onnxruntime
-
-        self.onnx_session = onnxruntime.InferenceSession(model)
+        self.onnx_session = ort.InferenceSession(model)
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
         Predicts labels using the provided features DataFrame.
 
         Args:
-            features (pd.DataFrame): DataFrame containing the features for prediction.
+            features (pd.ndarray): 2D array containing the features
 
         Returns:
             pd.DataFrame: DataFrame containing the predicted labels.
         """
         if self.onnx_session is None:
-            raise ValueError("Model has not been loaded. Please load a model first.")
+            raise ValueError(
+                "Model has not been loaded. Please load a model first."
+            )
 
         # Prepare input data for ONNX model
         outputs = self.onnx_session.run(None, {"features": features})
@@ -90,10 +92,10 @@ class WorldCerealPredictor:
         binary_labels = binary_labels.astype(int)
 
         return binary_labels
-
+    
+    
 
 class PrestoFeatureExtractor:
-
     def __init__(self, model: Presto):
         """
         Initialize the PrestoFeatureExtractor with a Presto model.
@@ -166,8 +168,8 @@ class PrestoFeatureExtractor:
 
         for org_band, presto_band in cls.BAND_MAPPING.items():
             if org_band in inarr.coords["bands"]:
-                values = np.swapaxes(
-                    inarr.sel(bands=org_band).values.reshape((num_timesteps, -1)), 0, 1
+                values = rearrange(
+                    inarr.sel(bands=org_band).values, "t x y -> (x y) t"
                 )
                 idx_valid = values != cls._NODATAVALUE
                 values = cls._preprocess_band_values(values, presto_band)
@@ -190,7 +192,9 @@ class PrestoFeatureExtractor:
         """
         # EPSG:4326 is the supported crs for presto
         lon, lat = np.meshgrid(inarr.x, inarr.y)
-        transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+        transformer = Transformer.from_crs(
+            f"EPSG:{epsg}", "EPSG:4326", always_xy=True
+        )
         lon, lat = transformer.transform(lon, lat)
         latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")
 
@@ -219,6 +223,7 @@ class PrestoFeatureExtractor:
 
         months = np.ones((num_instances)) * start_month
         return months
+    
 
     def _create_dataloader(
         self,
@@ -255,14 +260,14 @@ class PrestoFeatureExtractor:
         )
 
         return dl
-
+    
+    
     def _create_presto_input(
-        self, inarr: xr.DataArray, epsg: int = 4326
+        cls, inarr: xr.DataArray, epsg: int = 4326
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-
-        eo_data, mask = self._extract_eo_data(inarr)
-        latlons = self._extract_latlons(inarr, epsg)
-        months = self._extract_months(inarr)
+        eo_data, mask = cls._extract_eo_data(inarr)
+        latlons = cls._extract_latlons(inarr, epsg)
+        months = cls._extract_months(inarr)
         dynamic_world = np.ones((eo_data.shape[0], eo_data.shape[1])) * (
             DynamicWorld2020_2021.class_amount
         )
@@ -274,7 +279,8 @@ class PrestoFeatureExtractor:
             latlons,
             np.repeat(mask, BAND_EXPANSION, axis=-1),
         )
-
+    
+    
     def _get_encodings(self, dl: DataLoader) -> np.ndarray:
         """
         Get encodings from DataLoader.
@@ -309,10 +315,10 @@ class PrestoFeatureExtractor:
             all_encodings.append(encodings)
 
         return np.concatenate(all_encodings, axis=0)
-
+    
     def extract_presto_features(
         self, inarr: xr.DataArray, epsg: int = 4326
-    ) -> np.ndarray:
+    ) -> xr.DataArray:
         eo, dynamic_world, months, latlons, mask = self._create_presto_input(
             inarr, epsg
         )
@@ -324,13 +330,17 @@ class PrestoFeatureExtractor:
         )
         ft_names = [f"presto_ft_{i}" for i in range(128)]
         features = xr.DataArray(
-            features, coords={"x": inarr.x, "y": inarr.y, "bands": ft_names}
+            features,
+            coords={"x": inarr.x, "y": inarr.y, "bands": ft_names},
+            dims=["x", "y", "bands"],
         )
 
         return features
+    
 
 
-def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
+
+def get_presto_features(inarr: xr.DataArray, presto_path: str) -> xr.DataArray:
     """
     Extracts features from input data using Presto.
 
@@ -346,17 +356,20 @@ def get_presto_features(inarr: xr.DataArray, presto_path: str) -> np.ndarray:
     presto_model = Presto.load_pretrained_artifactory(
         presto_url=presto_path, strict=False
     )
+    #TODO flexible espg
     presto_extractor = PrestoFeatureExtractor(presto_model)
     features = presto_extractor.extract_presto_features(inarr, epsg=32631)
     return features
 
 
-def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarray:
+def classify_with_catboost(
+    features: xr.DataArray, catboost_path: str
+) -> xr.DataArray:
     """
     Classifies features using the WorldCereal CatBoost model.
 
     Args:
-        features (np.ndarray): Features to be classified.
+        features (xr.DataArray): Features to be classified [x, y, fts]
         map_dims (tuple): Original x, y dimensions of the input data.
         model_path (str): Path to the trained CatBoost model.
 
@@ -364,11 +377,20 @@ def classify_with_catboost(features: np.ndarray, catboost_path: str) -> np.ndarr
         xr.DataArray: Classified data as xarray DataArray.
     """
 
+    # Stack the features and transpose for feeding to CatBoost
+    stacked_features = features.stack(xy=["x", "y"]).transpose()
+
     predictor = WorldCerealPredictor()
     response = requests.get(catboost_path)
     catboost_model = response.content
 
     predictor.load_model(catboost_model)
-    predictions = predictor.predict(features)
+    predictions = predictor.predict(stacked_features.values)
+
+    predictions = (
+        xr.DataArray(predictions, coords={"xy": stacked_features.xy}, dims=["xy"])
+        .unstack()
+        .expand_dims(dim="bands")
+    )
 
     return predictions
