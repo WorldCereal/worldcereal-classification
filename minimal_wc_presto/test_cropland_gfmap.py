@@ -8,6 +8,8 @@ from openeo_gfmap.inference.model_inference import apply_model_inference
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
+from worldcereal.openeo.inference import CroplandClassifier
 
 EXTENT = dict(
     zip(["west", "south", "east", "north"], [664000.0, 5611120.0, 665000.0, 5612120.0])

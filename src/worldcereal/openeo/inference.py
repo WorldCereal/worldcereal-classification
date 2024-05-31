@@ -13,7 +13,6 @@ class CroplandClassifier(ModelInference):
 
     def __init__(self):
         import logging
-
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(WorldCerealInference.__name__)
 
@@ -58,9 +57,7 @@ class CroplandClassifier(ModelInference):
         self.logger.info("Adding dependencies")
         sys.path.append(str(dep_dir))
 
-        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import (
-            classify_with_catboost,
-        )
+        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import classify_with_catboost
 
         # Run catboost classification
         self.logger.info("Catboost classification")

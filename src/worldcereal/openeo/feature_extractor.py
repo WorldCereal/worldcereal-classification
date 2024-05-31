@@ -3,7 +3,6 @@
 import xarray as xr
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 
-
 class PrestoFeatureExtractor(PatchFeatureExtractor):
     """Feature extractor to use Presto model to compute embeddings.
     This will generate a datacube with 128 bands, each band representing a
@@ -109,9 +108,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         self.logger.info("Appending dependencies")
         sys.path.append(str(deps_dir))
 
-        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import (
-            get_presto_features,
-        )
+        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
 
         self.logger.info("Extracting presto features")
         features = get_presto_features(inarr, self.PRESTO_PATH, self.epsg)
