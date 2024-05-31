@@ -122,6 +122,10 @@ bbox_str = f'Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}'
 colSearchUrl = f'{RDM_API}/collections/search?{bbox_str}'
 colSearchResponse = requests.get(colSearchUrl, headers=headers)
 test = colSearchResponse.json()
+print('The following collections intersect with your AOI:')
+for i, col in enumerate(test):
+    print()
+    print(f'Collection {i+1}: {col["collectionId"]}')
 
 
 # %%
@@ -131,11 +135,30 @@ test = colSearchResponse.json()
 # If possible, harmonization should be done on the server side, not by the user
 
 # check whether data has been successfully ingested...
+colSearchResponse = requests.get(colSearchUrl, headers=headers)
+cols_aoi = colSearchResponse.json()
+print('The following collections intersect with your AOI:')
+for i, col in enumerate(test):
+    print()
+    print(f'Collection {i+1}: {col["collectionId"]}')
 
 # %%
 # Now that our reference data has been added, we launch a request to extract all reference points and polygons intersecting our region of interest
 # --> this should return the selected points/polygons as a geojson file/object (one per collection)
 
+responses = []
+for col in cols_aoi:
+    itemSearchCollectionId = col['collectionId']
+    print(
+        f'Extracting reference data from collection {itemSearchCollectionId}')
+    itemSearchUrl = f'{RDM_API}/collections/{itemSearchCollectionId}/items?{bbox_str}'
+    itemSearchResponse = requests.get(itemSearchUrl, headers=headers)
+    responses.append(itemSearchResponse.json())
+
+responses
+
+
+# %%
 # Next, we convert polygons to points (by taking the centroid) and combine all reference data into one geoparquet file
 
 
