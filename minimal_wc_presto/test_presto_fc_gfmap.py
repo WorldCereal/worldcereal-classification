@@ -3,9 +3,11 @@
 import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
-from presto_feature_computer import PrestoFeatureExtractor
+from openeo_gfmap.inference.model_inference import apply_model_inference
 
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
+from worldcereal.openeo.inference import CroplandClassifier
 
 EXTENT = dict(
     zip(["west", "south", "east", "north"], [664000.0, 5611120.0, 665000.0, 5612120.0])
@@ -14,6 +16,8 @@ EXTENT["crs"] = "EPSG:32631"
 EXTENT["srs"] = "EPSG:32631"
 STARTDATE = "2020-11-01"
 ENDDATE = "2021-10-31"
+
+ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
 
 if __name__ == "__main__":
@@ -62,8 +66,29 @@ if __name__ == "__main__":
         ],
     )
 
-    features.execute_batch(
-        outputfile=".notebook-tests/presto_features_gfmap_nointerp.nc",
+    catboost_parameters = {}
+
+    classes = apply_model_inference(
+        model_inference_class=CroplandClassifier,
+        cube=features,
+        parameters=catboost_parameters,
+        size=[
+            {"dimension": "x", "unit": "px", "value": 100},
+            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "t", "value": "P1D"},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ]
+    )
+
+    classes.execute_batch(
+        outputfile=".notebook-tests/presto_prediction_gfmap.nc",
         out_format="NetCDF",
-        job_options={"driver-memory": "4g", "executor-memoryOverhead": "8g"},
+        job_options={
+            "driver-memory": "4g",
+            "executor-memoryOverhead": "8g",
+            "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
+        },
     )
