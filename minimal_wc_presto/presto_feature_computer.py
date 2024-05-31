@@ -1,17 +1,9 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
-import functools
-import logging
-import shutil
-import sys
-import urllib.request
-from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import xarray as xr
-from pyproj import Transformer
-
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
+from pyproj import Transformer
 
 
 class PrestoFeatureExtractor(PatchFeatureExtractor):
@@ -19,6 +11,10 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     This will generate a datacube with 128 bands, each band representing a
     feature from the Presto model.
     """
+
+    import functools
+    from pathlib import Path
+    from typing import Tuple
 
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
@@ -28,26 +24,46 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     _NODATAVALUE = 65535
 
     BAND_MAPPING = {
-        "S2-L2A-B02": "B2",
-        "S2-L2A-B03": "B3",
-        "S2-L2A-B04": "B4",
-        "S2-L2A-B05": "B5",
-        "S2-L2A-B06": "B6",
-        "S2-L2A-B07": "B7",
-        "S2-L2A-B08": "B8",
+        "B02": "B2",
+        "B03": "B3",
+        "B04": "B4",
+        "B05": "B5",
+        "B06": "B6",
+        "B07": "B7",
+        "B08": "B8",
+        "B8A": "B8A",
+        "B11": "B11",
+        "B12": "B12",
+        "VH": "VH",
+        "VV": "VV",
+        "precipitation-flux": "total_precipitation",
+        "temperature-mean": "temperature_2m",
+    }
+
+    GFMAP_BAND_MAPPING = {
+        "S2-L2A-B02": "B02",
+        "S2-L2A-B03": "B03",
+        "S2-L2A-B04": "B04",
+        "S2-L2A-B05": "B05",
+        "S2-L2A-B06": "B06",
+        "S2-L2A-B07": "B07",
+        "S2-L2A-B08": "B08",
         "S2-L2A-B8A": "B8A",
         "S2-L2A-B11": "B11",
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "A5-precip": "total_precipitation",
-        "A5-tmean": "temperature_2m",
+        "COP-DEM": "DEM",
+        "A5-tmean": "temperature-mean",
+        "A5-precip": "precipitation-flux",
     }
 
     def __init__(self):
         """
         Initializes the PrestoFeatureExtractor object, starting a logger.
         """
+        import logging
+
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(PrestoFeatureExtractor.__name__)
         self.model = None  # To be initialized within the OpenEO environment
@@ -91,17 +107,23 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         num_pixels = len(inarr.x) * len(inarr.y)
         num_timesteps = len(inarr.t)
 
-        eo_data = np.zeros((num_pixels, num_timesteps, len(BANDS)))  # pylint: disable=E0602
-        mask = np.zeros((num_pixels, num_timesteps, len(BANDS_GROUPS_IDX)))  # pylint: disable=E0602
+        eo_data = np.zeros(
+            (num_pixels, num_timesteps, len(BANDS))
+        )  # pylint: disable=E0602
+        mask = np.zeros(
+            (num_pixels, num_timesteps, len(BANDS_GROUPS_IDX))
+        )  # pylint: disable=E0602
 
         for org_band, presto_band in cls.BAND_MAPPING.items():
             if org_band in inarr.coords["bands"]:
-                values = rearrange(    # pylint: disable=E0602
+                values = rearrange(  # pylint: disable=E0602
                     inarr.sel(bands=org_band).values, "t x y -> (x y) t"
                 )
                 idx_valid = values != cls._NODATAVALUE
                 values = cls._preprocess_band_values(values, presto_band)
-                eo_data[:, :, BANDS.index(presto_band)] = values  # pylint: disable=E0602
+                eo_data[
+                    :, :, BANDS.index(presto_band)
+                ] = values  # pylint: disable=E0602
                 mask[:, :, IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
 
         return eo_data, mask
@@ -120,11 +142,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         """
         # EPSG:4326 is the supported crs for presto
         lon, lat = np.meshgrid(inarr.x, inarr.y)
-        transformer = Transformer.from_crs(
-            f"EPSG:{epsg}", "EPSG:4326", always_xy=True
-        )
+        transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
         lon, lat = transformer.transform(lon, lat)
-        latlons = rearrange(np.stack([lat, lon]), "c x y -> (x y) c")  # pylint: disable=E0602
+        latlons = rearrange(
+            np.stack([lat, lon]), "c x y -> (x y) c"
+        )  # pylint: disable=E0602
 
         #  2D array where each row represents a pair of latitude and longitude coordinates.
         return latlons
@@ -224,7 +246,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         for x, dw, latlons, month, variable_mask in dl:
             x_f, dw_f, latlons_f, month_f, variable_mask_f = [
-                t.to(device) for t in (x, dw, latlons, month, variable_mask)  # pylint: disable=E0602
+                t.to(device)
+                for t in (x, dw, latlons, month, variable_mask)  # pylint: disable=E0602
             ]
 
             with torch.no_grad():  # pylint: disable=E0602
@@ -274,6 +297,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         """Extract the dependencies from the given URL. Unpacking a zip
         file in the current working directory.
         """
+        import shutil
+        import sys
+        import urllib.request
+        from pathlib import Path
+
         # Generate absolute path for the dependencies folder
         dependencies_dir = Path.cwd() / "dependencies"
 
@@ -288,7 +316,9 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)
 
         # Add the model directory to system path if it's not already there
-        abs_path = str(dependencies_dir / Path(modelfile_url).name.split(".zip")[0])  # NOQA
+        abs_path = str(
+            dependencies_dir / Path(modelfile_url).name.split(".zip")[0]
+        )  # NOQA
 
         # Append the dependencies
         sys.path.append(str(abs_path))
@@ -305,35 +335,54 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         Returns:
             xr.DataArray: Extracted features as xarray DataArray.
         """
+        self.logger.info("Loading presto model.")
         presto_model = Presto.load_pretrained_artifactory(  # pylint: disable=E0602
             presto_url=presto_path, strict=False
         )
         self.model = presto_model
+        self.logger.info("Presto model loaded sucessfully. Extracting features.")
 
         # Get the local EPSG code
         features = self.extract_presto_features(inarr, epsg=self.epsg)
+        self.logger.info("Features extracted.")
+        # features = self.extract_presto_features(inarr, epsg=32631)  # TODO remove hardcoded
         return features
 
     def output_labels(self) -> list:
         """Returns the output labels from this UDF, which is the output labels
         of the presto embeddings"""
         return [f"presto_ft_{i}" for i in range(128)]
-    
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         # The below is required to avoid flipping of the result
         # when running on OpenEO backend!
         inarr = inarr.transpose("bands", "t", "x", "y")
 
+        # Change the band names
+        new_band_names = [
+            self.GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands
+        ]
+        inarr = inarr.assign_coords(bands=new_band_names)
+
+        self.logger.info("Input data shape: %s", inarr.shape)
+        for band in inarr.bands:
+            self.logger.info(
+                "Input data null values for band %s -> %s",
+                band,
+                inarr.sel(bands=band).isnull().sum().item(),
+            )
+
         # Handle NaN values in Presto compatible way
         inarr = inarr.fillna(65535)
 
+        self.logger.info(
+            "After filling NaN values, total input data null values: %s",
+            inarr.isnull().sum().item(),
+        )
+
         # Unzip de dependencies on the backend
         self.logger.info("Unzipping dependencies")
-        self.extract_dependencies(
-            self.BASE_URL,
-            self.DEPENDENCY_NAME
-        )
+        self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
 
         # pylint: disable=E0401
         # pylint: disable=C0401
@@ -342,12 +391,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # pylint: disable=W0603
         # pylint: disable=reportMissingImports
         ##########################################################################
-        global onnxruntime, requests, torch, BANDS, BANDS_GROUPS_IDX, NORMED_BANDS
+        global requests, torch, BANDS, BANDS_GROUPS_IDX, NORMED_BANDS
         global S1_S2_ERA5_SRTM, DynamicWorld2020_2021, BAND_EXPANSION
         global IDX_TO_BAND_GROUPS, BAND_EXPANSION, Presto, device, rearrange
         global DataLoader, TensorDataset
 
-        import onnxruntime
         import requests
         import torch
         from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.dataops import (
@@ -364,6 +412,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.utils import device
         from einops import rearrange
         from torch.utils.data import DataLoader, TensorDataset
+
         ##########################################################################
         # pylint: enable=E0401
         # pylint: enable=C0401
@@ -371,8 +420,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # pylint: enable=W0601
         # pylint: enable=W0603
         # pylint: enable=reportMissingImports
-
-
         # Index to band groups mapping
         IDX_TO_BAND_GROUPS = {
             NORMED_BANDS[idx]: band_group_idx

@@ -12,11 +12,7 @@ from openeo_gfmap import (
 from openeo_gfmap.fetching.generic import build_generic_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
-from openeo_gfmap.preprocessing.compositing import (
-    median_compositing,
-    mean_compositing,
-    sum_compositing
-)
+from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 
 COMPOSITE_WINDOW = "month"
@@ -116,7 +112,9 @@ def raw_datacube_S2(
 
         # Try filtering using the geometry
         if fetch_type == FetchType.TILE:
-            additional_masks = additional_masks.filter_spatial(spatial_extent.to_geojson())
+            additional_masks = additional_masks.filter_spatial(
+                spatial_extent.to_geojson()
+            )
 
         extraction_parameters["pre_merge"] = additional_masks
 
@@ -231,7 +229,6 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S2-L2A-B06",
             "S2-L2A-B07",
             "S2-L2A-B08",
-            "S2-L2A-B8A",
             "S2-L2A-B11",
             "S2-L2A-B12",
         ],
@@ -253,8 +250,8 @@ def worldcereal_preprocessed_inputs_gfmap(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         bands=[
-            "S1-SIGMA0-VV",
             "S1-SIGMA0-VH",
+            "S1-SIGMA0-VV",
         ],
         fetch_type=FetchType.TILE,
         target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
