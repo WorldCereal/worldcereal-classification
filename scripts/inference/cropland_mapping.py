@@ -12,8 +12,6 @@ from openeo_gfmap.inference.model_inference import apply_model_inference
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
@@ -27,7 +25,6 @@ if __name__ == "__main__":
     parser.add_argument("miny", type=float, help="Minimum Y coordinate (south)")
     parser.add_argument("maxx", type=float, help="Maximum X coordinate (east)")
     parser.add_argument("maxy", type=float, help="Maximum Y coordinate (north)")
-    parser.add_argument("--epsg", type=int, default=4326, help="EPSG code for coordiante reference system.")
     parser.add_argument(
         "--epsg",
         type=int,

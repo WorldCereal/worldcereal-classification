@@ -1,19 +1,24 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
 import xarray as xr
+from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 
+
 class PrestoFeatureExtractor(PatchFeatureExtractor):
-    """Feature extractor to use Presto model to compute embeddings.
+    """Feature extractor to use Presto model to compute per-pixel embeddings.
     This will generate a datacube with 128 bands, each band representing a
     feature from the Presto model.
+
+    Interesting UDF parameters:
+    - presto_url: A public URL to the Presto model file. A default Presto
+      version is provided if the parameter is left undefined.
+    - rescale_s1: Is specifically disabled by default, as the presto
+      dependencies already take care of the backscatter decompression. If
+      specified, should be set as `False`.
     """
 
-    import functools
-    from pathlib import Path
-    from typing import Tuple
-
-    PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
+    PRESTO_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
     DEPENDENCY_NAME = "wc_presto_onnx_dependencies.zip"
 
@@ -31,48 +36,9 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
         "COP-DEM": "DEM",
-        "A5-tmean": "temperature-mean",
-        "A5-precip": "precipitation-flux",
+        "AGERA5-TMEAN": "temperature-mean",
+        "AGERA5-PRECIP": "precipitation-flux",
     }
-
-    def __init__(self):
-        """
-        Initializes the PrestoFeatureExtractor object, starting a logger.
-        """
-        import logging
-
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(PrestoFeatureExtractor.__name__)
-
-    @classmethod
-    @functools.lru_cache(maxsize=6)
-    def extract_dependencies(cls, base_url: str, dependency_name: str):
-        """Extract the dependencies from the given URL. Unpacking a zip
-        file in the current working directory.
-        """
-        import shutil
-        import urllib.request
-        from pathlib import Path
-
-        # Generate absolute path for the dependencies folder
-        dependencies_dir = Path.cwd() / "dependencies"
-
-        # Create the directory if it doesn't exist
-        dependencies_dir.mkdir(exist_ok=True, parents=True)
-
-        # Download and extract the model file
-        modelfile_url = f"{base_url}/{dependency_name}"
-        modelfile, _ = urllib.request.urlretrieve(
-            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name
-        )
-        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)
-
-        # Add the model directory to system path if it's not already there
-        abs_path = str(
-            dependencies_dir / Path(modelfile_url).name.split(".zip")[0]
-        )  # NOQA
-
-        return abs_path
 
     def output_labels(self) -> list:
         """Returns the output labels from this UDF, which is the output labels
@@ -87,6 +53,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
                 "EPSG code is required for Presto feature extraction, but was "
                 "not correctly initialized."
             )
+        presto_url = self._parameters.get("presto_url", self.PRESTO_URL)
 
         # The below is required to avoid flipping of the result
         # when running on OpenEO backend!
@@ -108,8 +75,16 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         self.logger.info("Appending dependencies")
         sys.path.append(str(deps_dir))
 
-        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
+        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import (
+            get_presto_features,
+        )
 
         self.logger.info("Extracting presto features")
-        features = get_presto_features(inarr, self.PRESTO_PATH, self.epsg)
+        features = get_presto_features(inarr, presto_url, self.epsg)
         return features
+
+    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:
+        # Disable S1 rescaling (decompression) by default
+        if parameters.get("rescale_s1", None) is None:
+            parameters.update({"rescale_s1": False})
+        return super()._execute(cube, parameters)

@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
+    Backend,
     BackendContext,
     BoundingBoxExtent,
     FetchType,
@@ -14,6 +15,7 @@ from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
+from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_S1_orbitstate
 
 COMPOSITE_WINDOW = "month"
 
@@ -162,10 +164,37 @@ def raw_datacube_S1(
         List of Sentinel-1 bands to extract.
     fetch_type : FetchType
         GFMAP Fetch type to use for extraction.
+    target_resolution : float, optional
+        Target resolution to resample the data to, by default 20.0.
+    orbit_direction : Optional[str], optional
+        Orbit direction to filter the data, by default None. If None and the
+        backend is in CDSE, then querries the catalogue for the best orbit
+        direction to use. In the case querrying is unavailable or fails, then
+        uses "ASCENDING" as a last resort.
     """
     extractor_parameters = {
         "target_resolution": target_resolution,
     }
+    if orbit_direction is None and backend_context.backend in [
+        Backend.CDSE,
+        Backend.CDSE_STAGING,
+        Backend.FED,
+    ]:
+        try:
+            orbit_direction = select_S1_orbitstate(
+                backend_context, spatial_extent, temporal_extent
+            )
+            print(
+                f"Selected orbit direction: {orbit_direction} from max "
+                "accumulated area overlap between bounds and products."
+            )
+        except UncoveredS1Exception as exc:
+            orbit_direction = "ASCENDING"
+            print(
+                f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
+                f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
+            )
+
     if orbit_direction is not None:
         extractor_parameters["load_collection"] = {
             "sat:orbit_state": lambda orbit: orbit == orbit_direction
@@ -202,7 +231,7 @@ def raw_datacube_METEO(
 ) -> DataCube:
     extractor = build_generic_extractor(
         backend_context=backend_context,
-        bands=["A5-tmean", "A5-precip"],
+        bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
         fetch_type=fetch_type,
         collection_name="AGERA5",
     )
@@ -243,6 +272,9 @@ def worldcereal_preprocessed_inputs_gfmap(
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
 
+    # Decide on the orbit direction from the maximum overlapping area of
+    # available products.
+
     # Extraction of the S1 data
     s1_data = raw_datacube_S1(
         connection=connection,
@@ -255,7 +287,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         ],
         fetch_type=FetchType.TILE,
         target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
-        orbit_direction="ASCENDING",
+        orbit_direction=None,  # Make the querry on the catalogue for the best orbit
     )
 
     s1_data = mean_compositing(s1_data, period="month")
@@ -279,10 +311,10 @@ def worldcereal_preprocessed_inputs_gfmap(
     # )
 
     # # Perform compositing differently depending on the bands
-    # mean_temperature = meteo_data.band("A5-tmean")
+    # mean_temperature = meteo_data.band("AGERA5-TMEAN")
     # mean_temperature = mean_compositing(mean_temperature, period="month")
 
-    # total_precipitation = meteo_data.band("A5-precip")
+    # total_precipitation = meteo_data.band("AGERA5-PRECIP")
     # total_precipitation = sum_compositing(total_precipitation, period="month")
 
     data = s2_data.merge_cubes(s1_data)
