@@ -1,5 +1,10 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
+# /// script
+# dependencies = [
+#   "presto @ https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.0.1-py3-none-any.whl"
+# ]
+# ///
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
@@ -75,9 +80,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         self.logger.info("Appending dependencies")
         sys.path.append(str(deps_dir))
 
-        from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import (
-            get_presto_features,
-        )
+        from presto.inference import get_presto_features
 
         self.logger.info("Extracting presto features")
         features = get_presto_features(inarr, presto_url, self.epsg)
