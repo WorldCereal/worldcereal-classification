@@ -317,7 +317,7 @@ class PrestoFeatureExtractor:
         return np.concatenate(all_encodings, axis=0)
     
     def extract_presto_features(
-        self, inarr: xr.DataArray, epsg: int = 4326
+        self, inarr: xr.DataArray, epsg: int
     ) -> xr.DataArray:
         eo, dynamic_world, months, latlons, mask = self._create_presto_input(
             inarr, epsg
@@ -338,9 +338,7 @@ class PrestoFeatureExtractor:
         return features
     
 
-
-
-def get_presto_features(inarr: xr.DataArray, presto_path: str) -> xr.DataArray:
+def get_presto_features(inarr: xr.DataArray, presto_path: str, espg: int) -> xr.DataArray:
     """
     Extracts features from input data using Presto.
 
@@ -356,9 +354,8 @@ def get_presto_features(inarr: xr.DataArray, presto_path: str) -> xr.DataArray:
     presto_model = Presto.load_pretrained_artifactory(
         presto_url=presto_path, strict=False
     )
-    #TODO flexible espg
     presto_extractor = PrestoFeatureExtractor(presto_model)
-    features = presto_extractor.extract_presto_features(inarr, epsg=32631)
+    features = presto_extractor.extract_presto_features(inarr, espg)
     return features
 
 

@@ -6,8 +6,7 @@ import sys
 import functools
 import xarray as xr
 from typing import Dict
-import numpy as np
-from pyproj import Transformer
+
 
 
 def _setup_logging():
@@ -36,36 +35,30 @@ def extract_dependencies(base_url: str, dependency_name: str):
     return(abs_path)
 
 
+# Add dependencies    
+base_url  = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"
+dependency_name = "wc_presto_onnx_dependencies.zip"
+
+dep_dir = extract_dependencies(base_url, dependency_name)
+sys.path.append(str(dep_dir))
+from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
+
+
 def apply_datacube(cube: xr.DataArray, context:Dict) -> xr.DataArray:
     
     logger = _setup_logging()
     
-
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
     cube = cube.transpose("bands", "t", "x", "y")
 
-    # Handle NaN values in Presto compatible way
-    cube = cube.fillna(65535)
-
-    logger.info("Unzipping dependencies")
-    #base_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/"
-    base_url  = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"
-    dependency_name = "wc_presto_onnx_dependencies.zip"
-
-    logger.info("Appending depencency")
-    dep_dir = extract_dependencies(base_url, dependency_name)
-    sys.path.append(str(dep_dir))
-
-    #directly add a path to the older pandas version
-    from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.world_cereal_inference import get_presto_features
-
+    # Handle potential NaN values in Presto compatible way
+    cube = cube.fillna(65535)    
 
     logger.info("Extracting presto features")
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"
-    output = get_presto_features(cube, PRESTO_PATH)
+    output = get_presto_features(cube, PRESTO_PATH, 32631)
 
- 
     return output
 
 

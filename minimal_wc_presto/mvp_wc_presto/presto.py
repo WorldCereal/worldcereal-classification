@@ -16,6 +16,8 @@ from .utils import default_model_path, device
 import io
 import requests
 
+import functools
+
 
 def param_groups_weight_decay(model: nn.Module, weight_decay=1e-5, no_weight_decay_list=()):
     # https://github.com/huggingface/pytorch-image-models/blob/main/timm/optim/optim_factory.py
@@ -801,6 +803,7 @@ class Presto(nn.Module):
         return model
     
     @classmethod
+    @functools.lru_cache(maxsize=6)
     def load_pretrained_artifactory(
         cls, presto_url: str, strict: bool = True
     ):
