@@ -77,7 +77,7 @@ def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series)
     s2_tile_id = row.s2_tile
 
     subfolder = root_folder / s2_tile_id
-    return subfolder / f"{row.out_prefix}_{sample_id}{row.out_extension}"
+    return subfolder / f"{sample_id}{row.out_extension}"
 
 
 def create_job_dataframe(
@@ -150,10 +150,6 @@ def create_datacube(
     bands_to_download = [
         "S2-L2A-B04",
         "S2-L2A-B08",
-        "S2-L2A-B8A",
-        "S2-L2A-B09",
-        "S2-L2A-B11",
-        "S2-L2A-B12",
     ]
 
     fetch_type = FetchType.POINT
@@ -170,25 +166,24 @@ def create_datacube(
         apply_mask_flag=True,
     )
 
+    cube = 2.5 * (cube.band('S2-L2A-B08') - cube.band('S2-L2A-B04')) / \
+        (cube.band('S2-L2A-B08') + 2.4 * cube.band('S2-L2A-B04') + 1)
+    cube = cube.add_dimension("bands", 'S2-L2A-EVI', "bands")
+
     # Create monthly median composites
     cube = median_compositing(cube=cube, period="month")
     # Perform linear interpolation
     cube = linear_interpolation(cube)
-
     # Map the time dimension to the bands dimension
-    def time_to_bands(input_timeseries: ProcessBuilder):
-        tsteps = array_create(
-            data=[input_timeseries.array_element(i) for i in range(20)]
-        )
-        return tsteps
+    nsteps = 20
+    cube = cube.apply_dimension(dimension='t',
+                            target_dimension='bands',
+                            process=lambda d: array_create(data=d),
+)
 
-    cube = cube.apply_dimension(
-        dimension="t", target_dimension="bands", process=time_to_bands
-    )
-
-    tstep_labels = [f"{band}_t{i}" for band in bands_to_download for i in range(20)]
-    cube = cube.rename_labels("bands", tstep_labels)
-
+    tstep_labels = [f'S2-L2A-EVI_t{i}' for i in range(0,nsteps)]
+    cube = cube.rename_labels('bands', tstep_labels)
+    
     # Finally, create a vector cube based on the Point geometries
     cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
 
