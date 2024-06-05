@@ -6,7 +6,7 @@
 
 pythonPipeline {
   package_name = 'worldcereal-classification'
-  test_module_name = 'worldcereal_classification'
+  test_module_name = 'worldcereal'
   wipeout_workspace = true
   python_version = ["3.10"]
   extras_require = 'dev'
