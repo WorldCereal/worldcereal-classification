@@ -4,6 +4,7 @@ import shutil
 import sys
 import urllib.request
 from pathlib import Path
+from functools import lru_cache
 
 
 def _setup_logging():
@@ -36,6 +37,7 @@ BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # N
 DEPENDENCY_NAME = "wc_presto_onnx_dependencies.zip"
 extract_dependencies(BASE_URL, DEPENDENCY_NAME)
 
+
 import onnxruntime
 import requests
 from typing import Dict, Tuple
@@ -59,37 +61,25 @@ from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.masking import (
 from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.presto import Presto
 from dependencies.wc_presto_onnx_dependencies.mvp_wc_presto.utils import device
 
-
-# Index to band groups mapping
-IDX_TO_BAND_GROUPS = {
-    NORMED_BANDS[idx]: band_group_idx
-    for band_group_idx, (_, val) in enumerate(BANDS_GROUPS_IDX.items())
-    for idx in val
-}
-        
-
-
 class CatBoostPredictor:
-    @functools.lru_cache(maxsize=6)
-    def __init__(self, model_url: str):
-        """
-        Initialize a WorldCerealPredictor with the given model URL.
+    
+    #singleton
+    _instance = None
 
-        Args:
-            model_url (str): The URL to the ONNX model file.
-        """
+    def __new__(cls, model_url: str):
+        if cls._instance is None:
+            cls._instance = super(CatBoostPredictor, cls).__new__(cls)
+            cls._instance.model_url = model_url
+            cls._instance.onnx_session = cls._load_model_from_url(model_url)
+        return cls._instance
 
-        self.onnx_session = None
-        self.model_url = model_url
-
-        # Load the model from the URL during initialization
-        self.onnx_session = self.load_model_from_url()
-
-    def load_model_from_url(self):
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def _load_model_from_url(model_url: str):
         """
         Load the ONNX model from the specified URL.
         """
-        response = requests.get(self.model_url)
+        response = requests.get(model_url)
         model_content = response.content
 
         # Load the dependency into an InferenceSession
@@ -146,21 +136,36 @@ class CatBoostPredictor:
         )
 
         return predictions
-    
+
 class PrestoEmbeddingExtractor:
         
-        @functools.lru_cache(maxsize=6)
-        def __init__(self, model_url:str):
+        #singleton
+        _instance = None
+
+        def __new__(cls, model_url: str):
+            if cls._instance is None:
+                cls._instance = super(PrestoEmbeddingExtractor, cls).__new__(cls)
+                cls._instance.model_url = model_url
+                cls._instance.model = cls._load_model_with_cache(model_url)
+            return cls._instance
+
+        @classmethod
+        def _load_model_with_cache(cls, model_url: str):
             """
-            Initialize the PrestoFeatureExtractor with a Presto model.
+            Load the Presto model with caching to avoid reloading the same model multiple times.
 
             Args:
-                model (Presto): The Presto model used for feature extraction.
+                model_url (str): The URL to the Presto model.
+
+            Returns:
+                Presto: The loaded Presto model.
             """
-
-            self.model = Presto.load_pretrained_artifactory(presto_url=model_url, strict=False)
-
-
+            if not hasattr(cls, '_model_cache'):
+                cls._model_cache = {}
+            if model_url not in cls._model_cache:
+                cls._model_cache[model_url] = Presto.load_pretrained_artifactory(presto_url=model_url, strict=False)
+            return cls._model_cache[model_url]
+            
         _NODATAVALUE = 65535
 
         BAND_MAPPING = {
@@ -178,6 +183,13 @@ class PrestoEmbeddingExtractor:
             "VV": "VV",
             "precipitation-flux": "total_precipitation",
             "temperature-mean": "temperature_2m",
+        }
+
+        # Index to band groups mapping
+        IDX_TO_BAND_GROUPS = {
+            NORMED_BANDS[idx]: band_group_idx
+            for band_group_idx, (_, val) in enumerate(BANDS_GROUPS_IDX.items())
+            for idx in val
         }
 
         @classmethod
@@ -230,7 +242,7 @@ class PrestoEmbeddingExtractor:
                     idx_valid = values != cls._NODATAVALUE
                     values = cls._preprocess_band_values(values, presto_band)
                     eo_data[:, :, BANDS.index(presto_band)] = values
-                    mask[:, :, IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
+                    mask[:, :, cls.IDX_TO_BAND_GROUPS[presto_band]] += ~idx_valid
 
             return eo_data, mask
 
@@ -279,7 +291,8 @@ class PrestoEmbeddingExtractor:
 
             months = np.ones((num_instances)) * start_month
             return months
-
+        
+        @classmethod
         def _create_dataloader(
             self,
             eo: np.ndarray,
@@ -371,7 +384,7 @@ class PrestoEmbeddingExtractor:
 
         def get_presto_embedding(
             self, inarr: xr.DataArray, epsg: int = 4326
-        ) -> np.ndarray:
+        ) -> xr.DataArray:
             eo, dynamic_world, months, latlons, mask = self._create_presto_input(
                 inarr, epsg
             )
@@ -390,20 +403,16 @@ class PrestoEmbeddingExtractor:
 
             return features
 
-        
+logger = _setup_logging()
 
 def apply_datacube(cube: xr.DataArray, context: Dict) -> xr.DataArray:
 
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
     PRESTO_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    
-
-    logger = _setup_logging()
 
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
     cube = cube.transpose("bands", "t", "x", "y")
-
     # Handle NaN values in Presto compatible way
     cube = cube.fillna(65535)
 
