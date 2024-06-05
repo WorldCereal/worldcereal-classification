@@ -1,4 +1,5 @@
 """Extract S2 data using OpenEO-GFMAP package."""
+
 import argparse
 import json
 from datetime import datetime
