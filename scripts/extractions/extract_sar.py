@@ -1,4 +1,5 @@
 """Extract S1 data using OpenEO-GFMAP package."""
+
 import argparse
 import json
 import logging
