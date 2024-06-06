@@ -174,15 +174,15 @@ def create_datacube(
     cube = median_compositing(cube=cube, period="month")
     # Perform linear interpolation
     cube = linear_interpolation(cube)
-    # Map the time dimension to the bands dimension
-    nsteps = 20
-    cube = cube.apply_dimension(dimension='t',
-                            target_dimension='bands',
-                            process=lambda d: array_create(data=d),
-)
+#     # Map the time dimension to the bands dimension
+#     nsteps = 20
+#     cube = cube.apply_dimension(dimension='t',
+#                             target_dimension='bands',
+#                             process=lambda d: array_create(data=d),
+# )
 
-    tstep_labels = [f'S2-L2A-EVI_t{i}' for i in range(0,nsteps)]
-    cube = cube.rename_labels('bands', tstep_labels)
+#     tstep_labels = [f'S2-L2A-EVI_t{i}' for i in range(0,nsteps)]
+#     cube = cube.rename_labels('bands', tstep_labels)
     
     # Finally, create a vector cube based on the Point geometries
     cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
