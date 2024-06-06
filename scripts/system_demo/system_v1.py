@@ -38,11 +38,13 @@ Content:
 
 # %%
 # IMPORTS
+import pandas as pd
 import geopandas as gpd
 import requests
 from shapely.geometry import shape, Polygon
 
 from worldcereal.utils.map import get_ui_map
+from worldcereal.utils.refdata import _to_points
 
 RDM_API = 'https://ewoc-rdm-api.iiasa.ac.at'
 
@@ -129,6 +131,7 @@ for i, col in enumerate(test):
 
 
 # %%
+# OPTIONAL
 # Contributing reference data to RDM
 
 # Here we should have a function that allows a user to upload a zip file containing the reference data
@@ -143,23 +146,30 @@ for i, col in enumerate(test):
     print(f'Collection {i+1}: {col["collectionId"]}')
 
 # %%
-# Now that our reference data has been added, we launch a request to extract all reference points and polygons intersecting our region of interest
-# --> this should return the selected points/polygons as a geojson file/object (one per collection)
+# Now that our reference data has been added,
+# we launch a request to extract all reference points and polygons
+# intersecting our region of interest.
+# --> this should return the selected points/polygons as a geojson file/object
+# (one per collection).
 
-responses = []
+# To combine the data into one database, we immediately convert
+# the polygons to points (by taking the centroid).
+
+max_items = 2000
+
+dfs = []
 for col in cols_aoi:
     itemSearchCollectionId = col['collectionId']
     print(
         f'Extracting reference data from collection {itemSearchCollectionId}')
-    itemSearchUrl = f'{RDM_API}/collections/{itemSearchCollectionId}/items?{bbox_str}'
+    itemSearchUrl = f'{RDM_API}/collections/{itemSearchCollectionId}/items?{bbox_str}&MaxResultCount={max_items}'
     itemSearchResponse = requests.get(itemSearchUrl, headers=headers)
-    responses.append(itemSearchResponse.json())
+    df = gpd.GeoDataFrame.from_features(
+        itemSearchResponse.json(), crs='EPSG:4326')
+    dfs.append(_to_points(df))
 
-responses
-
-
-# %%
-# Next, we convert polygons to points (by taking the centroid) and combine all reference data into one geoparquet file
+gdf = pd.concat(dfs, ignore_index=True)
+print(f'Got a total of {len(gdf)} reference points')
 
 
 # %%
@@ -167,13 +177,20 @@ responses
 points = gpd.read_file('data/points.geoparquet')
 
 # THIS WORKFLOW IS SPLIT INTO TWO:
-#     - 1. Extracting the satellite data for the points, up to monthly composites (pre-processing done)
-#     - 2. (If needed) finetuning presto + applying presto to generate the 128 classification features
+#     - 1. Extracting the satellite data for the points,
+#       up to monthly composites (pre-processing done)
+#     - 2. (If needed) finetuning presto + applying presto
+#       to generate the 128 classification features
 
 training_df = get_training_data(points)
 
 # FYI, for now we have a basic pipeline, here -->
 # https://github.com/Open-EO/openeo-gfmap/blob/issue97-basic-pipeline/examples/basic_pipeline/basic_pipeline.ipynb
+
+# %%
+# Combine extractions with previous extractions from Phase I:
+
+# Here, we need to access the geoparquet on artifactory and request all extractions for our AOI...
 
 # %%
 # Train catboost model
