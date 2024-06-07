@@ -1,10 +1,5 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
-# /// script
-# dependencies = [
-#   "presto @ https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.0.1-py3-none-any.whl"
-# ]
-# ///
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
@@ -45,6 +40,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "AGERA5-PRECIP": "precipitation-flux",
     }
 
+    def dependencies(self) -> list:
+        """Gives the presto dependencies from a wheel with all it's subdependencies."""
+        return [
+            "torch @ https://download.pytorch.org/whl/cpu/torch-2.0.0%2Bcpu-cp38-cp38-linux_x86_64.whl#sha256=354f281351cddb590990089eced60f866726415f7b287db5105514aa3c5f71ca",
+            "presto @ https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.0.1-py3-none-any.whl",
+        ]
+
     def output_labels(self) -> list:
         """Returns the output labels from this UDF, which is the output labels
         of the presto embeddings"""
@@ -74,11 +76,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         inarr = inarr.fillna(65535)
 
         # Unzip de dependencies on the backend
-        self.logger.info("Unzipping dependencies")
-        deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
+        # self.logger.info("Unzipping dependencies")
+        # deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
 
-        self.logger.info("Appending dependencies")
-        sys.path.append(str(deps_dir))
+        # self.logger.info("Appending dependencies")
+        # sys.path.append(str(deps_dir))
 
         from presto.inference import get_presto_features
 

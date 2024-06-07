@@ -58,7 +58,8 @@ if __name__ == "__main__":
     backend_context = BackendContext(Backend.FED)
 
     connection = openeo.connect(
-        "https://openeo.creo.vito.be/openeo/"
+        # "https://openeo.creo.vito.be/openeo/"
+        "https://openeo-staging.creo.vito.be/openeo/"
     ).authenticate_oidc()
 
     # Preparing the input cube for the inference
@@ -111,6 +112,6 @@ if __name__ == "__main__":
         job_options={
             "driver-memory": "4g",
             "executor-memoryOverhead": "8g",
-            "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
+            "logging-threshold": "debug",
         },
     )
