@@ -1,4 +1,5 @@
 """Extract AGERA5 (Meteo) data using OpenEO-GFMAP package."""
+
 import argparse
 from functools import partial
 from pathlib import Path
