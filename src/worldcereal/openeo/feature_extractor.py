@@ -18,9 +18,10 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
       specified, should be set as `False`.
     """
 
-    PRESTO_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
+    PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
+    PRESO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.0-temp-py3-none-any.whl"
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
-    DEPENDENCY_NAME = "wc_presto_onnx_dependencies.zip"
+    DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
         "S2-L2A-B02": "B02",
@@ -40,12 +41,18 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "AGERA5-PRECIP": "precipitation-flux",
     }
 
-    def dependencies(self) -> list:
-        """Gives the presto dependencies from a wheel with all it's subdependencies."""
-        return [
-            "torch @ https://download.pytorch.org/whl/cpu/torch-2.0.0%2Bcpu-cp38-cp38-linux_x86_64.whl#sha256=354f281351cddb590990089eced60f866726415f7b287db5105514aa3c5f71ca",
-            "presto @ https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.0.1-py3-none-any.whl",
-        ]
+    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> list:
+        import urllib.request
+        import zipfile
+        from pathlib import Path
+
+        # Downloads the wheel file
+        modelfile, _ = urllib.request.urlretrieve(
+            wheel_url, filename=Path.cwd() / Path(wheel_url).name
+        )
+        with zipfile.ZipFile(modelfile, "r") as zip_ref:
+            zip_ref.extractall(destination_dir)
+        return destination_dir
 
     def output_labels(self) -> list:
         """Returns the output labels from this UDF, which is the output labels
@@ -54,13 +61,17 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         import sys
+        from pathlib import Path
 
         if self.epsg is None:
             raise ValueError(
                 "EPSG code is required for Presto feature extraction, but was "
                 "not correctly initialized."
             )
-        presto_url = self._parameters.get("presto_url", self.PRESTO_URL)
+        presto_model_url = self._parameters.get(
+            "presto_model_url", self.PRESTO_MODEL_URL
+        )
+        presto_wheel_url = self._parameters.get("presot_wheel_url", self.PRESO_WHL_URL)
 
         # The below is required to avoid flipping of the result
         # when running on OpenEO backend!
@@ -76,16 +87,21 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         inarr = inarr.fillna(65535)
 
         # Unzip de dependencies on the backend
-        # self.logger.info("Unzipping dependencies")
-        # deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
+        self.logger.info("Unzipping dependencies")
+        deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
+        self.logger.info("Unpacking presto wheel")
+        deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)
 
-        # self.logger.info("Appending dependencies")
-        # sys.path.append(str(deps_dir))
+        self.logger.info("Appending dependencies")
+        sys.path.append(str(deps_dir))
+
+        # Debug, print the dependency directory
+        self.logger.info(f"Dependency directory: {list(Path(deps_dir).iterdir())}")
 
         from presto.inference import get_presto_features
 
         self.logger.info("Extracting presto features")
-        features = get_presto_features(inarr, presto_url, self.epsg)
+        features = get_presto_features(inarr, presto_model_url, self.epsg)
         return features
 
     def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:

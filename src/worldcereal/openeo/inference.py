@@ -15,41 +15,61 @@ class CroplandClassifier(ModelInference):
       the public Presto model.
     """
 
+    import numpy as np
+
     CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
-    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
-    DEPENDENCY_NAME = "wc_presto_onnx_dependencies.zip"
+
+    def __init__(self):
+        super().__init__()
+
+        self.onnx_session = None
 
     def dependencies(self) -> list:
-        """Gives the presto dependencies from a wheel with all it's subdependencies."""
-        return [
-            "onnxruntime",
-            "torch @ https://download.pytorch.org/whl/cpu/torch-2.0.0%2Bcpu-cp38-cp38-linux_x86_64.whl#sha256=354f281351cddb590990089eced60f866726415f7b287db5105514aa3c5f71ca",
-            "presto @ https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.0.1-py3-none-any.whl",
-        ]
+        return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
         return ["classification"]
 
-    def execute(self, inarr: xr.DataArray) -> xr.DataArray:
-        import sys
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        """
+        Predicts labels using the provided features array.
+        """
+        import numpy as np
 
+        if self.onnx_session is None:
+            raise ValueError("Model has not been loaded. Please load a model first.")
+
+        # Prepare input data for ONNX model
+        outputs = self.onnx_session.run(None, {"features": features})
+
+        # Threshold for binary conversion
+        threshold = 0.5
+
+        # Extract all prediction values and convert them to binary labels
+        prediction_values = [sublist["True"] for sublist in outputs[1]]
+        binary_labels = np.array(prediction_values) >= threshold
+        binary_labels = binary_labels.astype(int)
+
+        return binary_labels
+
+    def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
 
-        # shape and indiches for output
-        inarr = inarr.transpose("bands", "x", "y")
+        # shape and indices for output ("xy", "bands")
+        x_coords, y_coords = inarr.x.values, inarr.y.values
+        inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()
 
-        # Unzip de dependencies on the backend
-        # self.logger.info("Unzipping dependencies")
-        # dep_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
-
-        # self.logger.info("Adding dependencies")
-        # sys.path.append(str(dep_dir))
-
-        from presto.inference import classify_with_catboost
+        self.onnx_session = self.load_ort_session(classifier_url)
 
         # Run catboost classification
-        self.logger.info("Catboost classification")
-        classification = classify_with_catboost(inarr, classifier_url)
-        self.logger.info("Done")
+        self.logger.info(f"Catboost classification with input shape: {inarr.shape}")
+        classification = self.predict(inarr.values)
+        self.logger.info(f"Classification done with shape: {classification.shape}")
+
+        classification = xr.DataArray(
+            classification.reshape((1, len(x_coords), len(y_coords))),
+            dims=["bands", "x", "y"],
+            coords={"bands": ["classification"], "x": x_coords, "y": y_coords},
+        )
 
         return classification
