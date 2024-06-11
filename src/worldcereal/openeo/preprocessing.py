@@ -29,8 +29,8 @@ def raw_datacube_S2(
     fetch_type: FetchType,
     filter_tile: Optional[str] = None,
     distance_to_cloud_flag: Optional[bool] = True,
-    additional_masks_flag: bool = True,
-    apply_mask_flag: bool = False,
+    additional_masks_flag: Optional[bool] = True,
+    apply_mask_flag: Optional[bool] = False,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
