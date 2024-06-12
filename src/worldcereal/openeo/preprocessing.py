@@ -278,8 +278,9 @@ def worldcereal_preprocessed_inputs_gfmap(
         ],
         fetch_type=FetchType.TILE,
         filter_tile=False,
-        additional_masks=False,
-        apply_mask=True,
+        distance_to_cloud_flag=True,
+        additional_masks_flag=False,
+        apply_mask_flag=True,
     )
 
     s2_data = median_compositing(s2_data, period="month")

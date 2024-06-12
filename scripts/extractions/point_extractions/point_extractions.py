@@ -9,10 +9,8 @@ import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-from openeo.processes import ProcessBuilder, array_create
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
-from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from openeo_gfmap.preprocessing import linear_interpolation, median_compositing
@@ -146,7 +144,7 @@ def create_datacube(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Select some bands to download (chosen at random at this point)
+    # TODO: Adjust this to the desired bands to download
     bands_to_download = [
         "S2-L2A-B04",
         "S2-L2A-B08",
@@ -166,24 +164,12 @@ def create_datacube(
         apply_mask_flag=True,
     )
 
-    cube = 2.5 * (cube.band('S2-L2A-B08') - cube.band('S2-L2A-B04')) / \
-        (cube.band('S2-L2A-B08') + 2.4 * cube.band('S2-L2A-B04') + 1)
-    cube = cube.add_dimension("bands", 'S2-L2A-EVI', "bands")
-
     # Create monthly median composites
     cube = median_compositing(cube=cube, period="month")
+
     # Perform linear interpolation
     cube = linear_interpolation(cube)
-#     # Map the time dimension to the bands dimension
-#     nsteps = 20
-#     cube = cube.apply_dimension(dimension='t',
-#                             target_dimension='bands',
-#                             process=lambda d: array_create(data=d),
-# )
 
-#     tstep_labels = [f'S2-L2A-EVI_t{i}' for i in range(0,nsteps)]
-#     cube = cube.rename_labels('bands', tstep_labels)
-    
     # Finally, create a vector cube based on the Point geometries
     cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
 
