@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "--epsg",
         type=int,
         default=4326,
-        help="EPSG code for coordiante reference system.",
+        help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
     )
     parser.add_argument(
         "start_date", type=str, help="Starting date for data extraction."

@@ -19,7 +19,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     """
 
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    PRESO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.0-temp-py3-none-any.whl"
+    PRESO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.0-py3-none-any.whl"
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
@@ -96,9 +96,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         sys.path.append(str(deps_dir))
 
         # Debug, print the dependency directory
-        self.logger.info(f"Dependency directory: {list(Path(deps_dir).iterdir())}")
+        self.logger.info("Dependency directory: %s", list(Path(deps_dir).iterdir()))
 
-        from presto.inference import get_presto_features
+        from presto.inference import (  # pylint: disable=import-outside-toplevel
+            get_presto_features,
+        )
 
         self.logger.info("Extracting presto features")
         features = get_presto_features(inarr, presto_model_url, self.epsg)
