@@ -11,9 +11,10 @@ from openeo_gfmap import (
     TemporalContext,
 )
 from openeo_gfmap.fetching.generic import build_generic_extractor
+from openeo_gfmap.fetching.meteo import build_meteo_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
-from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
+from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing, sum_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_S1_orbitstate
 
@@ -229,11 +230,10 @@ def raw_datacube_METEO(
     temporal_extent: TemporalContext,
     fetch_type: FetchType,
 ) -> DataCube:
-    extractor = build_generic_extractor(
+    extractor = build_meteo_extractor(
         backend_context=backend_context,
         bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
-        fetch_type=fetch_type,
-        collection_name="AGERA5",
+        fetch_type=fetch_type
     )
     return extractor.get_cube(connection, spatial_extent, temporal_extent)
 
@@ -302,24 +302,24 @@ def worldcereal_preprocessed_inputs_gfmap(
 
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
-    # meteo_data = raw_datacube_METEO(
-    #     connection=connection,
-    #     backend_context=backend_context,
-    #     spatial_extent=spatial_extent,
-    #     temporal_extent=temporal_extent,
-    #     fetch_type=FetchType.TILE,
-    # )
+    meteo_data = raw_datacube_METEO(
+        connection=connection,
+        backend_context=backend_context,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        fetch_type=FetchType.TILE,
+    )
 
-    # # Perform compositing differently depending on the bands
-    # mean_temperature = meteo_data.band("AGERA5-TMEAN")
-    # mean_temperature = mean_compositing(mean_temperature, period="month")
+    # Perform compositing differently depending on the bands
+    mean_temperature = meteo_data.band("AGERA5-TMEAN")
+    mean_temperature = mean_compositing(mean_temperature, period="month")
 
-    # total_precipitation = meteo_data.band("AGERA5-PRECIP")
-    # total_precipitation = sum_compositing(total_precipitation, period="month")
+    total_precipitation = meteo_data.band("AGERA5-PRECIP")
+    total_precipitation = sum_compositing(total_precipitation, period="month")
 
     data = s2_data.merge_cubes(s1_data)
     data = data.merge_cubes(dem_data)
-    # data = data.merge_cubes(mean_temperature)
-    # data = data.merge_cubes(total_precipitation)
+    data = data.merge_cubes(mean_temperature)
+    data = data.merge_cubes(total_precipitation)
 
     return data
