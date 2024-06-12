@@ -3,7 +3,7 @@ import argparse
 import logging
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import geojson
 import geopandas as gpd
