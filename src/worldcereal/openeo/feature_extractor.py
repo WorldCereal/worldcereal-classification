@@ -18,6 +18,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
       specified, should be set as `False`.
     """
 
+    import functools
+
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
     PRESO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.1-py3-none-any.whl"
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
@@ -41,6 +43,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "AGERA5-PRECIP": "precipitation-flux",
     }
 
+    @functools.lru_cache(maxsize=6)
     def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> list:
         import urllib.request
         import zipfile
@@ -73,6 +76,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         )
         presto_wheel_url = self._parameters.get("presot_wheel_url", self.PRESO_WHL_URL)
 
+        ignore_dependencies = self._parameters.get("ignore_dependencies", False)
+        if ignore_dependencies:
+            self.logger.info(
+                "`ignore_dependencies` flag is set to True. Make sure that "
+                "Presto and its dependencies are available on the runtime "
+                "environment"
+            )
+
         # The below is required to avoid flipping of the result
         # when running on OpenEO backend!
         inarr = inarr.transpose("bands", "t", "x", "y")
@@ -87,16 +98,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         inarr = inarr.fillna(65535)
 
         # Unzip de dependencies on the backend
-        self.logger.info("Unzipping dependencies")
-        deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
-        self.logger.info("Unpacking presto wheel")
-        deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)
+        if not ignore_dependencies:
+            self.logger.info("Unzipping dependencies")
+            deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
+            self.logger.info("Unpacking presto wheel")
+            deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)
 
-        self.logger.info("Appending dependencies")
-        sys.path.append(str(deps_dir))
-
-        # Debug, print the dependency directory
-        self.logger.info("Dependency directory: %s", list(Path(deps_dir).iterdir()))
+            self.logger.info("Appending dependencies")
+            sys.path.append(str(deps_dir))
 
         from presto.inference import (  # pylint: disable=import-outside-toplevel
             get_presto_features,
