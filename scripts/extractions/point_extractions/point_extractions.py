@@ -93,7 +93,7 @@ def create_job_dataframe(
     rows = []
     for job in split_jobs:
         # Compute the average in the valid date and make a buffer of 1.5 year around
-        median_time = pd.to_datetime(job.valid_date).mean()
+        median_time = pd.to_datetime(job.valid_time).mean()
         start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
         end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
         s2_tile = job.tile.iloc[0]
@@ -130,7 +130,6 @@ def create_datacube(
 
     # Load the temporal and spatial extent
     temporal_extent = TemporalContext(row.start_date, row.end_date)
-    spatial_extent = geojson.loads(row.geometry)
 
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
@@ -155,7 +154,7 @@ def create_datacube(
     cube = raw_datacube_S2(
         connection=connection,
         backend_context=backend_context,
-        spatial_extent=spatial_extent,
+        spatial_extent=geometry,
         temporal_extent=temporal_extent,
         bands=bands_to_download,
         fetch_type=fetch_type,
@@ -171,7 +170,7 @@ def create_datacube(
     cube = linear_interpolation(cube)
 
     # Finally, create a vector cube based on the Point geometries
-    cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
+    cube = cube.aggregate_spatial(geometries=geometry, reducer="mean")
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_points = get_job_nb_points(row)
@@ -227,12 +226,12 @@ if __name__ == "__main__":
     # no location with the extract=True flag.
     pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
-    input_df = gpd.read_file(args.input_df)
+    input_df = gpd.read_parquet(args.input_df)
 
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = create_job_dataframe(Backend.CDSE, split_dfs).head(1)  # TODO: remove head
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs).iloc[[2]]  # TODO: remove iloc
 
     # Setup the memory parameters for the job creator.
     create_datacube = partial(
