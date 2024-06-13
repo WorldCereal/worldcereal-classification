@@ -9,6 +9,7 @@ import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
+import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
@@ -187,6 +188,27 @@ def create_datacube(
     )
 
 
+def post_job_action(
+    job_items: List[pystac.Item], row: pd.Series, parameters: dict = None
+) -> list:
+    for idx, item in enumerate(job_items):
+        item_asset_path = Path(list(item.assets.values())[0].href)
+
+        gdf = gpd.read_parquet(item_asset_path)
+
+        # Convert the dates to datetime format
+        gdf["date"] = pd.to_datetime(gdf["date"])
+
+        # Convert band dtype to uint16 (temporary fix)
+        # TODO: remove this step when the issue is fixed on the OpenEO backend
+        bands = ["S2-L2A-B04", "S2-L2A-B08"]
+        gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
+
+        gdf.to_parquet(item_asset_path, index=False)
+
+    return job_items
+
+
 if __name__ == "__main__":
     setup_logger()
 
@@ -231,7 +253,9 @@ if __name__ == "__main__":
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = create_job_dataframe(Backend.CDSE, split_dfs).iloc[[2]]  # TODO: remove iloc
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs).iloc[
+        [2]
+    ]  # TODO: remove iloc
 
     # Setup the memory parameters for the job creator.
     create_datacube = partial(
@@ -243,7 +267,7 @@ if __name__ == "__main__":
     manager = GFMAPJobManager(
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
-        post_job_action=None,
+        post_job_action=post_job_action,
         collection_id="SENTINEL2-POINT-FEATURE-EXTRACTION",
         collection_description="Sentinel-2 basic point feature extraction.",
         poll_sleep=60,
