@@ -1,7 +1,5 @@
 # WorldCereal classification module
-[![DOI](https://zenodo.org/badge/621251443.svg)](https://zenodo.org/badge/latestdoi/621251443)
-
-[![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/main?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Ftest_mvp.ipynb%26branch%3Dmain)
+[![DOI](https://zenodo.org/badge/621251443.svg)](https://zenodo.org/badge/latestdoi/621251443) [![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/main?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Ftest_mvp.ipynb%26branch%3Dmain)
 
 This repository contains the code for running the WorldCereal classification module.
 
