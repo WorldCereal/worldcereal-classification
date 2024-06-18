@@ -14,10 +14,7 @@ from openeo_gfmap.fetching.generic import build_generic_extractor
 from openeo_gfmap.fetching.meteo import build_meteo_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
-from openeo_gfmap.preprocessing.compositing import (
-    mean_compositing,
-    median_compositing,
-)
+from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_S1_orbitstate
 
@@ -236,7 +233,7 @@ def raw_datacube_METEO(
     extractor = build_meteo_extractor(
         backend_context=backend_context,
         bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
-        fetch_type=fetch_type
+        fetch_type=fetch_type,
     )
     return extractor.get_cube(connection, spatial_extent, temporal_extent)
 
@@ -267,9 +264,9 @@ def precomposited_datacube_METEO(
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
-    cube = cube.rename_labels(dimension="bands", target=[
-        "AGERA5-PRECIP", "AGERA5-TMEAN"
-    ])
+    cube = cube.rename_labels(
+        dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
+    )
 
     return cube
 
