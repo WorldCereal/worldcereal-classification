@@ -103,7 +103,9 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         )
 
         self.logger.info("Extracting presto features")
-        features = get_presto_features(inarr, presto_model_url, self.epsg)
+        features = get_presto_features(
+            inarr, presto_model_url, self.epsg, batch_size=8192
+        )
         return features
 
     def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:
