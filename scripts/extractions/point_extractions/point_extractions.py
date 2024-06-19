@@ -3,16 +3,15 @@ import argparse
 import logging
 from functools import partial
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-from openeo.processes import ProcessBuilder, array_create
+import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
-from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from openeo_gfmap.preprocessing import linear_interpolation, median_compositing
@@ -33,7 +32,8 @@ def setup_logger(level=logging.INFO) -> None:
     stream_handler = logging.StreamHandler()
     pipeline_log.addHandler(stream_handler)
 
-    formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
     stream_handler.setFormatter(formatter)
 
     # Exclude the other loggers from other libraries
@@ -77,7 +77,7 @@ def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series)
     s2_tile_id = row.s2_tile
 
     subfolder = root_folder / s2_tile_id
-    return subfolder / f"{row.out_prefix}_{sample_id}{row.out_extension}"
+    return subfolder / f"{sample_id}{row.out_extension}"
 
 
 def create_job_dataframe(
@@ -95,9 +95,11 @@ def create_job_dataframe(
     rows = []
     for job in split_jobs:
         # Compute the average in the valid date and make a buffer of 1.5 year around
-        median_time = pd.to_datetime(job.valid_date).mean()
-        start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
-        end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
+        median_time = pd.to_datetime(job.valid_time).mean()
+        # A bit more than 9 months
+        start_date = median_time - pd.Timedelta(days=275)
+        # A bit more than 9 months
+        end_date = median_time + pd.Timedelta(days=275)
         s2_tile = job.tile.iloc[0]
         rows.append(
             pd.Series(
@@ -132,7 +134,6 @@ def create_datacube(
 
     # Load the temporal and spatial extent
     temporal_extent = TemporalContext(row.start_date, row.end_date)
-    spatial_extent = geojson.loads(row.geometry)
 
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
@@ -146,14 +147,10 @@ def create_datacube(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Select some bands to download (chosen at random at this point)
+    # TODO: Adjust this to the desired bands to download
     bands_to_download = [
         "S2-L2A-B04",
         "S2-L2A-B08",
-        "S2-L2A-B8A",
-        "S2-L2A-B09",
-        "S2-L2A-B11",
-        "S2-L2A-B12",
     ]
 
     fetch_type = FetchType.POINT
@@ -161,7 +158,7 @@ def create_datacube(
     cube = raw_datacube_S2(
         connection=connection,
         backend_context=backend_context,
-        spatial_extent=spatial_extent,
+        spatial_extent=geometry,
         temporal_extent=temporal_extent,
         bands=bands_to_download,
         fetch_type=fetch_type,
@@ -172,25 +169,12 @@ def create_datacube(
 
     # Create monthly median composites
     cube = median_compositing(cube=cube, period="month")
+
     # Perform linear interpolation
     cube = linear_interpolation(cube)
 
-    # Map the time dimension to the bands dimension
-    def time_to_bands(input_timeseries: ProcessBuilder):
-        tsteps = array_create(
-            data=[input_timeseries.array_element(i) for i in range(20)]
-        )
-        return tsteps
-
-    cube = cube.apply_dimension(
-        dimension="t", target_dimension="bands", process=time_to_bands
-    )
-
-    tstep_labels = [f"{band}_t{i}" for band in bands_to_download for i in range(20)]
-    cube = cube.rename_labels("bands", tstep_labels)
-
     # Finally, create a vector cube based on the Point geometries
-    cube = cube.aggregate_spatial(geometries=spatial_extent, reducer="mean")
+    cube = cube.aggregate_spatial(geometries=geometry, reducer="mean")
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_points = get_job_nb_points(row)
@@ -205,6 +189,27 @@ def create_datacube(
         title=f"GFMAP_Feature_Extraction_S2_{row.s2_tile}",
         job_options=job_options,
     )
+
+
+def post_job_action(
+    job_items: List[pystac.Item], row: pd.Series, parameters: dict = None
+) -> list:
+    for idx, item in enumerate(job_items):
+        item_asset_path = Path(list(item.assets.values())[0].href)
+
+        gdf = gpd.read_parquet(item_asset_path)
+
+        # Convert the dates to datetime format
+        gdf["date"] = pd.to_datetime(gdf["date"])
+
+        # Convert band dtype to uint16 (temporary fix)
+        # TODO: remove this step when the issue is fixed on the OpenEO backend
+        bands = ["S2-L2A-B04", "S2-L2A-B08"]
+        gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
+
+        gdf.to_parquet(item_asset_path, index=False)
+
+    return job_items
 
 
 if __name__ == "__main__":
@@ -246,12 +251,14 @@ if __name__ == "__main__":
     # no location with the extract=True flag.
     pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
-    input_df = gpd.read_file(args.input_df)
+    input_df = gpd.read_parquet(args.input_df)
 
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = create_job_dataframe(Backend.CDSE, split_dfs).head(1)  # TODO: remove head
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs).iloc[
+        [2]
+    ]  # TODO: remove iloc
 
     # Setup the memory parameters for the job creator.
     create_datacube = partial(
@@ -263,7 +270,7 @@ if __name__ == "__main__":
     manager = GFMAPJobManager(
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
-        post_job_action=None,
+        post_job_action=post_job_action,
         collection_id="SENTINEL2-POINT-FEATURE-EXTRACTION",
         collection_description="Sentinel-2 basic point feature extraction.",
         poll_sleep=60,

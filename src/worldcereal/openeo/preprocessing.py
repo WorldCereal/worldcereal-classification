@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
+    Backend,
     BackendContext,
     BoundingBoxExtent,
     FetchType,
@@ -12,12 +13,9 @@ from openeo_gfmap import (
 from openeo_gfmap.fetching.generic import build_generic_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
-from openeo_gfmap.preprocessing.compositing import (
-    max_ndvi_compositing,
-    mean_compositing,
-)
-from openeo_gfmap.preprocessing.interpolation import linear_interpolation
+from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
+from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_S1_orbitstate
 
 COMPOSITE_WINDOW = "month"
 
@@ -31,8 +29,8 @@ def raw_datacube_S2(
     fetch_type: FetchType,
     filter_tile: Optional[str] = None,
     distance_to_cloud_flag: Optional[bool] = True,
-    additional_masks_flag: bool = True,
-    apply_mask_flag: bool = False,
+    additional_masks_flag: Optional[bool] = True,
+    apply_mask_flag: Optional[bool] = False,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -72,11 +70,20 @@ def raw_datacube_S2(
     if filter_tile:
         scl_cube_properties["tileId"] = lambda val: val == filter_tile
 
+    # Create the job to extract S2
+    extraction_parameters = {
+        "target_resolution": None,  # Disable target resolution
+        "load_collection": {
+            "eo:cloud_cover": lambda val: val <= 95.0,
+        },
+    }
+
     scl_cube = connection.load_collection(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        spatial_extent=dict(spatial_extent) if fetch_type == FetchType.TILE else None,
+        spatial_extent=dict(
+            spatial_extent) if fetch_type == FetchType.TILE else None,
         properties=scl_cube_properties,
     )
 
@@ -100,7 +107,8 @@ def raw_datacube_S2(
     if distance_to_cloud_flag:
         # Compute the distance to cloud and add it to the cube
         distance_to_cloud = scl_cube.apply_neighborhood(
-            process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
+            process=UDF.from_file(Path(__file__).parent /
+                                  "udf_distance_to_cloud.py"),
             size=[
                 {"dimension": "x", "unit": "px", "value": 256},
                 {"dimension": "y", "unit": "px", "value": 256},
@@ -113,10 +121,12 @@ def raw_datacube_S2(
         ).rename_labels("bands", ["S2-L2A-DISTANCE-TO-CLOUD"])
 
         additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
+        additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
 
     # Try filtering using the geometry
     if fetch_type == FetchType.TILE:
-        additional_masks = additional_masks.filter_spatial(spatial_extent.to_geojson())
+        additional_masks = additional_masks.filter_spatial(
+            spatial_extent.to_geojson())
 
     # Create the job to extract S2
     extraction_parameters = {
@@ -127,6 +137,7 @@ def raw_datacube_S2(
     }
     if additional_masks_flag:
         extraction_parameters["pre_merge"] = additional_masks
+
     if filter_tile:
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
@@ -171,10 +182,37 @@ def raw_datacube_S1(
         List of Sentinel-1 bands to extract.
     fetch_type : FetchType
         GFMAP Fetch type to use for extraction.
+    target_resolution : float, optional
+        Target resolution to resample the data to, by default 20.0.
+    orbit_direction : Optional[str], optional
+        Orbit direction to filter the data, by default None. If None and the
+        backend is in CDSE, then querries the catalogue for the best orbit
+        direction to use. In the case querrying is unavailable or fails, then
+        uses "ASCENDING" as a last resort.
     """
     extractor_parameters = {
         "target_resolution": target_resolution,
     }
+    if orbit_direction is None and backend_context.backend in [
+        Backend.CDSE,
+        Backend.CDSE_STAGING,
+        Backend.FED,
+    ]:
+        try:
+            orbit_direction = select_S1_orbitstate(
+                backend_context, spatial_extent, temporal_extent
+            )
+            print(
+                f"Selected orbit direction: {orbit_direction} from max "
+                "accumulated area overlap between bounds and products."
+            )
+        except UncoveredS1Exception as exc:
+            orbit_direction = "ASCENDING"
+            print(
+                f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
+                f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
+            )
+
     if orbit_direction is not None:
         extractor_parameters["load_collection"] = {
             "sat:orbit_state": lambda orbit: orbit == orbit_direction
@@ -202,6 +240,22 @@ def raw_datacube_DEM(
     return extractor.get_cube(connection, spatial_extent, None)
 
 
+def raw_datacube_METEO(
+    connection: Connection,
+    backend_context: BackendContext,
+    spatial_extent: SpatialContext,
+    temporal_extent: TemporalContext,
+    fetch_type: FetchType,
+) -> DataCube:
+    extractor = build_generic_extractor(
+        backend_context=backend_context,
+        bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
+        fetch_type=fetch_type,
+        collection_name="AGERA5",
+    )
+    return extractor.get_cube(connection, spatial_extent, temporal_extent)
+
+
 def worldcereal_preprocessed_inputs_gfmap(
     connection: Connection,
     backend_context: BackendContext,
@@ -222,21 +276,23 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S2-L2A-B06",
             "S2-L2A-B07",
             "S2-L2A-B08",
-            "S2-L2A-B8A",
             "S2-L2A-B11",
             "S2-L2A-B12",
         ],
         fetch_type=FetchType.TILE,
         filter_tile=False,
-        additional_masks=False,
-        apply_mask=True,
+        distance_to_cloud_flag=True,
+        additional_masks_flag=False,
+        apply_mask_flag=True,
     )
 
-    s2_data = max_ndvi_compositing(s2_data, period="month")
-    s2_data = linear_interpolation(s2_data)
+    s2_data = median_compositing(s2_data, period="month")
 
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
+
+    # Decide on the orbit direction from the maximum overlapping area of
+    # available products.
 
     # Extraction of the S1 data
     s1_data = raw_datacube_S1(
@@ -245,16 +301,16 @@ def worldcereal_preprocessed_inputs_gfmap(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         bands=[
-            "S1-SIGMA0-VV",
             "S1-SIGMA0-VH",
+            "S1-SIGMA0-VV",
         ],
         fetch_type=FetchType.TILE,
-        target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
-        orbit_direction="ASCENDING",
+        # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
+        target_resolution=10.0,
+        orbit_direction=None,  # Make the querry on the catalogue for the best orbit
     )
 
     s1_data = mean_compositing(s1_data, period="month")
-    s1_data = linear_interpolation(s1_data)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
     dem_data = raw_datacube_DEM(
@@ -264,10 +320,26 @@ def worldcereal_preprocessed_inputs_gfmap(
         fetch_type=FetchType.TILE,
     )
 
-    dem_data = dem_data.resample_cube_spatial(s2_data, method="cubic")
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
+
+    # meteo_data = raw_datacube_METEO(
+    #     connection=connection,
+    #     backend_context=backend_context,
+    #     spatial_extent=spatial_extent,
+    #     temporal_extent=temporal_extent,
+    #     fetch_type=FetchType.TILE,
+    # )
+
+    # # Perform compositing differently depending on the bands
+    # mean_temperature = meteo_data.band("AGERA5-TMEAN")
+    # mean_temperature = mean_compositing(mean_temperature, period="month")
+
+    # total_precipitation = meteo_data.band("AGERA5-PRECIP")
+    # total_precipitation = sum_compositing(total_precipitation, period="month")
 
     data = s2_data.merge_cubes(s1_data)
     data = data.merge_cubes(dem_data)
+    # data = data.merge_cubes(mean_temperature)
+    # data = data.merge_cubes(total_precipitation)
 
     return data
