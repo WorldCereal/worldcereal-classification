@@ -166,15 +166,17 @@ def season_doys_to_dates(
     return (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
 
-def get_processing_dates_for_extent(extent: BoundingBoxExtent, season: str, year: int):
+def get_processing_dates_for_extent(
+    extent: BoundingBoxExtent, year: int, season: str = "tc-annual"
+):
     """Function to retrieve required temporal range of input products for a
     given extent, season and year. Based on the requested season's end date
     a temporal range is inferred that spans an entire year.
 
     Args:
         extent (BoundingBoxExtent): extent for which to infer dates
-        season (str): season identifier for which to infer dates
         year (int): year in which the end of season needs to be
+        season (str): season identifier for which to infer dates. Defaults to tc-annual
 
     Raises:
         ValueError: invalid season specified

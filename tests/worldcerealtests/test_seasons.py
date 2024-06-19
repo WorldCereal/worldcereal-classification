@@ -41,12 +41,14 @@ def test_doy_to_date_after():
 
 
 def test_get_processing_dates_for_extent():
+    # Test to check if we can infer processing dates for default season
+    # tc-annual
     bounds = (574680, 5621800, 575320, 5622440)
     epsg = 32631
     year = 2021
     extent = BoundingBoxExtent(*bounds, epsg)
 
-    start_date, end_date = get_processing_dates_for_extent(extent, "tc-annual", year)
+    start_date, end_date = get_processing_dates_for_extent(extent, year)
 
     assert pd.to_datetime(end_date).year == year
     assert pd.to_datetime(end_date) - pd.to_datetime(start_date) == pd.Timedelta(
