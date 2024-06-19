@@ -50,7 +50,7 @@ class CroplandClassifier(ModelInference):
         binary_labels = np.array(prediction_values) >= threshold
         binary_labels = binary_labels.astype(int)
 
-        return binary_labels
+        return np.stack([binary_labels, prediction_values], axis=0).astype(np.float32)
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
@@ -67,9 +67,13 @@ class CroplandClassifier(ModelInference):
         self.logger.info(f"Classification done with shape: {classification.shape}")
 
         classification = xr.DataArray(
-            classification.reshape((1, len(x_coords), len(y_coords))),
+            classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
-            coords={"bands": ["classification"], "x": x_coords, "y": y_coords},
+            coords={
+                "bands": ["classification", "probability"],
+                "x": x_coords,
+                "y": y_coords,
+            },
         )
 
         return classification

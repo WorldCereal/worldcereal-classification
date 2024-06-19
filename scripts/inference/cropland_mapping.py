@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
     classes.execute_batch(
         outputfile=args.output_path,
-        out_format="NetCDF",
+        out_format="GTiff",
         job_options={
             "driver-memory": "4g",
             "executor-memoryOverhead": "12g",
