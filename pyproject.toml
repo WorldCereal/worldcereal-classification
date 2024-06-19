@@ -36,6 +36,7 @@ dependencies = [
     "xarray>=2022.3.0",
     "rioxarray>=0.13.0",
     "loguru>=0.7.2",
+    "geojson",
     "numpy<2.0.0",
     "h5netcdf>=1.1.0",
     "openeo>=0.29.0",
