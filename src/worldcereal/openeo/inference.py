@@ -28,7 +28,7 @@ class CroplandClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        return ["classification"]
+        return ["classification", "probability"]
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
