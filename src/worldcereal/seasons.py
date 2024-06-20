@@ -53,7 +53,7 @@ def circular_median_day_of_year(doy_array, total_days=365):
     return median_day
 
 
-def doy_from_tiff(season: str, kind: str, bonds: tuple, epsg: int, resolution: int):
+def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: int):
     """Function to read SOS/EOS DOY from TIFF
 
     Args:
