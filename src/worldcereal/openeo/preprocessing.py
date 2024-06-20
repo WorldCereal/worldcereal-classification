@@ -82,8 +82,7 @@ def raw_datacube_S2(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        spatial_extent=dict(
-            spatial_extent) if fetch_type == FetchType.TILE else None,
+        spatial_extent=dict(spatial_extent) if fetch_type == FetchType.TILE else None,
         properties=scl_cube_properties,
     )
 
@@ -107,8 +106,7 @@ def raw_datacube_S2(
     if distance_to_cloud_flag:
         # Compute the distance to cloud and add it to the cube
         distance_to_cloud = scl_cube.apply_neighborhood(
-            process=UDF.from_file(Path(__file__).parent /
-                                  "udf_distance_to_cloud.py"),
+            process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
             size=[
                 {"dimension": "x", "unit": "px", "value": 256},
                 {"dimension": "y", "unit": "px", "value": 256},
@@ -125,8 +123,7 @@ def raw_datacube_S2(
 
     # Try filtering using the geometry
     if fetch_type == FetchType.TILE:
-        additional_masks = additional_masks.filter_spatial(
-            spatial_extent.to_geojson())
+        additional_masks = additional_masks.filter_spatial(spatial_extent.to_geojson())
 
     # Create the job to extract S2
     extraction_parameters = {
