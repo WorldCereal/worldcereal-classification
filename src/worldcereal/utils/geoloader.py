@@ -115,5 +115,3 @@ def load_reproject(
         dst = dst[border_buff:-border_buff, border_buff:-border_buff]
 
     return dst
-
-    return dst

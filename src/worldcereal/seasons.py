@@ -1,5 +1,6 @@
 import datetime
 import importlib.resources as pkg_resources
+import math
 
 import numpy as np
 import pandas as pd
@@ -16,14 +17,50 @@ class NoSeasonError(Exception):
     pass
 
 
-def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: str, resolution: int):
+def doy_to_angle(day_of_year, total_days=365):
+    return 2 * math.pi * (day_of_year / total_days)
+
+
+def angle_to_doy(angle, total_days=365):
+    return (angle / (2 * math.pi)) * total_days
+
+
+def circular_median_day_of_year(doy_array, total_days=365):
+    """This function computes the median doy from a given array
+    taking into account its circular nature. Still has to be used with caution!
+    """
+    angles = np.array([doy_to_angle(day, total_days) for day in doy_array])
+
+    def circular_distance(a, b):
+        return np.angle(np.exp(1j * (a - b)))
+
+    median_angle = None
+    min_distance = float("inf")
+
+    for angle in angles:
+        total_distance = np.sum(
+            [abs(circular_distance(angle, other)) for other in angles]
+        )
+        if total_distance < min_distance:
+            min_distance = total_distance
+            median_angle = angle
+
+    median_day = round(angle_to_doy(median_angle, total_days))
+    median_day = median_day % total_days
+    if median_day < 0:
+        median_day += total_days
+
+    return median_day
+
+
+def doy_from_tiff(season: str, kind: str, bonds: tuple, epsg: int, resolution: int):
     """Function to read SOS/EOS DOY from TIFF
 
     Args:
         season (str): crop season to process
         kind (str): which DOY to read (SOS/EOS)
         bounds (tuple): the bounds to read
-        epsg (str): epsg in which bounds are expressed
+        epsg (int): epsg in which bounds are expressed
         resolution (int): resolution in meters of resulting array
 
     Raises:
@@ -34,6 +71,11 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: str, resolution: 
     Returns:
         np.ndarray: resulting DOY array
     """
+
+    if epsg == 4326:
+        raise ValueError(
+            "EPSG 4326 not supported for DOY data. Use a projected CRS instead."
+        )
 
     if season not in SUPPORTED_SEASONS:
         raise ValueError(f"Season `{season}` not supported.")
@@ -53,7 +95,9 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: str, resolution: 
     logger.info(f"Loading DOY data from: {doy_file}")
 
     with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:
-        doy_data = load_reproject(doy_file, bounds, epsg, resolution)
+        doy_data = load_reproject(
+            doy_file, bounds, epsg, resolution, nodata_value=0, fill_value=np.nan
+        )
 
     return doy_data
 
@@ -189,14 +233,18 @@ def get_processing_dates_for_extent(
     if season not in SUPPORTED_SEASONS:
         raise ValueError(f"Season `{season}` not supported!")
 
-    bounds = (extent.east, extent.south, extent.west, extent.north)
+    bounds = (extent.west, extent.south, extent.east, extent.north)
     epsg = extent.epsg
 
     # Get DOY of EOS for the target season
-    eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000)
+    eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000).flatten()
 
-    # Get the median EOS
-    eos_doy_median = np.median(eos_doy)
+    # Check if we have seasonality
+    if not np.isfinite(eos_doy).any():
+        raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
+
+    # Compute median DOY
+    eos_doy_median = circular_median_day_of_year(eos_doy)
 
     # We can derive the end date from year and EOS
     end_date = datetime.datetime(year, 1, 1) + pd.Timedelta(days=eos_doy_median)
