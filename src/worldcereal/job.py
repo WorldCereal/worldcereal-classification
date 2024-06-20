@@ -21,7 +21,7 @@ def generate_map(
     output_path: Union[Path, str],
     product: str = "cropland",
     format: str = "GTiff",
-) -> Path:
+):
     """Main function to generate a WorldCereal product.
 
     Args:
@@ -35,8 +35,6 @@ def generate_map(
     Raises:
         ValueError: if the product is not supported
 
-    Returns:
-        Path: path to output product
     """
 
     # Connect to openeo
@@ -108,5 +106,3 @@ def generate_map(
             "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
         },
     )
-
-    return output_path
