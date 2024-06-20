@@ -261,6 +261,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     backend_context: BackendContext,
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
+    fetch_type: Optional[FetchType] = FetchType.TILE,
 ) -> DataCube:
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -279,7 +280,7 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S2-L2A-B11",
             "S2-L2A-B12",
         ],
-        fetch_type=FetchType.TILE,
+        fetch_type=fetch_type,
         filter_tile=False,
         distance_to_cloud_flag=True,
         additional_masks_flag=False,
@@ -304,9 +305,8 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S1-SIGMA0-VH",
             "S1-SIGMA0-VV",
         ],
-        fetch_type=FetchType.TILE,
-        # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
-        target_resolution=10.0,
+        fetch_type=fetch_type,
+        target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=None,  # Make the querry on the catalogue for the best orbit
     )
 
@@ -317,7 +317,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=spatial_extent,
-        fetch_type=FetchType.TILE,
+        fetch_type=fetch_type,
     )
 
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
