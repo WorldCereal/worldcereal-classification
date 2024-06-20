@@ -45,7 +45,7 @@ def test_doy_to_date_after():
 def test_get_processing_dates_for_extent():
     # Test to check if we can infer processing dates for default season
     # tc-annual
-    bounds = (167286, 553423, 943774, 997257)
+    bounds = (574680, 5621800, 575320, 5622440)
     epsg = 32631
     year = 2021
     extent = BoundingBoxExtent(*bounds, epsg)

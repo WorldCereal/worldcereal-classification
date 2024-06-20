@@ -17,12 +17,42 @@ class NoSeasonError(Exception):
     pass
 
 
+class SeasonMaxDiffError(Exception):
+    pass
+
+
 def doy_to_angle(day_of_year, total_days=365):
     return 2 * math.pi * (day_of_year / total_days)
 
 
 def angle_to_doy(angle, total_days=365):
     return (angle / (2 * math.pi)) * total_days
+
+
+def max_doy_difference(doy_array):
+    """Method to check the max difference in days between all DOY values
+    in an array taking into account wrap-around effects due to the circular nature
+    """
+
+    doy_array = np.expand_dims(doy_array, axis=1)
+    x, y = np.meshgrid(doy_array, doy_array.T)
+
+    days_in_year = 365  # True for crop calendars
+
+    # Step 2: Calculate the direct difference
+    direct_difference = np.abs(x - y)
+
+    # Step 3: Calculate the wrap-around difference
+    wrap_around_difference = days_in_year - direct_difference
+
+    # Step 4: Determine the minimum difference
+    effective_difference = np.min(
+        np.stack([direct_difference, wrap_around_difference]), axis=0
+    )
+
+    # Step 5: Determine the maximum difference for all combinations
+
+    return effective_difference.max()
 
 
 def circular_median_day_of_year(doy_array, total_days=365):
@@ -211,7 +241,10 @@ def season_doys_to_dates(
 
 
 def get_processing_dates_for_extent(
-    extent: BoundingBoxExtent, year: int, season: str = "tc-annual"
+    extent: BoundingBoxExtent,
+    year: int,
+    season: str = "tc-annual",
+    max_seasonality_difference: int = 60,
 ):
     """Function to retrieve required temporal range of input products for a
     given extent, season and year. Based on the requested season's end date
@@ -221,9 +254,12 @@ def get_processing_dates_for_extent(
         extent (BoundingBoxExtent): extent for which to infer dates
         year (int): year in which the end of season needs to be
         season (str): season identifier for which to infer dates. Defaults to tc-annual
+        max_seasonality_difference (int): maximum difference in seasonality for all pixels
+                in extent before raising an exception. Defaults to 60.
 
     Raises:
         ValueError: invalid season specified
+        SeasonMaxDiffError: raised when seasonality difference is too large
 
     Returns:
         (start_date, end_date): tuple of date strings specifying
@@ -242,6 +278,16 @@ def get_processing_dates_for_extent(
     # Check if we have seasonality
     if not np.isfinite(eos_doy).any():
         raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
+
+    # Only consider valid seasonality pixels
+    eos_doy = eos_doy[np.isfinite(eos_doy)]
+
+    # Check max seasonality difference
+    seasonality_difference = max_doy_difference(eos_doy)
+    if seasonality_difference > max_seasonality_difference:
+        raise SeasonMaxDiffError(
+            f"Seasonality difference too large: {seasonality_difference} days"
+        )
 
     # Compute median DOY
     eos_doy_median = circular_median_day_of_year(eos_doy)
