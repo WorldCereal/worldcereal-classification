@@ -8,7 +8,7 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
 from openeo_gfmap.inference.model_inference import apply_model_inference
-from openeo_gfmap.preprocessing.scaling import compress_uint16
+from openeo_gfmap.preprocessing.scaling import compress_uint8
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier
@@ -106,8 +106,8 @@ if __name__ == "__main__":
         ],
     )
 
-    # Cast to uint16
-    classes = compress_uint16(classes)
+    # Cast to uint8
+    classes = compress_uint8(classes)
 
     classes.execute_batch(
         outputfile=args.output_path,
