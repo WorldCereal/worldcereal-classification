@@ -14,12 +14,8 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
-from openeo_gfmap.preprocessing import linear_interpolation, median_compositing
 
-from worldcereal.openeo.preprocessing import (
-    raw_datacube_S2,
-    worldcereal_preprocessed_inputs_gfmap,
-)
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
 
 # Logger for this current pipeline
 pipeline_log: Optional[logging.Logger] = None
@@ -35,8 +31,7 @@ def setup_logger(level=logging.INFO) -> None:
     stream_handler = logging.StreamHandler()
     pipeline_log.addHandler(stream_handler)
 
-    formatter = logging.Formatter(
-        "%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
+    formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
     stream_handler.setFormatter(formatter)
 
     # Exclude the other loggers from other libraries
