@@ -20,15 +20,12 @@ tmp
 *.tfevents
 *.nc
 *.gif
-data
 config.json
-features*.zarr
 # C extensions
 *.so
 *.gz
 # Distribution / packaging
 .Python
-data
 build/
 develop-eggs/
 dist/
@@ -69,17 +66,17 @@ pip-delete-this-directory.txt
 *.aux.xml
 
 # Allow crop calendar resources to be tracked
-!/src/worldcereal/resources/cropcalendars/*.tif
+!/src/worldcereal/data/cropcalendars/*.tif
 
 # Allow resource CSV files to be tracked
-!/src/worldcereal/resources/*.csv
+# !/src/worldcereal/resources/*.csv
 
 # Allow resource JSON files to be tracked
-!/src/worldcereal/resources/**/*.json
+# !/src/worldcereal/resources/**/*.json
 
 # Allow biomes/realms to be tracked
-!/src/worldcereal/resources/biomes/*.tif
-!/src/worldcereal/resources/realms/*.tif
+# !/src/worldcereal/resources/biomes/*.tif
+# !/src/worldcereal/resources/realms/*.tif
 
 # Dont track zarr data
 features.zarr/

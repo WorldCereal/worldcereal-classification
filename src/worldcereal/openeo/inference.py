@@ -28,7 +28,7 @@ class CroplandClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        return ["classification"]
+        return ["classification", "probability"]
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
@@ -48,9 +48,12 @@ class CroplandClassifier(ModelInference):
         # Extract all prediction values and convert them to binary labels
         prediction_values = [sublist["True"] for sublist in outputs[1]]
         binary_labels = np.array(prediction_values) >= threshold
-        binary_labels = binary_labels.astype(int)
+        binary_labels = binary_labels.astype("uint8")
 
-        return binary_labels
+        prediction_values = np.array(prediction_values) * 100.0
+        prediction_values = np.round(prediction_values).astype("uint8")
+
+        return np.stack([binary_labels, prediction_values], axis=0)
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
@@ -62,14 +65,18 @@ class CroplandClassifier(ModelInference):
         self.onnx_session = self.load_ort_session(classifier_url)
 
         # Run catboost classification
-        self.logger.info(f"Catboost classification with input shape: {inarr.shape}")
+        self.logger.info("Catboost classification with input shape: %s", inarr.shape)
         classification = self.predict(inarr.values)
-        self.logger.info(f"Classification done with shape: {classification.shape}")
+        self.logger.info("Classification done with shape: %s", inarr.shape)
 
         classification = xr.DataArray(
-            classification.reshape((1, len(x_coords), len(y_coords))),
+            classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
-            coords={"bands": ["classification"], "x": x_coords, "y": y_coords},
+            coords={
+                "bands": ["classification", "probability"],
+                "x": x_coords,
+                "y": y_coords,
+            },
         )
 
         return classification

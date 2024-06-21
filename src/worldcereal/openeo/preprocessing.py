@@ -11,6 +11,7 @@ from openeo_gfmap import (
     TemporalContext,
 )
 from openeo_gfmap.fetching.generic import build_generic_extractor
+from openeo_gfmap.fetching.meteo import build_meteo_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
@@ -229,13 +230,45 @@ def raw_datacube_METEO(
     temporal_extent: TemporalContext,
     fetch_type: FetchType,
 ) -> DataCube:
-    extractor = build_generic_extractor(
+    extractor = build_meteo_extractor(
         backend_context=backend_context,
         bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
         fetch_type=fetch_type,
-        collection_name="AGERA5",
     )
     return extractor.get_cube(connection, spatial_extent, temporal_extent)
+
+
+def precomposited_datacube_METEO(
+    connection: Connection,
+    spatial_extent: SpatialContext,
+    temporal_extent: TemporalContext,
+) -> DataCube:
+    """Extract the precipitation and temperature AGERA5 data from a
+    pre-composited and pre-processed collection. The data is stored in the
+    CloudFerro S3 stoage, allowing faster access and processing from the CDSE
+    backend.
+
+    Limitations:
+        - Only monthly composited data is available.
+        - Only two bands are available: precipitation-flux and temperature-mean.
+        - This function do not support fetching points or polygons, but only
+          tiles.
+    """
+    temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
+    spatial_extent = dict(spatial_extent)
+
+    # Monthly composited METEO data
+    cube = connection.load_stac(
+        "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json",
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        bands=["precipitation-flux", "temperature-mean"],
+    )
+    cube = cube.rename_labels(
+        dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
+    )
+
+    return cube
 
 
 def worldcereal_preprocessed_inputs_gfmap(
@@ -302,24 +335,14 @@ def worldcereal_preprocessed_inputs_gfmap(
 
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
-    # meteo_data = raw_datacube_METEO(
-    #     connection=connection,
-    #     backend_context=backend_context,
-    #     spatial_extent=spatial_extent,
-    #     temporal_extent=temporal_extent,
-    #     fetch_type=FetchType.TILE,
-    # )
-
-    # # Perform compositing differently depending on the bands
-    # mean_temperature = meteo_data.band("AGERA5-TMEAN")
-    # mean_temperature = mean_compositing(mean_temperature, period="month")
-
-    # total_precipitation = meteo_data.band("AGERA5-PRECIP")
-    # total_precipitation = sum_compositing(total_precipitation, period="month")
+    meteo_data = precomposited_datacube_METEO(
+        connection=connection,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+    )
 
     data = s2_data.merge_cubes(s1_data)
     data = data.merge_cubes(dem_data)
-    # data = data.merge_cubes(mean_temperature)
-    # data = data.merge_cubes(total_precipitation)
+    data = data.merge_cubes(meteo_data)
 
     return data
