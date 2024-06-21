@@ -7,8 +7,8 @@ import rasterio
 
 def get_ui_map():
 
-    m = Map(basemap=basemaps.Esri.WorldImagery,
-            center=(51.1872, 5.1154), zoom=5)
+    m = Map(basemap=basemaps.Esri.WorldStreetMap,
+            center=(51.1872, 5.1154), zoom=10)
 
     draw_control = DrawControl()
 
