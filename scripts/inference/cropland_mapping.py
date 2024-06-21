@@ -8,8 +8,6 @@ from openeo_gfmap.backend import Backend, BackendContext
 
 from worldcereal.job import generate_map
 
-ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="WC - Cropland Inference",
