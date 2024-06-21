@@ -5,7 +5,7 @@ import openeo
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
 from openeo_gfmap.inference.model_inference import apply_model_inference
-from openeo_gfmap.preprocessing.scaling import compress_uint8
+from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier
@@ -95,7 +95,10 @@ def generate_map(
     )
 
     # Cast to uint8
-    classes = compress_uint8(classes)
+    if product == "cropland":
+        classes = compress_uint8(classes)
+    else:
+        classes = compress_uint16(classes)
 
     classes.execute_batch(
         outputfile=output_path,
