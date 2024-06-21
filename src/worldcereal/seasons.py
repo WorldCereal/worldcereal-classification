@@ -5,8 +5,9 @@ import math
 import numpy as np
 import pandas as pd
 from loguru import logger
+from openeo_gfmap import BoundingBoxExtent
 
-from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS, BoundingBoxExtent
+from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
 
 # from worldcereal.utils import aez as aezloader

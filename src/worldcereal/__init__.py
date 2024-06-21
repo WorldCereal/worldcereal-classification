@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
 from ._version import __version__
-from .utils.spatial import BoundingBoxExtent
 
-__all__ = ["__version__", "BoundingBoxExtent"]
+__all__ = ["__version__"]
 
 SUPPORTED_SEASONS = [
     "tc-s1",

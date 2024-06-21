@@ -2,8 +2,8 @@ import datetime
 
 import numpy as np
 import pandas as pd
+from openeo_gfmap import BoundingBoxExtent
 
-from worldcereal import BoundingBoxExtent
 from worldcereal.seasons import (
     circular_median_day_of_year,
     doy_from_tiff,
