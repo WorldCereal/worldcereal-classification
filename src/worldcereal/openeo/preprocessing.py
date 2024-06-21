@@ -29,8 +29,9 @@ def raw_datacube_S2(
     bands: List[str],
     fetch_type: FetchType,
     filter_tile: Optional[str] = None,
-    additional_masks: bool = True,
-    apply_mask: bool = False,
+    distance_to_cloud_flag: Optional[bool] = True,
+    additional_masks_flag: Optional[bool] = True,
+    apply_mask_flag: Optional[bool] = False,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -96,7 +97,9 @@ def raw_datacube_S2(
         erosion_kernel_size=3,
     ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
 
-    if additional_masks:
+    additional_masks = scl_dilated_mask
+
+    if distance_to_cloud_flag:
         # Compute the distance to cloud and add it to the cube
         distance_to_cloud = scl_cube.apply_neighborhood(
             process=UDF.from_file(Path(__file__).parent / "udf_distance_to_cloud.py"),
@@ -119,13 +122,14 @@ def raw_datacube_S2(
                 spatial_extent.to_geojson()
             )
 
+    if additional_masks_flag:
         extraction_parameters["pre_merge"] = additional_masks
 
     if filter_tile:
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
         )
-    if apply_mask:
+    if apply_mask_flag:
         extraction_parameters["pre_mask"] = scl_dilated_mask
 
     extractor = build_sentinel2_l2a_extractor(
@@ -276,6 +280,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     backend_context: BackendContext,
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
+    fetch_type: Optional[FetchType] = FetchType.TILE,
 ) -> DataCube:
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -294,10 +299,11 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S2-L2A-B11",
             "S2-L2A-B12",
         ],
-        fetch_type=FetchType.TILE,
+        fetch_type=fetch_type,
         filter_tile=False,
-        additional_masks=False,
-        apply_mask=True,
+        distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
+        additional_masks_flag=False,
+        apply_mask_flag=True,
     )
 
     s2_data = median_compositing(s2_data, period="month")
@@ -318,7 +324,7 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S1-SIGMA0-VH",
             "S1-SIGMA0-VV",
         ],
-        fetch_type=FetchType.TILE,
+        fetch_type=fetch_type,
         target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=None,  # Make the querry on the catalogue for the best orbit
     )
@@ -330,7 +336,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=spatial_extent,
-        fetch_type=FetchType.TILE,
+        fetch_type=fetch_type,
     )
 
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
@@ -342,7 +348,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     )
 
     data = s2_data.merge_cubes(s1_data)
-    data = data.merge_cubes(dem_data)
+    # data = data.merge_cubes(dem_data)
     data = data.merge_cubes(meteo_data)
 
     return data
