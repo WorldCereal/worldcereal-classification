@@ -1,3 +1,5 @@
+"""Executing inference jobs on the OpenEO backend."""
+from enum import Enum
 from pathlib import Path
 from typing import Union
 
@@ -14,13 +16,20 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfm
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
 
+class WorldCerealProduct(Enum):
+    """Enum to define the different WorldCereal products."""
+
+    CROPLAND = "cropland"
+    CROPTPE = "croptype"
+
+
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     backend_context: BackendContext,
     output_path: Union[Path, str],
-    product: str = "cropland",
-    format: str = "GTiff",
+    product: WorldCerealProduct = WorldCerealProduct.CROPLAND,
+    out_format: str = "GTiff",
 ):
     """Main function to generate a WorldCereal product.
 
@@ -69,15 +78,15 @@ def generate_map(
         ],
     )
 
-    if product == "cropland":
+    if product == WorldCerealProduct.CROPLAND:
         # initiate default cropland model
         model_inference_class = CroplandClassifier
         model_inference_parameters = {}
     else:
         raise ValueError(f"Product {product} not supported.")
 
-    if format not in ["GTiff", "NetCDF"]:
-        raise ValueError(f"Format {format} not supported.")
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {out_format} not supported.")
 
     classes = apply_model_inference(
         model_inference_class=model_inference_class,
@@ -95,14 +104,14 @@ def generate_map(
     )
 
     # Cast to uint8
-    if product == "cropland":
+    if product == WorldCerealProduct.CROPLAND:
         classes = compress_uint8(classes)
     else:
         classes = compress_uint16(classes)
 
     classes.execute_batch(
         outputfile=output_path,
-        out_format=format,
+        out_format=out_format,
         job_options={
             "driver-memory": "4g",
             "executor-memoryOverhead": "12g",

@@ -56,5 +56,5 @@ if __name__ == "__main__":
         backend_context,
         args.output_path,
         product="cropland",
-        format="GTiff",
+        out_format="GTiff",
     )
