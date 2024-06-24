@@ -25,7 +25,9 @@ PRODUCT_SETTINGS = {
         },
         "classification": {
             "classifier": CroplandClassifier,
-            "parameters": {"classifier_url": ""},
+            "parameters": {
+                "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
+            },
         },
     },
     "croptype": {
@@ -38,7 +40,9 @@ PRODUCT_SETTINGS = {
         },
         "classification": {
             "classifier": CroplandClassifier,  # TODO: update to croptype classifier
-            "parameters": {"classifier_url": ""},
+            "parameters": {
+                "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
+            },
         },
     },
 }
