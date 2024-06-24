@@ -219,8 +219,9 @@ def create_datacube_optical(
         bands_to_download,
         FetchType.POLYGON,
         filter_tile=s2_tile,
-        apply_mask=False,
-        additional_masks=True,
+        distance_to_cloud_flag=True,
+        apply_mask_flag=False,
+        additional_masks_flag=True,
     )
 
     # Increase the memory of the jobs depending on the number of polygons to extract
