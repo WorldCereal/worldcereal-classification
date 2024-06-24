@@ -180,3 +180,4 @@ catboost_info/catboost_training.json
 *.zip
 
 .notebook-tests/
+.local-presto-test/
