@@ -64,7 +64,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         import sys
-        from pathlib import Path
 
         if self.epsg is None:
             raise ValueError(
