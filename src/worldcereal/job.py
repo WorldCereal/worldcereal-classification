@@ -25,7 +25,7 @@ class WorldCerealProduct(Enum):
 
 
 @dataclass
-class WorldCerealResults:
+class InferenceResults:
     """Dataclass to store the results of the WorldCereal job.
 
     Attributes
@@ -144,7 +144,7 @@ def generate_map(
     # Should contain a single job as this is a single-jon tile inference.
     asset = job.get_results().get_assets()[0]
 
-    return WorldCerealResults(
+    return InferenceResults(
         job_id=classes.job_id,
         product_url=asset.href,
         output_path=output_path,
