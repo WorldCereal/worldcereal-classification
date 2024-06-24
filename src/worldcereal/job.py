@@ -21,7 +21,7 @@ class WorldCerealProduct(Enum):
     """Enum to define the different WorldCereal products."""
 
     CROPLAND = "cropland"
-    CROPTPE = "croptype"
+    CROPTYPE = "croptype"
 
 
 @dataclass
