@@ -1,5 +1,8 @@
+"""Executing inference jobs on the OpenEO backend."""
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import openeo
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
@@ -8,14 +11,21 @@ from openeo_gfmap.inference.model_inference import apply_model_inference
 from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier
+from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+
+
+class WorldCerealProduct(Enum):
+    """Enum to define the different WorldCereal products."""
+
+    CROPLAND = "cropland"
+    CROPTYPE = "croptype"
+
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
-
 PRODUCT_SETTINGS = {
-    "cropland": {
+    WorldCerealProduct.CROPLAND: {
         "features": {
             "extractor": PrestoFeatureExtractor,
             "parameters": {
@@ -30,7 +40,7 @@ PRODUCT_SETTINGS = {
             },
         },
     },
-    "croptype": {
+    WorldCerealProduct.CROPTYPE: {
         "features": {
             "extractor": PrestoFeatureExtractor,
             "parameters": {
@@ -39,7 +49,7 @@ PRODUCT_SETTINGS = {
             },
         },
         "classification": {
-            "classifier": CroplandClassifier,  # TODO: update to croptype classifier
+            "classifier": CroptypeClassifier,
             "parameters": {
                 "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
             },
@@ -48,13 +58,35 @@ PRODUCT_SETTINGS = {
 }
 
 
+@dataclass
+class InferenceResults:
+    """Dataclass to store the results of the WorldCereal job.
+
+    Attributes
+    ----------
+    job_id : str
+        Job ID of the finished OpenEO job.
+    product_url : str
+        Public URL to the product accessible of the resulting OpenEO job.
+    output_path : Optional[Path]
+        Path to the output file, if it was downloaded locally.
+    product : WorldCerealProduct
+        Product that was generated.
+    """
+
+    job_id: str
+    product_url: str
+    output_path: Optional[Path]
+    product: WorldCerealProduct
+
+
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     backend_context: BackendContext,
-    output_path: Union[Path, str],
-    product: str = "cropland",
-    format: str = "GTiff",
+    output_path: Optional[Union[Path, str]],
+    product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
+    out_format: str = "GTiff",
 ):
     """Main function to generate a WorldCereal product.
 
@@ -71,8 +103,8 @@ def generate_map(
 
     """
 
-    if product not in PRODUCT_SETTINGS.keys():
-        raise ValueError(f"Product {product} not supported.")
+    if product_type not in PRODUCT_SETTINGS.keys():
+        raise ValueError(f"Product {product_type.value} not supported.")
 
     # Connect to openeo
     connection = openeo.connect(
@@ -89,9 +121,9 @@ def generate_map(
 
     # Run feature computer
     features = apply_feature_extractor(
-        feature_extractor_class=PRODUCT_SETTINGS[product]["features"]["extractor"],
+        feature_extractor_class=PRODUCT_SETTINGS[product_type]["features"]["extractor"],
         cube=inputs,
-        parameters=PRODUCT_SETTINGS[product]["features"]["parameters"],
+        parameters=PRODUCT_SETTINGS[product_type]["features"]["parameters"],
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
@@ -102,13 +134,15 @@ def generate_map(
         ],
     )
 
-    if format not in ["GTiff", "NetCDF"]:
+    if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
     classes = apply_model_inference(
-        model_inference_class=PRODUCT_SETTINGS[product]["classification"]["classifier"],
+        model_inference_class=PRODUCT_SETTINGS[product_type]["classification"][
+            "classifier"
+        ],
         cube=features,
-        parameters=PRODUCT_SETTINGS[product]["classification"]["parameters"],
+        parameters=PRODUCT_SETTINGS[product_type]["classification"]["parameters"],
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
@@ -121,19 +155,28 @@ def generate_map(
     )
 
     # Cast to uint8
-    if product == "cropland":
+    if product_type == WorldCerealProduct.CROPLAND:
         classes = compress_uint8(classes)
     else:
         classes = compress_uint16(classes)
 
-    classes.execute_batch(
+    job = classes.execute_batch(
         outputfile=output_path,
-        out_format=format,
+        out_format=out_format,
         job_options={
             "driver-memory": "4g",
             "executor-memoryOverhead": "6g",
             "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
         },
+    )
+
+    asset = job.get_results().get_assets()[0]
+
+    return InferenceResults(
+        job_id=classes.job_id,
+        product_url=asset.href,
+        output_path=output_path,
+        product=product_type,
     )
 
 
