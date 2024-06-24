@@ -264,6 +264,7 @@ def precomposited_datacube_METEO(
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
+    cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
         dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
     )

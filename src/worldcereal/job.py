@@ -127,7 +127,7 @@ def generate_map(
         out_format=format,
         job_options={
             "driver-memory": "4g",
-            "executor-memoryOverhead": "12g",
+            "executor-memoryOverhead": "6g",
             "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
         },
     )
