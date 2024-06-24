@@ -1,5 +1,8 @@
+"""Executing inference jobs on the OpenEO backend."""
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import openeo
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
@@ -14,13 +17,42 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfm
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
 
+class WorldCerealProduct(Enum):
+    """Enum to define the different WorldCereal products."""
+
+    CROPLAND = "cropland"
+    CROPTYPE = "croptype"
+
+
+@dataclass
+class InferenceResults:
+    """Dataclass to store the results of the WorldCereal job.
+
+    Attributes
+    ----------
+    job_id : str
+        Job ID of the finished OpenEO job.
+    product_url : str
+        Public URL to the product accessible of the resulting OpenEO job.
+    output_path : Optional[Path]
+        Path to the output file, if it was downloaded locally.
+    product : WorldCerealProduct
+        Product that was generated.
+    """
+
+    job_id: str
+    product_url: str
+    output_path: Optional[Path]
+    product: WorldCerealProduct
+
+
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     backend_context: BackendContext,
-    output_path: Union[Path, str],
-    product: str = "cropland",
-    format: str = "GTiff",
+    output_path: Optional[Union[Path, str]],
+    product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
+    out_format: str = "GTiff",
 ):
     """Main function to generate a WorldCereal product.
 
@@ -69,15 +101,15 @@ def generate_map(
         ],
     )
 
-    if product == "cropland":
+    if product_type == WorldCerealProduct.CROPLAND:
         # initiate default cropland model
         model_inference_class = CroplandClassifier
         model_inference_parameters = {}
     else:
-        raise ValueError(f"Product {product} not supported.")
+        raise ValueError(f"Product {product_type} not supported.")
 
-    if format not in ["GTiff", "NetCDF"]:
-        raise ValueError(f"Format {format} not supported.")
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {out_format} not supported.")
 
     classes = apply_model_inference(
         model_inference_class=model_inference_class,
@@ -95,17 +127,26 @@ def generate_map(
     )
 
     # Cast to uint8
-    if product == "cropland":
+    if product_type == WorldCerealProduct.CROPLAND:
         classes = compress_uint8(classes)
     else:
         classes = compress_uint16(classes)
 
-    classes.execute_batch(
+    job = classes.execute_batch(
         outputfile=output_path,
-        out_format=format,
+        out_format=out_format,
         job_options={
             "driver-memory": "4g",
             "executor-memoryOverhead": "12g",
             "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
         },
+    )
+    # Should contain a single job as this is a single-jon tile inference.
+    asset = job.get_results().get_assets()[0]
+
+    return InferenceResults(
+        job_id=classes.job_id,
+        product_url=asset.href,
+        output_path=output_path,
+        product=product_type,
     )
