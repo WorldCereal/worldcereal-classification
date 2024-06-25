@@ -165,4 +165,13 @@ class CroptypeClassifier(ModelInference):
             },
         )
 
+        # Apply optional cropland mask
+        cropland_mask = self._parameters.get("cropland_mask", None)
+        if cropland_mask is not None:
+            # Non-cropland pixels are set to 0
+            self.logger.info("Applying cropland mask ...")
+            classification = classification.where(
+                cropland_mask.sel(bands="classification") == 1, 0
+            )
+
         return classification
