@@ -110,9 +110,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             get_presto_features,
         )
 
+        batch_size = self._parameters.get("batch_size", 4096)
+
         self.logger.info("Extracting presto features")
         features = get_presto_features(
-            inarr, presto_model_url, self.epsg, batch_size=4096
+            inarr, presto_model_url, self.epsg, batch_size=batch_size
         )
         return features
 
