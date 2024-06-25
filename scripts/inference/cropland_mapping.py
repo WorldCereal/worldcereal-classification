@@ -3,12 +3,11 @@
 import argparse
 from pathlib import Path
 
+from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
-from worldcereal.job import generate_map
-
-ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
+from worldcereal.job import WorldCerealProduct, generate_map
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -52,11 +51,12 @@ if __name__ == "__main__":
 
     backend_context = BackendContext(Backend.FED)
 
-    generate_map(
+    job_results = generate_map(
         spatial_extent,
         temporal_extent,
         backend_context,
         args.output_path,
-        product="cropland",
-        format="GTiff",
+        product_type=WorldCerealProduct.CROPLAND,
+        out_format="GTiff",
     )
+    logger.success("Job finished:\n\t%s", job_results)

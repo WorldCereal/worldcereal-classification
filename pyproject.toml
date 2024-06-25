@@ -26,7 +26,8 @@ authors = [
 description = "WorldCereal classification module"
 readme = "README.md"
 requires-python = ">=3.8"
-dynamic = ["version"]
+# dynamic = ["version"]
+version = "2.0.2"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -40,6 +41,7 @@ dependencies = [
     "numpy<2.0.0",
     "h5netcdf>=1.1.0",
     "openeo>=0.29.0",
+    "openeo-gfmap==0.1.0",
     "cftime",
     "pytest-depends",
     "pyarrow",
