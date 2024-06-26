@@ -167,7 +167,7 @@ def create_datacube(
     }
     return cube.create_job(
         out_format="Parquet",
-        title=f"GFMAP_Feature_Extraction_S2_{row.s2_tile}",
+        title=f"GFMAP_Feature_Extraction_{row.s2_tile}",
         job_options=job_options,
     )
 
@@ -267,8 +267,8 @@ if __name__ == "__main__":
         output_dir=args.output_path,
         output_path_generator=generate_output_path,
         post_job_action=post_job_action,
-        collection_id="SENTINEL2-POINT-FEATURE-EXTRACTION",
-        collection_description="Sentinel-2 basic point feature extraction.",
+        collection_id="POINT-FEATURE-EXTRACTION",
+        collection_description="Worldcereal point feature extraction.",
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
