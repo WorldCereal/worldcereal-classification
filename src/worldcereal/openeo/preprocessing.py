@@ -348,7 +348,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     )
 
     data = s2_data.merge_cubes(s1_data)
-    # data = data.merge_cubes(dem_data)
+    data = data.merge_cubes(dem_data)
     data = data.merge_cubes(meteo_data)
 
     return data
