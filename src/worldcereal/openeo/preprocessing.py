@@ -283,6 +283,13 @@ def worldcereal_preprocessed_inputs_gfmap(
     fetch_type: Optional[FetchType] = FetchType.TILE,
     collections: Optional[List[str]] = None,
 ) -> DataCube:
+    if not all(
+        coll in {"sentinel1", "sentinel2", "copernicus", "meteo"}
+        for coll in collections
+    ):
+        raise ValueError(
+            f"Invalid collection name. Choose from {['sentinel1', 'sentinel2', 'copernicus', 'meteo']}"
+        )
     cube_list = []
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
