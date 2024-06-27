@@ -11,8 +11,8 @@ from worldcereal.job import WorldCerealProduct, generate_map
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="WC - Cropland Inference",
-        description="Cropland inference using GFMAP, Presto and WorldCereal classifiers",
+        prog="WC - Crop Mapping Inference",
+        description="Crop Mapping inference using GFMAP, Presto and WorldCereal classifiers",
     )
 
     parser.add_argument("minx", type=float, help="Minimum X coordinate (west)")
@@ -24,6 +24,11 @@ if __name__ == "__main__":
         type=int,
         default=4326,
         help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
+    )
+    parser.add_argument(
+        "product",
+        type=str,
+        help="Product to generate. One of ['cropland', 'croptype']",
     )
     parser.add_argument(
         "start_date", type=str, help="Starting date for data extraction."
@@ -46,6 +51,14 @@ if __name__ == "__main__":
     start_date = args.start_date
     end_date = args.end_date
 
+    product = args.product
+
+    # minx, miny, maxx, maxy = (664000, 5611134, 665000, 5612134)
+    # epsg = 32631
+    # start_date = "2020-11-01"
+    # end_date = "2021-10-31"
+    # product = "croptype"
+
     spatial_extent = BoundingBoxExtent(minx, miny, maxx, maxy, epsg)
     temporal_extent = TemporalContext(start_date, end_date)
 
@@ -56,7 +69,7 @@ if __name__ == "__main__":
         temporal_extent,
         backend_context,
         args.output_path,
-        product_type=WorldCerealProduct.CROPLAND,
+        product_type=WorldCerealProduct(product),
         out_format="GTiff",
     )
     logger.success("Job finished:\n\t%s", job_results)
