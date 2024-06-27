@@ -89,23 +89,35 @@ def generate_map(
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     out_format: str = "GTiff",
-):
+) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
-    Args:
-        spatial_extent (BoundingBoxExtent): spatial extent of the map
-        temporal_extent (TemporalContext): temporal range to consider
-        backend_context (BackendContext): backend to run the job on
-        output_path (Union[Path, str]): output path to download the product to
-        product (str, optional): product describer. Defaults to "cropland".
-        format (str, optional): Output format. Defaults to "GTiff".
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    backend_context : BackendContext
+        backend to run the job on
+    output_path : Optional[Union[Path, str]]
+        output path to download the product to
+    product_type : WorldCerealProduct, optional
+        product describer, by default WorldCerealProduct.CROPLAND
+    out_format : str, optional
+        Output format, by default "GTiff"
 
-    Raises:
-        ValueError: if the product is not supported
-        ValueError: if the out_format is not supported
-        ValueError: if a cropland mask is applied on a cropland workflow
+    Returns
+    -------
+    InferenceResults
+        Results of the finished WorldCereal job.
 
-
+    Raises
+    ------
+    ValueError
+        if the product is not supported
+    ValueError
+        if the out_format is not supported
     """
 
     if product_type not in PRODUCT_SETTINGS.keys():
@@ -172,18 +184,20 @@ def collect_inputs(
     temporal_extent: TemporalContext,
     backend_context: BackendContext,
     output_path: Union[Path, str],
-) -> DataCube:
+):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
 
-    Args:
-        spatial_extent (BoundingBoxExtent): spatial extent of the map
-        temporal_extent (TemporalContext): temporal range to consider
-        backend_context (BackendContext): backend to run the job on
-        output_path (Union[Path, str]): output path to download the product to
-
-    Raises:
-        ValueError: if the product is not supported
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    backend_context : BackendContext
+        backend to run the job on
+    output_path : Union[Path, str]
+        output path to download the product to
 
     """
 
@@ -211,11 +225,15 @@ def _cropland_map(inputs: DataCube) -> DataCube:
     """Method to produce cropland map from preprocessed inputs, using
     a Presto feature extractor and a CatBoost classifier.
 
-    Args:
-        inputs (DataCube): preprocessed input cube
+    Parameters
+    ----------
+    inputs : DataCube
+        preprocessed input cube
 
-    Returns:
-        DataCube: binary labels and probability
+    Returns
+    -------
+    DataCube
+        binary labels and probability
     """
 
     # Run feature computer
@@ -267,12 +285,17 @@ def _croptype_map(inputs: DataCube, cropland_mask: DataCube = None) -> DataCube:
     """Method to produce croptype map from preprocessed inputs, using
     a Presto feature extractor and a CatBoost classifier.
 
-    Args:
-        inputs (DataCube): preprocessed input cube
-        cropland_mask (DataCube): optional cropland mask
+    Parameters
+    ----------
+    inputs : DataCube
+        preprocessed input cube
+    cropland_mask : DataCube, optional
+        optional cropland mask, by default None
 
-    Returns:
-        DataCube: croptype labels and probability
+    Returns
+    -------
+    DataCube
+        croptype labels and probability
     """
 
     # Run feature computer
