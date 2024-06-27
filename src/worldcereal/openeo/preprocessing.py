@@ -284,11 +284,10 @@ def worldcereal_preprocessed_inputs_gfmap(
     collections: Optional[List[str]] = None,
 ) -> DataCube:
     if not all(
-        coll in {"sentinel1", "sentinel2", "copernicus", "meteo"}
-        for coll in collections
+        coll in {"sentinel1", "sentinel2", "cop", "meteo"} for coll in collections
     ):
         raise ValueError(
-            f"Invalid collection name. Choose from {['sentinel1', 'sentinel2', 'copernicus', 'meteo']}"
+            f"Invalid collection name. Choose from {['sentinel1', 'sentinel2', 'cop', 'meteo']}"
         )
     cube_list = []
     # Extraction of S2 from GFMAP
@@ -359,7 +358,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
     # Append the copernicus data to the list
-    if collections is None or "copernicus" in collections:
+    if collections is None or "cop" in collections:
         cube_list.append(dem_data)
 
     meteo_data = precomposited_datacube_METEO(
