@@ -53,7 +53,8 @@ if __name__ == "__main__":
 
     product = args.product
 
-    # minx, miny, maxx, maxy = (664000, 5611134, 665000, 5612134)
+    # minx, miny, maxx, maxy = (664000, 5611134, 665000, 5612134)  # Small test
+    # minx, miny, maxx, maxy = (664000, 5611134, 684000, 5631134)  # Large test
     # epsg = 32631
     # start_date = "2020-11-01"
     # end_date = "2021-10-31"
