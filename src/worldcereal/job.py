@@ -89,7 +89,6 @@ def generate_map(
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     out_format: str = "GTiff",
-    apply_cropland_mask: bool = False,
 ):
     """Main function to generate a WorldCereal product.
 
@@ -100,8 +99,6 @@ def generate_map(
         output_path (Union[Path, str]): output path to download the product to
         product (str, optional): product describer. Defaults to "cropland".
         format (str, optional): Output format. Defaults to "GTiff".
-        apply_cropland_mask (bool, optional). If True the output will be masked
-                with the cropland map. Defaults to False.
 
     Raises:
         ValueError: if the product is not supported
@@ -117,9 +114,6 @@ def generate_map(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    if product_type == WorldCerealProduct.CROPLAND and apply_cropland_mask:
-        raise ValueError("Cannot apply a cropland mask on a cropland workflow.")
-
     # Connect to openeo
     connection = openeo.connect(
         "https://openeo.creo.vito.be/openeo/"
@@ -133,15 +127,23 @@ def generate_map(
         temporal_extent=temporal_extent,
     )
 
+    # Explicit filtering again for bbox because of METEO low
+    # resolution causing issues
+    inputs = inputs.filter_bbox(dict(spatial_extent))
+
     # Construct the feature extraction and model inference pipeline
     if product_type == WorldCerealProduct.CROPLAND:
         classes = _cropland_map(inputs)
     elif product_type == WorldCerealProduct.CROPTYPE:
-        if apply_cropland_mask:
-            # First compute cropland map
-            cropland_mask = _cropland_map(inputs)
-        else:
-            cropland_mask = None
+        # First compute cropland map
+        cropland_mask = (
+            _cropland_map(inputs)
+            .filter_bands("classification")
+            .reduce_dimension(
+                dimension="t", reducer="mean"
+            )  # Temporary fix to make this work as mask
+        )
+
         classes = _croptype_map(inputs, cropland_mask=cropland_mask)
 
     # Submit the job
@@ -298,12 +300,9 @@ def _croptype_map(inputs: DataCube, cropland_mask: DataCube = None) -> DataCube:
             "classification"
         ]["classifier"],
         cube=features,
-        parameters=dict(
-            **PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE]["classification"][
-                "parameters"
-            ],
-            **{"cropland_mask": cropland_mask},
-        ),
+        parameters=PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE]["classification"][
+            "parameters"
+        ],
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
@@ -314,6 +313,10 @@ def _croptype_map(inputs: DataCube, cropland_mask: DataCube = None) -> DataCube:
             {"dimension": "y", "unit": "px", "value": 0},
         ],
     )
+
+    # Mask cropland
+    if cropland_mask is not None:
+        classes = classes.mask(cropland_mask == 0, replacement=0)
 
     # Cast to uint16
     classes = compress_uint16(classes)
