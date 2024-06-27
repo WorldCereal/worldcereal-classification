@@ -9,8 +9,8 @@ import gc
 import re
 import torch
 import glob
-import rioxarray as rxr
-import xarray as xr
+# import rioxarray as rxr
+# import xarray as xr
 import rasterio as rio
 from typing import Callable, Dict, List, Optional, Union
 from pathlib import Path
@@ -286,79 +286,79 @@ def plot_confusion_matrix(cm,
     plt.show()
 
 
-def patch2feats(
-    patch: xr.Dataset, 
-    tfeatures: List, 
-    get_satclip: bool = False,
-    features_type=np.nan,
-    satclip_model=np.nan,
-    satclip_model_name=np.nan,
-    satclip_pca_model=np.nan,
-    scaler=np.nan,
-    n_pcs: int = 32
-    ) -> pd.DataFrame:
-    patch_df = pd.DataFrame()
-    for feature_name in ['B02','B03','B04','B08']:
-        _feature_colnames = ['OPTICAL-{}-ts{}-10m'.format(feature_name,xx) for xx in range(12)]
-        feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
-        patch_df = pd.concat((patch_df,feature_df), axis=1)
+# def patch2feats(
+#     patch: xr.Dataset, 
+#     tfeatures: List, 
+#     get_satclip: bool = False,
+#     features_type=np.nan,
+#     satclip_model=np.nan,
+#     satclip_model_name=np.nan,
+#     satclip_pca_model=np.nan,
+#     scaler=np.nan,
+#     n_pcs: int = 32
+#     ) -> pd.DataFrame:
+#     patch_df = pd.DataFrame()
+#     for feature_name in ['B02','B03','B04','B08']:
+#         _feature_colnames = ['OPTICAL-{}-ts{}-10m'.format(feature_name,xx) for xx in range(12)]
+#         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
+#         feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
+#         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    for feature_name in ['B05','B06','B07','B8A','B11','B12']:
-        _feature_colnames = ['OPTICAL-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
-        feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
-        patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     for feature_name in ['B05','B06','B07','B8A','B11','B12']:
+#         _feature_colnames = ['OPTICAL-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
+#         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
+#         feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
+#         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    for feature_name in ['VV','VH']:
-        _feature_colnames = ['SAR-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
-        feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
-        feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
-        patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     for feature_name in ['VV','VH']:
+#         _feature_colnames = ['SAR-{}-ts{}-20m'.format(feature_name,xx) for xx in range(12)]
+#         feature_df = patch[feature_name].values.reshape(12,-1).swapaxes(0,1)
+#         feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
+#         patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    _feature_colnames = ['METEO-temperature_mean-ts{}-100m'.format(xx) for xx in range(12)]
-    feature_df = patch['temperature-mean'].values.reshape(12,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     _feature_colnames = ['METEO-temperature_mean-ts{}-100m'.format(xx) for xx in range(12)]
+#     feature_df = patch['temperature-mean'].values.reshape(12,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    _feature_colnames = ['METEO-precipitation_flux-ts{}-100m'.format(xx) for xx in range(12)]
-    feature_df = patch['precipitation-flux'].values.reshape(12,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     _feature_colnames = ['METEO-precipitation_flux-ts{}-100m'.format(xx) for xx in range(12)]
+#     feature_df = patch['precipitation-flux'].values.reshape(12,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=_feature_colnames).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    feature_df = patch['altitude'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['DEM-alt-20m']).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     feature_df = patch['altitude'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=['DEM-alt-20m']).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    feature_df = patch['slope'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['DEM-slo-20m']).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     feature_df = patch['slope'].values[0,:,:].reshape(1,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=['DEM-slo-20m']).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    feature_df = np.repeat(patch['x'].values.reshape(-1,1), patch['y'].shape[0], axis=1).reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['lon']).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     feature_df = np.repeat(patch['x'].values.reshape(-1,1), patch['y'].shape[0], axis=1).reshape(1,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=['lon']).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    feature_df = np.repeat(patch['y'].values.reshape(1,-1), patch['x'].shape[0], axis=0).reshape(1,-1).swapaxes(0,1)
-    feature_df = pd.DataFrame(feature_df, columns=['lat']).reset_index()
-    patch_df = pd.concat((patch_df,feature_df), axis=1)
+#     feature_df = np.repeat(patch['y'].values.reshape(1,-1), patch['x'].shape[0], axis=0).reshape(1,-1).swapaxes(0,1)
+#     feature_df = pd.DataFrame(feature_df, columns=['lat']).reset_index()
+#     patch_df = pd.concat((patch_df,feature_df), axis=1)
 
-    if get_satclip:
-        satclip_df = prepare_satclip_embeddings(satclip_model, satclip_model_name, patch_df)
-        if features_type=='emb':
-            patch_df = pd.concat([patch_df,satclip_df], join='inner', axis=1)
-        if features_type=='pca':
-            satclip_emb_norm = scaler.transform(satclip_df.values)
-            satclip_pca = satclip_pca_model.transform(satclip_emb_norm)
-            satclip_pca_feats = ['satclip_{}_PC{}'.format(satclip_model_name,jj) for jj in range(n_pcs)]
-            satclip_pca_df = pd.DataFrame(
-                satclip_pca, 
-                columns=satclip_pca_feats, 
-                index=patch_df.index)
-            patch_df = pd.concat([patch_df,satclip_pca_df], join='inner', axis=1)
+#     if get_satclip:
+#         satclip_df = prepare_satclip_embeddings(satclip_model, satclip_model_name, patch_df)
+#         if features_type=='emb':
+#             patch_df = pd.concat([patch_df,satclip_df], join='inner', axis=1)
+#         if features_type=='pca':
+#             satclip_emb_norm = scaler.transform(satclip_df.values)
+#             satclip_pca = satclip_pca_model.transform(satclip_emb_norm)
+#             satclip_pca_feats = ['satclip_{}_PC{}'.format(satclip_model_name,jj) for jj in range(n_pcs)]
+#             satclip_pca_df = pd.DataFrame(
+#                 satclip_pca, 
+#                 columns=satclip_pca_feats, 
+#                 index=patch_df.index)
+#             patch_df = pd.concat([patch_df,satclip_pca_df], join='inner', axis=1)
 
-    patch_df = patch_df[tfeatures]
+#     patch_df = patch_df[tfeatures]
 
-    return patch_df
+#     return patch_df
 
 
 def process_raw_features_input_df(
@@ -373,14 +373,14 @@ def process_raw_features_input_df(
     tdf['CROPTYPE_LABEL'].replace(0, np.nan, inplace=True)
     tdf['CROPTYPE_LABEL'].fillna(tdf['LANDCOVER_LABEL'], inplace=True)
 
-    tdf['ec_code'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['ec_code'])
+    tdf['ewoc_code'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['ewoc_code'])
     tdf['CROPTYPE_NAME'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['name'])
     tdf['landcover_wc'] = tdf['CROPTYPE_LABEL'].map(wc2ec_map.set_index('croptype')['landcover'])
     
     # tdf = tdf[tdf.isna().sum(axis=1)<3]
     for tlevel in label_columns:
-        tdf[tlevel] = tdf['ec_code'].map(ec_map['{}_label'.format(tlevel)]).astype('int32')
-        tdf['{}_name'.format(tlevel)] = tdf['ec_code'].map(ec_map['{}_name'.format(tlevel)])
+        tdf[tlevel] = tdf['ewoc_code'].map(ec_map['{}_label'.format(tlevel)]).astype('int32')
+        tdf['{}_name'.format(tlevel)] = tdf['ewoc_code'].map(ec_map['{}_name'.format(tlevel)])
     tdf = tdf[tdf['cropland']!=-1].reset_index(drop=True)
 
     for tcol in ['start_date','end_date','valid_date']:

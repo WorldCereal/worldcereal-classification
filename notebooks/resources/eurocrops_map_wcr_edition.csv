@@ -1,4 +1,4 @@
-ec_code,cropland_name,landcover_name,cropgroup_name,croptype_name,worldcereal_croptype_name,cropland_label,landcover_label,cropgroup_label,croptype_label,worldcereal_croptype_label
+ewoc_code,cropland_name,landcover_name,cropgroup_name,croptype_name,worldcereal_croptype_name,cropland_label,landcover_label,cropgroup_label,croptype_label,worldcereal_croptype_label
 00-00-00-000-0,unknown,unknown,unknown,unknown,unknown,-1,-1,-1,-1,-1
 10-00-00-000-0,cropland_unspecified,cropland_unspecified,cropland_unspecified,cropland_unspecified,cropland_unspecified,-1,-1,-1,-1,-1
 11-00-00-000-0,temporary_crops,temporary_crops,temporary_crops,temporary_crops,temporary_crops,11,110000000,110000000,110000000,110000000
