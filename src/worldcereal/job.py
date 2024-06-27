@@ -1,10 +1,12 @@
 """Executing inference jobs on the OpenEO backend."""
+
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 
 import openeo
+from openeo import DataCube
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
 from openeo_gfmap.inference.model_inference import apply_model_inference
@@ -87,31 +89,49 @@ def generate_map(
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     out_format: str = "GTiff",
-):
+) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
-    Args:
-        spatial_extent (BoundingBoxExtent): spatial extent of the map
-        temporal_extent (TemporalContext): temporal range to consider
-        backend_context (BackendContext): backend to run the job on
-        output_path (Union[Path, str]): output path to download the product to
-        product (str, optional): product describer. Defaults to "cropland".
-        format (str, optional): Output format. Defaults to "GTiff".
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    backend_context : BackendContext
+        backend to run the job on
+    output_path : Optional[Union[Path, str]]
+        output path to download the product to
+    product_type : WorldCerealProduct, optional
+        product describer, by default WorldCerealProduct.CROPLAND
+    out_format : str, optional
+        Output format, by default "GTiff"
 
-    Raises:
-        ValueError: if the product is not supported
+    Returns
+    -------
+    InferenceResults
+        Results of the finished WorldCereal job.
 
+    Raises
+    ------
+    ValueError
+        if the product is not supported
+    ValueError
+        if the out_format is not supported
     """
 
     if product_type not in PRODUCT_SETTINGS.keys():
         raise ValueError(f"Product {product_type.value} not supported.")
+
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {format} not supported.")
 
     # Connect to openeo
     connection = openeo.connect(
         "https://openeo.creo.vito.be/openeo/"
     ).authenticate_oidc()
 
-    # Preparing the input cube for the inference
+    # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs_gfmap(
         connection=connection,
         backend_context=backend_context,
@@ -119,53 +139,32 @@ def generate_map(
         temporal_extent=temporal_extent,
     )
 
-    # Run feature computer
-    features = apply_feature_extractor(
-        feature_extractor_class=PRODUCT_SETTINGS[product_type]["features"]["extractor"],
-        cube=inputs,
-        parameters=PRODUCT_SETTINGS[product_type]["features"]["parameters"],
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
+    # Explicit filtering again for bbox because of METEO low
+    # resolution causing issues
+    inputs = inputs.filter_bbox(dict(spatial_extent))
 
-    if out_format not in ["GTiff", "NetCDF"]:
-        raise ValueError(f"Format {format} not supported.")
-
-    classes = apply_model_inference(
-        model_inference_class=PRODUCT_SETTINGS[product_type]["classification"][
-            "classifier"
-        ],
-        cube=features,
-        parameters=PRODUCT_SETTINGS[product_type]["classification"]["parameters"],
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-            {"dimension": "t", "value": "P1D"},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
-
-    # Cast to uint8
+    # Construct the feature extraction and model inference pipeline
     if product_type == WorldCerealProduct.CROPLAND:
-        classes = compress_uint8(classes)
-    else:
-        classes = compress_uint16(classes)
+        classes = _cropland_map(inputs)
+    elif product_type == WorldCerealProduct.CROPTYPE:
+        # First compute cropland map
+        cropland_mask = (
+            _cropland_map(inputs)
+            .filter_bands("classification")
+            .reduce_dimension(
+                dimension="t", reducer="mean"
+            )  # Temporary fix to make this work as mask
+        )
 
+        classes = _croptype_map(inputs, cropland_mask=cropland_mask)
+
+    # Submit the job
     job = classes.execute_batch(
         outputfile=output_path,
         out_format=out_format,
         job_options={
             "driver-memory": "4g",
-            "executor-memoryOverhead": "6g",
+            "executor-memoryOverhead": "4g",
             "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
         },
     )
@@ -173,7 +172,7 @@ def generate_map(
     asset = job.get_results().get_assets()[0]
 
     return InferenceResults(
-        job_id=classes.job_id,
+        job_id=job.job_id,
         product_url=asset.href,
         output_path=output_path,
         product=product_type,
@@ -189,14 +188,16 @@ def collect_inputs(
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
 
-    Args:
-        spatial_extent (BoundingBoxExtent): spatial extent of the map
-        temporal_extent (TemporalContext): temporal range to consider
-        backend_context (BackendContext): backend to run the job on
-        output_path (Union[Path, str]): output path to download the product to
-
-    Raises:
-        ValueError: if the product is not supported
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    backend_context : BackendContext
+        backend to run the job on
+    output_path : Union[Path, str]
+        output path to download the product to
 
     """
 
@@ -218,3 +219,129 @@ def collect_inputs(
         out_format="NetCDF",
         job_options={"driver-memory": "4g", "executor-memoryOverhead": "4g"},
     )
+
+
+def _cropland_map(inputs: DataCube) -> DataCube:
+    """Method to produce cropland map from preprocessed inputs, using
+    a Presto feature extractor and a CatBoost classifier.
+
+    Parameters
+    ----------
+    inputs : DataCube
+        preprocessed input cube
+
+    Returns
+    -------
+    DataCube
+        binary labels and probability
+    """
+
+    # Run feature computer
+    features = apply_feature_extractor(
+        feature_extractor_class=PRODUCT_SETTINGS[WorldCerealProduct.CROPLAND][
+            "features"
+        ]["extractor"],
+        cube=inputs,
+        parameters=PRODUCT_SETTINGS[WorldCerealProduct.CROPLAND]["features"][
+            "parameters"
+        ],
+        size=[
+            {"dimension": "x", "unit": "px", "value": 100},
+            {"dimension": "y", "unit": "px", "value": 100},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ],
+    )
+
+    # Run model inference on features
+    classes = apply_model_inference(
+        model_inference_class=PRODUCT_SETTINGS[WorldCerealProduct.CROPLAND][
+            "classification"
+        ]["classifier"],
+        cube=features,
+        parameters=PRODUCT_SETTINGS[WorldCerealProduct.CROPLAND]["classification"][
+            "parameters"
+        ],
+        size=[
+            {"dimension": "x", "unit": "px", "value": 100},
+            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "t", "value": "P1D"},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ],
+    )
+
+    # Cast to uint8
+    classes = compress_uint8(classes)
+
+    return classes
+
+
+def _croptype_map(inputs: DataCube, cropland_mask: DataCube = None) -> DataCube:
+    """Method to produce croptype map from preprocessed inputs, using
+    a Presto feature extractor and a CatBoost classifier.
+
+    Parameters
+    ----------
+    inputs : DataCube
+        preprocessed input cube
+    cropland_mask : DataCube, optional
+        optional cropland mask, by default None
+
+    Returns
+    -------
+    DataCube
+        croptype labels and probability
+    """
+
+    # Run feature computer
+    features = apply_feature_extractor(
+        feature_extractor_class=PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE][
+            "features"
+        ]["extractor"],
+        cube=inputs,
+        parameters=PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE]["features"][
+            "parameters"
+        ],
+        size=[
+            {"dimension": "x", "unit": "px", "value": 100},
+            {"dimension": "y", "unit": "px", "value": 100},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ],
+    )
+
+    # Run model inference on features
+    classes = apply_model_inference(
+        model_inference_class=PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE][
+            "classification"
+        ]["classifier"],
+        cube=features,
+        parameters=PRODUCT_SETTINGS[WorldCerealProduct.CROPTYPE]["classification"][
+            "parameters"
+        ],
+        size=[
+            {"dimension": "x", "unit": "px", "value": 100},
+            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "t", "value": "P1D"},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ],
+    )
+
+    # Mask cropland
+    if cropland_mask is not None:
+        classes = classes.mask(cropland_mask == 0, replacement=0)
+
+    # Cast to uint16
+    classes = compress_uint16(classes)
+
+    return classes
