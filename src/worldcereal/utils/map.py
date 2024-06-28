@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 import leafmap
+from typing import List
 
 
 def get_probability_cmap():
@@ -33,7 +34,11 @@ COLORMAP = {
     'probabilities': get_probability_cmap()
 }
 
-NODATAVALUE = 255
+NODATAVALUE = {
+    'active-cropland': 255,
+    'temporary-crops': 255,
+    'maize': 255,
+    'probabilities': 255}
 
 
 def _get_colormap(product):
@@ -50,12 +55,133 @@ def _get_colormap(product):
 
 
 def _get_nodata(product):
-    return NODATAVALUE
+    return NODATAVALUE[product]
 
 
-def postprocess_map(infile, product=None, colormap=None, nodata=None):
+def get_default_filtersettings():
+    return {'kernelsize': 7,
+            'conf_threshold': 70}
+
+
+def majority_vote(prediction: np.ndarray, probability: np.ndarray,
+                  kernel_size: int = 7, conf_threshold: int = 30,
+                  target_excluded_value: int = 0,
+                  excluded_values: List[int] = [0, 255]):
+    """
+    Majority vote is performed using a sliding local kernel. For each pixel, the voting of a final class is done from
+    neighbours values weighted with the confidence threshold. Pixels that have one of the specified excluded values are
+    excluded in the voting process and are unchanged.
+
+    The prediction probabilities are reevaluated by taking, for each pixel, the average of probabilities of the
+    neighbors that belong to the winning class. (For example, if a pixel was voted to class 2 and there are three
+    neighbors of that class, then the new probability is the sum of the old probabilities of each pixels divided by 3)
+
+    :param prediction: A 2D numpy array containing the predicted classification labels.
+    :param probability: A 2D numpy array (same dimensions as predictions) containing the probabilities of the winning class
+        (ranging between 0 and 100).
+    :param kernel_size: The size of the kernel used for the neighbour around the pixel.
+    :param conf_threshold: Pixels under this confidence threshold do not count into the voting process.
+    :param target_excluded_value: Pixels that have a null score for every class are turned into this exclusion value
+    :param excluded_values: Pixels that have on of the excluded values do not count into the voting process and are
+                            unchanged.
+
+    :returns: the corrected classification labels and associated probabilities.
+    """
+
+    from scipy.signal import convolve2d
+
+    # As the probabilities are in integers between 0 and 100, we use uint16 matrices to store the vote scores
+    assert kernel_size <= 25, f'Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown'
+
+    # Build a class mapping, so classes are converted to indexes and vice-versa
+    unique_values = set(np.unique(prediction))
+    unique_values = sorted(unique_values - set(excluded_values))
+    index_value_lut = [(k, v) for k, v in enumerate(unique_values)]
+
+    counts = np.zeros(
+        shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
+    probabilities = np.zeros(
+        shape=(*probability.shape, len(unique_values)), dtype=np.uint16)
+
+    # Iterates for each classes
+    for cls_idx, cls_value in index_value_lut:
+
+        # Take the binary mask of the interest class, and multiplies by the probabilities
+        class_mask = ((prediction == cls_value) *
+                      probability).astype(np.uint16)
+
+        # Sets to 0 the class scores where the threshold is lower
+        class_mask[probability <= conf_threshold] = 0
+
+        # Set to 0 the class scores where the label is excluded
+        for excluded_value in excluded_values:
+            class_mask[prediction == excluded_value] = 0
+
+        # Binary class mask, used to count HOW MANY neighbours pixels are used for this class
+        binary_class_mask = (class_mask > 0).astype(np.uint16)
+
+        # Creates the kernel
+        kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)
+
+        # Counts around the window the sum of probabilities for that given class
+        counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode='same')
+
+        # Counts the number of neighbors pixels that voted for that given class
+        class_voters = convolve2d(binary_class_mask, kernel, mode='same')
+        # Remove the 0 values because might create divide by 0 issues
+        class_voters[class_voters == 0] = 1
+
+        probabilities[:, :, cls_idx] = np.divide(
+            counts[:, :, cls_idx], class_voters)
+
+    # Initializes output array
+    aggregated_predictions = np.zeros(
+        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
+    # Initializes prediction output array
+    aggregated_probabilities = np.zeros(
+        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
+
+    if len(unique_values) > 0:
+        # Takes the indices that have the biggest scores
+        aggregated_predictions_indices = np.argmax(counts, axis=2)
+
+        # Get the new confidence score for the indices
+        aggregated_probabilities = np.take_along_axis(
+            probabilities,
+            aggregated_predictions_indices.reshape(
+                *aggregated_predictions_indices.shape, 1),
+            axis=2
+        ).squeeze()
+
+        # Check which pixels have a counts value to 0
+        no_score_mask = np.sum(counts, axis=2) == 0
+
+        # convert back to values from indices
+        for (cls_idx, cls_value) in index_value_lut:
+            aggregated_predictions[aggregated_predictions_indices ==
+                                   cls_idx] = cls_value
+            aggregated_predictions = aggregated_predictions.astype(np.uint16)
+
+        aggregated_predictions[no_score_mask] = target_excluded_value
+        aggregated_probabilities[no_score_mask] = 0
+
+    # Setting excluded values back to their original values
+    for excluded_value in excluded_values:
+        aggregated_predictions[prediction == excluded_value] = excluded_value
+        aggregated_probabilities[prediction == excluded_value] = 0
+
+    return aggregated_predictions, aggregated_probabilities
+
+
+def postprocess_product(infile, product=None, colormap=None, nodata=None,
+                        filter_settings=None):
     '''
-    Function to set colormap and nodata value of a WorldCereal product.
+    Function taking care of post-processing of a WorldCereal product, including:
+    - spatial filter to clean the classification results
+    - (in case of a crop type output) deriving a cropland mask from the classified map
+    - splitting the multi-band raster into individual files
+    - assigning a colormap and no data value to each file
+
     The function assumes the input data consists of two layers:
     1) the classification layer
     2) the probabilities layer, indicating class probability of winning class
@@ -67,13 +193,15 @@ def postprocess_map(infile, product=None, colormap=None, nodata=None):
         nodata (int): nodata value to assign to the classification layer
 
     Returns:
-        outfiles (list): list of output files
-        (first file is the classification layer,
-        second file is the probabilities layer)
+        outfiles (dict): {label: path} of output files generated
+
     '''
-    # infer name of output file
-    outclas = infile.replace('.tif', '-classification.tif')
-    outprob = infile.replace('.tif', '-probabilities.tif')
+
+    # get properties and data from input file
+    with rasterio.open(infile, 'r') as src:
+        labels = src.read(1)
+        probs = src.read(2)
+        meta = src.meta
 
     # get colormap and nodata value
     if product is not None:
@@ -83,56 +211,66 @@ def postprocess_map(infile, product=None, colormap=None, nodata=None):
     if nodata is None:
         nodata = NODATAVALUE
 
-    # get properties and data from input file
-    with rasterio.open(infile, 'r') as src:
-        labels = src.read(1)
-        probs = src.read(2)
-        meta = src.meta
+    # run spatial cleaning filter if required
+    if filter_settings is None:
+        filter_settings = get_default_filtersettings()
+    if filter_settings['kernel_size'] > 0:
+        newlabels, newprobs = majority_vote(labels, probs,
+                                            kernel_size=filter_settings['kernel_size'],
+                                            conf_threshold=filter_settings['conf_threshold'],
+                                            target_excluded_value=0,
+                                            excluded_values=[0, nodata])
 
-    meta.update(count=1)
+    # construct dictionary of output files to be generated
+    outfiles = {'classification': {'data': newlabels,
+                                   'colormap': colormap,
+                                   'nodata': nodata},
+                'probabilities': {'data': newprobs,
+                                  'colormap': _get_colormap('probabilities'),
+                                  'nodata': _get_nodata('probabilities')}}
+
+    # derive cropland mask if required
+    if product != 'temporary-crops':
+        cropland = np.where(newlabels == 0, 1, 0)
+        outfiles['croplandmask'] = {'data': cropland,
+                                    'colormap': _get_colormap('temporary-crops'),
+                                    'nodata': _get_nodata('temporary-crops')}
 
     # write output files
-    with rasterio.open(outclas, 'w', **meta) as dst:
-        dst.write(labels, indexes=1)
-        dst.nodata = nodata
-        if colormap is not None:
-            dst.write_colormap(1, colormap)
+    outpaths = []
+    meta.update(count=1)
+    for label, settings in outfiles.items():
+        outpath = infile.replace('.tif', f'-{label}.tif')
+        with rasterio.open(outpath, 'w', **meta) as dst:
+            dst.write(settings['data'], indexes=1)
+            dst.nodata = settings['nodata']
+            if settings['colormap'] is not None:
+                dst.write_colormap(1, settings['colormap'])
 
-    with rasterio.open(outprob, 'w', **meta) as dst:
-        dst.write(probs, indexes=1)
-        dst.nodata = nodata
-        colormap_prob = _get_colormap('probabilities')
-        dst.write_colormap(1, colormap_prob)
+        outpaths.append(outpath)
 
-    return [outclas, outprob]
+    return outpaths
 
 
-def visualize_product(infile, product=None, colormap=None,
-                      nodata=None, port=8888):
+def visualize_products(products, port=8887):
     '''
-    Function to visualize a WorldCereal product.
-    The function assumes the input data consists of two layers:
-    1) the classification layer
-    2) the probabilities layer, indicating class probability of winning class
+    Function to visualize raster layers using leafmap.
+    Only the first band of the input rasters is visualized.
 
     Args:
-        infiles (list): list of input files
-        port (int): port to use for visualization
+        infiles (list): dictionary of products to visualize {label: path}
+        port (int): port to use for localtileserver application
 
     Returns:
-        None
+        leafmap Map instance
     '''
-    outfiles = postprocess_map(infile, product=product,
-                               colormap=colormap, nodata=nodata)
 
     m = leafmap.Map()
     m.add_basemap('Esri.WorldImagery')
-    m.add_raster(outfiles[0], indexes=[1],
-                 layer_name=f'{product}-classification',
-                 port=port)
-    m.add_raster(outfiles[1], indexes=[1],
-                 layer_name=f'{product}-probabilities',
-                 port=port)
+    for label, path in products.items():
+        m.add_raster(path, indexes=[1],
+                     layer_name=label,
+                     port=port)
 
     return m
 
