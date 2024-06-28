@@ -10,7 +10,7 @@ import openeo
 import pandas as pd
 from extract_sar import (
     buffer_geometry,
-    create_job_dataframe,
+    create_job_dataframe_s1,
     filter_extract_true,
     generate_output_path,
     pipeline_log,
@@ -129,7 +129,7 @@ if __name__ == "__main__":
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if df.extract.any()]
 
-    job_df = create_job_dataframe(Backend.TERRASCOPE, split_dfs, prefix="AGERA5")
+    job_df = create_job_dataframe_s1(Backend.TERRASCOPE, split_dfs, prefix="AGERA5")
 
     pipeline_log.warning(
         "Sub-sampling the job dataframe for testing. Remove this for production."

@@ -15,11 +15,11 @@ import pandas as pd
 import pystac
 from extract_sar import (
     buffer_geometry,
-    create_job_dataframe,
     filter_extract_true,
     generate_output_path,
     get_job_nb_polygons,
     pipeline_log,
+    post_job_action,
     setup_logger,
     upload_geoparquet_artifactory,
 )
@@ -163,6 +163,35 @@ sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
 )
 
 
+def create_job_dataframe_s2(
+    backend: Backend,
+    split_jobs: List[gpd.GeoDataFrame],
+) -> pd.DataFrame:
+    """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
+    rows = []
+    for job in split_jobs:
+        # Compute the average in the valid date and make a buffer of 1.5 year around
+        median_time = pd.to_datetime(job.valid_time).mean()
+        start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
+        end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
+        s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
+        h3_l3_cell = job.h3_l3_cell.iloc[0]
+
+        variables = {
+            "backend_name": backend.value,
+            "out_prefix": "S2-L2A-10m",
+            "out_extension": ".nc",
+            "start_date": start_date,
+            "end_date": end_date,
+            "s2_tile": s2_tile,
+            "h3_l3_cell": h3_l3_cell,
+            "geometry": job.to_json(),
+        }
+        rows.append(pd.Series(variables))
+
+    return pd.DataFrame(rows)
+
+
 def create_datacube_optical(
     row: pd.Series,
     connection: openeo.DataCube,
@@ -250,53 +279,6 @@ def create_datacube_optical(
     )
 
 
-def post_job_action(
-    job_items: List[pystac.Item], row: pd.Series, parameters: dict = {}
-) -> list:
-    base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
-        epsg=4326
-    )
-    assert len(base_gpd[base_gpd.extract == 1]) == len(
-        job_items
-    ), "The number of result paths should be the same as the number of geometries"
-
-    extracted_gpd = base_gpd[base_gpd.extract == 1].reset_index(drop=True)
-    # In this case we want to burn the metadata in a new file in the same folder as the S2 product
-    for idx, item in enumerate(job_items):
-        if "sample_id" in extracted_gpd.columns:
-            sample_id = extracted_gpd.iloc[idx].sample_id
-        else:
-            sample_id = extracted_gpd.iloc[idx].sampleID
-
-        ref_id = extracted_gpd.iloc[idx].ref_id
-        valid_time = extracted_gpd.iloc[idx].valid_time
-        h3_l3_cell = extracted_gpd.iloc[idx].h3_l3_cell
-        s2_tile = row.s2_tile
-
-        item_asset_path = Path(list(item.assets.values())[0].href)
-
-        # Add some metadata to the result_df netcdf file
-        new_attributes = {
-            "start_date": row.start_date,
-            "end_date": row.end_date,
-            "valid_time": valid_time,
-            "GFMAP_version": version("openeo_gfmap"),
-            "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": f"Sentinel2 L2A observations for sample: {sample_id}, unprocessed.",
-            "title": f"Sentinel2 L2A - {sample_id}",
-            "sample_id": sample_id,
-            "ref_id": ref_id,
-            "spatial_resolution": "10m",
-            "s2_tile": s2_tile,
-            "h3_l3_cell": h3_l3_cell,
-        }
-
-        # Saves the new attributes in the netcdf file
-        update_nc_attributes(item_asset_path, new_attributes)
-
-    return job_items
-
-
 if __name__ == "__main__":
     setup_logger()
     from extract_sar import pipeline_log
@@ -351,7 +333,7 @@ if __name__ == "__main__":
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
     split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
 
-    job_df = create_job_dataframe(Backend.CDSE, split_dfs, prefix="S2-L2A-10m")
+    job_df = create_job_dataframe_s2(Backend.CDSE, split_dfs)
 
     # Setup the memory parameters for the job creator.
     create_datacube_optical = partial(
@@ -364,6 +346,15 @@ if __name__ == "__main__":
     generate_output_path = partial(
         generate_output_path,
         s2_grid=load_s2_grid(),
+    )
+
+    post_job_action = partial(
+        post_job_action,
+        parameters={
+            "description": "Sentinel-2 L2A raw observations, unprocessed.",
+            "title": "Sentinel-2 L2A",
+            "spatial_resolution": "10m",
+        },
     )
 
     manager = GFMAPJobManager(
