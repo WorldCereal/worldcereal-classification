@@ -1,5 +1,5 @@
 from ipyleaflet import (Map, basemaps, DrawControl,
-                        SearchControl)
+                        SearchControl, LayersControl)
 import geopandas as gpd
 from shapely import geometry
 from loguru import logger
@@ -277,8 +277,18 @@ def visualize_products(products, port=8887):
 
 def get_ui_map():
 
-    m = Map(basemap=basemaps.Esri.WorldStreetMap,
-            center=(51.1872, 5.1154), zoom=10)
+    from ipyleaflet import basemap_to_tiles
+
+    osm = basemap_to_tiles(basemaps.OpenStreetMap.Mapnik)
+    osm.base = True
+    osm.name = 'Open street map'
+
+    img = basemap_to_tiles(basemaps.Esri.WorldImagery)
+    img.base = True
+    img.name = 'Satellite imagery'
+
+    m = Map(center=(51.1872, 5.1154), zoom=10, layers=[osm, img])
+    m.add_control(LayersControl())
 
     draw_control = DrawControl()
 
