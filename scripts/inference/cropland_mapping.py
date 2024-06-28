@@ -73,4 +73,4 @@ if __name__ == "__main__":
         product_type=WorldCerealProduct(product),
         out_format="GTiff",
     )
-    logger.success("Job finished:\n\t%s", job_results)
+    logger.success(f"Job finished:\n\t{job_results}")
