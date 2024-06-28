@@ -282,15 +282,8 @@ def worldcereal_preprocessed_inputs_gfmap(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     fetch_type: Optional[FetchType] = FetchType.TILE,
-    collections: Optional[List[str]] = None,
+    disable_meteo: bool = False,
 ) -> DataCube:
-    if not all(
-        coll in {"sentinel1", "sentinel2", "cop_dem", "meteo"} for coll in collections
-    ):
-        raise ValueError(
-            f"Invalid collection name. Choose from {['sentinel1', 'sentinel2', 'cop_dem', 'meteo']}"
-        )
-    cube_list = []
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
         connection=connection,
@@ -320,14 +313,9 @@ def worldcereal_preprocessed_inputs_gfmap(
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
 
-    # Append the S2 data to the list
-    if collections is None or "sentinel2" in collections:
-        cube_list.append(s2_data)
-
-    # Decide on the orbit direction from the maximum overlapping area of
-    # available products.
-
     # Extraction of the S1 data
+    # Decides on the orbit direction from the maximum overlapping area of
+    # available products.
     s1_data = raw_datacube_S1(
         connection=connection,
         backend_context=backend_context,
@@ -345,10 +333,6 @@ def worldcereal_preprocessed_inputs_gfmap(
     s1_data = mean_compositing(s1_data, period="month")
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
-    # Append the S1 data to the list
-    if collections is None or "sentinel1" in collections:
-        cube_list.append(s1_data)
-
     dem_data = raw_datacube_DEM(
         connection=connection,
         backend_context=backend_context,
@@ -358,23 +342,16 @@ def worldcereal_preprocessed_inputs_gfmap(
 
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
-    # Append the copernicus data to the list
-    if collections is None or "cop_dem" in collections:
-        cube_list.append(dem_data)
+    data = s2_data.merge_cubes(s1_data)
+    data = data.merge_cubes(dem_data)
 
-    meteo_data = precomposited_datacube_METEO(
-        connection=connection,
-        spatial_extent=spatial_extent,
-        temporal_extent=temporal_extent,
-    )
+    if not disable_meteo:
+        meteo_data = precomposited_datacube_METEO(
+            connection=connection,
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+        )
 
-    # Append the copernicus data to the list
-    if collections is None or "meteo" in collections:
-        cube_list.append(meteo_data)
-
-    # Merge the cubes
-    data = cube_list[0]
-    for cube in cube_list[1:]:
-        data = data.merge_cubes(cube)
+        data = data.merge_cubes(meteo_data)
 
     return data

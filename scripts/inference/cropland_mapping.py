@@ -37,7 +37,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "output_path",
         type=Path,
-        help="Path to folder where to save the resulting NetCDF.",
+        help="Path to folder where to save the resulting GeoTiff.",
     )
 
     args = parser.parse_args()
@@ -73,4 +73,4 @@ if __name__ == "__main__":
         product_type=WorldCerealProduct(product),
         out_format="GTiff",
     )
-    logger.success("Job finished:\n\t%s", job_results)
+    logger.success(f"Job finished:\n\t{job_results}")
