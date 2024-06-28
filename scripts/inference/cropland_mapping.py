@@ -37,7 +37,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "output_path",
         type=Path,
-        help="Path to folder where to save the resulting NetCDF.",
+        help="Path to folder where to save the resulting GeoTiff.",
     )
 
     args = parser.parse_args()
