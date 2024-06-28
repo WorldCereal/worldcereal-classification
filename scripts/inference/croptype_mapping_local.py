@@ -15,7 +15,7 @@ from openeo_gfmap.features.feature_extractor import (
 from openeo_gfmap.inference.model_inference import apply_model_inference_local
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroptypeClassifier
+from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 
 TEST_FILE_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/presto/localtestdata/local_presto_inputs.nc"
 TEST_FILE_PATH = Path.cwd() / "presto_test_inputs.nc"
@@ -40,8 +40,26 @@ if __name__ == "__main__":
         .astype("uint16")
     )
 
-    print("Running presto UDF locally")
-    features = apply_feature_extractor_local(
+    print("Get Presto cropland features")
+    cropland_features = apply_feature_extractor_local(
+        PrestoFeatureExtractor,
+        arr,
+        parameters={EPSG_HARMONIZED_NAME: 32631, "ignore_dependencies": True},
+    )
+
+    print("Running cropland classification inference UDF locally")
+
+    cropland_classification = apply_model_inference_local(
+        CroplandClassifier,
+        cropland_features,
+        parameters={
+            EPSG_HARMONIZED_NAME: 32631,
+            "ignore_dependencies": True,
+        },
+    )
+
+    print("Get Presto croptype features")
+    croptype_features = apply_feature_extractor_local(
         PrestoFeatureExtractor,
         arr,
         parameters={
@@ -51,13 +69,11 @@ if __name__ == "__main__":
         },
     )
 
-    features.to_netcdf(Path.cwd() / "presto_test_features_croptype.nc")
+    print("Running croptype classification inference UDF locally")
 
-    print("Running classification inference UDF locally")
-
-    classification = apply_model_inference_local(
+    croptype_classification = apply_model_inference_local(
         CroptypeClassifier,
-        features,
+        croptype_features,
         parameters={
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
@@ -65,4 +81,12 @@ if __name__ == "__main__":
         },
     )
 
-    classification.to_netcdf(Path.cwd() / "test_classification_croptype.nc")
+    # Apply cropland mask -> on the backend this is done with mask process
+    croptype_classification = croptype_classification.where(
+        cropland_classification.sel(bands="classification") == 1, 0
+    )
+
+    croptype_classification.to_netcdf(
+        Path("/vitodata/worldcereal/validation/internal_validation/")
+        / "test_classification_croptype_local.nc"
+    )
