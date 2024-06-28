@@ -1,0 +1,190 @@
+name,croptype,ewoc_code,landcover
+Unknown,0,00-00-00-000-0,0
+Cereals,1000,11-01-00-000-0,11
+Wheat,1100,11-01-01-000-0,11
+Winter wheat,1110,11-01-01-000-1,11
+Spring wheat,1120,11-01-01-000-2,11
+Maize,1200,11-01-06-000-0,11
+Rice,1300,11-01-08-000-0,11
+Sorghum,1400,11-01-07-003-0,11
+Barley,1500,11-01-02-000-0,11
+Winter barley,1510,11-01-02-000-1,11
+Spring barley,1520,11-01-02-000-2,11
+Rye,1600,11-01-03-000-0,11
+Winter rye,1610,11-01-03-000-1,11
+Spring rye,1620,11-01-03-000-2,11
+Oats,1700,11-01-04-000-0,11
+Millets,1800,11-01-07-001-0,11
+Other cereals,1900,11-01-00-000-0,11
+Winter cereal,1910,11-01-00-000-1,11
+Spring cereal,1920,11-01-00-000-2,11
+Vegetables and melons,2000,11-03-00-000-0,11
+Leafy or stem vegetables,2100,11-03-04-000-0,11
+Artichokes,2110,11-03-04-002-0,11
+Asparagus,2120,11-03-04-003-0,11
+Cabages,2130,11-03-06-000-0,11
+Cauliflowers & brocoli,2140,11-03-06-013-0,11
+Lettuce,2150,11-03-08-011-0,11
+Spinach,2160,11-03-08-008-0,11
+Chicory,2170,11-03-08-002-0,11
+Other leafy/stem vegetables,2190,11-03-04-000-0,11
+Fruit-bearing vegetables,2200,11-03-01-000-0,11
+Cucumbers,2210,11-03-02-001-0,11
+Eggplants,2220,11-03-01-002-0,11
+Tomatoes,2230,11-03-01-001-0,11
+Watermelons,2240,11-03-02-005-0,11
+Cantaloupes and other melons,2250,11-03-02-003-0,11
+"Pumpkin, squash and gourds",2260,11-03-02-004-0,11
+Other fruit-bearing vegetables,2290,11-03-01-000-0,11
+"Root, bulb or tuberous vegetables",2300,11-03-09-000-0,11
+Carrots,2310,11-03-09-004-0,11
+Turnips,2320,11-03-09-007-0,11
+Garlic,2330,11-03-11-002-0,11
+Onions and shallots,2340,11-03-11-007-0,11
+Leeks & other alliaceous vegetables,2350,11-03-11-000-0,11
+"Other root, bulb or tuberous vegetables",2390,11-03-09-000-0,11
+Mushrooms and truffles,2400,11-04-00-000-0,11
+Other vegetables,2900,11-03-00-000-0,11
+Fruit and nuts,3000,12-01-00-000-0,12
+Tropical and subtropical fruits,3100,12-01-02-000-0,12
+Avocados,3110,12-01-02-001-0,12
+Bananas & plantains,3120,12-01-02-002-0,12
+Dates,3130,12-01-02-003-0,12
+Figs,3140,12-01-01-006-0,12
+Mangoes,3150,12-01-02-004-0,12
+Papayas,3160,12-01-02-005-0,12
+Pineapples,3170,12-01-02-006-0,12
+Other tropical and subtropical fruits,3190,12-01-02-000-0,12
+Citrus fruits,3200,12-01-03-000-0,12
+Grapefruit & pomelo,3210,12-01-03-000-0,12
+Lemons & Limes,3220,12-01-03-003-0,12
+Oranges,3230,12-01-03-004-0,12
+"Tangerines, mandarins, clementines",3240,12-01-03-005-0,12
+Other citrus fruit,3290,12-01-03-000-0,12
+Grapes,3300,12-01-00-001-0,12
+Berries,3400,12-01-05-000-0,12
+Currants,3410,12-01-05-006-0,12
+Gooseberries,3420,12-01-05-007-0,12
+Kiwi fruit,3430,12-01-05-015-0,12
+Raspberries,3440,12-01-05-010-0,12
+Strawberries,3450,11-03-12-001-0,11
+Blueberries,3460,12-01-05-004-0,12
+Other berries,3490,12-01-05-000-0,12
+Pome fruits and stone fruits,3500,12-01-01-000-0,12
+Apples,3510,12-01-01-002-0,12
+Apricots,3520,12-01-01-003-0,12
+Cherries & sour cherries,3530,12-01-01-004-0,12
+Peaches & nectarines,3540,12-01-01-017-0,12
+Pears & quinces,3550,12-01-01-019-0,12
+Plums and sloes,3560,12-01-01-012-0,12
+Other pome fruits and stone fruits,3590,12-01-01-000-0,12
+Nuts,3600,12-01-04-000-0,12
+Almonds,3610,12-01-04-001-0,12
+Cashew nuts,3620,12-01-04-007-0,12
+Chestnuts,3630,12-01-04-005-0,12
+Hazelnuts,3640,12-01-04-002-0,12
+Pistachios,3650,12-01-04-004-0,12
+Walnuts,3660,12-01-04-006-0,12
+Other nuts,3690,12-01-04-000-0,12
+Other fruit,3900,12-01-00-000-0,12
+Oilseed crops,4000,11-06-00-000-0,11
+Soya beans,4100,11-06-00-002-0,11
+Groundnuts,4200,11-06-00-005-0,11
+Temporary oilseed crops,4300,11-06-00-000-0,11
+Castor bean,4310,11-06-00-006-0,11
+Linseed,4320,11-06-00-007-0,11
+Mustard,4330,11-06-00-008-0,11
+Niger seed,4340,11-06-00-004-0,11
+Rapeseed,4350,11-06-00-003-0,11
+Winter rapeseed,4351,11-06-00-003-1,11
+Spring rapeseed,4352,11-06-00-003-2,11
+Safflower,4360,11-06-00-009-0,11
+Sesame,4370,11-06-00-010-0,11
+Sunflower,4380,11-06-00-001-0,11
+Other temporary oilseed crops,4390,11-06-00-000-0,11
+Permanent oilseed crops,4400,12-03-00-000-0,12
+Coconuts,4410,12-03-00-002-0,12
+Olives,4420,12-03-00-001-0,12
+Oil palms,4430,12-03-00-003-0,12
+Other oleaginous fruits,4490,12-03-00-000-0,12
+Root/tuber crops,5000,11-07-00-000-0,11
+Potatoes,5100,11-07-00-001-0,11
+Sweet potatoes,5200,11-07-00-002-0,11
+Cassava,5300,11-07-00-004-0,11
+Yams,5400,11-07-00-005-0,11
+Other roots and tubers,5900,11-07-00-000-0,11
+Beverage and spice crops,6000,10-00-00-000-0,10
+Beverage crops,6100,12-02-00-000-0,12
+Coffee,6110,12-02-00-001-0,12
+Tea,6120,12-02-00-002-0,12
+Maté,6130,12-02-00-003-0,12
+Cocoa,6140,12-02-00-004-0,12
+Other beverage crops,6190,10-00-00-000-0,10
+Spice crops,6200,12-02-00-000-0,12
+Chilies & peppers,6211,11-03-03-000-0,11
+"Anise, badian, fennel",6212,11-00-00-000-0,11
+Other temporary spice crops,6219,11-09-00-000-0,11
+Pepper,6221,11-09-00-029-0,11
+"Nutmeg, mace, cardamoms",6222,12-02-00-007-0,12
+Cinnamon,6223,12-02-00-008-0,12
+Cloves,6224,12-02-00-009-0,12
+Ginger,6225,11-09-00-048-0,11
+Vanilla,6226,11-09-00-049-0,10
+Other permanent spice crops,6229,12-02-00-000-0,12
+Leguminous crops,7000,11-05-00-000-0,11
+Beans,7100,11-05-01-001-0,11
+Broad beans,7200,11-05-01-003-0,11
+Chick peas,7300,11-05-01-004-0,11
+Cow peas,7400,11-05-01-005-0,11
+Lentils,7500,11-05-00-003-0,11
+Lupins,7600,11-05-00-004-0,11
+Peas,7700,11-05-01-002-0,11
+Pigeon peas,7800,11-05-01-006-0,11
+Other Leguminous crops,7900,10-00-00-000-0,10
+Other Leguminous crops - Temporary,7910,11-05-00-000-0,11
+Other Leguminous crops - Permanent,7920,12-04-00-000-0,12
+Sugar crops,8000,10-00-00-000-0,10
+Sugar beet,8100,11-07-00-003-1,11
+Sugar cane,8200,11-11-01-010-0,11
+Sweet sorghum,8300,11-01-07-004-0,11
+Other sugar crops,8900,10-00-00-000-0,10
+Other crops,9000,10-00-00-000-0,10
+Grasses and other fodder crops,9100,11-11-00-000-0,11
+Temporary grass crops,9110,11-11-00-001-0,11
+Permanent grass crops,9120,13-00-00-000-0,13
+Fibre crops,9200,10-00-00-000-0,10
+Temporary fibre crops,9210,11-08-00-000-0,11
+Cotton,9211,11-08-00-001-0,11
+"Jute, kenaf and similar",9212,11-08-00-002-0,11
+"Flax, hemp and similar",9213,11-08-02-000-0,11
+Other temporary fibre crops,9219,11-08-00-000-0,11
+Permanent fibre crops,9220,12-05-00-000-0,12
+"Medicinal, aromatic, pesticidal crops",9300,10-00-00-000-0,10
+Temporary medicinal etc crops,9310,11-09-00-000-0,11
+Permanent medicinal etc crops,9320,12-02-00-000-0,12
+Rubber,9400,12-06-00-008-0,12
+Flower crops,9500,11-10-00-000-0,11
+Temporary flower crops,9510,11-10-00-000-0,11
+Permanent flower crops,9520,12-06-00-000-0,12
+Tobacco,9600,11-09-00-050-0,11
+Other other crops,9900,10-00-00-000-0,10
+Other crops - temporary,9910,11-00-00-000-0,11
+Other crops - permanent,9920,12-00-00-000-0,12
+mixed cropping,9998,10-00-00-000-0,10
+Cropland,10,10-00-00-000-0,10
+Annual cropland,11,11-00-00-000-0,11
+Perennial cropland,12,12-00-00-000-0,12
+Grassland *,13,13-00-00-000-0,13
+Herbaceous vegetation,20,20-00-00-000-0,20
+Shrubland,30,30-00-00-000-0,30
+Deciduous forest,40,43-02-00-000-0,40
+Evergreen forest,41,43-01-00-000-0,41
+Mixed/unknown forest,42,43-00-00-000-0,42
+Bare / sparse vegetation,50,50-00-00-000-0,50
+Built up / urban,60,60-00-00-000-0,60
+Water,70,70-00-00-000-0,70
+Snow / ice,80,50-05-00-000-0,80
+No cropland (including perennials),98,17-00-00-000-0,98
+No cropland,99,16-00-00-000-0,99
+Unknown,991,00-00-00-000-0,0
+Unknown,9700,00-00-00-000-0,0
