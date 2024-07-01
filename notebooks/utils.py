@@ -52,22 +52,12 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
         )
         for ii, row in potential_classes.iterrows()
     ]
-    widgets.VBox(
+    vbox = widgets.VBox(
         checkbox_widgets,
         layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
     )
 
-    selected_crops = [
-        checkbox.description.split(" ")[0]
-        for checkbox in checkbox_widgets
-        if checkbox.value
-    ]
-    df["custom_class"] = "other"
-    df.loc[df["croptype_name"].isin(selected_crops), "custom_class"] = df[
-        "croptype_name"
-    ]
-
-    return df
+    return vbox, checkbox_widgets
 
 
 def query_worldcereal_samples(bbox_poly):
@@ -84,9 +74,11 @@ def query_worldcereal_samples(bbox_poly):
     public_df_raw = db.sql(
         f"""
     set s3_endpoint='s3.waw3-1.cloudferro.com';
+    set enable_progress_bar=false;
     select *
     from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
     where st_within(ST_Point(original_data.lon, original_data.lat), ST_GeomFromText('{bbox_poly.wkt}'))
+    and original_data.LANDCOVER_LABEL = 11
     and original_data.CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
     """
     ).df()
@@ -98,10 +90,14 @@ def query_worldcereal_samples(bbox_poly):
     return public_df
 
 
-def get_encodings_targets(
-    df: pd.DataFrame, presto_model, batch_size: int = 1024
+def get_inputs_outputs(
+    df: pd.DataFrame, batch_size: int = 256
 ) -> Tuple[np.ndarray, np.ndarray]:
     from presto.dataset import WorldCerealLabelledDataset
+    from presto.presto import Presto
+
+    presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
+    presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
     tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
     tdl = DataLoader(tds, batch_size=batch_size, shuffle=False)
@@ -130,6 +126,74 @@ def get_encodings_targets(
     targets = np.concatenate(targets)
 
     return encodings_np, targets
+
+
+def get_custom_labels(df, checkbox_widgets):
+    selected_crops = [
+        checkbox.description.split(" ")[0]
+        for checkbox in checkbox_widgets
+        if checkbox.value
+    ]
+    df["custom_class"] = "other"
+    df.loc[df["croptype_name"].isin(selected_crops), "custom_class"] = df[
+        "croptype_name"
+    ]
+
+    return df
+
+
+def train_classifier(inputs, targets):
+    import numpy as np
+    from catboost import CatBoostClassifier, Pool
+    from presto.utils import DEFAULT_SEED
+    from sklearn.metrics import classification_report
+    from sklearn.model_selection import train_test_split
+    from sklearn.utils.class_weight import compute_class_weight
+
+    inputs_train, inputs_val, targets_train, targets_val = train_test_split(
+        inputs,
+        targets,
+        stratify=targets,
+        test_size=0.3,
+        random_state=DEFAULT_SEED,
+    )
+
+    if np.unique(targets_train).shape[0] > 1:
+        eval_metric = "TotalF1"
+    else:
+        eval_metric = "F1"
+
+    class_weights = compute_class_weight(
+        class_weight="balanced", classes=np.unique(targets_train), y=targets_train
+    )
+
+    custom_downstream_model = CatBoostClassifier(
+        iterations=8000,
+        depth=8,
+        learning_rate=0.05,
+        early_stopping_rounds=50,
+        # l2_leaf_reg=30,
+        colsample_bylevel=0.9,
+        l2_leaf_reg=3,
+        loss_function="MultiClass",
+        eval_metric="MultiClass",
+        random_state=DEFAULT_SEED,
+        class_weights=class_weights,
+        verbose=25,
+        class_names=np.unique(targets_train),
+    )
+
+    custom_downstream_model.fit(
+        inputs_train,
+        targets_train,
+        eval_set=Pool(inputs_val, targets_val),
+    )
+
+    pred = custom_downstream_model.predict(inputs_val).flatten()
+
+    report = classification_report(targets_val, pred)
+
+    return custom_downstream_model, report
 
 
 def map_croptypes(
