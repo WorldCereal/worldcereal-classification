@@ -5,15 +5,12 @@ from pathlib import Path
 from typing import Optional, Union
 
 import openeo
-from openeo import DataCube
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
-from openeo_gfmap.features.feature_extractor import apply_feature_extractor
-from openeo_gfmap.inference.model_inference import apply_model_inference
-from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 from pydantic import BaseModel
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.openeo.mapping import _cropland_map, _croptype_map
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
 
 
@@ -49,8 +46,9 @@ class ClassifierParameters(BaseModel):
     ----------
     classifier_url : str
         Public URL to the classifier model. Te file should be an ONNX accepting
-        a `features` field for input data and returning two output probability
-        arrays `true` and `false`.
+        a `features` field for input data and returning either two output
+        probability arrays `true` and `false` in case of cropland mapping, or
+        a probability array per-class in case of croptype mapping.
     """
 
     classifier_url: str
@@ -153,7 +151,7 @@ def generate_map(
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
+    croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
     out_format: str = "GTiff",
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
@@ -170,6 +168,12 @@ def generate_map(
         output path to download the product to
     product_type : WorldCerealProduct, optional
         product describer, by default WorldCerealProduct.CROPLAND
+    cropland_parameters: CropLandParameters
+        Parameters for the cropland product inference pipeline.
+    croptype_parameters: Optional[CropTypeParameters]
+        Parameters for the croptype product inference pipeline. Only required
+        whenever `product_type` is set to `WorldCerealProduct.CROPTYPE`, will be
+        ignored otherwise.
     out_format : str, optional
         Output format, by default "GTiff"
 
@@ -289,119 +293,3 @@ def collect_inputs(
         out_format="NetCDF",
         job_options={"driver-memory": "4g", "executor-memoryOverhead": "4g"},
     )
-
-
-def _cropland_map(
-    inputs: DataCube, cropland_parameters: CropLandParameters
-) -> DataCube:
-    """Method to produce cropland map from preprocessed inputs, using
-    a Presto feature extractor and a CatBoost classifier.
-
-    Parameters
-    ----------
-    inputs : DataCube
-        preprocessed input cube
-
-    Returns
-    -------
-    DataCube
-        binary labels and probability
-    """
-
-    # Run feature computer
-    features = apply_feature_extractor(
-        feature_extractor_class=cropland_parameters.feature_extractor,
-        cube=inputs,
-        parameters=cropland_parameters.features_parameters.dict(),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
-
-    # Run model inference on features
-    classes = apply_model_inference(
-        model_inference_class=cropland_parameters.classifier,
-        cube=features,
-        parameters=cropland_parameters.classifier_parameters.dict(),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-            {"dimension": "t", "value": "P1D"},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
-
-    # Cast to uint8
-    classes = compress_uint8(classes)
-
-    return classes
-
-
-def _croptype_map(
-    inputs: DataCube,
-    croptype_parameters: CropTypeParameters,
-    cropland_mask: DataCube = None,
-) -> DataCube:
-    """Method to produce croptype map from preprocessed inputs, using
-    a Presto feature extractor and a CatBoost classifier.
-
-    Parameters
-    ----------
-    inputs : DataCube
-        preprocessed input cube
-    cropland_mask : DataCube, optional
-        optional cropland mask, by default None
-
-    Returns
-    -------
-    DataCube
-        croptype labels and probability
-    """
-
-    # Run feature computer
-    features = apply_feature_extractor(
-        feature_extractor_class=croptype_parameters.feature_extractor,
-        cube=inputs,
-        parameters=croptype_parameters.feature_parameters.dict(),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
-
-    # Run model inference on features
-    classes = apply_model_inference(
-        model_inference_class=croptype_parameters.classifier,
-        cube=features,
-        parameters=croptype_parameters.classifier_parameters.dict(),
-        size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
-            {"dimension": "t", "value": "P1D"},
-        ],
-        overlap=[
-            {"dimension": "x", "unit": "px", "value": 0},
-            {"dimension": "y", "unit": "px", "value": 0},
-        ],
-    )
-
-    # Mask cropland
-    if cropland_mask is not None:
-        classes = classes.mask(cropland_mask == 0, replacement=0)
-
-    # Cast to uint16
-    classes = compress_uint16(classes)
-
-    return classes
