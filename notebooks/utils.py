@@ -1,8 +1,24 @@
 import json
 from typing import Tuple
+import requests
+from pathlib import Path
+from typing import List, Optional
+from functools import partial
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+import geojson
+import openeo
+import pystac
+
+from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
+from openeo_gfmap.backend import cdse_connection
+from openeo_gfmap.manager.job_manager import GFMAPJobManager
+from openeo_gfmap.manager.job_splitters import split_job_s2grid
+
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+
 
 try:
     import presto
@@ -17,13 +33,17 @@ from shapely.geometry import Polygon, shape
 from torch.utils.data import DataLoader
 
 
+RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
+
+
 def get_bbox_from_draw(dc, max_size=25000000):
     import geopandas as gpd
 
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
-        selected_area = gpd.GeoSeries(poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
+        selected_area = gpd.GeoSeries(
+            poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
         if selected_area > max_size:
             raise ValueError(
                 f"Selected area is too large ({selected_area/1000000:.0f} km2). Please select an area smaller than {max_size/1000000:.0f} km2."
@@ -61,7 +81,8 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     ]
     vbox = widgets.VBox(
         checkbox_widgets,
-        layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
+        layout=widgets.Layout(
+            width="50%", display="inline-flex", flex_flow="row wrap"),
     )
 
     return vbox, checkbox_widgets
@@ -102,7 +123,8 @@ def query_worldcereal_samples(bbox_poly, buffer=250000):
     print("Processing selected samples ...")
     public_df = process_parquet(public_df_raw)
     public_df = map_croptypes(public_df)
-    print(f"Extracted and processed {public_df.shape[0]} samples from global database.")
+    print(
+        f"Extracted and processed {public_df.shape[0]} samples from global database.")
 
     return public_df
 
@@ -115,9 +137,11 @@ def get_inputs_outputs(
 
     presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
     print("Loading Presto model ...")
-    presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
+    presto_model = Presto.load_pretrained_url(
+        presto_url=presto_model_url, strict=False)
 
-    tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
+    tds = WorldCerealLabelledDataset(
+        df, target_function=lambda xx: xx["custom_class"])
     tdl = DataLoader(tds, batch_size=batch_size, shuffle=False)
 
     encoding_list, targets = [], []
@@ -191,7 +215,8 @@ def train_classifier(inputs, targets):
     class_weights = compute_class_weight(
         class_weight="balanced", classes=np.unique(targets_train), y=targets_train
     )
-    class_weights = {k: v for k, v in zip(np.unique(targets_train), class_weights)}
+    class_weights = {k: v for k, v in zip(
+        np.unique(targets_train), class_weights)}
     print("Class weights:", class_weights)
 
     sample_weights = np.ones((len(targets_train),))
@@ -235,12 +260,15 @@ def map_croptypes(
     downstream_classes="CROPTYPE9",
 ) -> pd.DataFrame:
     wc2ewoc_map = pd.read_csv("resources/wc2eurocrops_map.csv")
-    wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
+    wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace(
+        "-", "").astype(int)
 
     ewoc_map = pd.read_csv("resources/eurocrops_map_wcr_edition.csv")
     ewoc_map = ewoc_map[ewoc_map["ewoc_code"].notna()]
-    ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
-    ewoc_map = ewoc_map.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
+    ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace(
+        "-", "").astype(int)
+    ewoc_map = ewoc_map.apply(
+        lambda x: x[: x.last_valid_index()].ffill(), axis=1)
     ewoc_map.set_index("ewoc_code", inplace=True)
 
     df["CROPTYPE_LABEL"].replace(0, np.nan, inplace=True)
@@ -254,7 +282,8 @@ def map_croptypes(
     df["croptype_name"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
 
     df["downstream_class"] = df["ewoc_code"].map(
-        {int(k): v for k, v in get_class_mappings()[downstream_classes].items()}
+        {int(k): v for k, v in get_class_mappings()
+         [downstream_classes].items()}
     )
 
     return df
@@ -309,3 +338,301 @@ def deploy_model(model, pattern=None):
     print(f"Deployed to: {uri}")
 
     return uri
+
+
+def terrascope_login():
+
+    authBaseUrl = 'https://sso.terrascope.be/auth/realms/terrascope'
+
+    username = input("Enter your Terrascope username: ")
+    password = input("Enter your Terrascope password: ")
+
+    data = {
+        'username': username,
+        'password': password,
+        'client_id': 'worldcereal-rdm',
+        'grant_type': 'password',
+    }
+
+    # call terrascope auth server to get token
+    tokenResponse = requests.post(
+        f'{authBaseUrl}/protocol/openid-connect/token', data=data)
+
+    token = tokenResponse.json()
+    tokentype = token['token_type']
+    accessToken = token['access_token']
+    headers = {'Authorization': f'{tokentype} {accessToken}'}
+
+    return headers
+
+
+def rdm_collection_request(poly, headers=None, buffer=250000):
+
+    if headers is None:
+        headers = {}
+
+    if buffer is not None:
+        poly = (
+            gpd.GeoSeries(poly, crs="EPSG:4326")
+            .to_crs(epsg=3785)
+            .buffer(buffer, cap_style="square", join_style="mitre")
+            .to_crs(epsg=4326)[0]
+        )
+
+    bbox = poly.bounds
+    bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+
+    colSearchUrl = f"{RDM_API}/collections/search?{bbox_str}"
+    print(colSearchUrl)
+    colSearchResponse = requests.get(colSearchUrl, headers=headers)
+    test = colSearchResponse.json()
+
+    col_ids = []
+    print("The following collections intersect with your AOI:")
+    for i, col in enumerate(test):
+        print()
+        print(
+            f'Collection {i+1}: {col["collectionId"]} of type {col["type"]} containing {col["featureCount"]} samples')
+        col_ids.append(col["collectionId"])
+
+    return col_ids
+
+
+def rdm_features_request(poly, col_ids=None, headers=None,
+                         max_items=1000, buffer=250000):
+
+    from worldcereal.utils.refdata import _to_points
+
+    if col_ids is None:
+        col_ids = rdm_collection_request(poly, headers=headers,
+                                         buffer=buffer)
+
+    if headers is None:
+        headers = {}
+
+    if buffer is not None:
+        poly = (
+            gpd.GeoSeries(poly, crs="EPSG:4326")
+            .to_crs(epsg=3785)
+            .buffer(buffer, cap_style="square", join_style="mitre")
+            .to_crs(epsg=4326)[0]
+        )
+    bbox = poly.bounds
+    bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+
+    dfs = []
+    for col_id in col_ids:
+        featureSearchUrl = f"{RDM_API}/collections/{col_id}/items?{bbox_str}&MaxResultCount={max_items}"
+        print(featureSearchUrl)
+        featureSearchResponse = requests.get(featureSearchUrl, headers=headers)
+        df = gpd.GeoDataFrame.from_features(
+            featureSearchResponse.json(), crs='EPSG:4326')
+        dfs.append(_to_points(df))
+
+    gdf = pd.concat(dfs, ignore_index=True)
+    print(f'Got a total of {len(gdf)} reference points')
+
+    return gdf
+
+
+def create_job_dataframe(
+    backend: Backend, split_jobs: List[gpd.GeoDataFrame]
+) -> pd.DataFrame:
+    """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
+    columns = [
+        "backend_name",
+        "out_extension",
+        "start_date",
+        "end_date",
+        "s2_tile",
+        "geometry",
+    ]
+    rows = []
+    for job in split_jobs:
+        # Compute the average in the valid date and make a buffer of 1.5 year around
+        median_time = pd.to_datetime(job.valid_time).mean()
+        # A bit more than 9 months
+        start_date = median_time - pd.Timedelta(days=275)
+        # A bit more than 9 months
+        end_date = median_time + pd.Timedelta(days=275)
+        s2_tile = job.tile.iloc[0]
+        rows.append(
+            pd.Series(
+                dict(
+                    zip(
+                        columns,
+                        [
+                            backend.value,
+                            ".parquet",
+                            start_date.strftime("%Y-%m-%d"),
+                            end_date.strftime("%Y-%m-%d"),
+                            s2_tile,
+                            job.to_json(),
+                        ],
+                    )
+                )
+            )
+        )
+
+    return pd.DataFrame(rows)
+
+
+def filter_extract_true(
+    geometries: geojson.FeatureCollection,
+) -> geojson.FeatureCollection:
+    """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
+    return geojson.FeatureCollection(
+        [f for f in geometries.features if f.properties.get("extract", 0) != 0]
+    )
+
+
+def get_job_nb_points(row: pd.Series) -> int:
+    """Get the number of points in the geometry."""
+    return len(
+        list(
+            filter(
+                lambda feat: feat.properties.get("extract"),
+                geojson.loads(row.geometry)["features"],
+            )
+        )
+    )
+
+
+def create_datacube(
+    row: pd.Series,
+    connection: openeo.DataCube,
+    provider,
+    connection_provider,
+    executor_memory: str = "3G",
+    executor_memory_overhead: str = "5G",
+):
+    """Creates an OpenEO BatchJob from the given row information."""
+
+    # Load the temporal and spatial extent
+    temporal_extent = TemporalContext(row.start_date, row.end_date)
+
+    # Get the feature collection containing the geometry to the job
+    geometry = geojson.loads(row.geometry)
+    assert isinstance(geometry, geojson.FeatureCollection)
+
+    # Filter the geometry to the rows with the extract only flag
+    geometry = filter_extract_true(geometry)
+    assert len(geometry.features) > 0, "No geometries with the extract flag found"
+
+    # Backend name and fetching type
+    backend = Backend(row.backend_name)
+    backend_context = BackendContext(backend)
+
+    inputs = worldcereal_preprocessed_inputs_gfmap(
+        connection=connection,
+        backend_context=backend_context,
+        spatial_extent=geometry,
+        temporal_extent=temporal_extent,
+        fetch_type=FetchType.POINT,
+    )
+
+    # Finally, create a vector cube based on the Point geometries
+    cube = inputs.aggregate_spatial(geometries=geometry, reducer="mean")
+
+    # Increase the memory of the jobs depending on the number of polygons to extract
+    number_points = get_job_nb_points(row)
+
+    job_options = {
+        "executor-memory": executor_memory,
+        "executor-memoryOverhead": executor_memory_overhead,
+        "soft-error": True,
+    }
+    return cube.create_job(
+        out_format="Parquet",
+        title=f"GFMAP_Feature_Extraction_{row.s2_tile}",
+        job_options=job_options,
+    )
+
+
+def post_job_action(
+    job_items: List[pystac.Item], row: pd.Series, parameters: dict = None
+) -> list:
+    for idx, item in enumerate(job_items):
+        item_asset_path = Path(list(item.assets.values())[0].href)
+
+        gdf = gpd.read_parquet(item_asset_path)
+
+        # Convert the dates to datetime format
+        gdf["date"] = pd.to_datetime(gdf["date"])
+
+        # Convert band dtype to uint16 (temporary fix)
+        # TODO: remove this step when the issue is fixed on the OpenEO backend
+        bands = [
+            "S2-L2A-B02",
+            "S2-L2A-B03",
+            "S2-L2A-B04",
+            "S2-L2A-B05",
+            "S2-L2A-B06",
+            "S2-L2A-B07",
+            "S2-L2A-B08",
+            "S2-L2A-B11",
+            "S2-L2A-B12",
+            "S1-SIGMA0-VH",
+            "S1-SIGMA0-VV",
+            "COP-DEM",
+            "AGERA5-PRECIP",
+            "AGERA5-TMEAN",
+        ]
+        gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
+
+        gdf.to_parquet(item_asset_path, index=False)
+
+    return job_items
+
+
+def generate_output_path(root_folder: Path, geometry_index: int,
+                         row: pd.Series):
+    features = geojson.loads(row.geometry)
+    sample_id = features[geometry_index].properties.get("sample_id", None)
+    if sample_id is None:
+        sample_id = features[geometry_index].properties["sampleID"]
+
+    s2_tile_id = row.s2_tile
+
+    subfolder = root_folder / s2_tile_id
+    return subfolder / f"{sample_id}{row.out_extension}"
+
+
+def point_extractions(input_df, output_path, max_locations=500,
+                      memory='3G', memory_overhead='5G'):
+
+    # define path to tracking csv
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+    tracking_df_path = Path(output_path) / "job_tracking.csv"
+
+    # Load the input dataframe, and perform dataset splitting using the h3 tile
+    # to respect the area of interest. Also filters out the jobs that have
+    # no location with the extract=True flag.
+    input_df = gpd.read_parquet(input_df)
+
+    split_dfs = split_job_s2grid(input_df, max_points=max_locations)
+    split_dfs = [df for df in split_dfs if df.extract.any()]
+
+    job_df = create_job_dataframe(Backend.CDSE, split_dfs)
+
+    # Setup the memory parameters for the job creator.
+    create_cube = partial(
+        create_datacube,
+        executor_memory=memory,
+        executor_memory_overhead=memory_overhead,
+    )
+
+    manager = GFMAPJobManager(
+        output_dir=output_path,
+        output_path_generator=generate_output_path,
+        post_job_action=post_job_action,
+        collection_id="POINT-FEATURE-EXTRACTION",
+        collection_description="Worldcereal point feature extraction.",
+        poll_sleep=60,
+        n_threads=2,
+        post_job_params={},
+    )
+
+    manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)
+
+    manager.run_jobs(job_df, create_cube, tracking_df_path)
