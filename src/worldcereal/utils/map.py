@@ -1,20 +1,19 @@
-from ipyleaflet import (Map, basemaps, DrawControl,
-                        SearchControl, LayersControl)
+from typing import List
+
 import geopandas as gpd
-from shapely import geometry
-from shapely.geometry import Polygon, shape
-from loguru import logger
+import leafmap
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-import leafmap
-from typing import List
-
+from ipyleaflet import DrawControl, LayersControl, Map, SearchControl, basemaps
+from loguru import logger
 from openeo_gfmap import BoundingBoxExtent
+from shapely import geometry
+from shapely.geometry import Polygon, shape
 
 
 def get_probability_cmap():
-    colormap = plt.get_cmap('RdYlGn')
+    colormap = plt.get_cmap("RdYlGn")
     cmap = {}
     for i in range(101):
         cmap[i] = tuple((np.array(colormap(int(2.55 * i))) * 255).astype(int))
@@ -22,19 +21,19 @@ def get_probability_cmap():
 
 
 COLORMAP = {
-    'active-cropland': {
+    "active-cropland": {
         0: (232, 55, 39, 255),  # inactive
         1: (77, 216, 39, 255),  # active
     },
-    'temporary-crops': {
+    "temporary-crops": {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
     },
-    'maize': {
+    "maize": {
         0: (186, 186, 186, 255),  # other
         1: (252, 207, 5, 255),  # maize
     },
-    'croptype': {
+    "croptype": {
         1: (103, 60, 32, 255),  # barley
         2: (252, 207, 5, 255),  # maize
         3: (247, 185, 29, 255),  # millet_sorghum
@@ -44,15 +43,15 @@ COLORMAP = {
         7: (245, 66, 111, 255),  # sunflower
         8: (186, 113, 53, 255),  # wheat
     },
-    'probabilities': get_probability_cmap()
+    "probabilities": get_probability_cmap(),
 }
 
 COLORLEGEND = {
-    'temporary-crops': {
+    "temporary-crops": {
         "No cropland": (186, 186, 186, 0),  # no cropland
         "Temporary crops": (224, 24, 28, 1),  # cropland
     },
-    'croptype': {
+    "croptype": {
         "Barley": (103, 60, 32, 1),
         "Maize": (252, 207, 5, 1),  # maize
         "Millet/Sorghum": (247, 185, 29, 1),  # millet_sorghum
@@ -61,25 +60,24 @@ COLORLEGEND = {
         "Soybean": (85, 218, 218, 1),  # soy
         "Sunflower": (245, 66, 111, 1),  # sunflower
         "Wheat": (186, 113, 53, 1),  # wheat
-    }
+    },
 }
 
 NODATAVALUE = {
-    'active-cropland': 255,
-    'temporary-crops': 255,
-    'maize': 255,
-    'croptype': 0,
-    'probabilities': 255}
+    "active-cropland": 255,
+    "temporary-crops": 255,
+    "maize": 255,
+    "croptype": 0,
+    "probabilities": 255,
+}
 
 
 def _get_colormap(product):
-
     if product in COLORMAP.keys():
         colormap = COLORMAP[product]
     else:
-        logger.warning((f'Unknown product `{product}`: '
-                        'cannot assign colormap'))
-        logger.info(f'Supported products: {COLORMAP.keys()}')
+        logger.warning((f"Unknown product `{product}`: " "cannot assign colormap"))
+        logger.info(f"Supported products: {COLORMAP.keys()}")
         colormap = None
 
     return colormap
@@ -90,14 +88,17 @@ def _get_nodata(product):
 
 
 def get_default_filtersettings():
-    return {'kernel_size': 7,
-            'conf_threshold': 80}
+    return {"kernel_size": 7, "conf_threshold": 80}
 
 
-def majority_vote(prediction: np.ndarray, probability: np.ndarray,
-                  kernel_size: int = 7, conf_threshold: int = 30,
-                  target_excluded_value: int = 255,
-                  excluded_values: List[int] = [255]):
+def majority_vote(
+    prediction: np.ndarray,
+    probability: np.ndarray,
+    kernel_size: int = 7,
+    conf_threshold: int = 30,
+    target_excluded_value: int = 255,
+    excluded_values: List[int] = [255],
+):
     """
     Majority vote is performed using a sliding local kernel.
     For each pixel, the voting of a final class is done from
@@ -111,9 +112,9 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
     neighbors of that class, then the new probability is the sum of the
     old probabilities of each pixels divided by 3)
 
-    :param prediction: A 2D numpy array containing the predicted 
+    :param prediction: A 2D numpy array containing the predicted
         classification labels.
-    :param probability: A 2D numpy array (same dimensions as predictions) 
+    :param probability: A 2D numpy array (same dimensions as predictions)
         containing the probabilities of the winning class (ranging between 0 and 100).
     :param kernel_size: The size of the kernel used for the neighbour around the pixel.
     :param conf_threshold: Pixels under this confidence threshold
@@ -130,24 +131,24 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
 
     # As the probabilities are in integers between 0 and 100,
     # we use uint16 matrices to store the vote scores
-    assert kernel_size <= 25, f'Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown'
+    assert (
+        kernel_size <= 25
+    ), f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
     unique_values = set(np.unique(prediction))
     unique_values = sorted(unique_values - set(excluded_values))
     index_value_lut = [(k, v) for k, v in enumerate(unique_values)]
 
-    counts = np.zeros(
-        shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
+    counts = np.zeros(shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
     probabilities = np.zeros(
-        shape=(*probability.shape, len(unique_values)), dtype=np.uint16)
+        shape=(*probability.shape, len(unique_values)), dtype=np.uint16
+    )
 
     # Iterates for each classes
     for cls_idx, cls_value in index_value_lut:
-
         # Take the binary mask of the interest class, and multiplies by the probabilities
-        class_mask = ((prediction == cls_value) *
-                      probability).astype(np.uint16)
+        class_mask = ((prediction == cls_value) * probability).astype(np.uint16)
 
         # Sets to 0 the class scores where the threshold is lower
         class_mask[probability <= conf_threshold] = 0
@@ -163,22 +164,23 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
         kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)
 
         # Counts around the window the sum of probabilities for that given class
-        counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode='same')
+        counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode="same")
 
         # Counts the number of neighbors pixels that voted for that given class
-        class_voters = convolve2d(binary_class_mask, kernel, mode='same')
+        class_voters = convolve2d(binary_class_mask, kernel, mode="same")
         # Remove the 0 values because might create divide by 0 issues
         class_voters[class_voters == 0] = 1
 
-        probabilities[:, :, cls_idx] = np.divide(
-            counts[:, :, cls_idx], class_voters)
+        probabilities[:, :, cls_idx] = np.divide(counts[:, :, cls_idx], class_voters)
 
     # Initializes output array
     aggregated_predictions = np.zeros(
-        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
+        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16
+    )
     # Initializes probabilities output array
     aggregated_probabilities = np.zeros(
-        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
+        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16
+    )
 
     if len(unique_values) > 0:
         # Takes the indices that have the biggest scores
@@ -188,17 +190,19 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
         aggregated_probabilities = np.take_along_axis(
             probabilities,
             aggregated_predictions_indices.reshape(
-                *aggregated_predictions_indices.shape, 1),
-            axis=2
+                *aggregated_predictions_indices.shape, 1
+            ),
+            axis=2,
         ).squeeze()
 
         # Check which pixels have a counts value to 0
         no_score_mask = np.sum(counts, axis=2) == 0
 
         # convert back to values from indices
-        for (cls_idx, cls_value) in index_value_lut:
-            aggregated_predictions[aggregated_predictions_indices ==
-                                   cls_idx] = cls_value
+        for cls_idx, cls_value in index_value_lut:
+            aggregated_predictions[
+                aggregated_predictions_indices == cls_idx
+            ] = cls_value
             aggregated_predictions = aggregated_predictions.astype(np.uint16)
 
         aggregated_predictions[no_score_mask] = target_excluded_value
@@ -207,15 +211,15 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
     # Setting excluded values back to their original values
     for excluded_value in excluded_values:
         aggregated_predictions[prediction == excluded_value] = excluded_value
-        aggregated_probabilities[prediction ==
-                                 excluded_value] = target_excluded_value
+        aggregated_probabilities[prediction == excluded_value] = target_excluded_value
 
     return aggregated_predictions, aggregated_probabilities
 
 
-def postprocess_product(infile, product=None, colormap=None, nodata=None,
-                        filter_settings=None):
-    '''
+def postprocess_product(
+    infile, product=None, colormap=None, nodata=None, filter_settings=None
+):
+    """
     Function taking care of post-processing of a WorldCereal product,
     including:
     - spatial filter to clean the classification results
@@ -237,10 +241,10 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
     Returns:
         outfiles (dict): {label: path} of output files generated
 
-    '''
+    """
 
     # get properties and data from input file
-    with rasterio.open(infile, 'r') as src:
+    with rasterio.open(infile, "r") as src:
         labels = src.read(1)
         probs = src.read(2)
         meta = src.meta
@@ -256,38 +260,45 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
     # run spatial cleaning filter if required
     if filter_settings is None:
         filter_settings = get_default_filtersettings()
-    if filter_settings['kernel_size'] > 0:
-        newlabels, newprobs = majority_vote(labels, probs,
-                                            kernel_size=filter_settings['kernel_size'],
-                                            conf_threshold=filter_settings['conf_threshold'],
-                                            target_excluded_value=0,
-                                            excluded_values=[0, nodata])
+    if filter_settings["kernel_size"] > 0:
+        newlabels, newprobs = majority_vote(
+            labels,
+            probs,
+            kernel_size=filter_settings["kernel_size"],
+            conf_threshold=filter_settings["conf_threshold"],
+            target_excluded_value=0,
+            excluded_values=[0, nodata],
+        )
 
     # construct dictionary of output files to be generated
-    outfiles = {'classification': {'data': newlabels,
-                                   'colormap': colormap,
-                                   'nodata': nodata},
-                'probabilities': {'data': probs,
-                                  'colormap': _get_colormap('probabilities'),
-                                  'nodata': _get_nodata('probabilities')}}
+    outfiles = {
+        "classification": {"data": newlabels, "colormap": colormap, "nodata": nodata},
+        "probabilities": {
+            "data": probs,
+            "colormap": _get_colormap("probabilities"),
+            "nodata": _get_nodata("probabilities"),
+        },
+    }
 
     # derive cropland mask if required
-    if product != 'temporary-crops':
+    if product != "temporary-crops":
         cropland = np.where(newlabels == 0, 1, 0)
-        outfiles['croplandmask'] = {'data': cropland,
-                                    'colormap': _get_colormap('temporary-crops'),
-                                    'nodata': _get_nodata('temporary-crops')}
+        outfiles["croplandmask"] = {
+            "data": cropland,
+            "colormap": _get_colormap("temporary-crops"),
+            "nodata": _get_nodata("temporary-crops"),
+        }
 
     # write output files
     outpaths = {}
     meta.update(count=1)
     for label, settings in outfiles.items():
-        outpath = infile.replace('.tif', f'-{label}.tif')
-        with rasterio.open(outpath, 'w', **meta) as dst:
-            dst.write(settings['data'], indexes=1)
-            dst.nodata = settings['nodata']
-            if settings['colormap'] is not None:
-                dst.write_colormap(1, settings['colormap'])
+        outpath = infile.replace(".tif", f"-{label}.tif")
+        with rasterio.open(outpath, "w", **meta) as dst:
+            dst.write(settings["data"], indexes=1)
+            dst.nodata = settings["nodata"]
+            if settings["colormap"] is not None:
+                dst.write_colormap(1, settings["colormap"])
 
         outpaths[label] = outpath
 
@@ -295,7 +306,7 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
 
 
 def visualize_products(products, port=8887):
-    '''
+    """
     Function to visualize raster layers using leafmap.
     Only the first band of the input rasters is visualized.
 
@@ -305,14 +316,12 @@ def visualize_products(products, port=8887):
 
     Returns:
         leafmap Map instance
-    '''
+    """
 
     m = leafmap.Map()
-    m.add_basemap('Esri.WorldImagery')
+    m.add_basemap("Esri.WorldImagery")
     for label, path in products.items():
-        m.add_raster(path, indexes=[1],
-                     layer_name=label,
-                     port=port)
+        m.add_raster(path, indexes=[1], layer_name=label, port=port)
     m.add_colormap(
         "RdYlGn",
         label="Probabilities (%)",
@@ -327,18 +336,17 @@ def visualize_products(products, port=8887):
 
 
 def show_color_legend(product):
+    import math
 
     from matplotlib import pyplot as plt
-    import math
     from matplotlib.patches import Rectangle
 
     if product not in COLORLEGEND.keys():
-        raise ValueError(
-            f'Unknown product `{product}`: cannot generate color legend')
+        raise ValueError(f"Unknown product `{product}`: cannot generate color legend")
 
     colors = COLORLEGEND.get(product)
     for key, value in colors.items():
-        colors[key] = tuple([c/255 for c in value[:-1]])
+        colors[key] = tuple([c / 255 for c in value[:-1]])
 
     cell_width = 212
     cell_height = 22
@@ -356,10 +364,14 @@ def show_color_legend(product):
     dpi = 72
 
     fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
-    fig.subplots_adjust(margin/width, margin/height,
-                        (width-margin)/width, (height-margin)/height)
+    fig.subplots_adjust(
+        margin / width,
+        margin / height,
+        (width - margin) / width,
+        (height - margin) / height,
+    )
     ax.set_xlim(0, cell_width * ncols)
-    ax.set_ylim(cell_height * (nrows-0.5), -cell_height/2.)
+    ax.set_ylim(cell_height * (nrows - 0.5), -cell_height / 2.0)
     ax.yaxis.set_visible(False)
     ax.xaxis.set_visible(False)
     ax.set_axis_off()
@@ -372,27 +384,36 @@ def show_color_legend(product):
         swatch_start_x = cell_width * col
         text_pos_x = cell_width * col + swatch_width + 7
 
-        ax.text(text_pos_x, y, name, fontsize=14,
-                horizontalalignment='left',
-                verticalalignment='center')
+        ax.text(
+            text_pos_x,
+            y,
+            name,
+            fontsize=14,
+            horizontalalignment="left",
+            verticalalignment="center",
+        )
 
         ax.add_patch(
-            Rectangle(xy=(swatch_start_x, y-9), width=swatch_width,
-                      height=18, facecolor=colors[name], edgecolor='0.7')
+            Rectangle(
+                xy=(swatch_start_x, y - 9),
+                width=swatch_width,
+                height=18,
+                facecolor=colors[name],
+                edgecolor="0.7",
+            )
         )
 
 
 def get_ui_map():
-
     from ipyleaflet import basemap_to_tiles
 
     osm = basemap_to_tiles(basemaps.OpenStreetMap.Mapnik)
     osm.base = True
-    osm.name = 'Open street map'
+    osm.name = "Open street map"
 
     img = basemap_to_tiles(basemaps.Esri.WorldImagery)
     img.base = True
-    img.name = 'Satellite imagery'
+    img.name = "Satellite imagery"
 
     m = Map(center=(51.1872, 5.1154), zoom=10, layers=[osm, img])
     m.add_control(LayersControl())
@@ -402,14 +423,11 @@ def get_ui_map():
     draw_control.rectangle = {
         "shapeOptions": {
             "fillColor": "#6be5c3",
-            "color": '#00F',
+            "color": "#00F",
             "fillOpacity": 0.3,
         },
-        "drawError": {
-            "color": "#dd253b",
-            "message": "Oups!"
-        },
-        "allowIntersection": False
+        "drawError": {"color": "#dd253b", "message": "Oups!"},
+        "allowIntersection": False,
     }
     draw_control.circle = {}
     draw_control.polyline = {}
@@ -420,8 +438,8 @@ def get_ui_map():
 
     search = SearchControl(
         position="topleft",
-        url='https://nominatim.openstreetmap.org/search?format=json&q={s}',
-        zoom=20
+        url="https://nominatim.openstreetmap.org/search?format=json&q={s}",
+        zoom=20,
     )
     m.add_control(search)
 
@@ -458,15 +476,14 @@ def get_bbox_from_draw(dc, area_limit=4000):
 
 
 def _latlon_to_utm(bbox):
-    '''This function converts a bounding box defined in lat/lon
+    """This function converts a bounding box defined in lat/lon
     to local UTM coordinates.
     It returns the bounding box in UTM and the epsg code
-    of the resulting UTM projection.'''
+    of the resulting UTM projection."""
 
     # convert bounding box to geodataframe
     bbox_poly = geometry.box(*bbox)
-    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_poly],
-                                crs='EPSG:4326')
+    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_poly], crs="EPSG:4326")
 
     # estimate best UTM zone
     crs = bbox_gdf.estimate_utm_crs()
