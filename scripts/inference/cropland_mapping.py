@@ -20,24 +20,24 @@ if __name__ == "__main__":
     parser.add_argument("maxx", type=float, help="Maximum X coordinate (east)")
     parser.add_argument("maxy", type=float, help="Maximum Y coordinate (north)")
     parser.add_argument(
-        "--epsg",
-        type=int,
-        default=4326,
-        help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
+        "start_date", type=str, help="Starting date for data extraction."
     )
+    parser.add_argument("end_date", type=str, help="Ending date for data extraction.")
     parser.add_argument(
         "product",
         type=str,
         help="Product to generate. One of ['cropland', 'croptype']",
     )
     parser.add_argument(
-        "start_date", type=str, help="Starting date for data extraction."
-    )
-    parser.add_argument("end_date", type=str, help="Ending date for data extraction.")
-    parser.add_argument(
         "output_path",
         type=Path,
         help="Path to folder where to save the resulting GeoTiff.",
+    )
+    parser.add_argument(
+        "--epsg",
+        type=int,
+        default=4326,
+        help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
     )
 
     args = parser.parse_args()
