@@ -178,7 +178,7 @@ def generate_output_path(
     ref_id = features[geometry_index].properties["ref_id"]
 
     if "orbit_state" in row:
-        orbit_state = f"{row.orbit_state}_"
+        orbit_state = f"_{row.orbit_state}"
     else:
         orbit_state = ""
 
@@ -454,10 +454,10 @@ if __name__ == "__main__":
         pipeline_log.info("Filtering out the datasets without any location to extract.")
         split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
 
-        # pipeline_log.warning(
-        #     "Sub-sampling the job dataframe for testing. Remove this for production."
-        # )
-        # split_dfs = split_dfs[:1]
+        pipeline_log.warning(
+            "Sub-sampling the job dataframe for testing. Remove this for production."
+        )
+        split_dfs = split_dfs[:1]
 
         job_df = create_job_dataframe_s1(Backend.CDSE, split_dfs)
         pipeline_log.info("Created the job dataframe with %s jobs.", len(job_df))
