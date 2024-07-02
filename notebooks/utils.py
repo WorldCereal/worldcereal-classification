@@ -1,9 +1,9 @@
 import json
 from typing import Tuple
 
+import h3
 import numpy as np
 import pandas as pd
-import h3
 
 from presto.inference import process_parquet
 from presto.utils import device
@@ -78,10 +78,10 @@ def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
     twisted_bbox_poly = Polygon([(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)])
     h3_cells_lst = []
     res = 5
-    while len(h3_cells_lst)==0:
+    while len(h3_cells_lst) == 0:
         h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
         res += 1
-    if res>5:
+    if res > 5:
         h3_cells_lst = tuple(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))
 
     db = duckdb.connect()
