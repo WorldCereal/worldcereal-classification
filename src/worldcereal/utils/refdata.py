@@ -1,7 +1,7 @@
 def _check_geom(row):
     try:
         result = row["geometry"].contains(row["centroid"])
-    except:
+    except Exception:
         result = False
     return result
 
