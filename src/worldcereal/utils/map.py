@@ -2,12 +2,15 @@ from ipyleaflet import (Map, basemaps, DrawControl,
                         SearchControl, LayersControl)
 import geopandas as gpd
 from shapely import geometry
+from shapely.geometry import Polygon, shape
 from loguru import logger
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 import leafmap
 from typing import List
+
+from openeo_gfmap import BoundingBoxExtent
 
 
 def get_probability_cmap():
@@ -31,13 +34,41 @@ COLORMAP = {
         0: (186, 186, 186, 255),  # other
         1: (252, 207, 5, 255),  # maize
     },
+    'croptype': {
+        1: (103, 60, 32, 255),  # barley
+        2: (252, 207, 5, 255),  # maize
+        3: (247, 185, 29, 255),  # millet_sorghum
+        4: (186, 186, 186, 0),  # other_crop
+        5: (167, 245, 66, 255),  # rapeseed
+        6: (85, 218, 218, 255),  # soy
+        7: (245, 66, 111, 255),  # sunflower
+        8: (186, 113, 53, 255),  # wheat
+    },
     'probabilities': get_probability_cmap()
+}
+
+COLORLEGEND = {
+    'temporary-crops': {
+        "No cropland": (186, 186, 186, 0),  # no cropland
+        "Temporary crops": (224, 24, 28, 1),  # cropland
+    },
+    'croptype': {
+        "Barley": (103, 60, 32, 1),
+        "Maize": (252, 207, 5, 1),  # maize
+        "Millet/Sorghum": (247, 185, 29, 1),  # millet_sorghum
+        "Other crop": (186, 186, 186, 1),  # other_crop
+        "Rapeseed": (167, 245, 66, 1),  # rapeseed
+        "Soybean": (85, 218, 218, 1),  # soy
+        "Sunflower": (245, 66, 111, 1),  # sunflower
+        "Wheat": (186, 113, 53, 1),  # wheat
+    }
 }
 
 NODATAVALUE = {
     'active-cropland': 255,
     'temporary-crops': 255,
     'maize': 255,
+    'croptype': 0,
     'probabilities': 255}
 
 
@@ -59,38 +90,46 @@ def _get_nodata(product):
 
 
 def get_default_filtersettings():
-    return {'kernelsize': 7,
-            'conf_threshold': 70}
+    return {'kernel_size': 7,
+            'conf_threshold': 80}
 
 
 def majority_vote(prediction: np.ndarray, probability: np.ndarray,
                   kernel_size: int = 7, conf_threshold: int = 30,
-                  target_excluded_value: int = 0,
-                  excluded_values: List[int] = [0, 255]):
+                  target_excluded_value: int = 255,
+                  excluded_values: List[int] = [255]):
     """
-    Majority vote is performed using a sliding local kernel. For each pixel, the voting of a final class is done from
-    neighbours values weighted with the confidence threshold. Pixels that have one of the specified excluded values are
+    Majority vote is performed using a sliding local kernel.
+    For each pixel, the voting of a final class is done from
+    neighbours values weighted with the confidence threshold.
+    Pixels that have one of the specified excluded values are
     excluded in the voting process and are unchanged.
 
-    The prediction probabilities are reevaluated by taking, for each pixel, the average of probabilities of the
-    neighbors that belong to the winning class. (For example, if a pixel was voted to class 2 and there are three
-    neighbors of that class, then the new probability is the sum of the old probabilities of each pixels divided by 3)
+    The prediction probabilities are reevaluated by taking, for each pixel,
+    the average of probabilities of the neighbors that belong to the winning class.
+    (For example, if a pixel was voted to class 2 and there are three
+    neighbors of that class, then the new probability is the sum of the
+    old probabilities of each pixels divided by 3)
 
-    :param prediction: A 2D numpy array containing the predicted classification labels.
-    :param probability: A 2D numpy array (same dimensions as predictions) containing the probabilities of the winning class
-        (ranging between 0 and 100).
+    :param prediction: A 2D numpy array containing the predicted 
+        classification labels.
+    :param probability: A 2D numpy array (same dimensions as predictions) 
+        containing the probabilities of the winning class (ranging between 0 and 100).
     :param kernel_size: The size of the kernel used for the neighbour around the pixel.
-    :param conf_threshold: Pixels under this confidence threshold do not count into the voting process.
-    :param target_excluded_value: Pixels that have a null score for every class are turned into this exclusion value
-    :param excluded_values: Pixels that have on of the excluded values do not count into the voting process and are
-                            unchanged.
+    :param conf_threshold: Pixels under this confidence threshold
+        do not count into the voting process.
+    :param target_excluded_value: Pixels that have a null score for every
+        class are turned into this exclusion value
+    :param excluded_values: Pixels that have one of the excluded values
+        do not count into the voting process and are unchanged.
 
     :returns: the corrected classification labels and associated probabilities.
     """
 
     from scipy.signal import convolve2d
 
-    # As the probabilities are in integers between 0 and 100, we use uint16 matrices to store the vote scores
+    # As the probabilities are in integers between 0 and 100,
+    # we use uint16 matrices to store the vote scores
     assert kernel_size <= 25, f'Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown'
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
@@ -137,7 +176,7 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
     # Initializes output array
     aggregated_predictions = np.zeros(
         shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
-    # Initializes prediction output array
+    # Initializes probabilities output array
     aggregated_probabilities = np.zeros(
         shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16)
 
@@ -163,12 +202,13 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
             aggregated_predictions = aggregated_predictions.astype(np.uint16)
 
         aggregated_predictions[no_score_mask] = target_excluded_value
-        aggregated_probabilities[no_score_mask] = 0
+        aggregated_probabilities[no_score_mask] = target_excluded_value
 
     # Setting excluded values back to their original values
     for excluded_value in excluded_values:
         aggregated_predictions[prediction == excluded_value] = excluded_value
-        aggregated_probabilities[prediction == excluded_value] = 0
+        aggregated_probabilities[prediction ==
+                                 excluded_value] = target_excluded_value
 
     return aggregated_predictions, aggregated_probabilities
 
@@ -176,9 +216,11 @@ def majority_vote(prediction: np.ndarray, probability: np.ndarray,
 def postprocess_product(infile, product=None, colormap=None, nodata=None,
                         filter_settings=None):
     '''
-    Function taking care of post-processing of a WorldCereal product, including:
+    Function taking care of post-processing of a WorldCereal product,
+    including:
     - spatial filter to clean the classification results
-    - (in case of a crop type output) deriving a cropland mask from the classified map
+    - (in case of a crop type output) deriving a cropland mask
+        from the classified map
     - splitting the multi-band raster into individual files
     - assigning a colormap and no data value to each file
 
@@ -225,7 +267,7 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
     outfiles = {'classification': {'data': newlabels,
                                    'colormap': colormap,
                                    'nodata': nodata},
-                'probabilities': {'data': newprobs,
+                'probabilities': {'data': probs,
                                   'colormap': _get_colormap('probabilities'),
                                   'nodata': _get_nodata('probabilities')}}
 
@@ -237,7 +279,7 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
                                     'nodata': _get_nodata('temporary-crops')}
 
     # write output files
-    outpaths = []
+    outpaths = {}
     meta.update(count=1)
     for label, settings in outfiles.items():
         outpath = infile.replace('.tif', f'-{label}.tif')
@@ -247,7 +289,7 @@ def postprocess_product(infile, product=None, colormap=None, nodata=None,
             if settings['colormap'] is not None:
                 dst.write_colormap(1, settings['colormap'])
 
-        outpaths.append(outpath)
+        outpaths[label] = outpath
 
     return outpaths
 
@@ -258,7 +300,7 @@ def visualize_products(products, port=8887):
     Only the first band of the input rasters is visualized.
 
     Args:
-        infiles (list): dictionary of products to visualize {label: path}
+        infiles (dict): dictionary of products to visualize {label: path}
         port (int): port to use for localtileserver application
 
     Returns:
@@ -271,8 +313,73 @@ def visualize_products(products, port=8887):
         m.add_raster(path, indexes=[1],
                      layer_name=label,
                      port=port)
+    m.add_colormap(
+        "RdYlGn",
+        label="Probabilities (%)",
+        width=8.0,
+        height=0.4,
+        orientation="horizontal",
+        vmin=0,
+        vmax=100,
+    )
 
     return m
+
+
+def show_color_legend(product):
+
+    from matplotlib import pyplot as plt
+    import math
+    from matplotlib.patches import Rectangle
+
+    if product not in COLORLEGEND.keys():
+        raise ValueError(
+            f'Unknown product `{product}`: cannot generate color legend')
+
+    colors = COLORLEGEND.get(product)
+    for key, value in colors.items():
+        colors[key] = tuple([c/255 for c in value[:-1]])
+
+    cell_width = 212
+    cell_height = 22
+    swatch_width = 48
+    margin = 12
+    ncols = 1
+
+    names = list(colors)
+
+    n = len(names)
+    nrows = math.ceil(n / ncols)
+
+    width = cell_width * ncols + 2 * margin
+    height = cell_height * nrows + 2 * margin
+    dpi = 72
+
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    fig.subplots_adjust(margin/width, margin/height,
+                        (width-margin)/width, (height-margin)/height)
+    ax.set_xlim(0, cell_width * ncols)
+    ax.set_ylim(cell_height * (nrows-0.5), -cell_height/2.)
+    ax.yaxis.set_visible(False)
+    ax.xaxis.set_visible(False)
+    ax.set_axis_off()
+
+    for i, name in enumerate(names):
+        row = i % nrows
+        col = i // nrows
+        y = row * cell_height
+
+        swatch_start_x = cell_width * col
+        text_pos_x = cell_width * col + swatch_width + 7
+
+        ax.text(text_pos_x, y, name, fontsize=14,
+                horizontalalignment='left',
+                verticalalignment='center')
+
+        ax.add_patch(
+            Rectangle(xy=(swatch_start_x, y-9), width=swatch_width,
+                      height=18, facecolor=colors[name], edgecolor='0.7')
+        )
 
 
 def get_ui_map():
@@ -319,6 +426,35 @@ def get_ui_map():
     m.add_control(search)
 
     return m, draw_control
+
+
+def get_bbox_from_draw(dc, area_limit=4000):
+    obj = dc.last_draw
+    if obj.get("geometry") is not None:
+        poly = Polygon(shape(obj.get("geometry")))
+        bbox = poly.bounds
+    else:
+        raise ValueError(
+            "Please first draw a rectangle " "on the map before proceeding."
+        )
+    print(f"Your area of interest: {bbox}")
+
+    # We convert our bounding box to local UTM projection
+    # for further processing
+    bbox_utm, epsg = _latlon_to_utm(bbox)
+    area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
+    print(f"Area of processing extent: {area:.2f} km²")
+
+    if area_limit is not None:
+        if area > area_limit:
+            spatial_extent = None
+            raise ValueError(
+                "Area of processing extent is too large. "
+                "Please select a smaller area."
+            )
+    spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
+
+    return spatial_extent, bbox, poly
 
 
 def _latlon_to_utm(bbox):
