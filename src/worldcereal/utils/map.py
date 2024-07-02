@@ -1,5 +1,5 @@
 from typing import List
-
+import copy
 import geopandas as gpd
 import leafmap
 import matplotlib.pyplot as plt
@@ -53,13 +53,13 @@ COLORLEGEND = {
     },
     "croptype": {
         "Barley": (103, 60, 32, 1),
-        "Maize": (252, 207, 5, 1),  # maize
-        "Millet/Sorghum": (247, 185, 29, 1),  # millet_sorghum
-        "Other crop": (186, 186, 186, 1),  # other_crop
-        "Rapeseed": (167, 245, 66, 1),  # rapeseed
-        "Soybean": (85, 218, 218, 1),  # soy
-        "Sunflower": (245, 66, 111, 1),  # sunflower
-        "Wheat": (186, 113, 53, 1),  # wheat
+        "Maize": (252, 207, 5, 1),
+        "Millet/Sorghum": (247, 185, 29, 1),
+        "Other crop": (186, 186, 186, 1),
+        "Rapeseed": (167, 245, 66, 1),
+        "Soybean": (85, 218, 218, 1),
+        "Sunflower": (245, 66, 111, 1),
+        "Wheat": (186, 113, 53, 1),
     },
 }
 
@@ -71,10 +71,12 @@ NODATAVALUE = {
     "probabilities": 255,
 }
 
+LOCALTILESERVER_PORT = 8889
+
 
 def _get_colormap(product):
     if product in COLORMAP.keys():
-        colormap = COLORMAP[product]
+        colormap = copy.deepcopy(COLORMAP[product])
     else:
         logger.warning(
             (f"Unknown product `{product}`: " "cannot assign colormap"))
@@ -310,13 +312,13 @@ def postprocess_product(
     return outpaths
 
 
-def visualize_products(products, port=8887):
+def visualize_products(products, port=LOCALTILESERVER_PORT):
     """
     Function to visualize raster layers using leafmap.
     Only the first band of the input rasters is visualized.
 
     Args:
-        infiles (dict): dictionary of products to visualize {label: path}
+        products (dict): dictionary of products to visualize {label: path}
         port (int): port to use for localtileserver application
 
     Returns:
@@ -350,9 +352,12 @@ def show_color_legend(product):
         raise ValueError(
             f"Unknown product `{product}`: cannot generate color legend")
 
-    colors = COLORLEGEND.get(product)
+    colors = copy.deepcopy(COLORLEGEND.get(product))
     for key, value in colors.items():
-        colors[key] = tuple([c / 255 for c in value[:-1]])
+        # apply scaling of RGB values
+        rgb = [c / 255 for c in value[:-1]]
+        rgb.extend([value[-1]])
+        colors[key] = tuple(rgb)
 
     cell_width = 212
     cell_height = 22
@@ -463,7 +468,7 @@ def get_bbox_from_draw(dc, area_limit=25):
         bbox = poly.bounds
     else:
         raise ValueError(
-            "Please first draw a rectangle " "on the map before proceeding."
+            "Please first draw a rectangle on the map before proceeding."
         )
     print(f"Your area of interest: {bbox}")
 
