@@ -2,11 +2,13 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Type, Union
 
 import openeo
 from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
-from pydantic import BaseModel
+from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
+from openeo_gfmap.inference.model_inference import ModelInference
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
@@ -76,15 +78,29 @@ class CropLandParameters(BaseModel):
         and passed in the process graph.
     """
 
-    feature_extractor: PrestoFeatureExtractor = PrestoFeatureExtractor
+    feature_extractor: Type[PatchFeatureExtractor] = Field(
+        default=PrestoFeatureExtractor
+    )
     features_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
     )
-    classifier: CroplandClassifier = CroplandClassifier
+    classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
     )
+
+    @model_validator(mode="after")
+    def check_udf_types(self):
+        """Validates the FeatureExtractor and Classifier classes."""
+        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
+            raise ValidationError(
+                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
+            )
+        if not issubclass(self.classifier, ModelInference):
+            raise ValidationError(
+                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+            )
 
 
 class CropTypeParameters(BaseModel):
@@ -109,15 +125,29 @@ class CropTypeParameters(BaseModel):
         and passed in the process graph.
     """
 
-    feature_extractor: PrestoFeatureExtractor = PrestoFeatureExtractor
+    feature_extractor: Type[PatchFeatureExtractor] = Field(
+        default=PrestoFeatureExtractor
+    )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
     )
-    classifier: CroptypeClassifier = CroptypeClassifier
+    classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
     )
+
+    @model_validator(mode="after")
+    def check_udf_types(self):
+        """Validates the FeatureExtractor and Classifier classes."""
+        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
+            raise ValidationError(
+                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
+            )
+        if not issubclass(self.classifier, ModelInference):
+            raise ValidationError(
+                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+            )
 
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
