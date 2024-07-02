@@ -2,6 +2,7 @@
 are interracting with the methods here are defined in the `worldcereal.job`
 sub-module.
 """
+
 from typing import TYPE_CHECKING
 
 from openeo import DataCube
@@ -121,7 +122,7 @@ def _croptype_map(
 
     # Mask cropland
     if cropland_mask is not None:
-        classes = classes.mask(cropland_mask == 0, replacement=0)
+        classes = classes.mask(cropland_mask == 0, replacement=254)
 
     # Cast to uint16
     classes = compress_uint16(classes)

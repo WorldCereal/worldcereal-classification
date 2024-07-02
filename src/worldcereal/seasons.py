@@ -95,7 +95,7 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
         resolution (int): resolution in meters of resulting array
 
     Raises:
-        RuntimeError: when required TIFF file was not found
+        FileNotFoundError: when required TIFF file was not found
         ValueError: when requested season is not supported
         ValueError: when `kind` value is not supported
 
@@ -121,8 +121,9 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
     doy_file = season + f"_{kind}_WGS84.tif"
 
     if not pkg_resources.is_resource(cropcalendars, doy_file):
-        raise RuntimeError(
-            ("Required season DOY file " f"`{doy_file}` not found."))
+        raise FileNotFoundError(
+            ("Required season DOY file " f"`{doy_file}` not found.")
+        )
 
     logger.info(f"Loading DOY data from: {doy_file}")
 
@@ -294,14 +295,13 @@ def get_processing_dates_for_extent(
     eos_doy_median = circular_median_day_of_year(eos_doy)
 
     # We can derive the end date from year and EOS
-    end_date = datetime.datetime(year, 1, 1) + \
-        pd.Timedelta(days=eos_doy_median)
+    end_date = datetime.datetime(year, 1, 1) + pd.Timedelta(days=eos_doy_median)
 
     # And get start date by subtracting a year
     start_date = end_date - pd.Timedelta(days=364)
 
-    print(f"Derived the following period for processing: {start_date} "
-          f"- {end_date}")
+    print(f"Derived the following period for processing: {start_date} " f"- {end_date}")
 
-    return TemporalContext(start_date.strftime("%Y-%m-%d"),
-                           end_date.strftime("%Y-%m-%d"))
+    return TemporalContext(
+        start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    )
