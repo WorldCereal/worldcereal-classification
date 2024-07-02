@@ -59,7 +59,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     return vbox, checkbox_widgets
 
 
-def query_worldcereal_samples(bbox_poly, buffer=250000):
+def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
     import duckdb
     import geopandas as gpd
 
@@ -72,6 +72,16 @@ def query_worldcereal_samples(bbox_poly, buffer=250000):
         .to_crs(epsg=4326)[0]
     )
 
+    xmin, ymin, xmax, ymax = bbox_poly.bounds
+    twisted_bbox_poly = Polygon([(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)])
+    h3_cells_lst = []
+    res = 5
+    while len(h3_cells_lst)==0:
+        h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
+        res += 1
+    if res>5:
+        h3_cells_lst = tuple(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))
+
     db = duckdb.connect()
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
@@ -80,17 +90,26 @@ def query_worldcereal_samples(bbox_poly, buffer=250000):
 
     # only querying the croptype data here
     print("Querying WorldCereal global database ...")
-    public_df_raw = db.sql(
-        f"""
-    set s3_endpoint='s3.waw3-1.cloudferro.com';
-    set enable_progress_bar=false;
-    select *
-    from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
-    where st_within(ST_Point(original_data.lon, original_data.lat), ST_GeomFromText('{bbox_poly.wkt}'))
-    and original_data.LANDCOVER_LABEL = 11
-    and original_data.CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
-    """
-    ).df()
+    if filter_cropland:
+        query = f"""
+        set s3_endpoint='s3.waw3-1.cloudferro.com';
+        set enable_progress_bar=false;
+        select *
+        from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
+        where original_data.h3_l5_cell in {h3_cells_lst}
+        and original_data.LANDCOVER_LABEL = 11
+        and original_data.CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
+        """
+    else:
+        query = f"""
+            set s3_endpoint='s3.waw3-1.cloudferro.com';
+            set enable_progress_bar=false;
+            select *
+            from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
+            where original_data.h3_l5_cell in {h3_cells_lst}
+        """
+
+    public_df_raw = db.sql(query).df()
     print("Processing selected samples ...")
     public_df = process_parquet(public_df_raw)
     public_df = map_croptypes(public_df)
@@ -100,12 +119,16 @@ def query_worldcereal_samples(bbox_poly, buffer=250000):
 
 
 def get_inputs_outputs(
-    df: pd.DataFrame, batch_size: int = 256
+    df: pd.DataFrame, batch_size: int = 256, task_type: str = "croptype"
 ) -> Tuple[np.ndarray, np.ndarray]:
     from presto.dataset import WorldCerealLabelledDataset
     from presto.presto import Presto
 
-    presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
+    if task_type == "croptype": 
+        presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
+    if task_type == "cropland": 
+        presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ft-cl_30D_cropland_random.pt"
+        df["custom_class"] = (df["LANDCOVER_LABEL"]==11).astype(int)
     print("Loading Presto model ...")
     presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
