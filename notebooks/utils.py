@@ -75,7 +75,9 @@ def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
     )
 
     xmin, ymin, xmax, ymax = bbox_poly.bounds
-    twisted_bbox_poly = Polygon([(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)])
+    twisted_bbox_poly = Polygon(
+        [(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)]
+    )
     h3_cells_lst = []
     res = 5
     while len(h3_cells_lst) == 0:
@@ -126,11 +128,11 @@ def get_inputs_outputs(
     from presto.dataset import WorldCerealLabelledDataset
     from presto.presto import Presto
 
-    if task_type == "croptype": 
+    if task_type == "croptype":
         presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
-    if task_type == "cropland": 
+    if task_type == "cropland":
         presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ft-cl_30D_cropland_random.pt"
-        df["custom_class"] = (df["LANDCOVER_LABEL"]==11).astype(int)
+        df["custom_class"] = (df["LANDCOVER_LABEL"] == 11).astype(int)
     presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
     tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
