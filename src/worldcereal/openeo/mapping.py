@@ -2,6 +2,7 @@
 are interracting with the methods here are defined in the `worldcereal.job`
 sub-module.
 """
+
 from typing import TYPE_CHECKING
 
 from openeo import DataCube
