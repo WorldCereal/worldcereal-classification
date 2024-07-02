@@ -409,7 +409,8 @@ def get_ui_map():
             "color": "#dd253b",
             "message": "Oups!"
         },
-        "allowIntersection": False
+        "allowIntersection": False,
+        "metric": ['km']
     }
     draw_control.circle = {}
     draw_control.polyline = {}
