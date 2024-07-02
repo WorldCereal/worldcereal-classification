@@ -17,16 +17,23 @@ from shapely.geometry import Polygon, shape
 from torch.utils.data import DataLoader
 
 
-def get_bbox_from_draw(dc):
+def get_bbox_from_draw(dc, max_size=25000000):
+    import geopandas as gpd
+
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
+        selected_area = gpd.GeoSeries(poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
+        if selected_area > max_size:
+            raise ValueError(
+                f"Selected area is too large ({selected_area/1000000:.0f} km2). Please select an area smaller than {max_size/1000000:.0f} km2."
+            )
         bbox = poly.bounds
     else:
         raise ValueError(
             "Please first draw a rectangle " "on the map before proceeding."
         )
-    print(f"Your area of interest: {bbox}")
+    print(f"Your area of interest: {bbox} ({selected_area/1000000:.0f} km2)")
 
     return bbox, poly
 
@@ -60,8 +67,18 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     return vbox, checkbox_widgets
 
 
-def query_worldcereal_samples(bbox_poly):
+def query_worldcereal_samples(bbox_poly, buffer=250000):
     import duckdb
+    import geopandas as gpd
+
+    print(f"Applying a buffer of {buffer/1000} km to the selected area ...")
+
+    bbox_poly = (
+        gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
+        .to_crs(epsg=3785)
+        .buffer(buffer, cap_style="square", join_style="mitre")
+        .to_crs(epsg=4326)[0]
+    )
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
@@ -97,6 +114,7 @@ def get_inputs_outputs(
     from presto.presto import Presto
 
     presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt"
+    print("Loading Presto model ...")
     presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
     tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
@@ -104,6 +122,7 @@ def get_inputs_outputs(
 
     encoding_list, targets = [], []
 
+    print("Computing Presto embeddings ...")
     for x, y, dw, latlons, month, variable_mask in tdl:
         x_f, dw_f, latlons_f, month_f, variable_mask_f = [
             t.to(device) for t in (x, dw, latlons, month, variable_mask)
@@ -124,6 +143,8 @@ def get_inputs_outputs(
 
     encodings_np = np.concatenate(encoding_list)
     targets = np.concatenate(targets)
+
+    print("Done.")
 
     return encodings_np, targets
 
@@ -150,6 +171,7 @@ def train_classifier(inputs, targets):
     from sklearn.model_selection import train_test_split
     from sklearn.utils.class_weight import compute_class_weight
 
+    print("Split train/test ...")
     inputs_train, inputs_val, targets_train, targets_val = train_test_split(
         inputs,
         targets,
@@ -158,14 +180,25 @@ def train_classifier(inputs, targets):
         random_state=DEFAULT_SEED,
     )
 
-    if np.unique(targets_train).shape[0] > 1:
-        eval_metric = "TotalF1"
+    if np.unique(targets_train).shape[0] > 2:
+        eval_metric = "MultiClass"
+        loss_function = "MultiClass"
     else:
         eval_metric = "F1"
+        loss_function = "Logloss"
 
+    print("Computing class weights ...")
     class_weights = compute_class_weight(
         class_weight="balanced", classes=np.unique(targets_train), y=targets_train
     )
+    class_weights = {k: v for k, v in zip(np.unique(targets_train), class_weights)}
+    print("Class weights:", class_weights)
+
+    sample_weights = np.ones((len(targets_train),))
+    sample_weights_val = np.ones((len(targets_val),))
+    for k, v in class_weights.items():
+        sample_weights[targets_train == k] = v
+        sample_weights_val[targets_val == k] = v
 
     custom_downstream_model = CatBoostClassifier(
         iterations=8000,
@@ -175,18 +208,19 @@ def train_classifier(inputs, targets):
         # l2_leaf_reg=30,
         colsample_bylevel=0.9,
         l2_leaf_reg=3,
-        loss_function="MultiClass",
-        eval_metric="MultiClass",
+        loss_function=loss_function,
+        eval_metric=eval_metric,
         random_state=DEFAULT_SEED,
-        class_weights=class_weights,
         verbose=25,
         class_names=np.unique(targets_train),
     )
 
+    print("Training CatBoost classifier ...")
     custom_downstream_model.fit(
         inputs_train,
         targets_train,
-        eval_set=Pool(inputs_val, targets_val),
+        sample_weight=sample_weights,
+        eval_set=Pool(inputs_val, targets_val, weight=sample_weights_val),
     )
 
     pred = custom_downstream_model.predict(inputs_val).flatten()
@@ -224,4 +258,54 @@ def map_croptypes(
     )
 
     return df
-    return df
+
+
+def deploy_model(model, pattern=None):
+    import datetime
+    import subprocess
+    import tempfile
+
+    ARTIFACTORY_USERNAME = "worldcereal_model"
+
+    # Generate a timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+    if pattern is None:
+        targetpath = f"{timestamp}_custommodel.onnx"
+    else:
+        targetpath = f"{pattern}_{timestamp}_custommodel.onnx"
+
+    # Use a temporary file to save the ONNX model
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".onnx") as temp_file:
+        model_file_path = temp_file.name
+
+        model.save_model(
+            f"{model_file_path}",
+            format="onnx",
+            export_parameters={
+                "onnx_domain": "ai.catboost",
+                "onnx_model_version": 1,
+                "onnx_doc_string": "custom model for crop classification using CatBoost",
+                "onnx_graph_name": "CatBoostModel_for_MulticlassClassification",
+            },
+        )
+
+        print(f"Uploading model to `{targetpath}`")
+
+        access_token = input("Enter your Artifactory API key: ")
+
+        cmd = (
+            f"curl -u{ARTIFACTORY_USERNAME}:{access_token} -T {model_file_path} "
+            f'"https://artifactory.vgt.vito.be/artifactory/worldcereal_models/{targetpath}"'
+        )
+
+        output, _ = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, shell=True
+        ).communicate()
+        output = eval(output)
+
+    uri = output["downloadUri"]
+
+    print(f"Deployed to: {uri}")
+
+    return uri
