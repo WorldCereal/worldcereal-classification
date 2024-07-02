@@ -120,17 +120,13 @@ class CroptypeClassifier(ModelInference):
         # Prepare input data for ONNX model
         outputs = self.onnx_session.run(None, {"features": features})
 
-        # Apply LUT: TODO:this needs an update!
-        LUT = {
-            "barley": 1,
-            "maize": 2,
-            "millet_sorghum": 3,
-            "other_crop": 4,
-            "rapeseed_rape": 5,
-            "soy_soybeans": 6,
-            "sunflower": 7,
-            "wheat": 8,
-        }
+        # Get info on classes from the model
+        class_params = eval(
+            self.onnx_session.get_modelmeta().custom_metadata_map["class_params"]
+        )
+
+        # Get classes LUT
+        LUT = dict(zip(class_params["class_names"], class_params["class_to_label"]))
 
         # Extract classes as INTs and probability of winning class values
         labels = np.zeros((len(outputs[0]),), dtype=np.uint16)
