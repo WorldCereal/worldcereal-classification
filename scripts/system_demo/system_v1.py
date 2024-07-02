@@ -14,7 +14,7 @@
 # ADD consortium logos
 # ![](./Consortium_logos.png)
 
-'''
+"""
 This notebook contains a demo of the WorldCereal system v1
 and all its functionalities.
 
@@ -25,28 +25,29 @@ Content:
 - Exploring available reference data in the RDM
 - Contributing reference data to RDM
 - Requesting reference data from RDM
-- Launching point extractions for obtaining satellite input data 
+- Launching point extractions for obtaining satellite input data
 - Launching catboost model training based on the extracted points
 - Perform inference run with the newly trained model
     (and/or the default cropland model)
 
-'''
+"""
 
 # ADD TABLE OF CONTENTS USING MARKDOWN
 # Notebook outline:
 # - [1. Introduction](#1.-Introduction)
 
+import geopandas as gpd
+
 # %%
 # IMPORTS
 import pandas as pd
-import geopandas as gpd
 import requests
-from shapely.geometry import shape, Polygon
+from shapely.geometry import Polygon, shape
 
 from worldcereal.utils.map import get_ui_map
 from worldcereal.utils.refdata import _to_points
 
-RDM_API = 'https://ewoc-rdm-api.iiasa.ac.at'
+RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
 
 # %%
 # WorldCereal user authentication
@@ -54,21 +55,23 @@ RDM_API = 'https://ewoc-rdm-api.iiasa.ac.at'
 # BEFORE PROCEEDING, A USER SHOULD CREATE AN ACCOUNT ON VITO'S TERRASCOPE PLATFORM:
 # https://sso.terrascope.be/auth/realms/terrascope/login-actions/registration?client_id=drupal-terrascope&tab_id=2MybIFKQHdo&execution=67e5ef09-bc23-4344-b099-4e710a86e68a&kc_locale=en
 
-username = input('Enter your Terrascope username: ')
-password = input('Enter your Terrascope password: ')
+username = input("Enter your Terrascope username: ")
+password = input("Enter your Terrascope password: ")
 
-url = 'https://sso.vgt.vito.be/auth/realms/terrascope/protocol/openid-connect/token'
-payload = {'grant_type': 'password',
-           'client_id': 'worldcereal-rdm',
-           'username': username,
-           'password': password}
+url = "https://sso.vgt.vito.be/auth/realms/terrascope/protocol/openid-connect/token"
+payload = {
+    "grant_type": "password",
+    "client_id": "worldcereal-rdm",
+    "username": username,
+    "password": password,
+}
 
 token = requests.post(url, data=payload)
 
-tokentype = token.json()['token_type']
-accessToken = token.json()['access_token']
+tokentype = token.json()["token_type"]
+accessToken = token.json()["access_token"]
 headers = {
-    'Authorization': f'{tokentype} {accessToken}',
+    "Authorization": f"{tokentype} {accessToken}",
 }
 
 # %% Define a region of interest
@@ -80,27 +83,26 @@ m
 # %%
 # retrieve bounding box from drawn rectangle
 obj = dc.last_draw
-if obj.get('geometry') is not None:
-    poly = Polygon(shape(obj.get('geometry')))
+if obj.get("geometry") is not None:
+    poly = Polygon(shape(obj.get("geometry")))
     bbox = poly.bounds
 else:
-    raise ValueError('Please first draw a rectangle '
-                     'on the map before proceeding.')
-print(f'Your area of interest: {bbox}')
+    raise ValueError("Please first draw a rectangle " "on the map before proceeding.")
+print(f"Your area of interest: {bbox}")
 
 # %%
 # Generate default cropland and crop type products for
 # the region of interest
 
 # Perform inference run with the default cropland model
-start_date = '2021-01-01'
-end_date = '2021-12-31'
+start_date = "2021-01-01"
+end_date = "2021-12-31"
 aoi = bbox
-cropland_result = run_inference(aoi, start_date, end_date, product='cropland')
+cropland_result = run_inference(aoi, start_date, end_date, product="cropland")
 # download and visualize map
 
 # Perform inference run with default crop type model
-croptype_result = run_inference(aoi, start_date, end_date, product='maize')
+croptype_result = run_inference(aoi, start_date, end_date, product="maize")
 # download and visualize map
 
 # use the cropland product to mask the previously generated custom crop type product
@@ -114,17 +116,17 @@ croptype_fin = mask_product(croptype_result, cropland_result)
 # Functionalities of RDM API Phase II --> https://ewoc-rdm-api.iiasa.ac.at/swagger/index.html
 
 # Check full list of available collections
-collectionResponse = requests.get(f'{RDM_API}/collections', headers=headers)
+collectionResponse = requests.get(f"{RDM_API}/collections", headers=headers)
 collections = collectionResponse.json()
-col_ids = [x['collectionId'] for x in collections['items']]
-print(f'Available collections: {col_ids}')
+col_ids = [x["collectionId"] for x in collections["items"]]
+print(f"Available collections: {col_ids}")
 
 # Now we check which collections intersect with our AOI
-bbox_str = f'Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}'
-colSearchUrl = f'{RDM_API}/collections/search?{bbox_str}'
+bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+colSearchUrl = f"{RDM_API}/collections/search?{bbox_str}"
 colSearchResponse = requests.get(colSearchUrl, headers=headers)
 test = colSearchResponse.json()
-print('The following collections intersect with your AOI:')
+print("The following collections intersect with your AOI:")
 for i, col in enumerate(test):
     print()
     print(f'Collection {i+1}: {col["collectionId"]}')
@@ -140,7 +142,7 @@ for i, col in enumerate(test):
 # check whether data has been successfully ingested...
 colSearchResponse = requests.get(colSearchUrl, headers=headers)
 cols_aoi = colSearchResponse.json()
-print('The following collections intersect with your AOI:')
+print("The following collections intersect with your AOI:")
 for i, col in enumerate(test):
     print()
     print(f'Collection {i+1}: {col["collectionId"]}')
@@ -159,22 +161,20 @@ max_items = 2000
 
 dfs = []
 for col in cols_aoi:
-    itemSearchCollectionId = col['collectionId']
-    print(
-        f'Extracting reference data from collection {itemSearchCollectionId}')
-    itemSearchUrl = f'{RDM_API}/collections/{itemSearchCollectionId}/items?{bbox_str}&MaxResultCount={max_items}'
+    itemSearchCollectionId = col["collectionId"]
+    print(f"Extracting reference data from collection {itemSearchCollectionId}")
+    itemSearchUrl = f"{RDM_API}/collections/{itemSearchCollectionId}/items?{bbox_str}&MaxResultCount={max_items}"
     itemSearchResponse = requests.get(itemSearchUrl, headers=headers)
-    df = gpd.GeoDataFrame.from_features(
-        itemSearchResponse.json(), crs='EPSG:4326')
+    df = gpd.GeoDataFrame.from_features(itemSearchResponse.json(), crs="EPSG:4326")
     dfs.append(_to_points(df))
 
 gdf = pd.concat(dfs, ignore_index=True)
-print(f'Got a total of {len(gdf)} reference points')
+print(f"Got a total of {len(gdf)} reference points")
 
 
 # %%
 # Launch point extractions for obtaining satellite input data
-points = gpd.read_file('data/points.geoparquet')
+points = gpd.read_file("data/points.geoparquet")
 
 # THIS WORKFLOW IS SPLIT INTO TWO:
 #     - 1. Extracting the satellite data for the points,
@@ -204,8 +204,8 @@ link_to_model = train_catboost_model(training_df)
 # Perform inference run with the newly trained model
 
 aoi = bbox
-start_date = '2021-03-01'
-end_date = '2021-10-01'
+start_date = "2021-03-01"
+end_date = "2021-10-01"
 
 result = run_inference(aoi, start_date, end_date, model=link_to_model)
 

@@ -1,31 +1,33 @@
 # %%
-from numba.types import Tuple
-from numba import njit, float32, int64, int16, float64
-import pandas as pd
-import numpy as np
+import os
+from datetime import datetime
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import rasterio
 import xarray as xr
 from matplotlib import pyplot as plt
-from datetime import datetime
-from scipy.signal import convolve2d
-import rasterio
+from numba import float32, float64, int16, int64, njit
+from numba.types import Tuple
 from rasterio.crs import CRS
 from rasterio.profiles import Profile
-import os
+from scipy.signal import convolve2d
 
 
 class DefaultProfile(Profile):
     """Tiled, band-interleaved, LZW-compressed, 8-bit GTiff."""
 
     defaults = {
-        'driver': 'GTiff',
-        'interleave': 'band',
-        'tiled': True,
-        'blockxsize': 256,
-        'blockysize': 256,
-        'compress': 'deflate',
-        'dtype': 'float32'
+        "driver": "GTiff",
+        "interleave": "band",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "compress": "deflate",
+        "dtype": "float32",
     }
+
 
 # %%
 # ALL REQUIRED FUNCTIONS TO RUN THIS NOTEBOOK
@@ -37,12 +39,10 @@ def nearest_date(items, pivot):
 
 @njit(int64[:](float32[:]))
 def find_peaks(x):
-
     peak_index = []
 
     for i, val in enumerate(x[1:-1], 1):
-
-        if val >= x[i-1] and val > x[i+1]:
+        if val >= x[i - 1] and val > x[i + 1]:
             peak_index.append(i)
 
     if x[-1] > x[-2]:
@@ -54,16 +54,18 @@ def find_peaks(x):
     return np.array(peak_index)
 
 
-def detect_seasons(evi,
-                   times,
-                   max_seasons=5,
-                   amp_thr1=0.1,
-                   amp_thr2=0.35,
-                   min_window=10,
-                   max_window=185,
-                   partial_start=False,
-                   partial_end=False):
-    '''
+def detect_seasons(
+    evi,
+    times,
+    max_seasons=5,
+    amp_thr1=0.1,
+    amp_thr2=0.35,
+    min_window=10,
+    max_window=185,
+    partial_start=False,
+    partial_end=False,
+):
+    """
     Computes peak, SOS and EOS of all seasons based on an EVI time series
 
     SOS, MOS and EOS are stored as datetime.timestamp()
@@ -87,22 +89,23 @@ def detect_seasons(evi,
         EOS after end of time series)
 
     returns a Seasons object with for each pixel SOS, MOS, EOS and nSeasons
-    '''
+    """
     # some dimensionality checks...
     if evi.ndim != 3:
-        raise ValueError('Input time series does not have the right dimensions')
+        raise ValueError("Input time series does not have the right dimensions")
     if evi.shape[0] != len(times):
-        raise ValueError('Time dimension does not match the input data')
+        raise ValueError("Time dimension does not match the input data")
 
     times = [pd.to_datetime(t) for t in times]
     times = np.array([t.timestamp() for t in times])
 
     # actual definition of the function
-    @njit(Tuple((int16[:, :], float32[:, :, :],
-                 float32[:, :, :], float32[:, :, :]))(
-                     float32[:, :, :], float64[:]))
+    @njit(
+        Tuple((int16[:, :], float32[:, :, :], float32[:, :, :], float32[:, :, :]))(
+            float32[:, :, :], float64[:]
+        )
+    )
     def _detect_seasons_fast(data, times):
-
         def _day_to_second(days):
             return days * 24 * 3600
 
@@ -153,7 +156,6 @@ def detect_seasons(evi,
                 # and decide whether
                 # the peak is valid or not
                 for p in range(npeaks):
-
                     skip_sos = False
 
                     idx = localmax_idx_sorted[p]
@@ -182,8 +184,9 @@ def detect_seasons(evi,
                         # find all intermediate VALID peaks
                         val_peaks = localmax_idx_sorted.copy()
                         val_peaks[valid == 0] = -1
-                        int_peaks_idx = localmax_idx_sorted[(
-                            val_peaks > idx_min) & (val_peaks < idx)]
+                        int_peaks_idx = localmax_idx_sorted[
+                            (val_peaks > idx_min) & (val_peaks < idx)
+                        ]
                         # if any, find the peak nearest to original peak
                         # and set t_min to that value
                         if int_peaks_idx.shape[0] > 0:
@@ -195,7 +198,7 @@ def detect_seasons(evi,
                                 continue
 
                         # identify index of local minimum in search window
-                        win = data_pix[idx_min:idx_max+1]
+                        win = data_pix[idx_min : idx_max + 1]
                         start[p] = np.where(win == np.amin(win))[0][-1] + idx_min
 
                         # check if amplitude conditions of the identified
@@ -223,8 +226,9 @@ def detect_seasons(evi,
                     # find all intermediate VALID peaks
                     val_peaks = localmax_idx_sorted.copy()
                     val_peaks[valid == 0] = -1
-                    int_peaks_idx = localmax_idx_sorted[(val_peaks > idx) & (
-                        val_peaks < idx_max)]
+                    int_peaks_idx = localmax_idx_sorted[
+                        (val_peaks > idx) & (val_peaks < idx_max)
+                    ]
                     # if any, find the peak nearest to original peak
                     # and set t_max to that value
                     if int_peaks_idx.shape[0] > 0:
@@ -243,7 +247,7 @@ def detect_seasons(evi,
                     if idx_max < idx_min:
                         end[p] = data_pix.shape[0] - 1
                     else:
-                        win = data_pix[idx_min:idx_max+1]
+                        win = data_pix[idx_min : idx_max + 1]
                         end[p] = np.where(win == np.amin(win))[0][0] + idx_min
 
                     # if partial season mapping is allowed
@@ -251,15 +255,17 @@ def detect_seasons(evi,
                     # AND search window includes end of TS
                     # THEN the end of season check can be skipped
 
-                    if (partial_end and (not skip_sos) and
-                            (idx_max == data_pix.shape[0] - 2)):
+                    if (
+                        partial_end
+                        and (not skip_sos)
+                        and (idx_max == data_pix.shape[0] - 2)
+                    ):
                         continue
                     else:
                         # check if amplitude conditions of the identified
                         # end point are met
                         amp_dif = data_pix[idx] - data_pix[end[p]]
-                        if not (amp_dif >= amp_thr1) & (
-                                amp_dif >= amp_thr2_fin):
+                        if not (amp_dif >= amp_thr1) & (amp_dif >= amp_thr2_fin):
                             valid[p] = 0
 
                 # now delete invalid peaks
@@ -275,8 +281,7 @@ def detect_seasons(evi,
                     toRemove = npeaks - max_seasons
                     maxSeason = data_pix[peaks]
 
-                    baseSeason = np.mean(np.stack((data_pix[start],
-                                                   data_pix[end])))
+                    baseSeason = np.mean(np.stack((data_pix[start], data_pix[end])))
                     amp = maxSeason - baseSeason
                     idx_remove = np.zeros_like(amp)
                     for r in range(toRemove):
@@ -302,8 +307,9 @@ def detect_seasons(evi,
                 # if less than max_seasons seasons detected -> add
                 # dummy seasons
                 if peaktimes.shape[0] < max_seasons:
-                    toAdd = np.ones(max_seasons - peaktimes.shape[0],
-                                    dtype=np.float32) * -1
+                    toAdd = (
+                        np.ones(max_seasons - peaktimes.shape[0], dtype=np.float32) * -1
+                    )
                     starttimes = np.concatenate((starttimes, toAdd))
                     endtimes = np.concatenate((endtimes, toAdd))
                     peaktimes = np.concatenate((peaktimes, toAdd))
@@ -318,14 +324,16 @@ def detect_seasons(evi,
 
     # actual call to the function
     seasons = _detect_seasons_fast(evi, times)
-    return {'nseasons': seasons[0],
-            'sos': seasons[1].astype(np.uint32),
-            'mos': seasons[2].astype(np.uint32),
-            'eos': seasons[3].astype(np.uint32)}
+    return {
+        "nseasons": seasons[0],
+        "sos": seasons[1].astype(np.uint32),
+        "mos": seasons[2].astype(np.uint32),
+        "eos": seasons[3].astype(np.uint32),
+    }
 
 
 def visualize_seasons(seasons, x, y, evi, times, outfile=None):
-    '''
+    """
     Plot seasons for a given pixel x,y
 
     :param seasons: output of season detection function
@@ -334,7 +342,7 @@ def visualize_seasons(seasons, x, y, evi, times, outfile=None):
     :param evi: original time series used for detection
     :param times: timestamps corresponding to the time series
     :param outfile: optional output file to save the plot
-    '''
+    """
 
     timestamps = np.array([int(pd.to_datetime(t).timestamp()) for t in times])
 
@@ -344,20 +352,17 @@ def visualize_seasons(seasons, x, y, evi, times, outfile=None):
     ax.plot(times, ts)
 
     # plot all seasons for particular pixel
-    npeaks = seasons['nseasons'][x, y]
+    npeaks = seasons["nseasons"][x, y]
     for p in range(npeaks):
-        startdate = seasons['sos'][p, x, y]
-        startidx = np.where(timestamps == nearest_date(timestamps,
-                                                       startdate))[0][0]
-        peakdate = seasons['mos'][p, x, y]
-        peakidx = np.where(timestamps == nearest_date(timestamps,
-                                                      peakdate))[0][0]
-        enddate = seasons['eos'][p, x, y]
-        endidx = np.where(timestamps == nearest_date(timestamps,
-                                                     enddate))[0][0]
-        ax.plot(times[startidx], ts[startidx], 'go')
-        ax.plot(times[peakidx], ts[peakidx], 'k+')
-        ax.plot(times[endidx], ts[endidx], 'ro')
+        startdate = seasons["sos"][p, x, y]
+        startidx = np.where(timestamps == nearest_date(timestamps, startdate))[0][0]
+        peakdate = seasons["mos"][p, x, y]
+        peakidx = np.where(timestamps == nearest_date(timestamps, peakdate))[0][0]
+        enddate = seasons["eos"][p, x, y]
+        endidx = np.where(timestamps == nearest_date(timestamps, enddate))[0][0]
+        ax.plot(times[startidx], ts[startidx], "go")
+        ax.plot(times[peakidx], ts[peakidx], "k+")
+        ax.plot(times[endidx], ts[endidx], "ro")
 
     plt.show()
 
@@ -371,23 +376,24 @@ def mask(data, mask, valid=100, maskedvalue=255):
     return data
 
 
-def _filter_with_confidence(prediction, confidence, conf_thr,
-                            kernel_size, no_data_value):
-
+def _filter_with_confidence(
+    prediction, confidence, conf_thr, kernel_size, no_data_value
+):
     if conf_thr is None:
-        raise ValueError('Confidence threshold for majority'
-                         'filter missing!')
+        raise ValueError("Confidence threshold for majority" "filter missing!")
     if conf_thr > 1:
-        raise ValueError('Confidence threshold for majority'
-                         'filtering should be between zero and one!')
+        raise ValueError(
+            "Confidence threshold for majority"
+            "filtering should be between zero and one!"
+        )
 
     filteredprediction = _filter_without_confidence(
-        prediction, kernel_size, no_data_value)
+        prediction, kernel_size, no_data_value
+    )
 
     # determine which cells need to be updated:
     # if confidence is low
-    update_mask = ((confidence < conf_thr) &
-                   (prediction != no_data_value))
+    update_mask = (confidence < conf_thr) & (prediction != no_data_value)
 
     # produce final result
     newprediction = np.where(update_mask, filteredprediction, prediction)
@@ -400,9 +406,7 @@ def _filter_with_confidence(prediction, confidence, conf_thr,
     return newprediction
 
 
-def _filter_without_confidence(prediction, kernel_size,
-                               no_data_value):
-
+def _filter_without_confidence(prediction, kernel_size, no_data_value):
     to_ignore = prediction == no_data_value
 
     # Convolution kernel
@@ -410,20 +414,19 @@ def _filter_without_confidence(prediction, kernel_size,
 
     # count number of valid ones in each window
     pred_val_one = np.where(to_ignore, 0, prediction)
-    val_ones_count = convolve2d(pred_val_one, k, 'same')
+    val_ones_count = convolve2d(pred_val_one, k, "same")
 
     # count number of valid zeros in each window
     pred_reverse = (prediction == 0).astype(np.uint16)
     pred_val_zero = np.where(to_ignore, 0, pred_reverse)
-    val_zeros_count = convolve2d(pred_val_zero, k, 'same')
+    val_zeros_count = convolve2d(pred_val_zero, k, "same")
 
     # determine majority
     majority = np.where(val_ones_count > val_zeros_count, 1, 0)
 
     # determine which cells need to be updated:
     # if prediction is not no data and if there is a clear majority
-    update_mask = ((val_ones_count != val_zeros_count) &
-                   (prediction != no_data_value))
+    update_mask = (val_ones_count != val_zeros_count) & (prediction != no_data_value)
 
     # produce final result
     newprediction = np.where(update_mask, majority, prediction)
@@ -431,10 +434,10 @@ def _filter_without_confidence(prediction, kernel_size,
     return newprediction
 
 
-def majority_filter(prediction, kernel_size,
-                    confidence=None, conf_thr=None,
-                    no_data_value=255):
-    '''
+def majority_filter(
+    prediction, kernel_size, confidence=None, conf_thr=None, no_data_value=255
+):
+    """
     :param prediction: prediction can only be zero, one or nodata
         (see no_data_value)
     :param kernel_size: determines the size of the spatial window
@@ -451,18 +454,19 @@ def majority_filter(prediction, kernel_size,
     :param no_data_value: (optional) No data value in both
         prediction and confidence, which will be ignored during
         the entire process.
-    '''
+    """
 
     if kernel_size % 2 == 0:
-        raise ValueError('Kernel size for majority filtering should be an'
-                         ' an odd number!')
+        raise ValueError(
+            "Kernel size for majority filtering should be an" " an odd number!"
+        )
 
     if confidence is not None:
-        return _filter_with_confidence(prediction, confidence, conf_thr,
-                                       kernel_size, no_data_value)
+        return _filter_with_confidence(
+            prediction, confidence, conf_thr, kernel_size, no_data_value
+        )
     else:
-        return _filter_without_confidence(prediction, kernel_size,
-                                          no_data_value)
+        return _filter_without_confidence(prediction, kernel_size, no_data_value)
 
 
 def get_blocksize(val):
@@ -475,13 +479,7 @@ def get_blocksize(val):
         return (val // 16) * 16
 
 
-def get_rasterio_profile(arr,
-                         bounds,
-                         epsg,
-                         blockxsize=None,
-                         blockysize=None,
-                         **params):
-
+def get_rasterio_profile(arr, bounds, epsg, blockxsize=None, blockysize=None, **params):
     if len(arr.shape) == 2:
         arr = np.expand_dims(arr, axis=0)
 
@@ -499,29 +497,22 @@ def get_rasterio_profile(arr,
     crs = CRS.from_epsg(epsg)
 
     base_profile.update(
-        transform=rasterio.transform.from_bounds(*bounds,
-                                                 width=width,
-                                                 height=height),
+        transform=rasterio.transform.from_bounds(*bounds, width=width, height=height),
         width=width,
         height=height,
         blockxsize=blockxsize,
         blockysize=blockysize,
         dtype=arr.dtype,
         crs=crs,
-        count=count)
+        count=count,
+    )
 
     base_profile.update(**params)
 
     return base_profile
 
 
-def write_geotiff(arr,
-                  profile,
-                  filename,
-                  band_names=None,
-                  colormap=None,
-                  nodata=None):
-
+def write_geotiff(arr, profile, filename, band_names=None, colormap=None, nodata=None):
     if nodata is not None:
         profile.update(nodata=nodata)
 
@@ -531,7 +522,7 @@ def write_geotiff(arr,
     if os.path.isfile(filename):
         os.remove(filename)
 
-    with rasterio.open(filename, 'w', **profile) as dst:
+    with rasterio.open(filename, "w", **profile) as dst:
         dst.write(arr)
         if band_names is not None:
             dst.update_tags(bands=band_names)
@@ -539,34 +530,34 @@ def write_geotiff(arr,
                 dst.update_tags(i + 1, band_name=b)
 
         if colormap is not None:
-            dst.write_colormap(
-                1, colormap)
+            dst.write_colormap(1, colormap)
 
 
-def _to_geotiff(data, bounds, epsg, filename,
-                band_names=[], colormap=None,
-                nodata=None):
-
+def _to_geotiff(
+    data, bounds, epsg, filename, band_names=[], colormap=None, nodata=None
+):
     if data.ndim == 2:
         data = np.expand_dims(data, axis=0)
 
     profile = get_rasterio_profile(data, bounds, epsg)
 
-    write_geotiff(data, profile, filename,
-                  band_names=band_names, colormap=colormap,
-                  nodata=nodata)
+    write_geotiff(
+        data, profile, filename, band_names=band_names, colormap=colormap, nodata=nodata
+    )
 
 
 # %%
 # Path to the input data
-infile = Path('/vitodata/worldcereal/data/openeo/inputs_presto/preprocessed_merged/belgium_good_2020-12-01_2021-11-30.nc')
+infile = Path(
+    "/vitodata/worldcereal/data/openeo/inputs_presto/preprocessed_merged/belgium_good_2020-12-01_2021-11-30.nc"
+)
 data = xr.open_dataset(infile)
 data
 
 
 # %%
 # compute EVI and visulize it
-evi = 2.5 * (data['B08'] - data['B04']) / (data['B08'] + 2.4 * data['B04'] + 1.0)
+evi = 2.5 * (data["B08"] - data["B04"]) / (data["B08"] + 2.4 * data["B04"] + 1.0)
 fig, ax = plt.subplots(figsize=(10, 10))
 x, y = 10, 10
 ax.plot(evi.t, evi.values[:, x, y])
@@ -582,7 +573,7 @@ visualize_seasons(seasons, 0, 0, input, evi.t.values)
 
 # %%
 # now define rule that generates active cropland marker...
-active_crop = seasons['nseasons']
+active_crop = seasons["nseasons"]
 active_crop = np.round(active_crop).astype(np.uint8)
 active_crop[active_crop > 0] = 1
 active_crop[active_crop != 1] = 0
@@ -595,9 +586,15 @@ nodatavalue = 255
 
 # save result for inspection
 filename = ...
-_to_geotiff(active_crop, bounds, epsg, filename,
-            band_names=['Active cropland'], colormap=colormap,
-            nodata=nodatavalue)
+_to_geotiff(
+    active_crop,
+    bounds,
+    epsg,
+    filename,
+    band_names=["Active cropland"],
+    colormap=colormap,
+    nodata=nodatavalue,
+)
 
 # %%
 # Mask result using cropland mask
@@ -607,17 +604,20 @@ _to_geotiff(active_crop, bounds, epsg, filename,
 
 # save result for inspection
 filename = ...
-_to_geotiff(active_crop, bounds, epsg, filename,
-            band_names=['Active cropland'], colormap=colormap,
-            nodata=nodatavalue)
+_to_geotiff(
+    active_crop,
+    bounds,
+    epsg,
+    filename,
+    band_names=["Active cropland"],
+    colormap=colormap,
+    nodata=nodatavalue,
+)
 
 # %%
 # apply post-classification majority filtering
 kernelsize = 7
-active_crop = majority_filter(
-    active_crop,
-    kernelsize,
-    no_data_value=nodatavalue)
+active_crop = majority_filter(active_crop, kernelsize, no_data_value=nodatavalue)
 
 # To correct dtype
 active_crop = active_crop.astype(np.uint8)
@@ -629,9 +629,15 @@ active_crop[active_crop == 255] = nodatavalue
 #
 # save result for inspection
 filename = ...
-_to_geotiff(active_crop, bounds, epsg, filename,
-            band_names=['Active cropland'], colormap=colormap,
-            nodata=nodatavalue)
+_to_geotiff(
+    active_crop,
+    bounds,
+    epsg,
+    filename,
+    band_names=["Active cropland"],
+    colormap=colormap,
+    nodata=nodatavalue,
+)
 
 # ...
 
