@@ -202,7 +202,12 @@ def raw_datacube_S1(
 
     if orbit_direction is not None:
         extractor_parameters["load_collection"] = {
-            "sat:orbit_state": lambda orbit: orbit == orbit_direction
+            "sat:orbit_state": lambda orbit: orbit == orbit_direction,
+            "polarisation": lambda pol: pol == "VV&VH",
+        }
+    else:
+        extractor_parameters["load_collection"] = {
+            "polarisation": lambda pol: pol == "VV&VH",
         }
 
     extractor = build_sentinel1_grd_extractor(
