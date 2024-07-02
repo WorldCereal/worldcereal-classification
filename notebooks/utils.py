@@ -3,6 +3,7 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
+from presto.inference import process_parquet
 from presto.utils import device
 from shapely.geometry import Polygon, shape
 from torch.utils.data import DataLoader
