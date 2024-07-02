@@ -200,9 +200,9 @@ def majority_vote(
 
         # convert back to values from indices
         for cls_idx, cls_value in index_value_lut:
-            aggregated_predictions[aggregated_predictions_indices == cls_idx] = (
-                cls_value
-            )
+            aggregated_predictions[
+                aggregated_predictions_indices == cls_idx
+            ] = cls_value
             aggregated_predictions = aggregated_predictions.astype(np.uint16)
 
         aggregated_predictions[no_score_mask] = target_excluded_value
