@@ -3,15 +3,6 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
-
-try:
-    import presto
-except ImportError:
-    import sys
-
-    presto_repo_path = "/home/cbutsko/Desktop/presto-worldcereal/"
-    sys.path.append(presto_repo_path)
-from presto.inference import process_parquet
 from presto.utils import device
 from shapely.geometry import Polygon, shape
 from torch.utils.data import DataLoader
