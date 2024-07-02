@@ -45,7 +45,9 @@ dependencies = [
     "cftime",
     "pytest-depends",
     "pyarrow",
-    "geopandas"]
+    "geopandas",
+    "pydantic>=2.7"
+  ]
 
 [project.urls]
 "Homepage" = "https://github.com/WorldCereal/worldcereal-classification"
