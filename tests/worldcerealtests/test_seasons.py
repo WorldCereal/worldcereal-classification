@@ -50,7 +50,9 @@ def test_get_processing_dates_for_extent():
     year = 2021
     extent = BoundingBoxExtent(*bounds, epsg)
 
-    start_date, end_date = get_processing_dates_for_extent(extent, year)
+    temporal_context = get_processing_dates_for_extent(extent, year)
+    start_date = temporal_context.start_date
+    end_date = temporal_context.end_date
 
     assert pd.to_datetime(end_date).year == year
     assert pd.to_datetime(end_date) - pd.to_datetime(start_date) == pd.Timedelta(

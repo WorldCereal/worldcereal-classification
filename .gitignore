@@ -13,7 +13,6 @@ tmp
 *.tif
 *.jp2
 *.npy
-*.png
 *.kml
 *.csv
 *.tsv

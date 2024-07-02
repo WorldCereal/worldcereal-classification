@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Type, Union
 
 import openeo
-from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
+from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -177,12 +177,12 @@ class InferenceResults(BaseModel):
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    backend_context: BackendContext,
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
     out_format: str = "GTiff",
+    backend_context: BackendContext = BackendContext(Backend.FED),
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -192,8 +192,6 @@ def generate_map(
         spatial extent of the map
     temporal_extent : TemporalContext
         temporal range to consider
-    backend_context : BackendContext
-        backend to run the job on
     output_path : Optional[Union[Path, str]]
         output path to download the product to
     product_type : WorldCerealProduct, optional
@@ -206,6 +204,8 @@ def generate_map(
         ignored otherwise.
     out_format : str, optional
         Output format, by default "GTiff"
+    backend_context : BackendContext
+        backend to run the job on
 
     Returns
     -------
