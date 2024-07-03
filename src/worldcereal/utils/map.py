@@ -78,8 +78,7 @@ def _get_colormap(product):
     if product in COLORMAP.keys():
         colormap = copy.deepcopy(COLORMAP[product])
     else:
-        logger.warning(
-            (f"Unknown product `{product}`: " "cannot assign colormap"))
+        logger.warning((f"Unknown product `{product}`: " "cannot assign colormap"))
         logger.info(f"Supported products: {COLORMAP.keys()}")
         colormap = None
 
@@ -143,8 +142,7 @@ def majority_vote(
     unique_values = sorted(unique_values - set(excluded_values))
     index_value_lut = [(k, v) for k, v in enumerate(unique_values)]
 
-    counts = np.zeros(
-        shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
+    counts = np.zeros(shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
     probabilities = np.zeros(
         shape=(*probability.shape, len(unique_values)), dtype=np.uint16
     )
@@ -152,8 +150,7 @@ def majority_vote(
     # Iterates for each classes
     for cls_idx, cls_value in index_value_lut:
         # Take the binary mask of the interest class, and multiplies by the probabilities
-        class_mask = ((prediction == cls_value) *
-                      probability).astype(np.uint16)
+        class_mask = ((prediction == cls_value) * probability).astype(np.uint16)
 
         # Sets to 0 the class scores where the threshold is lower
         class_mask[probability <= conf_threshold] = 0
@@ -176,8 +173,7 @@ def majority_vote(
         # Remove the 0 values because might create divide by 0 issues
         class_voters[class_voters == 0] = 1
 
-        probabilities[:, :, cls_idx] = np.divide(
-            counts[:, :, cls_idx], class_voters)
+        probabilities[:, :, cls_idx] = np.divide(counts[:, :, cls_idx], class_voters)
 
     # Initializes output array
     aggregated_predictions = np.zeros(
@@ -217,8 +213,7 @@ def majority_vote(
     # Setting excluded values back to their original values
     for excluded_value in excluded_values:
         aggregated_predictions[prediction == excluded_value] = excluded_value
-        aggregated_probabilities[prediction ==
-                                 excluded_value] = target_excluded_value
+        aggregated_probabilities[prediction == excluded_value] = target_excluded_value
 
     return aggregated_predictions, aggregated_probabilities
 
@@ -349,8 +344,7 @@ def show_color_legend(product):
     from matplotlib.patches import Rectangle
 
     if product not in COLORLEGEND.keys():
-        raise ValueError(
-            f"Unknown product `{product}`: cannot generate color legend")
+        raise ValueError(f"Unknown product `{product}`: cannot generate color legend")
 
     colors = copy.deepcopy(COLORLEGEND.get(product))
     for key, value in colors.items():
@@ -437,12 +431,9 @@ def get_ui_map():
             "color": "#00F",
             "fillOpacity": 0.3,
         },
-        "drawError": {
-            "color": "#dd253b",
-            "message": "Oups!"
-        },
+        "drawError": {"color": "#dd253b", "message": "Oups!"},
         "allowIntersection": False,
-        "metric": ['km']
+        "metric": ["km"],
     }
     draw_control.circle = {}
     draw_control.polyline = {}
@@ -467,9 +458,7 @@ def get_bbox_from_draw(dc, area_limit=25):
         poly = Polygon(shape(obj.get("geometry")))
         bbox = poly.bounds
     else:
-        raise ValueError(
-            "Please first draw a rectangle on the map before proceeding."
-        )
+        raise ValueError("Please first draw a rectangle on the map before proceeding.")
     print(f"Your area of interest: {bbox}")
 
     # We convert our bounding box to local UTM projection

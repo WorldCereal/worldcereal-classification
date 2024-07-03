@@ -35,8 +35,7 @@ def get_bbox_from_draw(dc, max_size=25000000):
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
-        selected_area = gpd.GeoSeries(
-            poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
+        selected_area = gpd.GeoSeries(poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
         if selected_area > max_size:
             raise ValueError(
                 f"Selected area is too large ({selected_area/1000000:.0f} km2). Please select an area smaller than {max_size/1000000:.0f} km2."
@@ -74,8 +73,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     ]
     vbox = widgets.VBox(
         checkbox_widgets,
-        layout=widgets.Layout(
-            width="50%", display="inline-flex", flex_flow="row wrap"),
+        layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
     )
 
     return vbox, checkbox_widgets
@@ -101,12 +99,10 @@ def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
     h3_cells_lst = []
     res = 5
     while len(h3_cells_lst) == 0:
-        h3_cells_lst = list(h3.polyfill(
-            twisted_bbox_poly.__geo_interface__, res))
+        h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
         res += 1
     if res > 5:
-        h3_cells_lst = tuple(
-            np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))
+        h3_cells_lst = tuple(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
@@ -139,8 +135,7 @@ def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
     print("Processing selected samples ...")
     public_df = process_parquet(public_df_raw)
     public_df = map_croptypes(public_df)
-    print(
-        f"Extracted and processed {public_df.shape[0]} samples from global database.")
+    print(f"Extracted and processed {public_df.shape[0]} samples from global database.")
 
     return public_df
 
@@ -156,11 +151,9 @@ def get_inputs_outputs(
     if task_type == "cropland":
         presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ft-cl_30D_cropland_random.pt"
         df["custom_class"] = (df["LANDCOVER_LABEL"] == 11).astype(int)
-    presto_model = Presto.load_pretrained_url(
-        presto_url=presto_model_url, strict=False)
+    presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
-    tds = WorldCerealLabelledDataset(
-        df, target_function=lambda xx: xx["custom_class"])
+    tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
     tdl = DataLoader(tds, batch_size=batch_size, shuffle=False)
 
     encoding_list, targets = [], []
@@ -234,8 +227,7 @@ def train_classifier(inputs, targets):
     class_weights = compute_class_weight(
         class_weight="balanced", classes=np.unique(targets_train), y=targets_train
     )
-    class_weights = {k: v for k, v in zip(
-        np.unique(targets_train), class_weights)}
+    class_weights = {k: v for k, v in zip(np.unique(targets_train), class_weights)}
     print("Class weights:", class_weights)
 
     sample_weights = np.ones((len(targets_train),))
@@ -279,15 +271,12 @@ def map_croptypes(
     downstream_classes="CROPTYPE9",
 ) -> pd.DataFrame:
     wc2ewoc_map = pd.read_csv("resources/wc2eurocrops_map.csv")
-    wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace(
-        "-", "").astype(int)
+    wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
 
     ewoc_map = pd.read_csv("resources/eurocrops_map_wcr_edition.csv")
     ewoc_map = ewoc_map[ewoc_map["ewoc_code"].notna()]
-    ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace(
-        "-", "").astype(int)
-    ewoc_map = ewoc_map.apply(
-        lambda x: x[: x.last_valid_index()].ffill(), axis=1)
+    ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
+    ewoc_map = ewoc_map.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
     ewoc_map.set_index("ewoc_code", inplace=True)
 
     df["CROPTYPE_LABEL"].replace(0, np.nan, inplace=True)
@@ -301,8 +290,7 @@ def map_croptypes(
     df["croptype_name"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
 
     df["downstream_class"] = df["ewoc_code"].map(
-        {int(k): v for k, v in get_class_mappings()
-         [downstream_classes].items()}
+        {int(k): v for k, v in get_class_mappings()[downstream_classes].items()}
     )
 
     return df
@@ -361,26 +349,27 @@ def deploy_model(model, pattern=None):
 
 def terrascope_login():
 
-    authBaseUrl = 'https://sso.terrascope.be/auth/realms/terrascope'
+    authBaseUrl = "https://sso.terrascope.be/auth/realms/terrascope"
 
     username = input("Enter your Terrascope username: ")
     password = input("Enter your Terrascope password: ")
 
     data = {
-        'username': username,
-        'password': password,
-        'client_id': 'worldcereal-rdm',
-        'grant_type': 'password',
+        "username": username,
+        "password": password,
+        "client_id": "worldcereal-rdm",
+        "grant_type": "password",
     }
 
     # call terrascope auth server to get token
     tokenResponse = requests.post(
-        f'{authBaseUrl}/protocol/openid-connect/token', data=data)
+        f"{authBaseUrl}/protocol/openid-connect/token", data=data
+    )
 
     token = tokenResponse.json()
-    tokentype = token['token_type']
-    accessToken = token['access_token']
-    headers = {'Authorization': f'{tokentype} {accessToken}'}
+    tokentype = token["token_type"]
+    accessToken = token["access_token"]
+    headers = {"Authorization": f"{tokentype} {accessToken}"}
 
     return headers
 
@@ -411,20 +400,21 @@ def rdm_collection_request(poly, headers=None, buffer=250000):
     for i, col in enumerate(test):
         print()
         print(
-            f'Collection {i+1}: {col["collectionId"]} of type {col["type"]} containing {col["featureCount"]} samples')
+            f'Collection {i+1}: {col["collectionId"]} of type {col["type"]} containing {col["featureCount"]} samples'
+        )
         col_ids.append(col["collectionId"])
 
     return col_ids
 
 
-def rdm_features_request(poly, col_ids=None, headers=None,
-                         max_items=1000, buffer=250000):
+def rdm_features_request(
+    poly, col_ids=None, headers=None, max_items=1000, buffer=250000
+):
 
     from worldcereal.utils.refdata import _to_points
 
     if col_ids is None:
-        col_ids = rdm_collection_request(poly, headers=headers,
-                                         buffer=buffer)
+        col_ids = rdm_collection_request(poly, headers=headers, buffer=buffer)
 
     if headers is None:
         headers = {}
@@ -445,11 +435,12 @@ def rdm_features_request(poly, col_ids=None, headers=None,
         print(featureSearchUrl)
         featureSearchResponse = requests.get(featureSearchUrl, headers=headers)
         df = gpd.GeoDataFrame.from_features(
-            featureSearchResponse.json(), crs='EPSG:4326')
+            featureSearchResponse.json(), crs="EPSG:4326"
+        )
         dfs.append(_to_points(df))
 
     gdf = pd.concat(dfs, ignore_index=True)
-    print(f'Got a total of {len(gdf)} reference points')
+    print(f"Got a total of {len(gdf)} reference points")
 
     return gdf
 
@@ -604,8 +595,7 @@ def post_job_action(
     return job_items
 
 
-def generate_output_path(root_folder: Path, geometry_index: int,
-                         row: pd.Series):
+def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series):
     features = geojson.loads(row.geometry)
     sample_id = features[geometry_index].properties.get("sample_id", None)
     if sample_id is None:
@@ -617,8 +607,9 @@ def generate_output_path(root_folder: Path, geometry_index: int,
     return subfolder / f"{sample_id}{row.out_extension}"
 
 
-def point_extractions(input_df, output_path, max_locations=500,
-                      memory='3G', memory_overhead='5G'):
+def point_extractions(
+    input_df, output_path, max_locations=500, memory="3G", memory_overhead="5G"
+):
 
     # define path to tracking csv
     Path(output_path).mkdir(parents=True, exist_ok=True)
