@@ -48,8 +48,8 @@ COLORMAP = {
 
 COLORLEGEND = {
     "temporary-crops": {
-        "No cropland": (186, 186, 186, 0),  # no cropland
-        "Temporary crops": (224, 24, 28, 1),  # cropland
+        "Temporary crops": (224, 24, 28, 1),
+        "Other land cover": (186, 186, 186, 1),
     },
     "croptype": {
         "Barley": (103, 60, 32, 1),
@@ -60,6 +60,7 @@ COLORLEGEND = {
         "Soybean": (85, 218, 218, 1),
         "Sunflower": (245, 66, 111, 1),
         "Wheat": (186, 113, 53, 1),
+        "No cropland": (186, 186, 186, 0)
     },
 }
 
@@ -67,8 +68,8 @@ NODATAVALUE = {
     "active-cropland": 255,
     "temporary-crops": 255,
     "maize": 255,
-    "croptype": 0,
-    "probabilities": 255,
+    "croptype": 254,
+    "probabilities": 254,
 }
 
 LOCALTILESERVER_PORT = 8889
@@ -274,7 +275,7 @@ def postprocess_product(
             kernel_size=filter_settings["kernel_size"],
             conf_threshold=filter_settings["conf_threshold"],
             target_excluded_value=0,
-            excluded_values=[0, nodata],
+            excluded_values=[0, 254, nodata],
         )
 
     # construct dictionary of output files to be generated
@@ -289,7 +290,7 @@ def postprocess_product(
 
     # derive cropland mask if required
     if product != "temporary-crops":
-        cropland = np.where(newlabels == 0, 1, 0)
+        cropland = np.where(newlabels != 254, 1, 0)
         outfiles["croplandmask"] = {
             "data": cropland,
             "colormap": _get_colormap("temporary-crops"),
