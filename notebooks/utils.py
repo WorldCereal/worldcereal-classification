@@ -4,6 +4,7 @@ import requests
 from pathlib import Path
 from typing import List, Optional
 from functools import partial
+import glob
 
 import h3
 import numpy as np
@@ -650,8 +651,33 @@ def point_extractions(input_df, output_path, max_locations=500,
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
+        restart_failed=True
     )
 
     manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)
 
     manager.run_jobs(job_df, create_cube, tracking_df_path)
+
+
+def fetch_point_extractions(indir: Path):
+    """Get all extractions available in the given directory.
+
+    Parameters
+    ----------
+    indir : Path
+        _description_
+
+    Returns
+    -------
+    List[pd.DataFrame]
+        List of pandas DataFrames containing all the extractions.
+    """
+
+    infiles = glob.glob(str(indir / '*' / '*.parquet'))
+    infiles = [Path(infile)
+               for infile in infiles if f'{indir}/stac' not in infile]
+    data = []
+    for infile in infiles:
+        data.append(pd.read_parquet(infile))
+
+    return data
