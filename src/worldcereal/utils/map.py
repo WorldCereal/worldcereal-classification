@@ -454,7 +454,7 @@ def get_ui_map():
     return m, draw_control
 
 
-def get_bbox_from_draw(dc, area_limit=25):
+def get_bbox_from_draw(dc, area_limit=100):
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
