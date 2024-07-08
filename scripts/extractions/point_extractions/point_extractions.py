@@ -1,4 +1,5 @@
 """Extract point data using OpenEO-GFMAP package."""
+
 import argparse
 import logging
 from functools import partial
