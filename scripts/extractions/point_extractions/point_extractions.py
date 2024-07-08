@@ -1,4 +1,5 @@
 """Extract point data using OpenEO-GFMAP package."""
+
 import argparse
 import logging
 from functools import partial
@@ -31,8 +32,7 @@ def setup_logger(level=logging.INFO) -> None:
     stream_handler = logging.StreamHandler()
     pipeline_log.addHandler(stream_handler)
 
-    formatter = logging.Formatter(
-        "%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
+    formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
     stream_handler.setFormatter(formatter)
 
     # Exclude the other loggers from other libraries
@@ -273,7 +273,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
-        restart_failed=True
+        restart_failed=True,
     )
 
     manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)
