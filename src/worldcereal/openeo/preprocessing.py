@@ -133,7 +133,7 @@ def raw_datacube_S2(
     if apply_mask_flag:
         extraction_parameters["pre_mask"] = scl_dilated_mask
 
-    if tile_size:
+    if tile_size is not None:
         extraction_parameters["update_arguments"] = {
             "featureflags": {"tilesize": tile_size}
         }
@@ -217,7 +217,7 @@ def raw_datacube_S1(
             "polarisation": lambda pol: pol == "VV&VH",
         }
 
-    if tile_size:
+    if tile_size is not None:
         extractor_parameters["update_arguments"] = {
             "featureflags": {"tilesize": tile_size}
         }
