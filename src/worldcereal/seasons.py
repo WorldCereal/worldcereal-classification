@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pandas as pd
 from loguru import logger
-from openeo_gfmap import BoundingBoxExtent
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
 
 from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
@@ -95,7 +95,7 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
         resolution (int): resolution in meters of resulting array
 
     Raises:
-        RuntimeError: when required TIFF file was not found
+        FileNotFoundError: when required TIFF file was not found
         ValueError: when requested season is not supported
         ValueError: when `kind` value is not supported
 
@@ -121,7 +121,9 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
     doy_file = season + f"_{kind}_WGS84.tif"
 
     if not pkg_resources.is_resource(cropcalendars, doy_file):
-        raise RuntimeError(("Required season DOY file " f"`{doy_file}` not found."))
+        raise FileNotFoundError(
+            ("Required season DOY file " f"`{doy_file}` not found.")
+        )
 
     logger.info(f"Loading DOY data from: {doy_file}")
 
@@ -246,7 +248,7 @@ def get_processing_dates_for_extent(
     year: int,
     season: str = "tc-annual",
     max_seasonality_difference: int = 60,
-):
+) -> TemporalContext:
     """Function to retrieve required temporal range of input products for a
     given extent, season and year. Based on the requested season's end date
     a temporal range is inferred that spans an entire year.
@@ -263,8 +265,7 @@ def get_processing_dates_for_extent(
         SeasonMaxDiffError: raised when seasonality difference is too large
 
     Returns:
-        (start_date, end_date): tuple of date strings specifying
-        start and end date to process
+        TemporalContext: inferred temporal range
     """
 
     if season not in SUPPORTED_SEASONS:
@@ -299,4 +300,8 @@ def get_processing_dates_for_extent(
     # And get start date by subtracting a year
     start_date = end_date - pd.Timedelta(days=364)
 
-    return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    print(f"Derived the following period for processing: {start_date} " f"- {end_date}")
+
+    return TemporalContext(
+        start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    )

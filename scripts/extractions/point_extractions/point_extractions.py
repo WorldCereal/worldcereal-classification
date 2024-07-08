@@ -273,6 +273,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=2,
         post_job_params={},
+        restart_failed=True,
     )
 
     manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)

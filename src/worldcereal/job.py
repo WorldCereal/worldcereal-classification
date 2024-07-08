@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Type, Union
 
 import openeo
-from openeo_gfmap import BackendContext, BoundingBoxExtent, TemporalContext
+from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -177,12 +177,13 @@ class InferenceResults(BaseModel):
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    backend_context: BackendContext,
     output_path: Optional[Union[Path, str]],
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
     out_format: str = "GTiff",
+    backend_context: BackendContext = BackendContext(Backend.FED),
+    tile_size: Optional[int] = 128,
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -192,8 +193,6 @@ def generate_map(
         spatial extent of the map
     temporal_extent : TemporalContext
         temporal range to consider
-    backend_context : BackendContext
-        backend to run the job on
     output_path : Optional[Union[Path, str]]
         output path to download the product to
     product_type : WorldCerealProduct, optional
@@ -206,6 +205,10 @@ def generate_map(
         ignored otherwise.
     out_format : str, optional
         Output format, by default "GTiff"
+    backend_context : BackendContext
+        backend to run the job on
+    tile_size: int, optional
+        Tile size to use for the data loading in OpenEO, by default 128.
 
     Returns
     -------
@@ -237,6 +240,7 @@ def generate_map(
         backend_context=backend_context,
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
+        tile_size=tile_size,
     )
 
     # Explicit filtering again for bbox because of METEO low
@@ -288,6 +292,7 @@ def collect_inputs(
     temporal_extent: TemporalContext,
     backend_context: BackendContext,
     output_path: Union[Path, str],
+    tile_size: Optional[int] = None,
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -302,7 +307,9 @@ def collect_inputs(
         backend to run the job on
     output_path : Union[Path, str]
         output path to download the product to
-
+    tile_size: int, optional
+        Tile size to use for the data loading in OpenEO, by default None
+        so it uses the OpenEO default setting.
     """
 
     # Connect to openeo
@@ -316,6 +323,7 @@ def collect_inputs(
         backend_context=backend_context,
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
+        tile_size=tile_size,
     )
 
     inputs.execute_batch(
