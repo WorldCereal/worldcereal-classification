@@ -26,27 +26,6 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfm
 RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
 
 
-def get_bbox_from_draw(dc, max_size=25000000):
-    import geopandas as gpd
-
-    obj = dc.last_draw
-    if obj.get("geometry") is not None:
-        poly = Polygon(shape(obj.get("geometry")))
-        selected_area = gpd.GeoSeries(poly, crs="EPSG:4326").to_crs(epsg=3785).area[0]
-        if selected_area > max_size:
-            raise ValueError(
-                f"Selected area is too large ({selected_area/1000000:.0f} km2). Please select an area smaller than {max_size/1000000:.0f} km2."
-            )
-        bbox = poly.bounds
-    else:
-        raise ValueError(
-            "Please first draw a rectangle " "on the map before proceeding."
-        )
-    print(f"Your area of interest: {bbox} ({selected_area/1000000:.0f} km2)")
-
-    return bbox, poly
-
-
 def get_class_mappings():
     with open("resources/croptype_classes.json") as f:
         CLASS_MAPPINGS = json.load(f)
