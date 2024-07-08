@@ -348,7 +348,6 @@ def deploy_model(model, pattern=None):
 
 
 def terrascope_login():
-
     authBaseUrl = "https://sso.terrascope.be/auth/realms/terrascope"
 
     username = input("Enter your Terrascope username: ")
@@ -375,7 +374,6 @@ def terrascope_login():
 
 
 def rdm_collection_request(poly, headers=None, buffer=250000):
-
     if headers is None:
         headers = {}
 
@@ -410,7 +408,6 @@ def rdm_collection_request(poly, headers=None, buffer=250000):
 def rdm_features_request(
     poly, col_ids=None, headers=None, max_items=1000, buffer=250000
 ):
-
     from worldcereal.utils.refdata import _to_points
 
     if col_ids is None:
@@ -610,7 +607,6 @@ def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series)
 def point_extractions(
     input_df, output_path, max_locations=500, memory="3G", memory_overhead="5G"
 ):
-
     # define path to tracking csv
     Path(output_path).mkdir(parents=True, exist_ok=True)
     tracking_df_path = Path(output_path) / "job_tracking.csv"
