@@ -1,5 +1,6 @@
-from typing import List
 import copy
+from typing import List
+
 import geopandas as gpd
 import leafmap
 import matplotlib.pyplot as plt
@@ -60,7 +61,7 @@ COLORLEGEND = {
         "Soybean": (85, 218, 218, 1),
         "Sunflower": (245, 66, 111, 1),
         "Wheat": (186, 113, 53, 1),
-        "No cropland": (186, 186, 186, 0)
+        "No cropland": (186, 186, 186, 0),
     },
 }
 
