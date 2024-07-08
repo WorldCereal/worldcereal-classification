@@ -59,12 +59,12 @@ repos:
     hooks:
       - id: auto-smart-commit
   - repo: https://github.com/psf/black
-    rev: 23.10.0
+    rev: 24.4.2
     hooks:
       - id: black
         language_version: python3.9
   - repo: https://github.com/pycqa/isort
-    rev: 5.12.0
+    rev: 5.13.2
     hooks:
       - id: isort
         name: isort (python)
