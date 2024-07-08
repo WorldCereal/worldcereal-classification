@@ -32,6 +32,7 @@ def raw_datacube_S2(
     distance_to_cloud_flag: Optional[bool] = True,
     additional_masks_flag: Optional[bool] = True,
     apply_mask_flag: Optional[bool] = False,
+    tile_size: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -132,6 +133,11 @@ def raw_datacube_S2(
     if apply_mask_flag:
         extraction_parameters["pre_mask"] = scl_dilated_mask
 
+    if tile_size is not None:
+        extraction_parameters["update_arguments"] = {
+            "featureflags": {"tilesize": tile_size}
+        }
+
     extractor = build_sentinel2_l2a_extractor(
         backend_context,
         bands=bands,
@@ -151,6 +157,7 @@ def raw_datacube_S1(
     fetch_type: FetchType,
     target_resolution: float = 20.0,
     orbit_direction: Optional[str] = None,
+    tile_size: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-1 datacube from OpenEO using GFMAP routines.
 
@@ -208,6 +215,11 @@ def raw_datacube_S1(
     else:
         extractor_parameters["load_collection"] = {
             "polarisation": lambda pol: pol == "VV&VH",
+        }
+
+    if tile_size is not None:
+        extractor_parameters["update_arguments"] = {
+            "featureflags": {"tilesize": tile_size}
         }
 
     extractor = build_sentinel1_grd_extractor(
@@ -288,6 +300,7 @@ def worldcereal_preprocessed_inputs_gfmap(
     temporal_extent: TemporalContext,
     fetch_type: Optional[FetchType] = FetchType.TILE,
     disable_meteo: bool = False,
+    tile_size: Optional[int] = None,
 ) -> DataCube:
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -311,6 +324,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
         additional_masks_flag=False,
         apply_mask_flag=True,
+        tile_size=tile_size,
     )
 
     s2_data = median_compositing(s2_data, period="month")
@@ -333,6 +347,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         fetch_type=fetch_type,
         target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=None,  # Make the querry on the catalogue for the best orbit
+        tile_size=tile_size,
     )
 
     s1_data = mean_compositing(s1_data, period="month")
