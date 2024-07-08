@@ -24,7 +24,7 @@ jobs:
         python -m pip install isort black ruff
     - name: isort
       run: python -m isort . --check --diff
-    # - name: black
-    #   run: python -m black --check --diff .
+    - name: black
+      run: python -m black --check --diff .
     - name: ruff
       run: ruff check .
