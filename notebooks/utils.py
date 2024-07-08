@@ -18,7 +18,7 @@ from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from presto.inference import process_parquet
 from presto.utils import device
-from shapely.geometry import Polygon, shape
+from shapely.geometry import Polygon
 from torch.utils.data import DataLoader
 
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
