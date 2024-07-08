@@ -45,15 +45,6 @@ def setup_logger(level=logging.INFO) -> None:
     stream_handler.addFilter(ManagerLoggerFilter())
 
 
-def filter_extract_true(
-    geometries: geojson.FeatureCollection,
-) -> geojson.FeatureCollection:
-    """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
-    return geojson.FeatureCollection(
-        [f for f in geometries.features if f.properties.get("extract", 0) != 0]
-    )
-
-
 def get_job_nb_points(row: pd.Series) -> int:
     """Get the number of points in the geometry."""
     return len(
@@ -137,9 +128,6 @@ def create_datacube(
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
     assert isinstance(geometry, geojson.FeatureCollection)
-
-    # Filter the geometry to the rows with the extract only flag
-    geometry = filter_extract_true(geometry)
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Backend name and fetching type
