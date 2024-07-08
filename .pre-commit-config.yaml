@@ -59,7 +59,7 @@ repos:
     hooks:
       - id: auto-smart-commit
   - repo: https://github.com/psf/black
-    rev: 24.3.0
+    rev: 23.10.0
     hooks:
       - id: black
         language_version: python3.9
