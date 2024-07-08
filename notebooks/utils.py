@@ -1,30 +1,26 @@
 import json
-from typing import Tuple
-import requests
-from pathlib import Path
-from typing import List, Optional
 from functools import partial
+from pathlib import Path
+from typing import List, Tuple
 
+import geojson
+import geopandas as gpd
 import h3
 import numpy as np
-import pandas as pd
-import geopandas as gpd
-import geojson
 import openeo
+import pandas as pd
 import pystac
-
+import requests
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
-
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
-
 from presto.inference import process_parquet
 from presto.utils import device
 from shapely.geometry import Polygon, shape
 from torch.utils.data import DataLoader
 
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
 
 RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
 
@@ -542,7 +538,7 @@ def create_datacube(
     cube = inputs.aggregate_spatial(geometries=geometry, reducer="mean")
 
     # Increase the memory of the jobs depending on the number of polygons to extract
-    number_points = get_job_nb_points(row)
+    # number_points = get_job_nb_points(row)
 
     job_options = {
         "executor-memory": executor_memory,
