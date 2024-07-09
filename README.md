@@ -7,7 +7,7 @@ This repository contains the code for running the WorldCereal classification mod
 |:-----------------------------------------|
 
 
-Launch a demo:
+Launch the _beta_ version of a V1 version of the new system:
 
 [![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/main?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Fsystem_v1_custom_croptype_model.ipynb%26branch%3Dsystem-v1-demo)
 
