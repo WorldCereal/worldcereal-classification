@@ -9,7 +9,7 @@ through [this link](https://aai.egi.eu/registry/co_petitions/start/coef:111).
 
 Once this registration process has been completed, clicking the Binder icon below will bring the user to a Jupyterhub instance allowing to run the demo.
 
-[![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/v1.0.0-beta?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Fsystem_v1_demo.ipynb%26branch%3Ddemo)
+[![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/v1.0.0-beta?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Fsystem_v1_demo.ipynb%26branch%3Dsystem-v1-demo)
 
 ## Running in your own environment
 Alternatively you can build your own environment and run the notebook locally. For this you can build your environment based on `environment.yml` and then `pip install` the `worldcereal-classification` package using the `pyproject.toml` file.
