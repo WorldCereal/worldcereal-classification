@@ -158,7 +158,6 @@ if __name__ == "__main__":
         collection_description="AGERA5 data extraction example.",
         poll_sleep=60,
         n_threads=2,
-        post_job_params={},
     )
 
     manager.add_backend(Backend.TERRASCOPE.value, vito_connection, parallel_jobs=6)

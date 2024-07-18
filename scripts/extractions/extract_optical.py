@@ -1,10 +1,8 @@
 """Extract S2 data using OpenEO-GFMAP package."""
 
 import argparse
-import json
 from datetime import datetime
 from functools import partial
-from importlib.metadata import version
 from pathlib import Path
 from typing import List
 
@@ -20,6 +18,7 @@ from extract_sar import (
     get_job_nb_polygons,
     pipeline_log,
     post_job_action,
+    send_notification,
     setup_logger,
     upload_geoparquet_artifactory,
 )
@@ -28,7 +27,7 @@ from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager import _log
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
-from openeo_gfmap.utils.netcdf import update_nc_attributes
+from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
 
@@ -162,6 +161,8 @@ sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(
     }
 )
 
+S2_L2A_CATALOGUE_BEGIN_DATE = datetime(2017, 1, 1)
+
 
 def create_job_dataframe_s2(
     backend: Backend,
@@ -169,13 +170,28 @@ def create_job_dataframe_s2(
 ) -> pd.DataFrame:
     """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
     rows = []
-    for job in split_jobs:
+    for job in tqdm(split_jobs):
         # Compute the average in the valid date and make a buffer of 1.5 year around
-        median_time = pd.to_datetime(job.valid_time).mean()
-        start_date = median_time - pd.Timedelta(days=275)  # A bit more than 9 months
-        end_date = median_time + pd.Timedelta(days=275)  # A bit more than 9 months
+        min_time = job.valid_time.min()
+        max_time = job.valid_time.max()
+        # 9 months before and after the valid time
+        start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
+        end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
+
+        # Impose limits due to the data availability
+        # start_date = max(start_date, S2_L2A_CATALOGUE_BEGIN_DATE)
+        # end_date = min(end_date, datetime.now())
+
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
         h3_l3_cell = job.h3_l3_cell.iloc[0]
+
+        # Convert dates to string format
+        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
+            "%Y-%m-%d"
+        )
+
+        # Set back the valid_time in the geometry as string
+        job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
 
         variables = {
             "backend_name": backend.value,
@@ -213,7 +229,7 @@ def create_datacube_optical(
     assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
-    geometry_df = buffer_geometry(geometry)
+    geometry_df = buffer_geometry(geometry, distance_m=320)
     spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
 
     # Backend name and fetching type
@@ -330,10 +346,30 @@ if __name__ == "__main__":
     else:
         input_df = gpd.read_file(args.input_df)
 
-    split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
+    split_dfs = []
+    pipeline_log.info(
+        "Performing splitting by the year...",
+    )
+    input_df["valid_time"] = pd.to_datetime(input_df.valid_time)
+    input_df["year"] = input_df.valid_time.dt.year
+
+    split_dfs_time = [group.reset_index() for _, group in input_df.groupby("year")]
+    pipeline_log.info("Performing splitting by s2 grid...")
+    for df in split_dfs_time:
+        s2_split_df = split_job_s2grid(df, max_points=args.max_locations)
+        split_dfs.extend(s2_split_df)
+
+    # Filter all the datasets withouth any location to extract
+    pipeline_log.info("Filtering out the datasets without any location to extract.")
     split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
 
+    # pipeline_log.warning(
+    #     "Sub-sampling the job dataframe for testing. Remove this for production."
+    # )
+    # split_dfs = split_dfs[:1]
+
     job_df = create_job_dataframe_s2(Backend.CDSE, split_dfs)
+    pipeline_log.info("Created the job dataframe with %s jobs.", len(job_df))
 
     # Setup the memory parameters for the job creator.
     create_datacube_optical = partial(
@@ -364,16 +400,38 @@ if __name__ == "__main__":
         collection_id="SENTINEL2-EXTRACTION",
         collection_description="Sentinel-2 and Auxiliary data extraction example.",
         poll_sleep=60,
-        n_threads=2,
-        post_job_params={},
+        n_threads=4,
         restart_failed=args.restart_failed,
     )
 
-    manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=6)
+    manager.add_backend(
+        Backend.CDSE.value,
+        cdse_connection,
+        dynamic_max_jobs=True,
+        max_jobs=20,
+        min_jobs=10,
+    )
     manager.setup_stac(
         constellation="sentinel2",
         item_assets={"sentinel2": sentinel2_asset},
     )
 
     pipeline_log.info("Launching the jobs from the manager.")
-    manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
+    try:
+        send_notification(
+            title="WorldCereal Extraction S2 - Started",
+            message="Extractions have been started.",
+        )
+        manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
+    except Exception as e:
+        send_notification(
+            title="WorldCereal Extraction S2 - Failed",
+            message=f"Exception while running extractions:\n{e}",
+        )
+        pipeline_log.exception("Exception while running the extractions:\n%s", e)
+        exit(1)
+
+    send_notification(
+        title="WorldCereal Extraction S2 - Completed",
+        message="Extractions have been completed.",
+    )

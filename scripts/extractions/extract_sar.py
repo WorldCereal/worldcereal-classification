@@ -68,8 +68,32 @@ sentinel1_asset = pystac.extensions.item_assets.AssetDefinition(
     }
 )
 
+S1_GRD_CATALOGUE_BEGIN_DATE = datetime(2014, 10, 1)
+
 # Logger for this current pipeline
 pipeline_log: Optional[logging.Logger] = None
+
+PUSHOVER_API_ENDPOINT = "https://api.pushover.net/1/messages.json"
+
+
+def send_notification(message: str, title: str = "OpenEO-GFMAP") -> None:
+    user_token = os.getenv("PUSHOVER_USER_TOKEN")
+    app_token = os.getenv("PUSHOVER_APP_TOKEN")
+
+    if user_token is None or app_token is None:
+        pipeline_log.warning("No pushover tokens found, skipping the notification.")
+        return
+
+    data = {
+        "token": app_token,
+        "user": user_token,
+        "message": message,
+        "title": title,
+    }
+    response = requests.post(PUSHOVER_API_ENDPOINT, data=data)
+
+    if response.status_code != 200:
+        pipeline_log.error("Error sending the notification: %s", response.text)
 
 
 def setup_logger(level=logging.INFO) -> None:
@@ -203,12 +227,16 @@ def create_job_dataframe_s1(
         # Compute the average in the valid date and make a buffer of 1.5 year around
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
-        start_date = (
-            (min_time - pd.Timedelta(days=275)).to_pydatetime().strftime("%Y-%m-%d")
-        )  # A bit more than 9 months
-        end_date = (
-            (max_time + pd.Timedelta(days=275)).to_pydatetime().strftime("%Y-%m-%d")
-        )  # A bit more than 9 months
+
+        # Compute the average in the valid date and make a buffer of 1.5 year around
+        # 9 months before and after the valid time
+        start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
+        end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
+
+        # Impose limits due to the data availability
+        start_date = max(start_date, S1_GRD_CATALOGUE_BEGIN_DATE)
+        end_date = min(end_date, datetime.now())
+
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
         h3_l3_cell = job.h3_l3_cell.iloc[0]
 
@@ -222,6 +250,11 @@ def create_job_dataframe_s1(
         )
         descending_area = area_per_orbit["DESCENDING"]["area"]
         ascending_area = area_per_orbit["ASCENDING"]["area"]
+
+        # Convert dates to string format
+        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
+            "%Y-%m-%d"
+        )
 
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
@@ -485,8 +518,7 @@ if __name__ == "__main__":
         collection_id="SENTINEL1-EXTRACTION",
         collection_description="Sentinel-1 data extraction example.",
         poll_sleep=60,
-        n_threads=2,
-        post_job_params={},
+        n_threads=4,
         restart_failed=args.restart_failed,
     )
 
