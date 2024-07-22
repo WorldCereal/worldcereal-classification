@@ -1,5 +1,5 @@
 ## Introduction
-The notebook `system_v1_demo.ipynb` aims to show how to run WorldCereal system V1 for a custom area of interest. The current notebook focuses on training a custom crop type model for an area of interested and running inference on CDSE.
+The notebook `system_v1_demo.ipynb` aims to show how to run WorldCereal system V1 for a custom area of interest. The current notebook focuses on training a custom crop type model for an area of interest and running inference on CDSE.
 
 ## Running on binder
 In order to run this demo notebook smoothly, the WorldCereal consortium has set up a pre-configured Python environment for you. To access this environment and run the notebook, please follow the Binder link below.
