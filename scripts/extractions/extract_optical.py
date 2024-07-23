@@ -409,9 +409,11 @@ if __name__ == "__main__":
     manager.add_backend(
         Backend.CDSE.value,
         cdse_connection,
-        dynamic_max_jobs=True,
-        max_jobs=20,
-        min_jobs=10,
+        # dynamic_max_jobs=True,
+        # max_jobs=20,
+        # min_jobs=10,
+        dynamic_max_jobs=False,
+        parallel_jobs=10
     )
     manager.setup_stac(
         constellation="sentinel2",
