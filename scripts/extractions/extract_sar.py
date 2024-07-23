@@ -470,6 +470,8 @@ if __name__ == "__main__":
         else:
             input_df = gpd.read_file(args.input_df)
 
+        input_df = input_df[input_df['extract'] == 1]
+
         split_dfs = []
         pipeline_log.info(
             "Performing splitting by the year...",
@@ -485,7 +487,7 @@ if __name__ == "__main__":
 
         # Filter all the datasets withouth any location to extract
         pipeline_log.info("Filtering out the datasets without any location to extract.")
-        split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
+        # split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
 
         pipeline_log.warning(
             "Sub-sampling the job dataframe for testing. Remove this for production."

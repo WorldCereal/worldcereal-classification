@@ -126,8 +126,10 @@ if __name__ == "__main__":
     input_df = gpd.read_file(args.input_df)
     input_df = append_h3_index(input_df, grid_resolution=3)
 
+    input_df = input_df[input_df['extract'] == 1]
+
     split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
-    split_dfs = [df for df in split_dfs if df.extract.any()]
+    # split_dfs = [df for df in split_dfs if df.extract.any()]
 
     job_df = create_job_dataframe_s1(Backend.TERRASCOPE, split_dfs, prefix="AGERA5")
 
