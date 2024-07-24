@@ -346,7 +346,7 @@ if __name__ == "__main__":
     else:
         input_df = gpd.read_file(args.input_df)
 
-    input_df = input_df[input_df['extract'] == 1]
+    input_df = input_df[input_df['extract'] == 2]
 
     split_dfs = []
     pipeline_log.info(
