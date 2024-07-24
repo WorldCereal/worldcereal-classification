@@ -224,9 +224,9 @@ def create_datacube_optical(
     geometry = geojson.loads(row.geometry)
     assert isinstance(geometry, geojson.FeatureCollection)
 
-    # Filter the geometry to the rows with the extract only flag
-    geometry = filter_extract_true(geometry)
-    assert len(geometry.features) > 0, "No geometries with the extract flag found"
+    # # Filter the geometry to the rows with the extract only flag
+    # geometry = filter_extract_true(geometry)
+    # assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
