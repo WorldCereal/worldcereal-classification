@@ -365,7 +365,7 @@ def post_job_action(
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
-    assert len(base_gpd[base_gpd.extract == 1]) == len(
+    assert len(base_gpd[base_gpd.extract == 2]) == len(
         job_items
     ), "The number of result paths should be the same as the number of geometries"
 
