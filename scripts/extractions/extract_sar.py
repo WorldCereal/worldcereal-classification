@@ -370,7 +370,7 @@ def post_job_action(
         job_items
     ), "The number of result paths should be the same as the number of geometries"
 
-    extracted_gpd = base_gpd[base_gpd.extract == 1].reset_index(drop=True)
+    extracted_gpd = base_gpd[base_gpd.extract == 2].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for idx, item in enumerate(job_items):
         if "sample_id" in extracted_gpd.columns:
