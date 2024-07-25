@@ -279,7 +279,7 @@ def create_datacube_optical(
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
         "executor-cores": "1",
-        "max-executors": "34",
+        "max-executors": "10",
         "soft-errors": "true",
         "gdal-dataset-cache-size": 2,
         "gdal-cachemax": 120,

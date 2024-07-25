@@ -349,6 +349,7 @@ def create_datacube_sar(
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
         "soft-errors": "true",
+        "max_executors": 10,
     }
     return cube.create_job(
         out_format="NetCDF",
