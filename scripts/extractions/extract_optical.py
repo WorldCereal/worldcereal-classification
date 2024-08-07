@@ -9,6 +9,7 @@ from typing import List
 import geojson
 import geopandas as gpd
 import openeo
+from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 import pandas as pd
 import pystac
 from extract_sar import (
@@ -420,20 +421,50 @@ if __name__ == "__main__":
         item_assets={"sentinel2": sentinel2_asset},
     )
 
-    pipeline_log.info("Launching the jobs from the manager.")
-    try:
-        send_notification(
-            title="WorldCereal Extraction S2 - Started",
-            message="Extractions have been started.",
-        )
-        manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
-    except Exception as e:
-        send_notification(
-            title="WorldCereal Extraction S2 - Failed",
-            message=f"Exception while running extractions:\n{e}",
-        )
-        pipeline_log.exception("Exception while running the extractions:\n%s", e)
-        exit(1)
+    latest_exception_time = None
+    exception_counter = 0
+    running = True
+    
+    while running:
+        pipeline_log.info("Launching the jobs from the manager.")
+        try:
+            send_notification(
+                title="WorldCereal Extraction S2 - Started",
+                message="Extractions have been started.",
+            )
+            manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
+            running = False  # Exit the loop once the manager finishes noramlly
+        except (OpenEoRestError, OpenEoApiError, OpenEoApiPlainError) as e:
+            pipeline_log.exception("Exception while running the extractions:\n%s", e)
+            send_notification(
+                title="WorldCereal Extraction S2 - Exception",
+                message=f"Exception while running extractions:\n{e}",
+            )
+            if latest_exception_time is None:
+                latest_exception_time = datetime.now()
+                exception_counter += 1
+            # 30 minutes between each exception
+            elif (datetime.now() - latest_exception_time).seconds < 1800:
+                exception_counter += 1
+            else:
+                exception_counter = 0
+                latest_exception_time = None
+
+            if exception_counter >= 3:
+                send_notification(
+                    title="WorldCereal Extraction S2 - Failed",
+                    message="Too many exceptions, stopping the extraction.",
+                )
+                pipeline_log.error("Too many exceptions, stopping the extraction.")
+                exit(1)
+        except Exception as e:
+            send_notification(
+                title="WorldCereal Extraction S2 - Failed",
+                message=f"Exception while running extractions:\n{e}",
+            )
+            pipeline_log.exception("Exception while running the extractions:\n%s", e)
+            exit(1)
+        
 
     send_notification(
         title="WorldCereal Extraction S2 - Completed",
