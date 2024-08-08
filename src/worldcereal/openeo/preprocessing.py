@@ -211,8 +211,6 @@ def raw_datacube_S1(
         extractor_parameters["load_collection"] = {
             "sat:orbit_state": lambda orbit: orbit == orbit_direction,
             "polarisation": lambda pol: pol == "VV&VH",
-<<<<<<< HEAD
-=======
         }
     else:
         extractor_parameters["load_collection"] = {
@@ -222,7 +220,6 @@ def raw_datacube_S1(
     if tile_size is not None:
         extractor_parameters["update_arguments"] = {
             "featureflags": {"tilesize": tile_size}
->>>>>>> 37d59b513aa9763a41d48dc9b463d84ebbcf03e4
         }
 
     extractor = build_sentinel1_grd_extractor(
