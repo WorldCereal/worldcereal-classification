@@ -1,33 +1,20 @@
 """Extract S2 data using OpenEO-GFMAP package."""
 
-import argparse
 from datetime import datetime
-from functools import partial
-from pathlib import Path
 from typing import List
 
 import geojson
 import geopandas as gpd
 import openeo
-from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 import pandas as pd
 import pystac
-from extract_sar import (
+from extract_common import (
     buffer_geometry,
-    filter_extract_true,
-    generate_output_path,
     get_job_nb_polygons,
-    pipeline_log,
-    post_job_action,
-    send_notification,
-    setup_logger,
     upload_geoparquet_artifactory,
 )
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
-from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager import _log
-from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
 from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
@@ -293,180 +280,4 @@ def create_datacube_optical(
         sample_by_feature=True,
         job_options=job_options,
         feature_id_property="sample_id",
-    )
-
-
-if __name__ == "__main__":
-    setup_logger()
-    from extract_sar import pipeline_log
-
-    parser = argparse.ArgumentParser(
-        description="S2 samples extraction with OpenEO-GFMAP package."
-    )
-    parser.add_argument(
-        "output_path", type=Path, help="Path where to save the extraction results."
-    )
-    parser.add_argument(
-        "input_df",
-        type=Path,
-        help="Path or URL to the input dataframe for the training data.",
-    )
-    parser.add_argument(
-        "--max_locations",
-        type=int,
-        default=500,
-        help="Maximum number of locations to extract per job.",
-    )
-    parser.add_argument(
-        "--memory",
-        type=str,
-        default="1800m",
-        help="Memory to allocate for the executor.",
-    )
-    parser.add_argument(
-        "--memory_overhead",
-        type=str,
-        default="1900m",
-        help="Memory overhead to allocate for the executor.",
-    )
-    parser.add_argument(
-        "--restart_failed",
-        action="store_true",
-        help="Restart the jobs that previously failed.",
-    )
-
-    args = parser.parse_args()
-
-    tracking_df_path = Path(args.output_path) / "job_tracking.csv"
-
-    # Load the input dataframe
-    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
-
-    if args.input_df.name.endswith(".geoparquet"):
-        input_df = gpd.read_parquet(args.input_df)
-    else:
-        input_df = gpd.read_file(args.input_df)
-
-    input_df = input_df[input_df['extract'] == 2]
-
-    split_dfs = []
-    pipeline_log.info(
-        "Performing splitting by the year...",
-    )
-    input_df["valid_time"] = pd.to_datetime(input_df.valid_time)
-    input_df["year"] = input_df.valid_time.dt.year
-
-    split_dfs_time = [group.reset_index() for _, group in input_df.groupby("year")]
-    pipeline_log.info("Performing splitting by s2 grid...")
-    for df in split_dfs_time:
-        s2_split_df = split_job_s2grid(df, max_points=args.max_locations)
-        split_dfs.extend(s2_split_df)
-
-    # Filter all the datasets withouth any location to extract
-    pipeline_log.info("Filtering out the datasets without any location to extract.")
-    # split_dfs = [df for df in split_dfs if (df.extract == 1).any()]
-
-    # pipeline_log.warning(
-    #     "Sub-sampling the job dataframe for testing. Remove this for production."
-    # )
-    # split_dfs = split_dfs[:1]
-
-    job_df = create_job_dataframe_s2(Backend.CDSE, split_dfs)
-    pipeline_log.info("Created the job dataframe with %s jobs.", len(job_df))
-
-    # Setup the memory parameters for the job creator.
-    create_datacube_optical = partial(
-        create_datacube_optical,
-        executor_memory=args.memory,
-        executor_memory_overhead=args.memory_overhead,
-    )
-
-    # Setup the s2 grid for the output path generation function
-    generate_output_path = partial(
-        generate_output_path,
-        s2_grid=load_s2_grid(),
-    )
-
-    post_job_action = partial(
-        post_job_action,
-        parameters={
-            "description": "Sentinel-2 L2A raw observations, unprocessed.",
-            "title": "Sentinel-2 L2A",
-            "spatial_resolution": "10m",
-        },
-    )
-
-    manager = GFMAPJobManager(
-        output_dir=args.output_path,
-        output_path_generator=generate_output_path,
-        post_job_action=post_job_action,
-        collection_id="SENTINEL2-EXTRACTION",
-        collection_description="Sentinel-2 and Auxiliary data extraction example.",
-        poll_sleep=60,
-        n_threads=4,
-        restart_failed=args.restart_failed,
-    )
-
-    manager.add_backend(
-        Backend.CDSE.value,
-        cdse_connection,
-        # dynamic_max_jobs=True,
-        # max_jobs=20,
-        # min_jobs=10,
-        dynamic_max_jobs=False,
-        parallel_jobs=10
-    )
-    manager.setup_stac(
-        constellation="sentinel2",
-        item_assets={"sentinel2": sentinel2_asset},
-    )
-
-    latest_exception_time = None
-    exception_counter = 0
-    running = True
-    
-    while running:
-        pipeline_log.info("Launching the jobs from the manager.")
-        try:
-            send_notification(
-                title="WorldCereal Extraction S2 - Started",
-                message="Extractions have been started.",
-            )
-            manager.run_jobs(job_df, create_datacube_optical, tracking_df_path)
-            running = False  # Exit the loop once the manager finishes noramlly
-        except (OpenEoRestError, OpenEoApiError, OpenEoApiPlainError) as e:
-            pipeline_log.exception("Exception while running the extractions:\n%s", e)
-            send_notification(
-                title="WorldCereal Extraction S2 - Exception",
-                message=f"Exception while running extractions:\n{e}",
-            )
-            if latest_exception_time is None:
-                latest_exception_time = datetime.now()
-                exception_counter += 1
-            # 30 minutes between each exception
-            elif (datetime.now() - latest_exception_time).seconds < 1800:
-                exception_counter += 1
-            else:
-                exception_counter = 0
-                latest_exception_time = None
-
-            if exception_counter >= 3:
-                send_notification(
-                    title="WorldCereal Extraction S2 - Failed",
-                    message="Too many exceptions, stopping the extraction.",
-                )
-                pipeline_log.error("Too many exceptions, stopping the extraction.")
-                exit(1)
-        except Exception as e:
-            send_notification(
-                title="WorldCereal Extraction S2 - Failed",
-                message=f"Exception while running extractions:\n{e}",
-            )
-            pipeline_log.exception("Exception while running the extractions:\n%s", e)
-            exit(1)
-        
-
-    send_notification(
-        title="WorldCereal Extraction S2 - Completed",
-        message="Extractions have been completed.",
     )

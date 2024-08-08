@@ -1,30 +1,24 @@
 """Extract AGERA5 (Meteo) data using OpenEO-GFMAP package."""
 
-import argparse
-from functools import partial
-from pathlib import Path
+from typing import List
 
 import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-from extract_sar import (
+import pystac
+from extract_common import (
     buffer_geometry,
-    create_job_dataframe_s1,
     filter_extract_true,
-    generate_output_path,
-    pipeline_log,
-    setup_logger,
     upload_geoparquet_artifactory,
 )
 from openeo_gfmap import Backend, TemporalContext
-from openeo_gfmap.backend import vito_connection
-from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import (
-    append_h3_index,
-    load_s2_grid,
-    split_job_s2grid,
-)
+
+meteo_asset = pystac.extensions.item_assets.AssetDefinition({})
+
+
+def create_job_dataframe_meteo(backend: Backend, split_jobs: List[gpd.GeoDataFrame]):
+    raise NotImplementedError("This function is not implemented yet.")
 
 
 def create_datacube_meteo(
@@ -83,86 +77,3 @@ def create_datacube_meteo(
         sample_by_feature=True,
         job_options=job_options,
     )
-
-
-if __name__ == "__main__":
-    setup_logger()
-    from extract_sar import pipeline_log
-
-    parser = argparse.ArgumentParser(
-        description="AGERA5 samples extraction with OpenEO-GFMAP package."
-    )
-    parser.add_argument(
-        "output_path", type=Path, help="Path where to save the extraction results."
-    )
-    parser.add_argument(
-        "input_df",
-        type=str,
-        help="Path or URL to the input dataframe for the training data.",
-    )
-    parser.add_argument(
-        "--max_locations",
-        type=int,
-        default=5,
-        help="Maximum number of locations to extract per job.",
-    )
-    parser.add_argument(
-        "--memory", type=str, default="5G", help="Memory to allocate for the executor."
-    )
-    parser.add_argument(
-        "--memory-overhead",
-        type=str,
-        default="3G",
-        help="Memory overhead to allocate for the executor.",
-    )
-
-    args = parser.parse_args()
-
-    tracking_df_path = Path(args.output_path) / "job_tracking.csv"
-
-    # Load the input dataframe
-    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
-
-    input_df = gpd.read_file(args.input_df)
-    input_df = append_h3_index(input_df, grid_resolution=3)
-
-    input_df = input_df[input_df['extract'] == 1]
-
-    split_dfs = split_job_s2grid(input_df, max_points=args.max_locations)
-    # split_dfs = [df for df in split_dfs if df.extract.any()]
-
-    job_df = create_job_dataframe_s1(Backend.TERRASCOPE, split_dfs, prefix="AGERA5")
-
-    pipeline_log.warning(
-        "Sub-sampling the job dataframe for testing. Remove this for production."
-    )
-    # job_df = job_df.iloc[[0, 2, 3, -6]].reset_index(drop=True)
-    job_df = job_df.iloc[[0]].reset_index(drop=True)
-
-    # Setup the memory parameters for the job creator.
-    create_datacube_meteo = partial(
-        create_datacube_meteo,
-        executor_memory=args.memory,
-        executor_memory_overhead=args.memory_overhead,
-    )
-
-    # Setup the s2 grid for the output path generation function
-    generate_output_path = partial(
-        generate_output_path,
-        s2_grid=load_s2_grid(),
-    )
-
-    manager = GFMAPJobManager(
-        output_dir=args.output_path,
-        output_path_generator=generate_output_path,
-        post_job_action=None,
-        collection_id="AGERA5-EXTRACTION",
-        collection_description="AGERA5 data extraction example.",
-        poll_sleep=60,
-        n_threads=2,
-    )
-
-    manager.add_backend(Backend.TERRASCOPE.value, vito_connection, parallel_jobs=6)
-
-    pipeline_log.info("Launching the jobs from the manager.")
-    manager.run_jobs(job_df, create_datacube_meteo, tracking_df_path)
