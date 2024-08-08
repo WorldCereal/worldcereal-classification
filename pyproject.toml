@@ -46,7 +46,9 @@ dependencies = [
     "cftime",
     "pytest-depends",
     "pyarrow",
-    "geopandas"]
+    "geopandas",
+    "pydantic>=2.6"
+  ]
 
 [project.urls]
 "Homepage" = "https://github.com/WorldCereal/worldcereal-classification"
@@ -56,6 +58,14 @@ dependencies = [
 dev = [
   "pytest>=7.4.0",
   "matplotlib>=3.3.0"
+]
+train = [
+  "catboost==1.2.5",
+  "presto-worldcereal==0.1.2",
+  "scikit-learn==1.5.0",
+  "torch==2.3.1",
+  "ipywidgets==8.1.3",
+  "duckdb==1.0.0"
 ]
 
 [tool.pytest.ini_options]

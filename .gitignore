@@ -13,7 +13,6 @@ tmp
 *.tif
 *.jp2
 *.npy
-*.png
 *.kml
 *.csv
 *.tsv
@@ -161,10 +160,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-notebooks/S1A_IW_GRDH_1SDV_20191026T153410_20191026T153444_029631_035FDA_2640.SAFE/preview/map-overlay.kml
-scripts/classification/tenpercent_sparse/.nfs00000000c35c9cfd00000035
 download.zip
-catboost_info/catboost_training.json
+catboost_info/*
+notebooks/catboost_info/*
 
 *.cbm
 *.pt
