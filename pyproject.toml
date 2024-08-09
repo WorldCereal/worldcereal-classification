@@ -39,6 +39,7 @@ dependencies = [
     "loguru>=0.7.2",
     "geojson",
     "numpy<2.0.0",
+    "netcdf4<=1.6.4",
     "h5netcdf>=1.1.0",
     "openeo>=0.29.0",
     "openeo-gfmap==0.1.0",
