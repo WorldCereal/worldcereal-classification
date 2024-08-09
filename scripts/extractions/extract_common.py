@@ -41,7 +41,11 @@ stream_handler.addFilter(ManagerLoggerFilter())
 
 
 def post_job_action(
-    job_items: List[pystac.Item], row: pd.Series, parameters: dict = {}
+    job_items: List[pystac.Item],
+    row: pd.Series,
+    description: str,
+    title: str,
+    spatail_resolution: str,
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
@@ -73,13 +77,11 @@ def post_job_action(
             "valid_time": valid_time,
             "GFMAP_version": version("openeo_gfmap"),
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": parameters.get(
-                "description", "Sentinel1 GRD raw observations, unprocessed."
-            ),
-            "title": parameters.get("title", "Sentinel-1 GRD"),
+            "description": description,
+            "title": title,
             "sample_id": sample_id,
             "ref_id": ref_id,
-            "spatial_resolution": parameters.get("spatial_resolution", "20m"),
+            "spatial_resolution": spatial_resolution,
             "s2_tile": s2_tile,
             "h3_l3_cell": h3_l3_cell,
         }

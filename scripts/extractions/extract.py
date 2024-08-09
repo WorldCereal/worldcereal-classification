@@ -166,27 +166,21 @@ def setup_extraction_functions(
     post_job_actions = {
         ExtractionCollection.SENTINEL1: partial(
             post_job_action,
-            parameters={
-                "descrpition": "Sentinel1 GRD raw observations, unprocessed.",
-                "title": "Sentinel-1 GRD",
-                "spatial_resolution": "20m",
-            },
+            description="Sentinel1 GRD raw observations, unprocessed.",
+            title="Sentinel-1 GRD",
+            spatial_resolution="20m",
         ),
         ExtractionCollection.SENTINEL2: partial(
             post_job_action,
-            parameters={
-                "descrpition": "Sentinel2 L2A observations, processed.",
-                "title": "Sentinel-2 L2A",
-                "spatial_resolution": "10m",
-            },
+            description="Sentinel2 L2A observations, processed.",
+            title="Sentinel-2 L2A",
+            spatial_resolution="10m",
         ),
         ExtractionCollection.METEO: partial(
             post_job_action,
-            parameters={
-                "descrpition": "Meteo observations",
-                "title": "Meteo observations",
-                "spatial_resolution": "1deg",
-            },
+            description="Meteo observations",
+            title="Meteo observations",
+            spatial_resolution="1deg",
         ),
     }
 
