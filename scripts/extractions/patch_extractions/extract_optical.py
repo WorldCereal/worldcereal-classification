@@ -12,12 +12,13 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
-from extract_common import (
-    buffer_geometry,
-    get_job_nb_polygons,
-    upload_geoparquet_artifactory,
-)
 from worldcereal.openeo.preprocessing import raw_datacube_S2
+
+from extract_common import (  # isort: skip
+    buffer_geometry,  # isort: skip
+    get_job_nb_polygons,  # isort: skip
+    upload_geoparquet_artifactory,  # isort: skip
+)  # isort: skip
 
 # Define the sentinel 2 asset
 sentinel2_asset = pystac.extensions.item_assets.AssetDefinition(

@@ -18,12 +18,17 @@ from extract_optical import (
     create_job_dataframe_s2,
     sentinel2_asset,
 )
-from extract_sar import create_datacube_sar, create_job_dataframe_s1, sentinel1_asset
 from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
+
+from extract_sar import (  # isort: skip
+    create_datacube_sar,
+    create_job_dataframe_s1,
+    sentinel1_asset,
+)
 
 
 class ExtractionCollection(Enum):

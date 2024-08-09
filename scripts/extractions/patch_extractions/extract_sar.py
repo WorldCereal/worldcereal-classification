@@ -19,14 +19,15 @@ from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate
 from tqdm import tqdm
 
-from extract_common import (
-    buffer_geometry,
-    filter_extract_true,
-    get_job_nb_polygons,
-    pipeline_log,
-    upload_geoparquet_artifactory,
-)
 from worldcereal.openeo.preprocessing import raw_datacube_S1
+
+from extract_common import (  # isort: skip
+    buffer_geometry,  # isort: skip
+    filter_extract_true,  # isort: skip
+    get_job_nb_polygons,  # isort: skip
+    pipeline_log,  # isort: skip
+    upload_geoparquet_artifactory,  # isort: skip
+)
 
 # Define the sentinel 1 asset
 sentinel1_asset = pystac.extensions.item_assets.AssetDefinition(

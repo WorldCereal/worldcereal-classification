@@ -9,11 +9,11 @@ import pandas as pd
 import pystac
 from openeo_gfmap import Backend, TemporalContext
 
-from extract_common import (
-    buffer_geometry,
-    filter_extract_true,
-    upload_geoparquet_artifactory,
-)
+from extract_common import (  # isort: skip
+    buffer_geometry,  # isort: skip
+    filter_extract_true,  # isort: skip
+    upload_geoparquet_artifactory,  # isort: skip
+)  # isort: skip
 
 meteo_asset = pystac.extensions.item_assets.AssetDefinition({})
 
