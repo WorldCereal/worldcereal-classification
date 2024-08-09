@@ -45,7 +45,7 @@ def post_job_action(
     row: pd.Series,
     description: str,
     title: str,
-    spatail_resolution: str,
+    spatial_resolution: str,
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
