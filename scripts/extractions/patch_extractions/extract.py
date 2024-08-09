@@ -11,6 +11,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import requests
+from extract_common import generate_output_path, pipeline_log, post_job_action
 from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo, meteo_asset
 from extract_optical import (
     create_datacube_optical,
@@ -23,12 +24,6 @@ from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
-
-from scripts.extractions.patch_extractions.extract_common import (
-    generate_output_path,
-    pipeline_log,
-    post_job_action,
-)
 
 
 class ExtractionCollection(Enum):
