@@ -12,7 +12,7 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
-from scripts.extractions.patch_extractions.extract_common import (
+from extract_common import (
     buffer_geometry,
     get_job_nb_polygons,
     upload_geoparquet_artifactory,

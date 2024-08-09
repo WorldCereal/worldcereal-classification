@@ -19,7 +19,7 @@ from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate
 from tqdm import tqdm
 
-from scripts.extractions.patch_extractions.extract_common import (
+from extract_common import (
     buffer_geometry,
     filter_extract_true,
     get_job_nb_polygons,

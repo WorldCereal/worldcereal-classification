@@ -9,7 +9,7 @@ import pandas as pd
 import pystac
 from openeo_gfmap import Backend, TemporalContext
 
-from scripts.extractions.patch_extractions.extract_common import (
+from extract_common import (
     buffer_geometry,
     filter_extract_true,
     upload_geoparquet_artifactory,
