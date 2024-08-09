@@ -7,12 +7,13 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
-from extract_common import (
+from openeo_gfmap import Backend, TemporalContext
+
+from scripts.extractions.patch_extractions.extract_common import (
     buffer_geometry,
     filter_extract_true,
     upload_geoparquet_artifactory,
 )
-from openeo_gfmap import Backend, TemporalContext
 
 meteo_asset = pystac.extensions.item_assets.AssetDefinition({})
 
@@ -28,6 +29,7 @@ def create_datacube_meteo(
     connection_provider=None,
     executor_memory: str = "2G",
     executor_memory_overhead: str = "1G",
+    max_executors: int = 22,
 ) -> gpd.GeoDataFrame:
     start_date = row.start_date
     end_date = row.end_date
@@ -70,6 +72,7 @@ def create_datacube_meteo(
     job_options = {
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
+        "max-executors": max_executors,
     }
     return cube.create_job(
         out_format="NetCDF",

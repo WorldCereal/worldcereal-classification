@@ -8,13 +8,6 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
-from extract_common import (
-    buffer_geometry,
-    filter_extract_true,
-    get_job_nb_polygons,
-    pipeline_log,
-    upload_geoparquet_artifactory,
-)
 from openeo_gfmap import (
     Backend,
     BackendContext,
@@ -26,6 +19,13 @@ from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate
 from tqdm import tqdm
 
+from scripts.extractions.patch_extractions.extract_common import (
+    buffer_geometry,
+    filter_extract_true,
+    get_job_nb_polygons,
+    pipeline_log,
+    upload_geoparquet_artifactory,
+)
 from worldcereal.openeo.preprocessing import raw_datacube_S1
 
 # Define the sentinel 1 asset
@@ -142,6 +142,7 @@ def create_datacube_sar(
     connection_provider,
     executor_memory: str = "5G",
     executor_memory_overhead: str = "2G",
+    max_executors: int = 22,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information. This job is a
     S1 patch of 32x32 pixels at 20m spatial resolution."""
@@ -195,7 +196,7 @@ def create_datacube_sar(
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
         "soft-errors": "true",
-        "max_executors": 10,
+        "max_executors": max_executors,
     }
     return cube.create_job(
         out_format="NetCDF",

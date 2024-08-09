@@ -8,15 +8,15 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
-from extract_common import (
-    buffer_geometry,
-    get_job_nb_polygons,
-    upload_geoparquet_artifactory,
-)
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
+from scripts.extractions.patch_extractions.extract_common import (
+    buffer_geometry,
+    get_job_nb_polygons,
+    upload_geoparquet_artifactory,
+)
 from worldcereal.openeo.preprocessing import raw_datacube_S2
 
 # Define the sentinel 2 asset
@@ -203,6 +203,7 @@ def create_datacube_optical(
     connection_provider=None,
     executor_memory: str = "5G",
     executor_memory_overhead: str = "2G",
+    max_executors: int = 22,
 ) -> gpd.GeoDataFrame:
     start_date = row.start_date
     end_date = row.end_date
@@ -267,7 +268,7 @@ def create_datacube_optical(
         "executor-memory": executor_memory,
         "executor-memoryOverhead": executor_memory_overhead,
         "executor-cores": "1",
-        "max-executors": "10",
+        "max-executors": max_executors,
         "soft-errors": "true",
         "gdal-dataset-cache-size": 2,
         "gdal-cachemax": 120,

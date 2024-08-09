@@ -11,7 +11,6 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import requests
-from extract_common import generate_output_path, pipeline_log, post_job_action
 from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo, meteo_asset
 from extract_optical import (
     create_datacube_optical,
@@ -24,6 +23,12 @@ from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
+
+from scripts.extractions.patch_extractions.extract_common import (
+    generate_output_path,
+    pipeline_log,
+    post_job_action,
+)
 
 
 class ExtractionCollection(Enum):
@@ -127,7 +132,10 @@ def prepare_job_dataframe(
 
 
 def setup_extraction_functions(
-    collection: ExtractionCollection, memory: str, memory_overhead: str
+    collection: ExtractionCollection,
+    memory: str,
+    memory_overhead: str,
+    max_executors: int,
 ) -> tuple[callable, callable, callable]:
     """Setup the datacube creation, path generation and post-job action
     functions for the given collection. Returns a tuple of three functions:
@@ -141,16 +149,19 @@ def setup_extraction_functions(
             create_datacube_sar,
             executor_memory=memory,
             executor_memory_overhead=memory_overhead,
+            max_executors=max_executors,
         ),
         ExtractionCollection.SENTINEL2: partial(
             create_datacube_optical,
             executor_memory=memory,
             executor_memory_overhead=memory_overhead,
+            max_executors=max_executors,
         ),
         ExtractionCollection.METEO: partial(
             create_datacube_meteo,
             executor_memory=memory,
             executor_memory_overhead=memory_overhead,
+            max_executors=max_executors,
         ),
     }
 
@@ -286,6 +297,15 @@ if __name__ == "__main__":
         help="Memory overhead to allocate for the executor.",
     )
     parser.add_argument(
+        "--max_executors", type=int, default=22, help="Number of executors to run."
+    )
+    parser.add_argument(
+        "--parallel_jobs",
+        type=int,
+        default=10,
+        help="The maximum number of parrallel jobs to run at the same time.",
+    )
+    parser.add_argument(
         "--restart_failed",
         action="store_true",
         help="Restart the jobs that previously failed.",
@@ -319,7 +339,7 @@ if __name__ == "__main__":
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, args.memory, args.memory_overhead
+        collection, args.memory, args.memory_overhead, args.max_executors
     )
 
     # Initialize and setups the job manager
@@ -347,7 +367,10 @@ if __name__ == "__main__":
     )
 
     job_manager.add_backend(
-        Backend.CDSE.value, cdse_connection, dynamic_max_jobs=False, parallel_jobs=10
+        Backend.CDSE.value,
+        cdse_connection,
+        dynamic_max_jobs=False,
+        parallel_jobs=args.parallel_jobs,
     )
 
     constellation_name = {
