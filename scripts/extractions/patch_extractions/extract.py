@@ -120,11 +120,6 @@ def prepare_job_dataframe(
         ),
     )
 
-    pipeline_log.warning(
-        "Subsampling the number of splitted dataframes. Remove this for production."
-    )
-    split_dfs = split_dfs[:1]
-
     job_df = create_job_dataframe_fn(backend, split_dfs)
     pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
 
