@@ -128,6 +128,7 @@ def prepare_job_dataframe(
 
 def setup_extraction_functions(
     collection: ExtractionCollection,
+    extract_value: int,
     memory: str,
     memory_overhead: str,
     max_executors: int,
@@ -172,18 +173,22 @@ def setup_extraction_functions(
     post_job_actions = {
         ExtractionCollection.SENTINEL1: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Sentinel1 GRD raw observations, unprocessed.",
             title="Sentinel-1 GRD",
             spatial_resolution="20m",
+            s1_orbit_fix=True,
         ),
         ExtractionCollection.SENTINEL2: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Sentinel2 L2A observations, processed.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
         ),
         ExtractionCollection.METEO: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Meteo observations",
             title="Meteo observations",
             spatial_resolution="1deg",
@@ -223,7 +228,12 @@ def manager_main_loop(
             )
             manager.run_jobs(job_df, datacube_fn, tracking_df_path)
             return
-        except (OpenEoApiPlainError, OpenEoApiError, OpenEoRestError) as e:
+        except (
+            OpenEoApiPlainError,
+            OpenEoApiError,
+            OpenEoRestError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
             pipeline_log.exception("An error occurred during the extraction.\n%s", e)
             send_notification(
                 title=f"WorldCereal Extraction {collection.value} - OpenEo Exception",
@@ -334,7 +344,7 @@ if __name__ == "__main__":
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, args.memory, args.memory_overhead, args.max_executors
+        collection, extract_value, args.memory, args.memory_overhead, args.max_executors
     )
 
     # Initialize and setups the job manager
