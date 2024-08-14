@@ -86,6 +86,7 @@ def post_job_action(
             "spatial_resolution": spatial_resolution,
             "s2_tile": s2_tile,
             "h3_l3_cell": h3_l3_cell,
+            "_FillValue": 65535,  # No data value for uint16
         }
 
         if s1_orbit_fix:
