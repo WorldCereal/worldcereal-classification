@@ -43,19 +43,21 @@ stream_handler.addFilter(ManagerLoggerFilter())
 def post_job_action(
     job_items: List[pystac.Item],
     row: pd.Series,
+    extract_value: int,
     description: str,
     title: str,
     spatial_resolution: str,
+    s1_orbit_fix: bool = False,  # To rename the samples from the S1 orbit
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
-    assert len(base_gpd[base_gpd.extract == 2]) == len(
+    assert len(base_gpd[base_gpd.extract == extract_value]) == len(
         job_items
     ), "The number of result paths should be the same as the number of geometries"
 
-    extracted_gpd = base_gpd[base_gpd.extract == 2].reset_index(drop=True)
+    extracted_gpd = base_gpd[base_gpd.extract == extract_value].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for idx, item in enumerate(job_items):
         if "sample_id" in extracted_gpd.columns:
@@ -84,7 +86,12 @@ def post_job_action(
             "spatial_resolution": spatial_resolution,
             "s2_tile": s2_tile,
             "h3_l3_cell": h3_l3_cell,
+            "_FillValue": 65535,  # No data value for uint16
         }
+
+        if s1_orbit_fix:
+            new_attributes["orbit_state"] = row.orbit_state
+            item.id = item.id.replace(".nc", f"{row.orbit_state}.nc")
 
         # Saves the new attributes in the netcdf file
         update_nc_attributes(item_asset_path, new_attributes)
