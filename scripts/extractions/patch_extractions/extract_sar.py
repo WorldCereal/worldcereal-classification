@@ -45,8 +45,8 @@ sentinel1_asset = pystac.extensions.item_assets.AssetDefinition(
             },
         ],
         "cube:variables": {
-            "S1-SIGMA0-VV": {"dimesions": ["time", "y", "x"], "type": "data"},
-            "S1-SIGMA0-VH": {"dimesions": ["time", "y", "x"], "type": "data"},
+            "S1-SIGMA0-VV": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S1-SIGMA0-VH": {"dimensions": ["time", "y", "x"], "type": "data"},
         },
         "eo:bands": [
             {
