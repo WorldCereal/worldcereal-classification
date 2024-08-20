@@ -72,7 +72,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             TerrainAttribute,
             rdarray,
         )
-        
+
         dem = inarr.sel(bands="elevation").values
         dem_array = rdarray(dem, no_data=65535)
         slope = TerrainAttribute(dem_array, attrib="slope_riserun")
