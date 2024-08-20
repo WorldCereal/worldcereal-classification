@@ -23,7 +23,6 @@ from worldcereal.openeo.preprocessing import raw_datacube_S1
 
 from extract_common import (  # isort: skip
     buffer_geometry,  # isort: skip
-    filter_extract_true,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
@@ -94,6 +93,21 @@ def create_job_dataframe_s1(
 
         # Check wherever the s2_tile is in the grid
         geometry_bbox = job.to_crs(epsg=4326).total_bounds
+        # Buffer if the geometry is a point
+        if geometry_bbox[0] == geometry_bbox[2]:
+            geometry_bbox = (
+                geometry_bbox[0] - 0.0001,
+                geometry_bbox[1],
+                geometry_bbox[2] + 0.0001,
+                geometry_bbox[3],
+            )
+        if geometry_bbox[1] == geometry_bbox[3]:
+            geometry_bbox = (
+                geometry_bbox[0],
+                geometry_bbox[1] - 0.0001,
+                geometry_bbox[2],
+                geometry_bbox[3] + 0.0001,
+            )
 
         area_per_orbit = s1_area_per_orbitstate(
             backend=BackendContext(backend),
@@ -156,10 +170,6 @@ def create_datacube_sar(
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
     assert isinstance(geometry, geojson.FeatureCollection)
-
-    # Filter the geometry to the rows with the extract only flag
-    geometry = filter_extract_true(geometry)
-    assert len(geometry.features) > 0, "No geometries with the extract flag found"
 
     # Jobs will be run for two orbit direction
     orbit_state = row.orbit_state

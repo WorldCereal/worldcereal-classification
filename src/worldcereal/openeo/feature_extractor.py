@@ -2,6 +2,7 @@
 
 import xarray as xr
 from openeo.udf import XarrayDataCube
+from openeo.udf.debug import inspect
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 
 
@@ -21,8 +22,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     import functools
 
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.2-py3-none-any.whl"
-    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
+    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.3-py3-none-any.whl"
+    BASE_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
@@ -64,21 +65,21 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     def _compute_slope(self, inarr: xr.DataArray) -> xr.DataArray:
         """Computes the slope using the richdem library. The input array should
-        have the following bands: 'elevation'. Returns a new DataArray
-        containing the new `slope` band.
+        have the following bands: 'elevation' And no time dimension. Returns a
+        new DataArray containing the new `slope` band.
         """
         from richdem import (  # pylint: disable=import-outside-toplevel
             TerrainAttribute,
             rdarray,
         )
-
+        
         dem = inarr.sel(bands="elevation").values
         dem_array = rdarray(dem, no_data=65535)
         slope = TerrainAttribute(dem_array, attrib="slope_riserun")
         return xr.DataArray(
-            slope,
-            dims=("bands", "y", "x"),
-            coords={"bands": ["slope"], "y": inarr.y, "x": inarr.x},
+            slope[None, :, :],
+            dims=("bands", "x", "y"),
+            coords={"bands": ["slope"], "x": inarr.x, "y": inarr.y},
         )
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
@@ -129,8 +130,12 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             get_presto_features,
         )
 
-        slope = self._compute_slope(inarr)
-        inarr = xr.concat([inarr, slope], dim="bands")
+        slope = self._compute_slope(inarr.isel(t=0))
+        slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
+
+        inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
+        inspect(inarr.rio, "Rioxarray accesor: ")
+        inspect(inarr.rio.bounds, "Rioxarray bounds: ")
 
         batch_size = self._parameters.get("batch_size", 256)
 

@@ -142,10 +142,10 @@ def buffer_geometry(
     return gdf
 
 
-def filter_extract_true(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
+def filter_extract_true(geometries: geojson.FeatureCollection, extract_value: int = 1) -> gpd.GeoDataFrame:
     """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
     return geojson.FeatureCollection(
-        [f for f in geometries.features if f.properties.get("extract", 0) == 1]
+        [f for f in geometries.features if f.properties.get("extract", 0) == extract_value]
     )
 
 

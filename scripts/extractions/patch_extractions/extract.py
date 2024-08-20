@@ -327,9 +327,11 @@ if __name__ == "__main__":
     # Load the input dataframe and build the job dataframe
     input_df = load_dataframe(args.input_df)
 
-    job_df = prepare_job_dataframe(
-        input_df, collection, max_locations_per_job, extract_value, backend
-    )
+    job_df = None
+    if not tracking_df_path.exists():
+        job_df = prepare_job_dataframe(
+            input_df, collection, max_locations_per_job, extract_value, backend
+        )
 
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
