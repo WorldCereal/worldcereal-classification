@@ -53,21 +53,37 @@ def post_job_action(
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
-    assert len(base_gpd[base_gpd.extract == extract_value]) == len(
-        job_items
-    ), "The number of result paths should be the same as the number of geometries"
+    if len(base_gpd[base_gpd.extract == extract_value]) != len(job_items):
+        pipeline_log.warning(
+            "Different amount of geometries in the job output items and the "
+            "input geometry. Job items #: %s, Input geometries #: %s",
+            len(job_items),
+            len(base_gpd[base_gpd.extract == extract_value]),
+        )
 
     extracted_gpd = base_gpd[base_gpd.extract == extract_value].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
-    for idx, item in enumerate(job_items):
-        if "sample_id" in extracted_gpd.columns:
-            sample_id = extracted_gpd.iloc[idx].sample_id
-        else:
-            sample_id = extracted_gpd.iloc[idx].sampleID
+    for item in job_items:
+        item_id = item.id.replace(".nc", "")
+        sample_id_column_name = (
+            "sample_id" if "sample_id" in extracted_gpd.columns else "sampleID"
+        )
 
-        ref_id = extracted_gpd.iloc[idx].ref_id
-        valid_time = extracted_gpd.iloc[idx].valid_time
-        h3_l3_cell = extracted_gpd.iloc[idx].h3_l3_cell
+        geometry_information = extracted_gpd.loc[
+            extracted_gpd[sample_id_column_name] == item_id
+        ].squeeze()
+
+        if len(geometry_information) == 0:
+            pipeline_log.warning(
+                "No geometry found for the sample_id %s in the input geometry.",
+                item_id,
+            )
+            continue
+
+        sample_id = geometry_information[sample_id_column_name]
+        ref_id = geometry_information.ref_id
+        valid_time = geometry_information.valid_time
+        h3_l3_cell = geometry_information.h3_l3_cell
         s2_tile = row.s2_tile
 
         item_asset_path = Path(list(item.assets.values())[0].href)
