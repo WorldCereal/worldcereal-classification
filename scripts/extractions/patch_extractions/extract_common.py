@@ -64,7 +64,7 @@ def post_job_action(
     extracted_gpd = base_gpd[base_gpd.extract == extract_value].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for item in job_items:
-        item_id = item.id.replace(".nc", "")
+        item_id = item.id.replace(".nc", "").replace("openEO_", "")
         sample_id_column_name = (
             "sample_id" if "sample_id" in extracted_gpd.columns else "sampleID"
         )
@@ -107,7 +107,7 @@ def post_job_action(
 
         if s1_orbit_fix:
             new_attributes["orbit_state"] = row.orbit_state
-            item.id = item.id.replace(".nc", f"{row.orbit_state}.nc")
+            item.id = item.id.replace(".nc", f"_{row.orbit_state}.nc")
 
         # Saves the new attributes in the netcdf file
         update_nc_attributes(item_asset_path, new_attributes)
