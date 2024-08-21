@@ -68,9 +68,9 @@ if __name__ == "__main__":
     job_results = generate_map(
         spatial_extent,
         temporal_extent,
-        backend_context,
         args.output_path,
         product_type=WorldCerealProduct(product),
         out_format="GTiff",
+        backend_context=backend_context,
     )
     logger.success(f"Job finished:\n\t{job_results}")

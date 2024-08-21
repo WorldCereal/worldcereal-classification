@@ -345,7 +345,7 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S1-SIGMA0-VV",
         ],
         fetch_type=fetch_type,
-        target_resolution=10.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
+        target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=None,  # Make the querry on the catalogue for the best orbit
         tile_size=tile_size,
     )
