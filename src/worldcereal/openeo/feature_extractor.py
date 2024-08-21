@@ -134,8 +134,10 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
 
         inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
-        inspect(inarr.rio, "Rioxarray accesor: ")
-        inspect(inarr.rio.bounds, "Rioxarray bounds: ")
+        inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
+        inspect(inarr.rio.crs, "Rioxarray crs: ")
+        inspect(inarr.rio.bounds(), "Rioxarray bounds: ")
+        inspect(inarr.rio.transform(), "Rioxarray transform: ")
 
         batch_size = self._parameters.get("batch_size", 256)
 
