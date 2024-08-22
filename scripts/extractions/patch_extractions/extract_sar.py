@@ -205,7 +205,7 @@ def create_datacube_sar(
 
     job_options = {
         "executor-memory": executor_memory,
-        "executor-memoryOverhead": executor_memory_overhead,
+        "python-memory": executor_memory_overhead,
         "soft-errors": "true",
         "max_executors": max_executors,
     }

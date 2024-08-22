@@ -267,7 +267,7 @@ def create_datacube_optical(
         "driver-memoryOverhead": "2G",
         "driver-cores": "1",
         "executor-memory": executor_memory,
-        "executor-memoryOverhead": executor_memory_overhead,
+        "python-memory": executor_memory_overhead,
         "executor-cores": "1",
         "max-executors": max_executors,
         "soft-errors": "true",

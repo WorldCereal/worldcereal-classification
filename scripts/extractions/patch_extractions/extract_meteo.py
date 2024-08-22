@@ -71,7 +71,7 @@ def create_datacube_meteo(
 
     job_options = {
         "executor-memory": executor_memory,
-        "executor-memoryOverhead": executor_memory_overhead,
+        "python-memory": executor_memory_overhead,
         "max-executors": max_executors,
     }
     return cube.create_job(

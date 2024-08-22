@@ -130,7 +130,7 @@ def setup_extraction_functions(
     collection: ExtractionCollection,
     extract_value: int,
     memory: str,
-    memory_overhead: str,
+    python_memory: str,
     max_executors: int,
 ) -> tuple[callable, callable, callable]:
     """Setup the datacube creation, path generation and post-job action
@@ -144,19 +144,19 @@ def setup_extraction_functions(
         ExtractionCollection.SENTINEL1: partial(
             create_datacube_sar,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
         ExtractionCollection.SENTINEL2: partial(
             create_datacube_optical,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
         ExtractionCollection.METEO: partial(
             create_datacube_meteo,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
     }
@@ -296,10 +296,10 @@ if __name__ == "__main__":
         help="Memory to allocate for the executor.",
     )
     parser.add_argument(
-        "--memory_overhead",
+        "--python_memory",
         type=str,
         default="1900m",
-        help="Memory overhead to allocate for the executor.",
+        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
     )
     parser.add_argument(
         "--max_executors", type=int, default=22, help="Number of executors to run."
@@ -346,7 +346,7 @@ if __name__ == "__main__":
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, extract_value, args.memory, args.memory_overhead, args.max_executors
+        collection, extract_value, args.memory, args.python_memory, args.max_executors
     )
 
     # Initialize and setups the job manager
