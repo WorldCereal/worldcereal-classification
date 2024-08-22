@@ -376,7 +376,6 @@ if __name__ == "__main__":
     job_manager.add_backend(
         Backend.CDSE.value,
         cdse_connection,
-        dynamic_max_jobs=False,
         parallel_jobs=args.parallel_jobs,
     )
 
