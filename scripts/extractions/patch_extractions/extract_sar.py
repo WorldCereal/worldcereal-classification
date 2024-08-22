@@ -156,7 +156,7 @@ def create_datacube_sar(
     provider,
     connection_provider,
     executor_memory: str = "5G",
-    executor_memory_overhead: str = "2G",
+    python_memory: str = "2G",
     max_executors: int = 22,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information. This job is a
@@ -205,7 +205,7 @@ def create_datacube_sar(
 
     job_options = {
         "executor-memory": executor_memory,
-        "python-memory": executor_memory_overhead,
+        "python-memory": python_memory,
         "soft-errors": "true",
         "max_executors": max_executors,
     }

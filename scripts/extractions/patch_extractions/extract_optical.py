@@ -203,7 +203,7 @@ def create_datacube_optical(
     provider=None,
     connection_provider=None,
     executor_memory: str = "5G",
-    executor_memory_overhead: str = "2G",
+    python_memory: str = "2G",
     max_executors: int = 22,
 ) -> gpd.GeoDataFrame:
     start_date = row.start_date
@@ -267,7 +267,7 @@ def create_datacube_optical(
         "driver-memoryOverhead": "2G",
         "driver-cores": "1",
         "executor-memory": executor_memory,
-        "python-memory": executor_memory_overhead,
+        "python-memory": python_memory,
         "executor-cores": "1",
         "max-executors": max_executors,
         "soft-errors": "true",
