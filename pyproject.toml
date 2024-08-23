@@ -47,7 +47,8 @@ dependencies = [
     "pytest-depends",
     "pyarrow",
     "geopandas",
-    "pydantic>=2.6"
+    "pydantic>=2.6",
+    "richdem==0.13.4",
   ]
 
 [project.urls]
