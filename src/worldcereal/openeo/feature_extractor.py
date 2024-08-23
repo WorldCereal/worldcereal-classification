@@ -23,7 +23,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
     PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.3-py3-none-any.whl"
-    BASE_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/"  # NOQA
+    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
