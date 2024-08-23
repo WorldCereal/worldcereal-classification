@@ -38,7 +38,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "COP-DEM": "altitude",
+        "COP-DEM": "elevation",
         "AGERA5-TMEAN": "temperature_2m",
         "AGERA5-PRECIP": "total_precipitation",
     }
@@ -72,7 +72,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             rdarray,
         )
 
-        dem = inarr.sel(bands="altitude").values
+        dem = inarr.sel(bands="elevation").values
         dem_array = rdarray(dem, no_data=65535)
         slope = TerrainAttribute(dem_array, attrib="slope_riserun")
 
