@@ -128,8 +128,9 @@ def prepare_job_dataframe(
 
 def setup_extraction_functions(
     collection: ExtractionCollection,
+    extract_value: int,
     memory: str,
-    memory_overhead: str,
+    python_memory: str,
     max_executors: int,
 ) -> tuple[callable, callable, callable]:
     """Setup the datacube creation, path generation and post-job action
@@ -143,19 +144,19 @@ def setup_extraction_functions(
         ExtractionCollection.SENTINEL1: partial(
             create_datacube_sar,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
         ExtractionCollection.SENTINEL2: partial(
             create_datacube_optical,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
         ExtractionCollection.METEO: partial(
             create_datacube_meteo,
             executor_memory=memory,
-            executor_memory_overhead=memory_overhead,
+            python_memory=python_memory,
             max_executors=max_executors,
         ),
     }
@@ -172,18 +173,22 @@ def setup_extraction_functions(
     post_job_actions = {
         ExtractionCollection.SENTINEL1: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Sentinel1 GRD raw observations, unprocessed.",
             title="Sentinel-1 GRD",
             spatial_resolution="20m",
+            s1_orbit_fix=True,
         ),
         ExtractionCollection.SENTINEL2: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Sentinel2 L2A observations, processed.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
         ),
         ExtractionCollection.METEO: partial(
             post_job_action,
+            extract_value=extract_value,
             description="Meteo observations",
             title="Meteo observations",
             spatial_resolution="1deg",
@@ -223,7 +228,12 @@ def manager_main_loop(
             )
             manager.run_jobs(job_df, datacube_fn, tracking_df_path)
             return
-        except (OpenEoApiPlainError, OpenEoApiError, OpenEoRestError) as e:
+        except (
+            OpenEoApiPlainError,
+            OpenEoApiError,
+            OpenEoRestError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
             pipeline_log.exception("An error occurred during the extraction.\n%s", e)
             send_notification(
                 title=f"WorldCereal Extraction {collection.value} - OpenEo Exception",
@@ -286,10 +296,10 @@ if __name__ == "__main__":
         help="Memory to allocate for the executor.",
     )
     parser.add_argument(
-        "--memory_overhead",
+        "--python_memory",
         type=str,
         default="1900m",
-        help="Memory overhead to allocate for the executor.",
+        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
     )
     parser.add_argument(
         "--max_executors", type=int, default=22, help="Number of executors to run."
@@ -327,14 +337,16 @@ if __name__ == "__main__":
     # Load the input dataframe and build the job dataframe
     input_df = load_dataframe(args.input_df)
 
-    job_df = prepare_job_dataframe(
-        input_df, collection, max_locations_per_job, extract_value, backend
-    )
+    job_df = None
+    if not tracking_df_path.exists():
+        job_df = prepare_job_dataframe(
+            input_df, collection, max_locations_per_job, extract_value, backend
+        )
 
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, args.memory, args.memory_overhead, args.max_executors
+        collection, extract_value, args.memory, args.python_memory, args.max_executors
     )
 
     # Initialize and setups the job manager
@@ -364,7 +376,6 @@ if __name__ == "__main__":
     job_manager.add_backend(
         Backend.CDSE.value,
         cdse_connection,
-        dynamic_max_jobs=False,
         parallel_jobs=args.parallel_jobs,
     )
 

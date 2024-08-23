@@ -21,8 +21,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     import functools
 
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.2-py3-none-any.whl"
-    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
+    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.3-py3-none-any.whl"
+    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
@@ -38,7 +38,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "COP-DEM": "DEM",
+        "COP-DEM": "elevation",
         "AGERA5-TMEAN": "temperature-mean",
         "AGERA5-PRECIP": "precipitation-flux",
     }
@@ -61,6 +61,30 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         """Returns the output labels from this UDF, which is the output labels
         of the presto embeddings"""
         return [f"presto_ft_{i}" for i in range(128)]
+
+    def _compute_slope(self, inarr: xr.DataArray) -> xr.DataArray:
+        """Computes the slope using the richdem library. The input array should
+        have the following bands: 'elevation' And no time dimension. Returns a
+        new DataArray containing the new `slope` band.
+        """
+        from richdem import (  # pylint: disable=import-outside-toplevel
+            TerrainAttribute,
+            rdarray,
+        )
+
+        dem = inarr.sel(bands="elevation").values
+        dem_array = rdarray(dem, no_data=65535)
+        slope = TerrainAttribute(dem_array, attrib="slope_riserun")
+
+        # Although richdem accepts no_data as 65535, it returns the slope with
+        # no data as -9999, which is the default no_data value for richdem.
+        slope[slope == -9999] = 65535
+
+        return xr.DataArray(
+            slope[None, :, :],
+            dims=("bands", "x", "y"),
+            coords={"bands": ["slope"], "x": inarr.x, "y": inarr.y},
+        )
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         import sys
@@ -109,6 +133,12 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         from presto.inference import (  # pylint: disable=import-outside-toplevel
             get_presto_features,
         )
+
+        slope = self._compute_slope(inarr.isel(t=0))
+        slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
+
+        inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
+        inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
 
         batch_size = self._parameters.get("batch_size", 256)
 
