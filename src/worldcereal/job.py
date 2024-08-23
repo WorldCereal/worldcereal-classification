@@ -274,7 +274,7 @@ def generate_map(
         "driver-memory": "4g",
         "executor-memory": "1g",
         "executor-memoryOverhead": "1g",
-        "python-memory": "2g",
+        "python-memory": "3g",
         "soft-errors": "true",
         "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
     }

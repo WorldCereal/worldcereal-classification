@@ -21,26 +21,26 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     import functools
 
     PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.3-py3-none-any.whl"
-    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/"  # NOQA
+    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.4-py3-none-any.whl"
+    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
-        "S2-L2A-B02": "B02",
-        "S2-L2A-B03": "B03",
-        "S2-L2A-B04": "B04",
-        "S2-L2A-B05": "B05",
-        "S2-L2A-B06": "B06",
-        "S2-L2A-B07": "B07",
-        "S2-L2A-B08": "B08",
+        "S2-L2A-B02": "B2",
+        "S2-L2A-B03": "B3",
+        "S2-L2A-B04": "B4",
+        "S2-L2A-B05": "B5",
+        "S2-L2A-B06": "B6",
+        "S2-L2A-B07": "B7",
+        "S2-L2A-B08": "B8",
         "S2-L2A-B8A": "B8A",
         "S2-L2A-B11": "B11",
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "COP-DEM": "elevation",
-        "AGERA5-TMEAN": "temperature-mean",
-        "AGERA5-PRECIP": "precipitation-flux",
+        "COP-DEM": "altitude",
+        "AGERA5-TMEAN": "temperature_2m",
+        "AGERA5-PRECIP": "total_precipitation",
     }
 
     @functools.lru_cache(maxsize=6)
@@ -72,7 +72,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             rdarray,
         )
 
-        dem = inarr.sel(bands="elevation").values
+        dem = inarr.sel(bands="altitude").values
         dem_array = rdarray(dem, no_data=65535)
         slope = TerrainAttribute(dem_array, attrib="slope_riserun")
 
