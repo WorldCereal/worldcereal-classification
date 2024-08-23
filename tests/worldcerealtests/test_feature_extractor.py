@@ -18,4 +18,4 @@ def test_dem_computation():
     # In the UDF no_data is set to 65535
     slope = extractor._compute_slope(array).values  # pylint: disable=protected-access
 
-    assert slope[-1, 0] == 65535
+    assert slope[0, -1, 0] == 65535
