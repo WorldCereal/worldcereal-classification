@@ -75,6 +75,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         dem = inarr.sel(bands="elevation").values
         dem_array = rdarray(dem, no_data=65535)
         slope = TerrainAttribute(dem_array, attrib="slope_riserun")
+
+        # Although richdem accepts no_data as 65535, it returns the slope with
+        # no data as -9999, which is the default no_data value for richdem.
+        slope[slope == -9999] = 65535
+
         return xr.DataArray(
             slope[None, :, :],
             dims=("bands", "x", "y"),
