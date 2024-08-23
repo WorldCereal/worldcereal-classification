@@ -2,7 +2,6 @@
 
 import xarray as xr
 from openeo.udf import XarrayDataCube
-from openeo.udf.debug import inspect
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 
 
