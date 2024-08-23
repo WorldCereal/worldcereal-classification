@@ -48,7 +48,7 @@ dependencies = [
     "pyarrow",
     "geopandas",
     "pydantic>=2.6",
-    "richdem==0.13.4",
+    "richdem",
   ]
 
 [project.urls]
