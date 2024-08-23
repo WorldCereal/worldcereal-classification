@@ -184,6 +184,7 @@ def generate_map(
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.FED),
     tile_size: Optional[int] = 128,
+    job_options: Optional[dict] = None,
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -209,6 +210,8 @@ def generate_map(
         backend to run the job on
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128.
+    job_options: dict, optional
+        Additional job options to pass to the OpenEO backend, by default None
 
     Returns
     -------
@@ -267,15 +270,21 @@ def generate_map(
         )
 
     # Submit the job
+    JOB_OPTIONS = {
+        "driver-memory": "4g",
+        "executor-memory": "1g",
+        "executor-memoryOverhead": "1g",
+        "python-memory": "2g",
+        "soft-errors": "true",
+        "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
+    }
+    if job_options is not None:
+        JOB_OPTIONS.update(job_options)
+
     job = classes.execute_batch(
         outputfile=output_path,
         out_format=out_format,
-        job_options={
-            "driver-memory": "4g",
-            "executor-memory": "3g",
-            "executor-memoryOverhead": "5g",
-            "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
-        },
+        job_options=JOB_OPTIONS,
     )
 
     asset = job.get_results().get_assets()[0]
