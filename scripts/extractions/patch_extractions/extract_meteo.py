@@ -28,7 +28,7 @@ def create_datacube_meteo(
     provider=None,
     connection_provider=None,
     executor_memory: str = "2G",
-    executor_memory_overhead: str = "1G",
+    python_memory: str = "1G",
     max_executors: int = 22,
 ) -> gpd.GeoDataFrame:
     start_date = row.start_date
@@ -71,7 +71,7 @@ def create_datacube_meteo(
 
     job_options = {
         "executor-memory": executor_memory,
-        "executor-memoryOverhead": executor_memory_overhead,
+        "python-memory": python_memory,
         "max-executors": max_executors,
     }
     return cube.create_job(
