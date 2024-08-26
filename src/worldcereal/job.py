@@ -305,9 +305,9 @@ def generate_map(
 def collect_inputs(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    backend_context: BackendContext,
     output_path: Union[Path, str],
-    tile_size: Optional[int] = None,
+    backend_context: BackendContext = BackendContext(Backend.FED),
+    tile_size: Optional[int] = 128,
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -318,12 +318,12 @@ def collect_inputs(
         spatial extent of the map
     temporal_extent : TemporalContext
         temporal range to consider
-    backend_context : BackendContext
-        backend to run the job on
     output_path : Union[Path, str]
         output path to download the product to
+    backend_context : BackendContext
+        backend to run the job on
     tile_size: int, optional
-        Tile size to use for the data loading in OpenEO, by default None
+        Tile size to use for the data loading in OpenEO, by default 128
         so it uses the OpenEO default setting.
     """
 
@@ -344,5 +344,11 @@ def collect_inputs(
     inputs.execute_batch(
         outputfile=output_path,
         out_format="NetCDF",
-        job_options={"driver-memory": "4g", "executor-memoryOverhead": "4g"},
+        job_options={
+            "driver-memory": "4g",
+            "executor-memory": "1g",
+            "executor-memoryOverhead": "1g",
+            "python-memory": "2g",
+            "soft-errors": "true",
+        },
     )
