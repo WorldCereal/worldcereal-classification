@@ -97,6 +97,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         presto_model_url = self._parameters.get(
             "presto_model_url", self.PRESTO_MODEL_URL
         )
+        self.logger.info(f'Loading Presto model from "{presto_model_url}"')
         presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
 
         ignore_dependencies = self._parameters.get("ignore_dependencies", False)
@@ -141,10 +142,16 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
 
         batch_size = self._parameters.get("batch_size", 256)
+        compile_presto = self._parameters.get("compile_presto", False)
+        self.logger.info(f"Compile presto: {compile_presto}")
 
         self.logger.info("Extracting presto features")
         features = get_presto_features(
-            inarr, presto_model_url, self.epsg, batch_size=batch_size
+            inarr,
+            presto_model_url,
+            self.epsg,
+            batch_size=batch_size,
+            compile=compile_presto,
         )
         return features
 

@@ -35,10 +35,13 @@ class FeaturesParameters(BaseModel):
     presto_model_url : str
         Public URL to the Presto model used for feature extraction. The file
         should be a PyTorch serialized model.
+    compile_presto : bool (default=False)
+        Whether to compile the Presto encoder for speeding up large-scale inference.
     """
 
     rescale_s1: bool
     presto_model_url: str
+    compile_presto: bool
 
 
 class ClassifierParameters(BaseModel):
@@ -84,6 +87,7 @@ class CropLandParameters(BaseModel):
     features_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
+        compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
@@ -131,6 +135,7 @@ class CropTypeParameters(BaseModel):
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
+        compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
