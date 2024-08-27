@@ -13,6 +13,7 @@ pythonPipeline {
   upload_dev_wheels = false
   pipeline_triggers = [cron('H H(0-6) * * *')]
   pep440 = true
+  venv_rpm_deps = ['gcc', 'gcc-c++']
   extra_env_variables = [
     "OPENEO_AUTH_METHOD=client_credentials",
     "OPENEO_OIDC_DEVICE_CODE_MAX_POLL_TIME=5",
