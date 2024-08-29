@@ -1,6 +1,7 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
+from geojson import GeoJSON
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
     Backend,
@@ -261,8 +262,8 @@ def raw_datacube_METEO(
 
 def precomposited_datacube_METEO(
     connection: Connection,
-    spatial_extent: SpatialContext,
     temporal_extent: TemporalContext,
+    spatial_extent: SpatialContext = None,
 ) -> DataCube:
     """Extract the precipitation and temperature AGERA5 data from a
     pre-composited and pre-processed collection. The data is stored in the
@@ -276,7 +277,8 @@ def precomposited_datacube_METEO(
           tiles.
     """
     temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
-    spatial_extent = dict(spatial_extent)
+    if isinstance(spatial_extent, BoundingBoxExtent):
+        spatial_extent = dict(spatial_extent)
 
     # Monthly composited METEO data
     cube = connection.load_stac(
@@ -296,10 +298,11 @@ def precomposited_datacube_METEO(
 def worldcereal_preprocessed_inputs_gfmap(
     connection: Connection,
     backend_context: BackendContext,
-    spatial_extent: BoundingBoxExtent,
+    spatial_extent: Union[GeoJSON, BoundingBoxExtent, str],
     temporal_extent: TemporalContext,
     fetch_type: Optional[FetchType] = FetchType.TILE,
     disable_meteo: bool = False,
+    s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
 ) -> DataCube:
     # Extraction of S2 from GFMAP
@@ -346,7 +349,7 @@ def worldcereal_preprocessed_inputs_gfmap(
         ],
         fetch_type=fetch_type,
         target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
-        orbit_direction=None,  # Make the querry on the catalogue for the best orbit
+        orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
         tile_size=tile_size,
     )
 
