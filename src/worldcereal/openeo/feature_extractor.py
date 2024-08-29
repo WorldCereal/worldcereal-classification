@@ -154,9 +154,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Fill NaNs with rolling fill
         dem_arr = _rolling_fill(dem_arr)
 
-        # Set resolution
-        resolution = 10  # Resolution in meters: TODO: check if we can assume this
-
         # Mask NaN values in the DEM data
         dem_masked = np.ma.masked_invalid(dem_arr)
 
@@ -250,7 +247,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
 
             inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
-            inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
 
         batch_size = self._parameters.get("batch_size", 256)
 

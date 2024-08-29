@@ -29,3 +29,4 @@ def test_dem_computation():
     ).values  # pylint: disable=protected-access
 
     assert slope[0, -1, 0] == 65535
+    assert resolution == 10
