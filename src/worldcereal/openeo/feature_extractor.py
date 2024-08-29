@@ -62,23 +62,129 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         of the presto embeddings"""
         return [f"presto_ft_{i}" for i in range(128)]
 
-    def _compute_slope(self, inarr: xr.DataArray) -> xr.DataArray:
-        """Computes the slope using the richdem library. The input array should
+    def evaluate_resolution(self, inarr: xr.DataArray) -> float:
+        """Helper function to get the resolution in meters for
+        the input array.
+
+        Parameters
+        ----------
+        inarr : xr.DataArray
+            input array to determine resolution for.
+
+        Returns
+        -------
+        float
+            resolution in meters.
+        """
+
+        if self.epsg == 4326:
+            from pyproj import Transformer
+            from shapely.geometry import Point
+            from shapely.ops import transform
+
+            self.logger.info(
+                "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
+            )
+
+            transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)
+            points = [Point(x, y) for x, y in zip(inarr.x, inarr.y)]
+            points = [transform(transformer.transform, point) for point in points]
+
+            resolution = abs(points[1].x - points[0].x)
+
+        else:
+            resolution = abs(inarr.x[1] - inarr.x[0])
+
+        self.logger.info(f"Resolution for computing slope: {resolution}")
+
+        return resolution
+
+    def compute_slope(self, inarr: xr.DataArray, resolution: int) -> xr.DataArray:
+        """Computes the slope using the scipy library. The input array should
         have the following bands: 'elevation' And no time dimension. Returns a
         new DataArray containing the new `slope` band.
+
+        Parameters
+        ----------
+        inarr : xr.DataArray
+            input array containing a band 'elevation'.
+        resolution : int
+            resolution of the input array in meters.
+
+        Returns
+        -------
+        xr.DataArray
+            output array containing 'slope' band in degrees.
         """
-        from richdem import (  # pylint: disable=import-outside-toplevel
-            TerrainAttribute,
-            rdarray,
-        )
+
+        import random  # pylint: disable=import-outside-toplevel
+
+        import numpy as np  # pylint: disable=import-outside-toplevel
+        from scipy.ndimage import convolve  # pylint: disable=import-outside-toplevel
+
+        def _rolling_fill(darr, max_iter=2):
+            """Helper function that also reflects values inside
+            a patch with NaNs."""
+            if max_iter == 0:
+                return darr
+            else:
+                max_iter -= 1
+            # arr of shape (rows, cols)
+            mask = np.isnan(darr)
+
+            if ~np.any(mask):
+                return darr
+
+            roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            random.shuffle(roll_params)
+
+            for roll_param in roll_params:
+                rolled = np.roll(darr, roll_param, axis=(0, 1))
+                darr[mask] = rolled[mask]
+
+            return _rolling_fill(darr, max_iter=max_iter)
 
         dem = inarr.sel(bands="elevation").values
-        dem_array = rdarray(dem, no_data=65535)
-        slope = TerrainAttribute(dem_array, attrib="slope_riserun")
+        dem_arr = dem.astype(np.float32)
 
-        # Although richdem accepts no_data as 65535, it returns the slope with
-        # no data as -9999, which is the default no_data value for richdem.
-        slope[slope == -9999] = 65535
+        # Invalid to NaN and keep track of these pixels
+        dem_arr[dem_arr == 65535] = np.nan
+        idx_invalid = np.isnan(dem_arr)
+
+        # Fill NaNs with rolling fill
+        dem_arr = _rolling_fill(dem_arr)
+
+        # Mask NaN values in the DEM data
+        dem_masked = np.ma.masked_invalid(dem_arr)
+
+        # Define convolution kernels for x and y gradients (simple finite difference approximation)
+        kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (
+            8.0 * resolution
+        )  # x-derivative kernel
+
+        kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (
+            8.0 * resolution
+        )  # y-derivative kernel
+
+        # Apply convolution to compute gradients
+        dx = convolve(dem_masked, kernel_x)  # Gradient in the x-direction
+        dy = convolve(dem_masked, kernel_y)  # Gradient in the y-direction
+
+        # Reapply the mask to the gradients
+        dx = np.ma.masked_where(dem_masked.mask, dx)
+        dy = np.ma.masked_where(dem_masked.mask, dy)
+
+        # Calculate the magnitude of the gradient (rise/run)
+        gradient_magnitude = np.ma.sqrt(dx**2 + dy**2)
+
+        # Convert gradient magnitude to slope (in degrees)
+        slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)
+
+        # Fill slope values where the original DEM had NaNs
+        slope = slope.filled(65535)
+        slope[idx_invalid] = 65535
+        slope[np.isnan(slope)] = 65535
+        slope = slope.astype(np.uint16)
 
         return xr.DataArray(
             slope[None, :, :],
@@ -134,11 +240,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             get_presto_features,
         )
 
-        slope = self._compute_slope(inarr.isel(t=0))
-        slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
+        if "slope" not in inarr.bands:
+            # If 'slope' is not present we need to compute it here
+            resolution = self.evaluate_resolution(inarr.isel(t=0))
+            slope = self.compute_slope(inarr.isel(t=0), resolution)
+            slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
 
-        inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
-        inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
+            inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
 
         batch_size = self._parameters.get("batch_size", 256)
 
