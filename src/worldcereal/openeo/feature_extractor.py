@@ -63,22 +63,82 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         return [f"presto_ft_{i}" for i in range(128)]
 
     def _compute_slope(self, inarr: xr.DataArray) -> xr.DataArray:
-        """Computes the slope using the richdem library. The input array should
+        """Computes the slope using the scipy library. The input array should
         have the following bands: 'elevation' And no time dimension. Returns a
         new DataArray containing the new `slope` band.
         """
-        from richdem import (  # pylint: disable=import-outside-toplevel
-            TerrainAttribute,
-            rdarray,
-        )
+
+        import random  # pylint: disable=import-outside-toplevel
+
+        import numpy as np  # pylint: disable=import-outside-toplevel
+        from scipy.ndimage import convolve  # pylint: disable=import-outside-toplevel
+
+        def _rolling_fill(darr, max_iter=2):
+            """Helper function that also reflects values inside
+            a patch with NaNs."""
+            if max_iter == 0:
+                return darr
+            else:
+                max_iter -= 1
+            # arr of shape (rows, cols)
+            mask = np.isnan(darr)
+
+            if ~np.any(mask):
+                return darr
+
+            roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            random.shuffle(roll_params)
+
+            for roll_param in roll_params:
+                rolled = np.roll(darr, roll_param, axis=(0, 1))
+                darr[mask] = rolled[mask]
+
+            return _rolling_fill(darr, max_iter=max_iter)
 
         dem = inarr.sel(bands="elevation").values
-        dem_array = rdarray(dem, no_data=65535)
-        slope = TerrainAttribute(dem_array, attrib="slope_riserun")
+        dem_arr = dem.astype(np.float32)
 
-        # Although richdem accepts no_data as 65535, it returns the slope with
-        # no data as -9999, which is the default no_data value for richdem.
-        slope[slope == -9999] = 65535
+        # Invalid to NaN and keep track of these pixels
+        dem_arr[dem_arr == 65535] = np.nan
+        idx_invalid = np.isnan(dem_arr)
+
+        # Fill NaNs with rolling fill
+        dem_arr = _rolling_fill(dem_arr)
+
+        # Set resolution
+        resolution = 10  # Resolution in meters: TODO: check if we can assume this
+
+        # Mask NaN values in the DEM data
+        dem_masked = np.ma.masked_invalid(dem_arr)
+
+        # Define convolution kernels for x and y gradients (simple finite difference approximation)
+        kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (
+            8.0 * resolution
+        )  # x-derivative kernel
+
+        kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (
+            8.0 * resolution
+        )  # y-derivative kernel
+
+        # Apply convolution to compute gradients
+        dx = convolve(dem_masked, kernel_x)  # Gradient in the x-direction
+        dy = convolve(dem_masked, kernel_y)  # Gradient in the y-direction
+
+        # Reapply the mask to the gradients
+        dx = np.ma.masked_where(dem_masked.mask, dx)
+        dy = np.ma.masked_where(dem_masked.mask, dy)
+
+        # Calculate the magnitude of the gradient (rise/run)
+        gradient_magnitude = np.ma.sqrt(dx**2 + dy**2)
+
+        # Convert gradient magnitude to slope (in degrees)
+        slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)
+
+        # Fill slope values where the original DEM had NaNs
+        slope = slope.filled(65535)
+        slope[idx_invalid] = 65535
+        slope[np.isnan(slope)] = 65535
+        slope = slope.astype(np.uint16)
 
         return xr.DataArray(
             slope[None, :, :],
