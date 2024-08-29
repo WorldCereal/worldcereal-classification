@@ -29,7 +29,6 @@ from worldcereal.openeo.preprocessing import (
 )
 
 from extract_common import (  # isort: skip
-    buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
