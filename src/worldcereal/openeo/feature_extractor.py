@@ -154,9 +154,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Fill NaNs with rolling fill
         dem_arr = _rolling_fill(dem_arr)
 
-        # Set resolution
-        resolution = 10  # Resolution in meters: TODO: check if we can assume this
-
         # Mask NaN values in the DEM data
         dem_masked = np.ma.masked_invalid(dem_arr)
 
