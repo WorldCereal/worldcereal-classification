@@ -363,6 +363,10 @@ def worldcereal_preprocessed_inputs_gfmap(
         fetch_type=fetch_type,
     )
 
+    # Explicitly resample DEM with bilinear interpolation
+    dem_data = dem_data.resample_cube_spatial(s2_data, method="bilinear")
+
+    # Cast DEM to UINT16
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
     data = s2_data.merge_cubes(s1_data)
