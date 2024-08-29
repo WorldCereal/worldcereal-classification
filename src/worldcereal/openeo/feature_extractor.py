@@ -62,10 +62,59 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         of the presto embeddings"""
         return [f"presto_ft_{i}" for i in range(128)]
 
-    def _compute_slope(self, inarr: xr.DataArray) -> xr.DataArray:
+    def evaluate_resolution(self, inarr: xr.DataArray) -> float:
+        """Helper function to get the resolution in meters for
+        the input array.
+
+        Parameters
+        ----------
+        inarr : xr.DataArray
+            input array to determine resolution for.
+
+        Returns
+        -------
+        float
+            resolution in meters.
+        """
+
+        if self.epsg == 4326:
+            from pyproj import Transformer
+            from shapely.geometry import Point
+            from shapely.ops import transform
+
+            self.logger.info(
+                "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
+            )
+
+            transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)
+            points = [Point(x, y) for x, y in zip(inarr.x, inarr.y)]
+            points = [transform(transformer.transform, point) for point in points]
+
+            resolution = abs(points[1].x - points[0].x)
+
+        else:
+            resolution = abs(inarr.x[1] - inarr.x[0])
+
+        self.logger.info(f"Resolution for computing slope: {resolution}")
+
+        return resolution
+
+    def compute_slope(self, inarr: xr.DataArray, resolution: int) -> xr.DataArray:
         """Computes the slope using the scipy library. The input array should
         have the following bands: 'elevation' And no time dimension. Returns a
         new DataArray containing the new `slope` band.
+
+        Parameters
+        ----------
+        inarr : xr.DataArray
+            input array containing a band 'elevation'.
+        resolution : int
+            resolution of the input array in meters.
+
+        Returns
+        -------
+        xr.DataArray
+            output array containing 'slope' band in degrees.
         """
 
         import random  # pylint: disable=import-outside-toplevel
@@ -194,11 +243,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             get_presto_features,
         )
 
-        slope = self._compute_slope(inarr.isel(t=0))
-        slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
+        if "slope" not in inarr.bands:
+            # If 'slope' is not present we need to compute it here
+            resolution = self.evaluate_resolution(inarr.isel(t=0))
+            slope = self.compute_slope(inarr.isel(t=0), resolution)
+            slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
 
-        inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
-        inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
+            inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
+            inarr.rio.write_crs(f"EPSG:{self.epsg}", inplace=True)
 
         batch_size = self._parameters.get("batch_size", 256)
 
