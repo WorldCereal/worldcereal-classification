@@ -5,7 +5,9 @@ from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 
 
 def test_dem_computation():
-    test_elevation = np.array([[1, 2, 3], [1, 2, 2], [65535, 2, 2]], dtype=np.uint16)
+    test_elevation = np.array(
+        [[10, 20, 30], [10, 20, 20], [65535, 20, 20]], dtype=np.uint16
+    )
 
     array = xr.DataArray(
         test_elevation[None, :, :],
