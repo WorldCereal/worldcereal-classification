@@ -365,7 +365,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--disable_stack",
-        action="store_false",
+        action="store_true",
         help="Disable generation of STAC collection.",
     )
 
@@ -421,7 +421,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=4,
         restart_failed=args.restart_failed,
-        stac_enabled=args.disable_stack,
+        stac_enabled=(not args.disable_stack),
     )
 
     job_manager.add_backend(
@@ -443,10 +443,11 @@ if __name__ == "__main__":
         ExtractionCollection.WORLDCEREAL: None,
     }
 
-    job_manager.setup_stac(
-        constellation=constellation_name[collection],
-        item_assets=item_assets[collection],
-    )
+    if not args.disable_stack:
+        job_manager.setup_stac(
+            constellation=constellation_name[collection],
+            item_assets=item_assets[collection],
+        )
 
     manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
 
