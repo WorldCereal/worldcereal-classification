@@ -231,9 +231,6 @@ def postprocess_extracted_file(item_asset_path, new_attributes):
     pipeline_log.info("Postprocessing file %s", item_asset_path)
     ds = xr.open_dataset(item_asset_path)
 
-    # This is important for controlled x/y order
-    ds = ds.transpose("t", "x", "y")
-
     # Strip borders for no-data artefacts of filter_spatial()
     ds = ds.isel(x=slice(2, -2), y=slice(2, -2))
 
