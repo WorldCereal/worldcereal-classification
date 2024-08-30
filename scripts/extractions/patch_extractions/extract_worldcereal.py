@@ -232,21 +232,26 @@ def postprocess_extracted_file(item_asset_path, new_attributes):
     ds = xr.open_dataset(item_asset_path)
 
     # Strip borders for no-data artefacts of filter_spatial()
-    ds = ds.isel(x=slice(2, -2), y=slice(2, -2))
+    x_crop = int(ds.x.shape[0] * 0.05)
+    y_crop = int(ds.y.shape[0] * 0.05)
+    ds = ds.isel(x=slice(x_crop, -x_crop), y=slice(y_crop, -y_crop))
 
     # Map to presto band names
     new_band_names = {b: GFMAP_BAND_MAPPING.get(b, b) for b in ds if b != "crs"}
     ds = ds.rename(new_band_names)
 
-    # Make sure any NaN is mapped to presto no data value
-    ds = ds.fillna(65535)
-
     # Compute slope if it's not present yet
     if "slope" not in ds:
         pipeline_log.info("Computing slope")
-        slope = PrestoFeatureExtractor().compute_slope(
-            ds.to_array(dim="bands").isel(t=0), resolution=10
+        slope = (
+            PrestoFeatureExtractor()
+            .compute_slope(
+                ds.isel(t=0)[["elevation"]].to_array(dim="bands"), resolution=10
+            )
+            .sel(bands="slope", drop=True)
+            .assign_attrs({"grid_mapping": "crs"})
         )
+        slope = slope.expand_dims({"t": ds.t}, axis=0)
         ds["slope"] = slope
 
     # Update attributes
