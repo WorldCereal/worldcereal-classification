@@ -17,7 +17,7 @@ from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
-from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_S1_orbitstate
+from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
 COMPOSITE_WINDOW = "month"
 
@@ -194,7 +194,7 @@ def raw_datacube_S1(
         Backend.FED,
     ]:
         try:
-            orbit_direction = select_S1_orbitstate(
+            orbit_direction = select_s1_orbitstate_vvvh(
                 backend_context, spatial_extent, temporal_extent
             )
             print(

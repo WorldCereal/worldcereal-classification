@@ -16,7 +16,7 @@ from openeo_gfmap import (
     TemporalContext,
 )
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
-from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate
+from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate_vvvh
 from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S1
@@ -109,7 +109,7 @@ def create_job_dataframe_s1(
                 geometry_bbox[3] + 0.0001,
             )
 
-        area_per_orbit = s1_area_per_orbitstate(
+        area_per_orbit = s1_area_per_orbitstate_vvvh(
             backend=BackendContext(backend),
             spatial_extent=BoundingBoxExtent(*geometry_bbox),
             temporal_extent=TemporalContext(start_date, end_date),
