@@ -6,7 +6,7 @@ from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 
 def test_dem_computation():
     test_elevation = np.array(
-        [[10, 20, 30], [10, 20, 20], [65535, 20, 20]], dtype=np.uint16
+        [[10, 20, 30, 30], [10, 20, 20, 20], [65535, 20, 20, 20]], dtype=np.uint16
     )
 
     array = xr.DataArray(
@@ -14,7 +14,12 @@ def test_dem_computation():
         dims=["bands", "y", "x"],
         coords={
             "bands": ["elevation"],
-            "x": [71.2302216215233, 71.23031145305171, 71.23040128458014],
+            "x": [
+                71.2302216215233,
+                71.23031145305171,
+                71.23040128458014,
+                71.23040128458014,
+            ],
             "y": [25.084450211061935, 25.08436885206669, 25.084287493017356],
         },
     )
