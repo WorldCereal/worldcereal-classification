@@ -188,8 +188,12 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         return xr.DataArray(
             slope[None, :, :],
-            dims=("bands", "x", "y"),
-            coords={"bands": ["slope"], "x": inarr.x, "y": inarr.y},
+            dims=("bands", "y", "x"),
+            coords={
+                "bands": ["slope"],
+                "y": inarr.y,
+                "x": inarr.x,
+            },
         )
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
