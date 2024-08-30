@@ -363,6 +363,12 @@ if __name__ == "__main__":
         default=1,
         help="The value of the `extract` flag to use in the dataframe.",
     )
+    parser.add_argument(
+        "--disable_stack",
+        action="store_false",
+        help="Disable generation of STAC collection.",
+    )
+
     args = parser.parse_args()
 
     # Fetches values and setups hardocded values
@@ -415,6 +421,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=4,
         restart_failed=args.restart_failed,
+        stac_enabled=args.disable_stack,
     )
 
     job_manager.add_backend(
