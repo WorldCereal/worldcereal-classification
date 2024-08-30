@@ -1,6 +1,7 @@
 """Extract WorldCereal preprocessed inputs using OpenEO-GFMAP package."""
 
 import json
+import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -11,6 +12,7 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
+import xarray as xr
 from openeo_gfmap import (
     Backend,
     BackendContext,
@@ -19,10 +21,10 @@ from openeo_gfmap import (
     TemporalContext,
 )
 from openeo_gfmap.manager.job_splitters import load_s2_grid
-from openeo_gfmap.utils.catalogue import select_S1_orbitstate
-from openeo_gfmap.utils.netcdf import update_nc_attributes
+from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
 from tqdm import tqdm
 
+from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.preprocessing import (
     precomposited_datacube_METEO,
     worldcereal_preprocessed_inputs_gfmap,
@@ -85,7 +87,7 @@ def create_job_dataframe_worldcereal(
             )
 
         # Find best orbit state
-        orbit_state = select_S1_orbitstate(
+        orbit_state = select_s1_orbitstate_vvvh(
             backend=BackendContext(backend),
             spatial_extent=BoundingBoxExtent(*geometry_bbox),
             temporal_extent=TemporalContext(start_date, end_date),
@@ -205,6 +207,65 @@ def create_datacube_worldcereal(
     )
 
 
+def postprocess_extracted_file(item_asset_path, new_attributes):
+
+    GFMAP_BAND_MAPPING = {
+        "S2-L2A-B02": "B2",
+        "S2-L2A-B03": "B3",
+        "S2-L2A-B04": "B4",
+        "S2-L2A-B05": "B5",
+        "S2-L2A-B06": "B6",
+        "S2-L2A-B07": "B7",
+        "S2-L2A-B08": "B8",
+        "S2-L2A-B8A": "B8A",
+        "S2-L2A-B11": "B11",
+        "S2-L2A-B12": "B12",
+        "S1-SIGMA0-VH": "VH",
+        "S1-SIGMA0-VV": "VV",
+        "COP-DEM": "elevation",
+        "AGERA5-TMEAN": "temperature_2m",
+        "AGERA5-PRECIP": "total_precipitation",
+    }
+
+    # Open original file
+    pipeline_log.info("Postprocessing file %s", item_asset_path)
+    ds = xr.open_dataset(item_asset_path)
+
+    # This is important for controlled x/y order
+    ds = ds.transpose("t", "x", "y")
+
+    # Strip borders for no-data artefacts of filter_spatial()
+    ds = ds.isel(x=slice(2, -2), y=slice(2, -2))
+
+    # Map to presto band names
+    new_band_names = {b: GFMAP_BAND_MAPPING.get(b, b) for b in ds if b != "crs"}
+    ds = ds.rename(new_band_names)
+
+    # Make sure any NaN is mapped to presto no data value
+    ds = ds.fillna(65535)
+
+    # Compute slope if it's not present yet
+    if "slope" not in ds:
+        pipeline_log.info("Computing slope")
+        slope = PrestoFeatureExtractor().compute_slope(
+            ds.to_array(dim="bands").isel(t=0), resolution=10
+        )
+        ds["slope"] = slope
+
+    # Update attributes
+    pipeline_log.info("Updating attributes")
+    ds = ds.assign_attrs(new_attributes)
+
+    # Save to temporary file
+    tempfile = f"./{Path(item_asset_path).name}"
+    pipeline_log.info("Saving to new temporary file")
+    ds.to_netcdf(tempfile)
+
+    # Move to output
+    pipeline_log.info("Moving to original file")
+    shutil.move(tempfile, item_asset_path)
+
+
 def post_job_action_worldcereal(
     job_items: List[pystac.Item],
     row: pd.Series,
@@ -248,7 +309,7 @@ def post_job_action_worldcereal(
 
         item_asset_path = Path(list(item.assets.values())[0].href)
 
-        # Add some metadata to the result_df netcdf file
+        # Define some metadata to the result_df netcdf file
         new_attributes = {
             "start_date": row.start_date,
             "end_date": row.end_date,
@@ -263,8 +324,8 @@ def post_job_action_worldcereal(
             "_FillValue": 65535,  # No data value for uint16
         }
 
-        # Saves the new attributes in the netcdf file
-        update_nc_attributes(item_asset_path, new_attributes)
+        # Postprocess file
+        postprocess_extracted_file(item_asset_path, new_attributes)
 
     return job_items
 
