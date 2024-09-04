@@ -87,13 +87,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             )
 
             transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)
-            points = [Point(x, y) for x, y in zip(inarr.x, inarr.y)]
+            points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]
             points = [transform(transformer.transform, point) for point in points]
 
             resolution = abs(points[1].x - points[0].x)
 
         else:
-            resolution = abs(inarr.x[1] - inarr.x[0])
+            resolution = abs(inarr.x[1].values - inarr.x[0].values)
 
         self.logger.info(f"Resolution for computing slope: {resolution}")
 
