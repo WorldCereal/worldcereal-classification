@@ -11,7 +11,9 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
 
     clouds = np.logical_or(
         np.logical_and(cube_array < 11, cube_array >= 8), cube_array == 3
-    ).isel(bands=0)
+    ).isel(
+        bands=0
+    )  # type: ignore
 
     # Calculate the Distance To Cloud score
     # Erode

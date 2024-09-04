@@ -320,7 +320,7 @@ def worldcereal_preprocessed_inputs_gfmap(
             "S2-L2A-B12",
         ],
         fetch_type=fetch_type,
-        filter_tile=False,
+        filter_tile=None,
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
         additional_masks_flag=False,
         apply_mask_flag=True,

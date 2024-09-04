@@ -167,7 +167,7 @@ class InferenceResults(BaseModel):
         Job ID of the finished OpenEO job.
     product_url : str
         Public URL to the product accessible of the resulting OpenEO job.
-    output_path : Optional[Path]
+    output_path : Optional[Union[Path, str]]
         Path to the output file, if it was downloaded locally.
     product : WorldCerealProduct
         Product that was generated.
@@ -175,7 +175,7 @@ class InferenceResults(BaseModel):
 
     job_id: str
     product_url: str
-    output_path: Optional[Path]
+    output_path: Optional[Union[Path, str]]
     product: WorldCerealProduct
 
 

@@ -69,7 +69,7 @@ class CroplandClassifier(ModelInference):
         classification = self.predict(inarr.values)
         self.logger.info("Classification done with shape: %s", inarr.shape)
 
-        classification = xr.DataArray(
+        classification_da = xr.DataArray(
             classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
@@ -79,7 +79,7 @@ class CroplandClassifier(ModelInference):
             },
         )
 
-        return classification
+        return classification_da
 
 
 class CroptypeClassifier(ModelInference):
@@ -151,7 +151,7 @@ class CroptypeClassifier(ModelInference):
         classification = self.predict(inarr.values)
         self.logger.info("Classification done with shape: %s", inarr.shape)
 
-        classification = xr.DataArray(
+        classification_da = xr.DataArray(
             classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
@@ -161,4 +161,4 @@ class CroptypeClassifier(ModelInference):
             },
         )
 
-        return classification
+        return classification_da

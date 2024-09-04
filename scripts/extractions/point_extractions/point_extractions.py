@@ -162,7 +162,7 @@ def create_datacube(
 
 
 def post_job_action(
-    job_items: List[pystac.Item], row: pd.Series, parameters: dict = None
+    job_items: List[pystac.Item], row: pd.Series, parameters: Optional[dict] = None
 ) -> list:
     for idx, item in enumerate(job_items):
         item_asset_path = Path(list(item.assets.values())[0].href)
