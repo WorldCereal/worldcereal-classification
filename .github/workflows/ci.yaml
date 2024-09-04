@@ -1,4 +1,4 @@
-name: Lint
+name: Tests
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  lint:
-    name: "Lint: code quality and formatting checks"
+  tests:
+    name: tests
     runs-on: ubuntu-latest
     steps:
     - name: Clone repo
@@ -18,15 +18,7 @@ jobs:
       with:
         python-version: 3.9
         cache: 'pip'
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install isort black==24.3.0 ruff==0.5.0
-    - name: isort
-      run: python -m isort . --check --diff
-    - name: black
-      run: python -m black --check --diff .
-    - name: ruff
-      run: ruff check .
+    - name: Install dependencies
+      run: pip install ".[dev]"
     - name: tests
       run: python -m pytest -s tests

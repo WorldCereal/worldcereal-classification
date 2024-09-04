@@ -1,0 +1,30 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: "Lint: code quality and formatting checks"
+    runs-on: ubuntu-latest
+    steps:
+    - name: Clone repo
+      uses: actions/checkout@v2
+    - name: Set up python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+        cache: 'pip'
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install isort black==24.3.0 ruff==0.5.0
+    - name: isort
+      run: python -m isort . --check --diff
+    - name: black
+      run: python -m black --check --diff .
+    - name: ruff
+      run: ruff check .
