@@ -5,7 +5,7 @@ import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Tuple, Union
 
 import geojson
 import geopandas as gpd
@@ -210,7 +210,9 @@ def create_datacube_worldcereal(
     )
 
 
-def get_worldcereal_product(worldcereal_product, bounds, epsg):
+def get_worldcereal_product(
+    worldcereal_product: str, bounds: Tuple[int, int, int, int], epsg: int
+) -> np.ndarray:
     """Method to load a WorldCereal product from a VRT file based
     on given bounds and EPSG.
 
@@ -237,7 +239,19 @@ def get_worldcereal_product(worldcereal_product, bounds, epsg):
     return data
 
 
-def postprocess_extracted_file(item_asset_path, new_attributes):
+def postprocess_extracted_file(
+    item_asset_path: Union[Path, str], new_attributes: Dict[str, Union[str, int]]
+) -> None:
+    """Method to postprocess extracted NetCDF file. Will first generate new temporary
+    file in current working directory and then move it to the original file.
+
+    Parameters
+    ----------
+    item_asset_path : Union[Path, str]
+        path to the original NetCDF file
+    new_attributes : Dict[str, Union[str, int]]
+        dictionary with new attributes to be added to the NetCDF file
+    """
 
     GFMAP_BAND_MAPPING = {
         "S2-L2A-B02": "B2",
