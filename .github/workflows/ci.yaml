@@ -28,3 +28,5 @@ jobs:
       run: python -m black --check --diff .
     - name: ruff
       run: ruff check .
+    - name: tests
+      run: python -m pytest -s tests
