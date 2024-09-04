@@ -16,7 +16,7 @@ from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 # Logger for this current pipeline
 pipeline_log: Optional[logging.Logger] = None
@@ -134,7 +134,7 @@ def create_datacube(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    inputs = worldcereal_preprocessed_inputs_gfmap(
+    inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=geometry,

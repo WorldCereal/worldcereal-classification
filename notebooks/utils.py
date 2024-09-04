@@ -21,7 +21,7 @@ from presto.utils import device
 from shapely.geometry import Polygon
 from torch.utils.data import DataLoader
 
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
 
@@ -506,7 +506,7 @@ def create_datacube(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    inputs = worldcereal_preprocessed_inputs_gfmap(
+    inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=geometry,

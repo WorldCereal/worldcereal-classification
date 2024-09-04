@@ -163,7 +163,7 @@ def create_datacube_worldcereal(
 
     # Create the job to extract preprocessed worldcereal inputs
     # Disable default meteo fetching
-    cube = worldcereal_preprocessed_inputs_gfmap(
+    cube = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=spatial_extent_url,

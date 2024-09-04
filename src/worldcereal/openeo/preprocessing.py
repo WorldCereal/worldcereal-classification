@@ -295,7 +295,7 @@ def precomposited_datacube_METEO(
     return cube
 
 
-def worldcereal_preprocessed_inputs_gfmap(
+def worldcereal_preprocessed_inputs(
     connection: Connection,
     backend_context: BackendContext,
     spatial_extent: Union[GeoJSON, BoundingBoxExtent, str],
