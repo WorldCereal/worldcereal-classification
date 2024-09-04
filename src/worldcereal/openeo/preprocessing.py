@@ -305,6 +305,9 @@ def worldcereal_preprocessed_inputs(
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
 ) -> DataCube:
+
+    # TODO: check temporal extent for start/end to ensure 1st and last day of month
+
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
         connection=connection,
