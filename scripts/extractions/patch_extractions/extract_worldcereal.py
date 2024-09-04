@@ -9,6 +9,7 @@ from typing import List
 
 import geojson
 import geopandas as gpd
+import numpy as np
 import openeo
 import pandas as pd
 import pystac
@@ -22,22 +23,21 @@ from openeo_gfmap import (
 )
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
+from pyproj import CRS
 from tqdm import tqdm
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.preprocessing import (
     precomposited_datacube_METEO,
-    worldcereal_preprocessed_inputs_gfmap,
+    worldcereal_preprocessed_inputs,
 )
+from worldcereal.utils.geoloader import load_reproject
 
 from extract_common import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
 )
-
-
-WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 
 
 def create_job_dataframe_worldcereal(
@@ -207,6 +207,33 @@ def create_datacube_worldcereal(
     )
 
 
+def get_worldcereal_product(worldcereal_product, bounds, epsg):
+    """Method to load a WorldCereal product from a VRT file based
+    on given bounds and EPSG.
+
+    Parameters
+    ----------
+    worldcereal_product : str
+        path to the VRT file of the WorldCereal product
+    bounds : tuple
+        bounds to load the data
+    epsg : int
+        EPSG in which bounds are expressed
+
+    Returns
+    -------
+    np.ndarray
+        resulting loaded WorldCereal product patch
+    """
+    vrt_file = f"/vitodata/worldcereal_data/MAP-v3/2021/VRTs/ESA_WORLDCEREAL_{worldcereal_product}_V1.vrt"
+
+    data = load_reproject(vrt_file, bounds, epsg)
+    data[np.isnan(data)] = 255
+    data = data.astype(np.uint8)
+
+    return data
+
+
 def postprocess_extracted_file(item_asset_path, new_attributes):
 
     GFMAP_BAND_MAPPING = {
@@ -236,6 +263,21 @@ def postprocess_extracted_file(item_asset_path, new_attributes):
     y_crop = int(ds.y.shape[0] * 0.05)
     ds = ds.isel(x=slice(x_crop, -x_crop), y=slice(y_crop, -y_crop))
 
+    # Add WorldCereal phase I products
+    bounds = ds.rio.bounds()
+    epsg = CRS.from_wkt(ds.crs.attrs["crs_wkt"]).to_epsg()
+    products = [
+        "TEMPORARYCROPS",
+        "WINTERCEREALS",
+        "SPRINGCEREALS",
+        "MAIZE-MAIN",
+        "MAIZE-SECOND",
+    ]
+    for product in products:
+        data = get_worldcereal_product(product, bounds, epsg)
+        ds[f"WORLDCEREAL_{product}_2021"] = (("y", "x"), data)
+        ds[f"WORLDCEREAL_{product}_2021"].encoding["grid_mapping"] = "crs"
+
     # Map to presto band names
     new_band_names = {b: GFMAP_BAND_MAPPING.get(b, b) for b in ds if b != "crs"}
     ds = ds.rename(new_band_names)
@@ -246,13 +288,16 @@ def postprocess_extracted_file(item_asset_path, new_attributes):
         slope = (
             PrestoFeatureExtractor()
             .compute_slope(
-                ds.isel(t=0)[["elevation"]].to_array(dim="bands"), resolution=10
+                ds.isel(t=1)[["elevation"]].to_array(dim="bands"), resolution=10
             )
             .sel(bands="slope", drop=True)
             .assign_attrs({"grid_mapping": "crs"})
         )
-        slope = slope.expand_dims({"t": ds.t}, axis=0)
         ds["slope"] = slope
+
+    # Make DEM 2D
+    da = ds["elevation"].isel(t=0, drop=True).assign_attrs({"grid_mapping": "crs"})
+    ds["elevation"] = da
 
     # Update attributes
     pipeline_log.info("Updating attributes")
