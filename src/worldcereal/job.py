@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 
 class WorldCerealProduct(Enum):
@@ -243,7 +243,7 @@ def generate_map(
     ).authenticate_oidc()
 
     # Preparing the input cube for inference
-    inputs = worldcereal_preprocessed_inputs_gfmap(
+    inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=spatial_extent,
@@ -333,7 +333,7 @@ def collect_inputs(
     ).authenticate_oidc()
 
     # Preparing the input cube for the inference
-    inputs = worldcereal_preprocessed_inputs_gfmap(
+    inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=spatial_extent,

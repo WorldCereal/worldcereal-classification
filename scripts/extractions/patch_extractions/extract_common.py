@@ -18,7 +18,7 @@ from openeo_gfmap.utils.netcdf import update_nc_attributes
 from shapely import Point
 
 # Logger used for the pipeline
-pipeline_log = logging.getLogger("pipeline_sar")
+pipeline_log = logging.getLogger("extraction_pipeline")
 
 pipeline_log.setLevel(level=logging.INFO)
 
@@ -178,7 +178,9 @@ def filter_extract_true(
     )
 
 
-def upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
+def upload_geoparquet_artifactory(
+    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+) -> str:
     """Upload the given GeoDataFrame to artifactory and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
     using custom CRS.
@@ -192,7 +194,7 @@ def upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
 
     headers = {"Content-Type": "application/octet-stream"}
 
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{name}.parquet"
+    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}{name}.parquet"
 
     with open(temporary_file.name, "rb") as f:
         response = requests.put(

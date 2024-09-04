@@ -30,6 +30,13 @@ from extract_sar import (  # isort: skip
     sentinel1_asset,
 )
 
+from extract_worldcereal import (  # isort: skip
+    create_datacube_worldcereal,
+    create_job_dataframe_worldcereal,
+    post_job_action_worldcereal,
+    generate_output_path_worldcereal,
+)
+
 
 class ExtractionCollection(Enum):
     """Collections that can be extracted in those scripts."""
@@ -37,6 +44,7 @@ class ExtractionCollection(Enum):
     SENTINEL1 = "SENTINEL1"
     SENTINEL2 = "SENTINEL2"
     METEO = "METEO"
+    WORLDCEREAL = "WORLDCEREAL"
 
 
 # Pushover API endpoint, allowing to send notifications to personal devices.
@@ -111,6 +119,7 @@ def prepare_job_dataframe(
         ExtractionCollection.SENTINEL1: create_job_dataframe_s1,
         ExtractionCollection.SENTINEL2: create_job_dataframe_s2,
         ExtractionCollection.METEO: create_job_dataframe_meteo,
+        ExtractionCollection.WORLDCEREAL: create_job_dataframe_worldcereal,
     }
 
     create_job_dataframe_fn = collection_switch.get(
@@ -159,6 +168,12 @@ def setup_extraction_functions(
             python_memory=python_memory,
             max_executors=max_executors,
         ),
+        ExtractionCollection.WORLDCEREAL: partial(
+            create_datacube_worldcereal,
+            executor_memory=memory,
+            python_memory=python_memory,
+            max_executors=max_executors,
+        ),
     }
 
     datacube_fn = datacube_creation.get(
@@ -168,7 +183,27 @@ def setup_extraction_functions(
         ),
     )
 
-    path_fn = partial(generate_output_path, s2_grid=load_s2_grid())
+    path_fns = {
+        ExtractionCollection.SENTINEL1: partial(
+            generate_output_path, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.SENTINEL2: partial(
+            generate_output_path, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.METEO: partial(
+            generate_output_path, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.WORLDCEREAL: partial(
+            generate_output_path_worldcereal, s2_grid=load_s2_grid()
+        ),
+    }
+
+    path_fn = path_fns.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
 
     post_job_actions = {
         ExtractionCollection.SENTINEL1: partial(
@@ -192,6 +227,13 @@ def setup_extraction_functions(
             description="Meteo observations",
             title="Meteo observations",
             spatial_resolution="1deg",
+        ),
+        ExtractionCollection.WORLDCEREAL: partial(
+            post_job_action_worldcereal,
+            extract_value=extract_value,
+            description="WorldCereal preprocessed inputs",
+            title="WorldCereal inputs",
+            spatial_resolution="10m",
         ),
     }
 
@@ -321,6 +363,12 @@ if __name__ == "__main__":
         default=1,
         help="The value of the `extract` flag to use in the dataframe.",
     )
+    parser.add_argument(
+        "--disable_stac",
+        action="store_true",
+        help="Disable generation of STAC collection.",
+    )
+
     args = parser.parse_args()
 
     # Fetches values and setups hardocded values
@@ -356,11 +404,13 @@ if __name__ == "__main__":
         ExtractionCollection.SENTINEL1: "SENTINEL1-EXTRACTION",
         ExtractionCollection.SENTINEL2: "sentinel2-EXTRACTION",
         ExtractionCollection.METEO: "METEO-EXTRACTION",
+        ExtractionCollection.WORLDCEREAL: "WORLDCEREAL-INPUTS",
     }
     collection_description = {
         ExtractionCollection.SENTINEL1: "Sentinel1 GRD data extraction.",
         ExtractionCollection.SENTINEL2: "Sentinel2 L2A data extraction.",
         ExtractionCollection.METEO: "Meteo data extraction.",
+        ExtractionCollection.WORLDCEREAL: "WorldCereal preprocessed inputs extraction.",
     }
     job_manager = GFMAPJobManager(
         output_dir=args.output_folder,
@@ -371,6 +421,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=4,
         restart_failed=args.restart_failed,
+        stac_enabled=(not args.disable_stac),
     )
 
     job_manager.add_backend(
@@ -383,17 +434,20 @@ if __name__ == "__main__":
         ExtractionCollection.SENTINEL1: "sentinel1",
         ExtractionCollection.SENTINEL2: "sentinel2",
         ExtractionCollection.METEO: "agera5",
+        ExtractionCollection.WORLDCEREAL: "worldcereal",
     }
     item_assets = {
         ExtractionCollection.SENTINEL1: {"sentinel1": sentinel1_asset},
         ExtractionCollection.SENTINEL2: {"sentinel2": sentinel2_asset},
         ExtractionCollection.METEO: {"agera5": meteo_asset},
+        ExtractionCollection.WORLDCEREAL: None,
     }
 
-    job_manager.setup_stac(
-        constellation=constellation_name[collection],
-        item_assets=item_assets[collection],
-    )
+    if not args.disable_stac:
+        job_manager.setup_stac(
+            constellation=constellation_name[collection],
+            item_assets=item_assets[collection],
+        )
 
     manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
 
