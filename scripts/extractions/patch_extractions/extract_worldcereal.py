@@ -40,6 +40,9 @@ from extract_common import (  # isort: skip
 )
 
 
+WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
+
+
 def create_job_dataframe_worldcereal(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
