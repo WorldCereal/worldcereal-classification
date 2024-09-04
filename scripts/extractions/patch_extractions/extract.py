@@ -364,7 +364,7 @@ if __name__ == "__main__":
         help="The value of the `extract` flag to use in the dataframe.",
     )
     parser.add_argument(
-        "--disable_stack",
+        "--disable_stac",
         action="store_true",
         help="Disable generation of STAC collection.",
     )
@@ -421,7 +421,7 @@ if __name__ == "__main__":
         poll_sleep=60,
         n_threads=4,
         restart_failed=args.restart_failed,
-        stac_enabled=(not args.disable_stack),
+        stac_enabled=(not args.disable_stac),
     )
 
     job_manager.add_backend(
@@ -443,7 +443,7 @@ if __name__ == "__main__":
         ExtractionCollection.WORLDCEREAL: None,
     }
 
-    if not args.disable_stack:
+    if not args.disable_stac:
         job_manager.setup_stac(
             constellation=constellation_name[collection],
             item_assets=item_assets[collection],
