@@ -87,13 +87,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             )
 
             transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)
-            points = [Point(x, y) for x, y in zip(inarr.x, inarr.y)]
+            points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]
             points = [transform(transformer.transform, point) for point in points]
 
             resolution = abs(points[1].x - points[0].x)
 
         else:
-            resolution = abs(inarr.x[1] - inarr.x[0])
+            resolution = abs(inarr.x[1].values - inarr.x[0].values)
 
         self.logger.info(f"Resolution for computing slope: {resolution}")
 
@@ -207,6 +207,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         presto_model_url = self._parameters.get(
             "presto_model_url", self.PRESTO_MODEL_URL
         )
+        self.logger.info(f'Loading Presto model from "{presto_model_url}"')
         presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
 
         ignore_dependencies = self._parameters.get("ignore_dependencies", False)
@@ -253,10 +254,16 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
 
         batch_size = self._parameters.get("batch_size", 256)
+        compile_presto = self._parameters.get("compile_presto", False)
+        self.logger.info(f"Compile presto: {compile_presto}")
 
         self.logger.info("Extracting presto features")
         features = get_presto_features(
-            inarr, presto_model_url, self.epsg, batch_size=batch_size
+            inarr,
+            presto_model_url,
+            self.epsg,
+            batch_size=batch_size,
+            compile=compile_presto,
         )
         return features
 
