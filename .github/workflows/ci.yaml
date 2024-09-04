@@ -18,13 +18,19 @@ jobs:
       with:
         python-version: 3.9
         cache: 'pip'
-    - name: Install dependencies
-      run: pip install ".[dev]"
+    - name: Install openEO-GFMAP from source
+      run: |
+        git clone https://github.com/Open-EO/openeo-gfmap.git
+        cd openeo-gfmap
+        pip install .
+        cd ..
     - name: Install Presto from source
       run: |
         git clone --branch updated-inferencedatasets https://github.com/WorldCereal/presto-worldcereal.git
         cd presto-worldcereal
         pip install .
         cd ..
-    - name: tests
+    - name: Install WorldCereal dependencies
+      run: pip install ".[dev]"
+    - name: Run WorldCereal tests
       run: python -m pytest -s tests
