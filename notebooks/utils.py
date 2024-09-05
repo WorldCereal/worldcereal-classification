@@ -16,12 +16,11 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
-from presto.inference import process_parquet
 from presto.utils import device
 from shapely.geometry import Polygon
 from torch.utils.data import DataLoader
 
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs_gfmap
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 RDM_API = "https://ewoc-rdm-api.iiasa.ac.at"
 
@@ -108,8 +107,15 @@ def query_worldcereal_samples(bbox_poly, buffer=250000, filter_cropland=True):
         """
 
     public_df_raw = db.sql(query).df()
+
+    return public_df_raw
+
+
+def process_parquet(public_df_raw):
+    from presto.inference import process_parquet as process_parquet_for_presto
+
     print("Processing selected samples ...")
-    public_df = process_parquet(public_df_raw)
+    public_df = process_parquet_for_presto(public_df_raw)
     public_df = map_croptypes(public_df)
     print(f"Extracted and processed {public_df.shape[0]} samples from global database.")
 
@@ -127,6 +133,7 @@ def get_inputs_outputs(
     if task_type == "cropland":
         presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ft-cl_30D_cropland_random.pt"
         df["custom_class"] = (df["LANDCOVER_LABEL"] == 11).astype(int)
+    print(f"Presto URL: {presto_model_url}")
     presto_model = Presto.load_pretrained_url(presto_url=presto_model_url, strict=False)
 
     tds = WorldCerealLabelledDataset(df, target_function=lambda xx: xx["custom_class"])
@@ -179,7 +186,7 @@ def train_classifier(inputs, targets):
     import numpy as np
     from catboost import CatBoostClassifier, Pool
     from presto.utils import DEFAULT_SEED
-    from sklearn.metrics import classification_report
+    from sklearn.metrics import classification_report, confusion_matrix
     from sklearn.model_selection import train_test_split
     from sklearn.utils.class_weight import compute_class_weight
 
@@ -215,11 +222,11 @@ def train_classifier(inputs, targets):
     custom_downstream_model = CatBoostClassifier(
         iterations=8000,
         depth=8,
-        learning_rate=0.05,
+        # learning_rate=0.05,
         early_stopping_rounds=50,
         # l2_leaf_reg=30,
-        colsample_bylevel=0.9,
-        l2_leaf_reg=3,
+        # colsample_bylevel=0.9,
+        # l2_leaf_reg=3,
         loss_function=loss_function,
         eval_metric=eval_metric,
         random_state=DEFAULT_SEED,
@@ -238,8 +245,9 @@ def train_classifier(inputs, targets):
     pred = custom_downstream_model.predict(inputs_val).flatten()
 
     report = classification_report(targets_val, pred)
+    confuson_matrix = confusion_matrix(targets_val, pred)
 
-    return custom_downstream_model, report
+    return custom_downstream_model, report, confuson_matrix
 
 
 def map_croptypes(
@@ -255,8 +263,8 @@ def map_croptypes(
     ewoc_map = ewoc_map.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
     ewoc_map.set_index("ewoc_code", inplace=True)
 
-    df["CROPTYPE_LABEL"].replace(0, np.nan, inplace=True)
-    df["CROPTYPE_LABEL"].fillna(df["LANDCOVER_LABEL"], inplace=True)
+    df["CROPTYPE_LABEL"] = df["CROPTYPE_LABEL"].replace(0, np.nan)
+    df["CROPTYPE_LABEL"] = df["CROPTYPE_LABEL"].fillna(df["LANDCOVER_LABEL"])
 
     df["ewoc_code"] = df["CROPTYPE_LABEL"].map(
         wc2ewoc_map.set_index("croptype")["ewoc_code"]
@@ -506,7 +514,7 @@ def create_datacube(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    inputs = worldcereal_preprocessed_inputs_gfmap(
+    inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         spatial_extent=geometry,
