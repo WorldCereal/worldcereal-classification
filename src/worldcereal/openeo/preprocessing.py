@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
+import pandas as pd
 from geojson import GeoJSON
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
@@ -19,7 +20,9 @@ from openeo_gfmap.preprocessing.compositing import mean_compositing, median_comp
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
-COMPOSITE_WINDOW = "month"
+
+class InvalidTemporalContextError(Exception):
+    pass
 
 
 def raw_datacube_S2(
@@ -306,7 +309,8 @@ def worldcereal_preprocessed_inputs(
     tile_size: Optional[int] = None,
 ) -> DataCube:
 
-    # TODO: check temporal extent for start/end to ensure 1st and last day of month
+    # First validate the temporal context
+    _validate_temporal_context(temporal_extent)
 
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -385,3 +389,61 @@ def worldcereal_preprocessed_inputs(
         data = data.merge_cubes(meteo_data)
 
     return data
+
+
+def _validate_temporal_context(temporal_context: TemporalContext) -> None:
+    """validation method to ensure proper specification of temporal context.
+    which requires that the start and end date are at the first and last day of a month.
+
+    Parameters
+    ----------
+    temporal_context : TemporalContext
+        temporal context to validate
+
+    Raises
+    ------
+    InvalidTemporalContextError
+        if start_date is not on the first day of a month or end_date
+        is not on the last day of a month
+    """
+
+    start_date, end_date = temporal_context.to_datetime()
+
+    if start_date != start_date.replace(
+        day=1
+    ) or end_date != end_date + pd.offsets.MonthEnd(0):
+        error_msg = (
+            "WorldCereal uses monthly compositing. For this to work properly, "
+            "requested temporal range should start and end at the first and last "
+            "day of a month. Instead, got: "
+            f"{temporal_context.start_date} - {temporal_context.end_date}. "
+            "You may use `worldcereal.preprocessing.correct_temporal_context()` "
+            "to correct the temporal context."
+        )
+        raise InvalidTemporalContextError(error_msg)
+
+
+def correct_temporal_context(temporal_context: TemporalContext) -> TemporalContext:
+    """Corrects the temporal context to ensure that the start and end date are
+    at the first and last day of a month as required by the WorldCereal processing.
+
+    Parameters
+    ----------
+    temporal_context : TemporalContext
+        temporal context to correct
+
+    Returns
+    -------
+    TemporalContext
+        corrected temporal context
+    """
+
+    start_date, end_date = temporal_context.to_datetime()
+
+    start_date = start_date.replace(day=1)
+    end_date = end_date + pd.offsets.MonthEnd(0)
+
+    return TemporalContext(
+        start_date=start_date.strftime("%Y-%m-%d"),
+        end_date=end_date.strftime("%Y-%m-%d"),
+    )
