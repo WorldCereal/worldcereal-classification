@@ -63,6 +63,10 @@ def create_job_dataframe_worldcereal(
         start_date = max(start_date, WORLDCEREAL_BEGIN_DATE)
         end_date = min(end_date, datetime.now())
 
+        # We need to start 1st of the month and end on the last day of the month
+        start_date = start_date.replace(day=1)
+        end_date = end_date + pd.offsets.MonthEnd(0)
+
         # Convert dates to string format
         start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
             "%Y-%m-%d"
