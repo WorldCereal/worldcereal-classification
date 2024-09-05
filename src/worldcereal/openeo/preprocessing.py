@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from openeo import UDF, Connection, DataCube
 from openeo_gfmap import (
@@ -68,7 +68,7 @@ def raw_datacube_S2(
         scl_cube_properties["tileId"] = lambda val: val == filter_tile
 
     # Create the job to extract S2
-    extraction_parameters = {
+    extraction_parameters: dict[str, Any] = {
         "target_resolution": None,  # Disable target resolution
         "load_collection": {
             "eo:cloud_cover": lambda val: val <= 95.0,
@@ -184,7 +184,7 @@ def raw_datacube_S1(
         direction to use. In the case querrying is unavailable or fails, then
         uses "ASCENDING" as a last resort.
     """
-    extractor_parameters = {
+    extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
     }
     if orbit_direction is None and backend_context.backend in [

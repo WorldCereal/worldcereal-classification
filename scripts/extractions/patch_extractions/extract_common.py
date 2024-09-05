@@ -190,6 +190,11 @@ def upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str) -> str:
     artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
     artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
 
+    if not artifactory_username or not artifactory_password:
+        raise ValueError(
+            "Artifactory credentials not found. Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD."
+        )
+
     headers = {"Content-Type": "application/octet-stream"}
 
     upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{name}.parquet"

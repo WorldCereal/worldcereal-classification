@@ -9,7 +9,7 @@ def apply_datacube(cube: XarrayDataCube, context: dict) -> XarrayDataCube:
     cube_array: xr.DataArray = cube.get_array()
     cube_array = cube_array.transpose("bands", "y", "x")
 
-    clouds = np.logical_or(
+    clouds: xr.DataArray = np.logical_or(
         np.logical_and(cube_array < 11, cube_array >= 8), cube_array == 3
     ).isel(
         bands=0

@@ -46,11 +46,11 @@ class CroplandClassifier(ModelInference):
         threshold = 0.5
 
         # Extract all prediction values and convert them to binary labels
-        prediction_values = [sublist["True"] for sublist in outputs[1]]
-        binary_labels = np.array(prediction_values) >= threshold
+        prediction_values = np.array([sublist["True"] for sublist in outputs[1]])
+        binary_labels = prediction_values >= threshold
         binary_labels = binary_labels.astype("uint8")
 
-        prediction_values = np.array(prediction_values) * 100.0
+        prediction_values = prediction_values * 100.0
         prediction_values = np.round(prediction_values).astype("uint8")
 
         return np.stack([binary_labels, prediction_values], axis=0)

@@ -18,7 +18,9 @@ from extract_common import (  # isort: skip
 meteo_asset = pystac.extensions.item_assets.AssetDefinition({})
 
 
-def create_job_dataframe_meteo(backend: Backend, split_jobs: List[gpd.GeoDataFrame]):
+def create_job_dataframe_meteo(
+    backend: Backend, split_jobs: List[gpd.GeoDataFrame]
+) -> pd.DataFrame:
     raise NotImplementedError("This function is not implemented yet.")
 
 

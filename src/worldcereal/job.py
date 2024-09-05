@@ -259,6 +259,10 @@ def generate_map(
     if product_type == WorldCerealProduct.CROPLAND:
         classes = _cropland_map(inputs, cropland_parameters=cropland_parameters)
     elif product_type == WorldCerealProduct.CROPTYPE:
+        if not isinstance(croptype_parameters, CropTypeParameters):
+            raise ValueError(
+                f"Please provide a valid `croptype_parameters` parameter. Received: {croptype_parameters}"
+            )
         # First compute cropland map
         cropland_mask = (
             _cropland_map(inputs, cropland_parameters=cropland_parameters)

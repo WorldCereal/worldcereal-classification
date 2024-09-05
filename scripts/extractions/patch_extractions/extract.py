@@ -108,7 +108,7 @@ def prepare_job_dataframe(
         split_dfs.extend(s2_split_df)
 
     pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
-    collection_switch = {
+    collection_switch: dict[ExtractionCollection, typing.Callable] = {
         ExtractionCollection.SENTINEL1: create_job_dataframe_s1,
         ExtractionCollection.SENTINEL2: create_job_dataframe_s2,
         ExtractionCollection.METEO: create_job_dataframe_meteo,
