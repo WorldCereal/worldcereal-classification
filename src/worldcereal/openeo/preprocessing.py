@@ -13,7 +13,6 @@ from openeo_gfmap import (
     TemporalContext,
 )
 from openeo_gfmap.fetching.generic import build_generic_extractor
-from openeo_gfmap.fetching.meteo import build_meteo_extractor
 from openeo_gfmap.fetching.s1 import build_sentinel1_grd_extractor
 from openeo_gfmap.fetching.s2 import build_sentinel2_l2a_extractor
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
@@ -255,10 +254,11 @@ def raw_datacube_METEO(
     temporal_extent: TemporalContext,
     fetch_type: FetchType,
 ) -> DataCube:
-    extractor = build_meteo_extractor(
+    extractor = build_generic_extractor(
         backend_context=backend_context,
         bands=["AGERA5-TMEAN", "AGERA5-PRECIP"],
         fetch_type=fetch_type,
+        collection_name="AGERA5",
     )
     return extractor.get_cube(connection, spatial_extent, temporal_extent)
 
