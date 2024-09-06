@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Install git
+su - jenkins -c "dnf install git -y"
+
 # Install openeo-gfmap
 GFMAP_URL="https://github.com/Open-EO/openeo-gfmap.git"
 su - jenkins -c "git clone $GFMAP_URL"
