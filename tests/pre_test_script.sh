@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Install git
-sudo dnf install git -y
+dnf install git -y
 
 # Install openeo-gfmap
 GFMAP_URL="https://github.com/Open-EO/openeo-gfmap.git"
