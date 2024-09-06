@@ -3,6 +3,7 @@ own functions, but the setup and main thread execution is done here."""
 
 import argparse
 import os
+import typing
 from datetime import datetime
 from enum import Enum
 from functools import partial
@@ -115,7 +116,7 @@ def prepare_job_dataframe(
         split_dfs.extend(s2_split_df)
 
     pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
-    collection_switch = {
+    collection_switch: dict[ExtractionCollection, typing.Callable] = {
         ExtractionCollection.SENTINEL1: create_job_dataframe_s1,
         ExtractionCollection.SENTINEL2: create_job_dataframe_s2,
         ExtractionCollection.METEO: create_job_dataframe_meteo,
@@ -141,7 +142,7 @@ def setup_extraction_functions(
     memory: str,
     python_memory: str,
     max_executors: int,
-) -> tuple[callable, callable, callable]:
+) -> tuple[typing.Callable, typing.Callable, typing.Callable]:
     """Setup the datacube creation, path generation and post-job action
     functions for the given collection. Returns a tuple of three functions:
     1. The datacube creation function
@@ -251,7 +252,7 @@ def manager_main_loop(
     manager: GFMAPJobManager,
     collection: ExtractionCollection,
     job_df: gpd.GeoDataFrame,
-    datacube_fn: callable,
+    datacube_fn: typing.Callable,
     tracking_df_path: Path,
 ) -> None:
     """Main loop for the job manager, re-running it whenever an uncatched

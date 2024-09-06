@@ -74,3 +74,8 @@ repos:
     hooks:
       - id: black
         language_version: python3.9
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        additional_dependencies: ["types-requests"]

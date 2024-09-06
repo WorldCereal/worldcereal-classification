@@ -46,11 +46,11 @@ class CroplandClassifier(ModelInference):
         threshold = 0.5
 
         # Extract all prediction values and convert them to binary labels
-        prediction_values = [sublist["True"] for sublist in outputs[1]]
-        binary_labels = np.array(prediction_values) >= threshold
+        prediction_values = np.array([sublist["True"] for sublist in outputs[1]])
+        binary_labels = prediction_values >= threshold
         binary_labels = binary_labels.astype("uint8")
 
-        prediction_values = np.array(prediction_values) * 100.0
+        prediction_values = prediction_values * 100.0
         prediction_values = np.round(prediction_values).astype("uint8")
 
         return np.stack([binary_labels, prediction_values], axis=0)
@@ -69,7 +69,7 @@ class CroplandClassifier(ModelInference):
         classification = self.predict(inarr.values)
         self.logger.info("Classification done with shape: %s", inarr.shape)
 
-        classification = xr.DataArray(
+        classification_da = xr.DataArray(
             classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
@@ -79,7 +79,7 @@ class CroplandClassifier(ModelInference):
             },
         )
 
-        return classification
+        return classification_da
 
 
 class CroptypeClassifier(ModelInference):
@@ -151,7 +151,7 @@ class CroptypeClassifier(ModelInference):
         classification = self.predict(inarr.values)
         self.logger.info("Classification done with shape: %s", inarr.shape)
 
-        classification = xr.DataArray(
+        classification_da = xr.DataArray(
             classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
@@ -161,4 +161,4 @@ class CroptypeClassifier(ModelInference):
             },
         )
 
-        return classification
+        return classification_da

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 from geojson import GeoJSON
@@ -72,7 +72,7 @@ def raw_datacube_S2(
         scl_cube_properties["tileId"] = lambda val: val == filter_tile
 
     # Create the job to extract S2
-    extraction_parameters = {
+    extraction_parameters: dict[str, Any] = {
         "target_resolution": None,  # Disable target resolution
         "load_collection": {
             "eo:cloud_cover": lambda val: val <= 95.0,
@@ -188,7 +188,7 @@ def raw_datacube_S1(
         direction to use. In the case querrying is unavailable or fails, then
         uses "ASCENDING" as a last resort.
     """
-    extractor_parameters = {
+    extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
     }
     if orbit_direction is None and backend_context.backend in [
@@ -330,7 +330,7 @@ def worldcereal_preprocessed_inputs(
             "S2-L2A-B12",
         ],
         fetch_type=fetch_type,
-        filter_tile=False,
+        filter_tile=None,
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
         additional_masks_flag=False,
         apply_mask_flag=True,

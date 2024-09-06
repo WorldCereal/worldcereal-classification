@@ -141,7 +141,7 @@ def majority_vote(
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
     unique_values = set(np.unique(prediction))
-    unique_values = sorted(unique_values - set(excluded_values))
+    unique_values = sorted(unique_values - set(excluded_values))  # type: ignore
     index_value_lut = [(k, v) for k, v in enumerate(unique_values)]
 
     counts = np.zeros(shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)

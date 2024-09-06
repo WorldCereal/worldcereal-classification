@@ -127,7 +127,7 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
 
     logger.info(f"Loading DOY data from: {doy_file}")
 
-    with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:
+    with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:  # type: ignore
         doy_data = load_reproject(
             doy_file, bounds, epsg, resolution, nodata_value=0, fill_value=np.nan
         )
@@ -189,7 +189,7 @@ def season_doys_to_dates(
         Straightforward case in which season
         is entirely in one calendar year
         """
-        ref_year = sample_date.year
+        ref_year = sample_date.year  # type: ignore
 
     else:
         """
@@ -202,7 +202,7 @@ def season_doys_to_dates(
         # Correct DOY for the year crossing
         eos += 365
 
-        base_year = sample_date.year
+        base_year = sample_date.year  # type: ignore
         timediff = 365
         ref_year = base_year
 

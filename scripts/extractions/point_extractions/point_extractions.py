@@ -147,7 +147,8 @@ def create_datacube(
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_points = get_job_nb_points(row)
-    pipeline_log.debug("Number of polygons to extract %s", number_points)
+    if pipeline_log is not None:
+        pipeline_log.debug("Number of polygons to extract %s", number_points)
 
     job_options = {
         "executor-memory": executor_memory,
@@ -162,7 +163,7 @@ def create_datacube(
 
 
 def post_job_action(
-    job_items: List[pystac.Item], row: pd.Series, parameters: dict = None
+    job_items: List[pystac.Item], row: pd.Series, parameters: Optional[dict] = None
 ) -> list:
     for idx, item in enumerate(job_items):
         item_asset_path = Path(list(item.assets.values())[0].href)
@@ -234,7 +235,8 @@ if __name__ == "__main__":
     # Load the input dataframe, and perform dataset splitting using the h3 tile
     # to respect the area of interest. Also filters out the jobs that have
     # no location with the extract=True flag.
-    pipeline_log.info("Loading input dataframe from %s.", args.input_df)
+    if pipeline_log is not None:
+        pipeline_log.info("Loading input dataframe from %s.", args.input_df)
 
     input_df = gpd.read_parquet(args.input_df)
 
@@ -266,5 +268,6 @@ if __name__ == "__main__":
 
     manager.add_backend(Backend.CDSE.value, cdse_connection, parallel_jobs=2)
 
-    pipeline_log.info("Launching the jobs from the manager.")
+    if pipeline_log is not None:
+        pipeline_log.info("Launching the jobs from the manager.")
     manager.run_jobs(job_df, create_datacube, tracking_df_path)

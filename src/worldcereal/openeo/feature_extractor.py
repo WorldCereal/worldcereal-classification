@@ -44,7 +44,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     }
 
     @functools.lru_cache(maxsize=6)
-    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> list:
+    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> str:
         import urllib.request
         import zipfile
         from pathlib import Path
@@ -62,7 +62,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         of the presto embeddings"""
         return [f"presto_ft_{i}" for i in range(128)]
 
-    def evaluate_resolution(self, inarr: xr.DataArray) -> float:
+    def evaluate_resolution(self, inarr: xr.DataArray) -> int:
         """Helper function to get the resolution in meters for
         the input array.
 
@@ -73,7 +73,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         Returns
         -------
-        float
+        int
             resolution in meters.
         """
 
