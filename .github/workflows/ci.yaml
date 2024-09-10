@@ -33,10 +33,10 @@ jobs:
     - name: Install WorldCereal dependencies
       run: pip install ".[dev]"
     - name: Run WorldCereal tests
-      run: python -m pytest -s tests
+      run: python -m pytest -s --log-cli-level=INFO tests
       env:
         OPENEO_AUTH_METHOD: client_credentials
         OPENEO_OIDC_DEVICE_CODE_MAX_POLL_TIME: 5
         OPENEO_AUTH_PROVIDER_ID_CDSE: CDSE
-        OPENEO_AUTH_CLIENT_ID_CDSE: ${{ secrets.OPENEO_AUTH_CLIENT_ID_CDSE }}
+        OPENEO_AUTH_CLIENT_ID_CDSE: openeo-worldcereal-service-account
         OPENEO_AUTH_CLIENT_SECRET_CDSE: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_CDSE }}
