@@ -14,7 +14,7 @@ su - jenkins -c "cd $dir && \
   cd openeo-gfmap || { echo 'Directory not found! Exiting...'; exit 1; } && \
   pip install . && \
   cd ..
-  git clone --branch updated-inferencedatasets $PRESTO_URL && \
+  git clone $PRESTO_URL && \
   cd presto-worldcereal || { echo 'Directory not found! Exiting...'; exit 1; } && \
   pip install .
 "
