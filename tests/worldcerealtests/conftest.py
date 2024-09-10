@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import geojson
 import pytest
 import xarray as xr
 
@@ -20,3 +21,10 @@ def WorldCerealPreprocessedInputs():
         .astype("uint16")
     )
     return arr
+
+
+@pytest.fixture
+def SpatialExtent():
+    filepath = get_test_resource("spatial_extent.json")
+    with open(filepath, "r") as f:
+        return geojson.load(f)
