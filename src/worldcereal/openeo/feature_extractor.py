@@ -119,7 +119,10 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         import random  # pylint: disable=import-outside-toplevel
 
         import numpy as np  # pylint: disable=import-outside-toplevel
-        from scipy.ndimage import convolve  # pylint: disable=import-outside-toplevel
+        from scipy.ndimage import (  # pylint: disable=import-outside-toplevel
+            convolve,
+            zoom,
+        )
 
         def _rolling_fill(darr, max_iter=2):
             """Helper function that also reflects values inside
@@ -143,6 +146,41 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
             return _rolling_fill(darr, max_iter=max_iter)
 
+        def _downsample(arr, factor):
+            """
+            Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.
+
+            Parameters:
+            arr (np.array): The 2D input array.
+            factor (int): The factor by which to downsample. For example, factor=2 downsamples by 2x.
+
+            Returns:
+            np.array: The downsampled array.
+            """
+            # Get the original shape of the array
+            X, Y = arr.shape
+
+            # Calculate how much padding is needed for each dimension
+            pad_X = (
+                factor - (X % factor)
+            ) % factor  # Ensures padding is only applied if needed
+            pad_Y = (
+                factor - (Y % factor)
+            ) % factor  # Ensures padding is only applied if needed
+
+            # Pad the array using 'reflect' mode
+            padded = np.pad(arr, ((0, pad_X), (0, pad_Y)), mode="reflect")
+
+            # Reshape the array to form blocks of size 'factor' x 'factor'
+            reshaped = padded.reshape(
+                (X + pad_X) // factor, factor, (Y + pad_Y) // factor, factor
+            )
+
+            # Take the mean over the factor-sized blocks
+            downsampled = np.nanmean(reshaped, axis=(1, 3))
+
+            return downsampled
+
         dem = inarr.sel(bands="elevation").values
         dem_arr = dem.astype(np.float32)
 
@@ -153,16 +191,26 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Fill NaNs with rolling fill
         dem_arr = _rolling_fill(dem_arr)
 
+        # We make sure DEM is at 20m for slope computation
+        # compatible with global slope collection
+        factor = int(20 / resolution)
+        if factor < 1 or factor % 2 != 0:
+            raise NotImplementedError(
+                f"Unsupported resolution for slope computation: {resolution}"
+            )
+        dem_arr_downsampled = _downsample(dem_arr, factor)
+        x_odd, y_odd = dem_arr.shape[0] % 2 != 0, dem_arr.shape[1] % 2 != 0
+
         # Mask NaN values in the DEM data
-        dem_masked = np.ma.masked_invalid(dem_arr)
+        dem_masked = np.ma.masked_invalid(dem_arr_downsampled)
 
         # Define convolution kernels for x and y gradients (simple finite difference approximation)
         kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (
-            8.0 * resolution
+            8.0 * 20  # array is now at 20m resolution
         )  # x-derivative kernel
 
         kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (
-            8.0 * resolution
+            8.0 * 20  # array is now at 20m resolution
         )  # y-derivative kernel
 
         # Apply convolution to compute gradients
@@ -179,8 +227,19 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Convert gradient magnitude to slope (in degrees)
         slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)
 
+        # Upsample to original resolution with bilinear interpolation
+        mask = slope.mask
+        mask = zoom(mask, zoom=factor, order=0)
+        slope = zoom(slope, zoom=factor, order=1)
+        slope[mask] = 65535
+
+        # Strip one row or column if original array was odd in that dimension
+        if x_odd:
+            slope = slope[:-1, :]
+        if y_odd:
+            slope = slope[:, :-1]
+
         # Fill slope values where the original DEM had NaNs
-        slope = slope.filled(65535)
         slope[idx_invalid] = 65535
         slope[np.isnan(slope)] = 65535
         slope = slope.astype(np.uint16)
