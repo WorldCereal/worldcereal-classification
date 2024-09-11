@@ -244,7 +244,34 @@ def raw_datacube_DEM(
         fetch_type=fetch_type,
         collection_name="COPERNICUS_30",
     )
-    return extractor.get_cube(connection, spatial_extent, None)
+    """Method to get the DEM datacube from the backend.
+    If running on CDSE backend, the slope is also loaded from the global
+    slope collection and merged with the DEM cube.
+
+    Returns
+    -------
+    DataCube
+        openEO datacube with the DEM data (and slope if available).
+    """
+
+    cube = extractor.get_cube(connection, spatial_extent, None)
+
+    if backend_context.backend.name == "CDSE":
+        # On CDSE we can load the slope from a global slope collection
+        slope = (
+            connection.load_stac(
+                "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
+                spatial_extent=spatial_extent,
+                bands=["Slope"],
+            )
+            .rename_labels(dimension="bands", target=["slope"])
+            .min_time()
+        )
+        # Note that when slope is available we use it as the base cube
+        # to merge DEM with, as it comes at 20m resolution.
+        cube = slope.merge_cubes(cube)
+
+    return cube
 
 
 def raw_datacube_METEO(
