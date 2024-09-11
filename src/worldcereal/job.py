@@ -4,8 +4,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Type, Union
 
-import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
+from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -187,7 +187,7 @@ def generate_map(
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
     out_format: str = "GTiff",
-    backend_context: BackendContext = BackendContext(Backend.FED),
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
 ) -> InferenceResults:
@@ -212,7 +212,7 @@ def generate_map(
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
-        backend to run the job on
+        backend to run the job on, by default CDSE.
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128.
     job_options: dict, optional
@@ -237,10 +237,8 @@ def generate_map(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    # Connect to openeo
-    connection = openeo.connect(
-        "https://openeo.creo.vito.be/openeo/"
-    ).authenticate_oidc()
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
@@ -310,7 +308,7 @@ def collect_inputs(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     output_path: Union[Path, str],
-    backend_context: BackendContext = BackendContext(Backend.FED),
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
 ):
     """Function to retrieve preprocessed inputs that are being
@@ -325,16 +323,14 @@ def collect_inputs(
     output_path : Union[Path, str]
         output path to download the product to
     backend_context : BackendContext
-        backend to run the job on
+        backend to run the job on, by default CDSE
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128
         so it uses the OpenEO default setting.
     """
 
-    # Connect to openeo
-    connection = openeo.connect(
-        "https://openeo.creo.vito.be/openeo/"
-    ).authenticate_oidc()
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for the inference
     inputs = worldcereal_preprocessed_inputs(
