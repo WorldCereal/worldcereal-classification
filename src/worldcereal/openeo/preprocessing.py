@@ -259,6 +259,10 @@ def raw_datacube_DEM(
 
     if backend_context.backend.name == "CDSE":
         # On CDSE we can load the slope from a global slope collection
+
+        if isinstance(spatial_extent, BoundingBoxExtent):
+            spatial_extent = dict(spatial_extent)
+
         slope = (
             connection.load_stac(
                 "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
