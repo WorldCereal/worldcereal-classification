@@ -876,6 +876,18 @@
             ]
         }
     },
+    "renamelabels6": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "renamelabels5"
+            },
+            "dimension": "bands",
+            "target": [
+                "elevation"
+            ]
+        }
+    },
     "mergecubes2": {
         "process_id": "merge_cubes",
         "arguments": {
@@ -883,7 +895,7 @@
                 "from_node": "reducedimension1"
             },
             "cube2": {
-                "from_node": "renamelabels5"
+                "from_node": "renamelabels6"
             }
         }
     },
@@ -988,7 +1000,7 @@
             "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
         }
     },
-    "renamelabels6": {
+    "renamelabels7": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
@@ -1008,7 +1020,7 @@
                 "from_node": "mergecubes3"
             },
             "cube2": {
-                "from_node": "renamelabels6"
+                "from_node": "renamelabels7"
             }
         },
         "result": true
