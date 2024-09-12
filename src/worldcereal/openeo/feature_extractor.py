@@ -146,17 +146,22 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
             return _rolling_fill(darr, max_iter=max_iter)
 
-        def _downsample(arr, factor):
-            """
-            Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.
+        def _downsample(arr: np.ndarray, factor: int) -> np.ndarray:
+            """Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.
 
-            Parameters:
-            arr (np.array): The 2D input array.
-            factor (int): The factor by which to downsample. For example, factor=2 downsamples by 2x.
+            Parameters
+            ----------
+            arr : np.ndarray
+                The 2D input array.
+            factor : int
+                The factor by which to downsample. For example, factor=2 downsamples by 2x.
 
-            Returns:
-            np.array: The downsampled array.
+            Returns
+            -------
+            np.ndarray
+                Downsampled array.
             """
+
             # Get the original shape of the array
             X, Y = arr.shape
 
