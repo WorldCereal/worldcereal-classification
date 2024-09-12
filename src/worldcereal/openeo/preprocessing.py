@@ -257,7 +257,7 @@ def raw_datacube_DEM(
     cube = extractor.get_cube(connection, spatial_extent, None)
     cube = cube.rename_labels(dimension="bands", target=["elevation"])
 
-    if backend_context.backend.name == "CDSE" and fetch_type == FetchType.TILE:
+    if backend_context.backend == Backend.CDSE and fetch_type == FetchType.TILE:
         # On CDSE we can load the slope from a global slope collection
         # but this currently only works for tile fetching.
 
