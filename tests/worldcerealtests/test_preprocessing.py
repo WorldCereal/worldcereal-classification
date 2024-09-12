@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
-from openeo_gfmap import FetchType
+from openeo_gfmap import BoundingBoxExtent, FetchType
 from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
 from openeo_gfmap.temporal import TemporalContext
 
@@ -56,6 +56,32 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
 
     # Ref file with processing graph
     ref_graph = basedir / "testresources" / "preprocess_graph.json"
+
+    # # uncomment to save current graph to the ref file
+    # with open(ref_graph, "w") as f:
+    #     f.write(json.dumps(cube.flat_graph(), indent=4))
+
+    with open(ref_graph, "r") as f:
+        expected = json.load(f)
+        assert expected == cube.flat_graph()
+
+
+def test_worldcereal_preprocessed_inputs_graph_withslope():
+    """This version has fetchtype.TILE and should include slope."""
+
+    temporal_extent = TemporalContext("2020-01-01", "2022-03-31")
+
+    cube = worldcereal_preprocessed_inputs(
+        connection=cdse_connection(),
+        backend_context=BackendContext(Backend.CDSE),
+        spatial_extent=BoundingBoxExtent(
+            west=44.432274, south=51.317362, east=44.698802, north=51.428224, epsg=4326
+        ),
+        temporal_extent=temporal_extent,
+    )
+
+    # Ref file with processing graph
+    ref_graph = basedir / "testresources" / "preprocess_graphwithslope.json"
 
     # # uncomment to save current graph to the ref file
     # with open(ref_graph, "w") as f:

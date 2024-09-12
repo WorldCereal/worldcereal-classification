@@ -4,7 +4,7 @@ import xarray as xr
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 
 
-def test_dem_computation():
+def test_slope_computation():
     test_elevation = np.array(
         [[10, 20, 30, 30], [10, 20, 20, 20], [65535, 20, 20, 20]], dtype=np.uint16
     )
