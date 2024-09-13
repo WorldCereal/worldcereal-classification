@@ -5,17 +5,38 @@ from typing import Optional, Union
 
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
+from pydantic import BaseModel
 
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
-    InferenceResults,
     WorldCerealProduct,
 )
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
+
+
+class InferenceResults(BaseModel):
+    """Dataclass to store the results of the WorldCereal job.
+
+    Attributes
+    ----------
+    job_id : str
+        Job ID of the finished OpenEO job.
+    product_url : str
+        Public URL to the product accessible of the resulting OpenEO job.
+    output_path : Optional[Union[Path, str]]
+        Path to the output file, if it was downloaded locally.
+    product : WorldCerealProduct
+        Product that was generated.
+    """
+
+    job_id: str
+    product_url: str
+    output_path: Optional[Union[Path, str]]
+    product: WorldCerealProduct
 
 
 def generate_map(

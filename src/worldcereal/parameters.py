@@ -1,6 +1,5 @@
 from enum import Enum
-from pathlib import Path
-from typing import Optional, Type, Union
+from typing import Type
 
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
@@ -93,7 +92,7 @@ class CropLandParameters(BaseModel):
         """Validates the FeatureExtractor and Classifier classes."""
         if not issubclass(self.feature_extractor, PatchFeatureExtractor):
             raise ValidationError(
-                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
+                f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
             )
         if not issubclass(self.classifier, ModelInference):
             raise ValidationError(
@@ -147,24 +146,3 @@ class CropTypeParameters(BaseModel):
             raise ValidationError(
                 f"Classifier must be a subclass of ModelInference, got {self.classifier}"
             )
-
-
-class InferenceResults(BaseModel):
-    """Dataclass to store the results of the WorldCereal job.
-
-    Attributes
-    ----------
-    job_id : str
-        Job ID of the finished OpenEO job.
-    product_url : str
-        Public URL to the product accessible of the resulting OpenEO job.
-    output_path : Optional[Union[Path, str]]
-        Path to the output file, if it was downloaded locally.
-    product : WorldCerealProduct
-        Product that was generated.
-    """
-
-    job_id: str
-    product_url: str
-    output_path: Optional[Union[Path, str]]
-    product: WorldCerealProduct
