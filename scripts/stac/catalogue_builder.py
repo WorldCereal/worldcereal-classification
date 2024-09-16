@@ -253,6 +253,12 @@ if __name__ == "__main__":
         paths[i : i + args.chunk_size] for i in range(0, len(paths), args.chunk_size)
     ]
 
+    if args.local:
+        builder_log.info("Subsampling the patches paths as the job is running locally.")
+        paths = paths[:1000]
+        parse_collection(paths, output_folder=args.output_folder, collection=args.collection)
+        exit()
+    
     builder_log.info("Configuring the Mepsy App.")
     app_config = dict(
         app_name=f"CatalogueBuilder {args.collection.value}",
@@ -266,10 +272,6 @@ if __name__ == "__main__":
     )
 
     mep = mepsy.SparkApp(**app_config)
-
-    if args.local:
-        builder_log.info("Subsampling the patches paths as the job is running locally.")
-        paths = paths[:1000]
 
     builder_log.info("Processing %s patches...", len(paths))
 
