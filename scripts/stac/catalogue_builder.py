@@ -256,9 +256,11 @@ if __name__ == "__main__":
     if args.local:
         builder_log.info("Subsampling the patches paths as the job is running locally.")
         paths = paths[:1000]
-        parse_collection(paths, output_folder=args.output_folder, collection=args.collection)
+        parse_collection(
+            paths, output_folder=args.output_folder, collection=args.collection
+        )
         exit()
-    
+
     builder_log.info("Configuring the Mepsy App.")
     app_config = dict(
         app_name=f"CatalogueBuilder {args.collection.value}",
