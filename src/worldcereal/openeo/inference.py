@@ -28,7 +28,7 @@ class CroplandClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        return ["classification", "probability"]
+        return ["classification", "max_probability"]
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
@@ -42,18 +42,18 @@ class CroplandClassifier(ModelInference):
         # Prepare input data for ONNX model
         outputs = self.onnx_session.run(None, {"features": features})
 
-        # Threshold for binary conversion
-        threshold = 0.5
+        # Get the prediction labels
+        binary_labels = (outputs[0] == "True").astype(np.uint8).reshape((-1, 1))
 
-        # Extract all prediction values and convert them to binary labels
-        prediction_values = np.array([sublist["True"] for sublist in outputs[1]])
-        binary_labels = prediction_values >= threshold
-        binary_labels = binary_labels.astype("uint8")
-
-        prediction_values = prediction_values * 100.0
-        prediction_values = np.round(prediction_values).astype("uint8")
-
-        return np.stack([binary_labels, prediction_values], axis=0)
+        # Extract all probabilities
+        all_probabilities = np.round(
+            np.array([[x["False"], x["True"]] for x in outputs[1]]) * 100.0
+        ).astype(np.uint8)
+        max_probability = np.max(all_probabilities, axis=1, keepdims=True)
+        # return np.concatenate(
+        #     [binary_labels, max_probability, all_probabilities], axis=1
+        # )
+        return np.concatenate([binary_labels, max_probability], axis=1)
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
@@ -73,7 +73,10 @@ class CroplandClassifier(ModelInference):
             classification.reshape((2, len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
-                "bands": ["classification", "probability"],
+                "bands": [
+                    "classification",
+                    "max_probability",
+                ],
                 "x": x_coords,
                 "y": y_coords,
             },

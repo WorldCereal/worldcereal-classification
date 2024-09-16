@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.openeo.postprocess import PostProcessor
 
 
 class WorldCerealProduct(Enum):
@@ -145,4 +146,25 @@ class CropTypeParameters(BaseModel):
         if not issubclass(self.classifier, ModelInference):
             raise ValidationError(
                 f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+            )
+
+
+class PostprocessParameters(BaseModel):
+    """Parameters for postprocessing. Types are enforced by Pydantic.
+
+    Attributes
+    ----------
+
+    """
+
+    enable: bool = True
+
+    postprocessor: Type[ModelInference] = Field(default=PostProcessor)
+
+    @model_validator(mode="after")
+    def check_udf_types(self):
+        """Validates the PostProcessor class."""
+        if not issubclass(self.postprocessor, ModelInference):
+            raise ValidationError(
+                f"Postprocessor must be a subclass of PostProcessor, got {self.postprocessor}"
             )

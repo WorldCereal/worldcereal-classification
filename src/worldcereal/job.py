@@ -12,6 +12,7 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
+    PostprocessParameters,
     WorldCerealProduct,
 )
 
@@ -46,6 +47,7 @@ def generate_map(
     product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
+    postprocess_parameters: PostprocessParameters = PostprocessParameters(enable=False),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
@@ -69,6 +71,8 @@ def generate_map(
         Parameters for the croptype product inference pipeline. Only required
         whenever `product_type` is set to `WorldCerealProduct.CROPTYPE`, will be
         ignored otherwise.
+    postprocess_parameters: Optional[PostprocessParameters]
+        Parameters for the postprocessing pipeline.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
@@ -115,7 +119,11 @@ def generate_map(
 
     # Construct the feature extraction and model inference pipeline
     if product_type == WorldCerealProduct.CROPLAND:
-        classes = _cropland_map(inputs, cropland_parameters=cropland_parameters)
+        classes = _cropland_map(
+            inputs,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
+        )
     elif product_type == WorldCerealProduct.CROPTYPE:
         if not isinstance(croptype_parameters, CropTypeParameters):
             raise ValueError(
@@ -123,7 +131,11 @@ def generate_map(
             )
         # First compute cropland map
         cropland_mask = (
-            _cropland_map(inputs, cropland_parameters=cropland_parameters)
+            _cropland_map(
+                inputs,
+                cropland_parameters=cropland_parameters,
+                postprocess_parameters=postprocess_parameters,
+            )
             .filter_bands("classification")
             .reduce_dimension(
                 dimension="t", reducer="mean"
@@ -134,6 +146,7 @@ def generate_map(
             inputs,
             croptype_parameters=croptype_parameters,
             cropland_mask=cropland_mask,
+            postprocess_parameters=postprocess_parameters,
         )
 
     # Submit the job
