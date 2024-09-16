@@ -5,7 +5,6 @@ import argparse
 import os
 import typing
 from datetime import datetime
-from enum import Enum
 from functools import partial
 from pathlib import Path
 
@@ -13,22 +12,19 @@ import geopandas as gpd
 import pandas as pd
 import requests
 from extract_common import generate_output_path, pipeline_log, post_job_action
-from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo, meteo_asset
-from extract_optical import (
-    create_datacube_optical,
-    create_job_dataframe_s2,
-    sentinel2_asset,
-)
+from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo
+from extract_optical import create_datacube_optical, create_job_dataframe_s2
 from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
 
+from worldcereal.stac.constants import ExtractionCollection
+
 from extract_sar import (  # isort: skip
     create_datacube_sar,
     create_job_dataframe_s1,
-    sentinel1_asset,
 )
 
 from extract_worldcereal import (  # isort: skip
@@ -37,15 +33,6 @@ from extract_worldcereal import (  # isort: skip
     post_job_action_worldcereal,
     generate_output_path_worldcereal,
 )
-
-
-class ExtractionCollection(Enum):
-    """Collections that can be extracted in those scripts."""
-
-    SENTINEL1 = "SENTINEL1"
-    SENTINEL2 = "SENTINEL2"
-    METEO = "METEO"
-    WORLDCEREAL = "WORLDCEREAL"
 
 
 # Pushover API endpoint, allowing to send notifications to personal devices.
@@ -364,11 +351,6 @@ if __name__ == "__main__":
         default=1,
         help="The value of the `extract` flag to use in the dataframe.",
     )
-    parser.add_argument(
-        "--disable_stac",
-        action="store_true",
-        help="Disable generation of STAC collection.",
-    )
 
     args = parser.parse_args()
 
@@ -401,28 +383,14 @@ if __name__ == "__main__":
     # Initialize and setups the job manager
     pipeline_log.info("Initializing the job manager.")
 
-    collection_id = {
-        ExtractionCollection.SENTINEL1: "SENTINEL1-EXTRACTION",
-        ExtractionCollection.SENTINEL2: "sentinel2-EXTRACTION",
-        ExtractionCollection.METEO: "METEO-EXTRACTION",
-        ExtractionCollection.WORLDCEREAL: "WORLDCEREAL-INPUTS",
-    }
-    collection_description = {
-        ExtractionCollection.SENTINEL1: "Sentinel1 GRD data extraction.",
-        ExtractionCollection.SENTINEL2: "Sentinel2 L2A data extraction.",
-        ExtractionCollection.METEO: "Meteo data extraction.",
-        ExtractionCollection.WORLDCEREAL: "WorldCereal preprocessed inputs extraction.",
-    }
     job_manager = GFMAPJobManager(
         output_dir=args.output_folder,
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
-        collection_id=collection_id[collection],
-        collection_description=collection_description[collection],
         poll_sleep=60,
         n_threads=4,
         restart_failed=args.restart_failed,
-        stac_enabled=(not args.disable_stac),
+        stac_enabled=False,
     )
 
     job_manager.add_backend(
@@ -430,25 +398,6 @@ if __name__ == "__main__":
         cdse_connection,
         parallel_jobs=args.parallel_jobs,
     )
-
-    constellation_name = {
-        ExtractionCollection.SENTINEL1: "sentinel1",
-        ExtractionCollection.SENTINEL2: "sentinel2",
-        ExtractionCollection.METEO: "agera5",
-        ExtractionCollection.WORLDCEREAL: "worldcereal",
-    }
-    item_assets = {
-        ExtractionCollection.SENTINEL1: {"sentinel1": sentinel1_asset},
-        ExtractionCollection.SENTINEL2: {"sentinel2": sentinel2_asset},
-        ExtractionCollection.METEO: {"agera5": meteo_asset},
-        ExtractionCollection.WORLDCEREAL: None,
-    }
-
-    if not args.disable_stac:
-        job_manager.setup_stac(
-            constellation=constellation_name[collection],
-            item_assets=item_assets[collection],
-        )
 
     manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
 

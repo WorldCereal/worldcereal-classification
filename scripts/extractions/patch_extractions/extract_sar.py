@@ -7,7 +7,6 @@ import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-import pystac
 from openeo_gfmap import (
     Backend,
     BackendContext,
@@ -26,38 +25,6 @@ from extract_common import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
-)
-
-# Define the sentinel 1 asset
-sentinel1_asset = pystac.extensions.item_assets.AssetDefinition(
-    {
-        "gsd": 20,
-        "title": "Sentinel1",
-        "description": "Sentinel-1 bands",
-        "type": "application/x-netcdf",
-        "roles": ["data"],
-        "proj:shape": [32, 32],
-        "raster:bands": [
-            {"name": "S1-SIGMA0-VV"},
-            {
-                "name": "S1-SIGMA0-VH",
-            },
-        ],
-        "cube:variables": {
-            "S1-SIGMA0-VV": {"dimensions": ["time", "y", "x"], "type": "data"},
-            "S1-SIGMA0-VH": {"dimensions": ["time", "y", "x"], "type": "data"},
-        },
-        "eo:bands": [
-            {
-                "name": "S1-SIGMA0-VV",
-                "common_name": "VV",
-            },
-            {
-                "name": "S1-SIGMA0-VH",
-                "common_name": "VH",
-            },
-        ],
-    }
 )
 
 S1_GRD_CATALOGUE_BEGIN_DATE = datetime(2014, 10, 1)
