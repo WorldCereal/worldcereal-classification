@@ -3,21 +3,20 @@
 import json
 import logging
 import os
+import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import List
-import shutil
 
 import geojson
 import geopandas as gpd
 import pandas as pd
 import pystac
 import requests
-from openeo_gfmap.utils.netcdf import update_nc_attributes
-from shapely import Point
 import xarray as xr
+from shapely import Point
 
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
