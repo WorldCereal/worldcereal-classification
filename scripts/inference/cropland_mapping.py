@@ -8,6 +8,7 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
 from worldcereal.job import WorldCerealProduct, generate_map
+from worldcereal.parameters import PostprocessParameters
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -38,6 +39,11 @@ if __name__ == "__main__":
         type=int,
         default=4326,
         help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
+    )
+    parser.add_argument(
+        "--postprocess",
+        action="store_true",
+        help="Run postprocessing on the croptype and/or the cropland product after inference.",
     )
 
     args = parser.parse_args()
@@ -70,6 +76,7 @@ if __name__ == "__main__":
         temporal_extent,
         args.output_path,
         product_type=WorldCerealProduct(product),
+        postprocess_parameters=PostprocessParameters(enable=args.postprocess),
         out_format="GTiff",
         backend_context=backend_context,
     )

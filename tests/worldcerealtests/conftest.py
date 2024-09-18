@@ -35,3 +35,10 @@ def WorldCerealCroplandClassification():
     filepath = get_test_resource("worldcereal_cropland_classification.nc")
     arr = xr.open_dataarray(filepath).astype("uint16")
     return arr
+
+
+@pytest.fixture
+def WorldCerealCroptypeClassification():
+    filepath = get_test_resource("worldcereal_croptype_classification.nc")
+    arr = xr.open_dataarray(filepath).astype("uint16")
+    return arr
