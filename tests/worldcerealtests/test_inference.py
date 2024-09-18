@@ -71,12 +71,20 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     assert list(croptype_classification.bands.values) == [
         "classification",
-        "probability",
+        "max_probability",
+        "probability_barley",
+        "probability_maize",
+        "probability_millet_sorghum",
+        "probability_other_crop",
+        "probability_rapeseed_rape",
+        "probability_soy_soybeans",
+        "probability_sunflower",
+        "probability_wheat",
     ]
 
     #  First assert below depends on the amount of classes in the model
     assert croptype_classification.sel(bands="classification").values.max() <= 7
     assert croptype_classification.sel(bands="classification").values.min() >= 0
-    assert croptype_classification.sel(bands="probability").values.max() <= 100
-    assert croptype_classification.sel(bands="probability").values.min() >= 0
-    assert croptype_classification.shape == (2, 100, 100)
+    assert croptype_classification.sel(bands="max_probability").values.max() <= 100
+    assert croptype_classification.sel(bands="max_probability").values.min() >= 0
+    assert croptype_classification.shape == (10, 100, 100)

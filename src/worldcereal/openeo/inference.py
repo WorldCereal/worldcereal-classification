@@ -53,7 +53,7 @@ class CroplandClassifier(ModelInference):
         # return np.concatenate(
         #     [binary_labels, max_probability, all_probabilities], axis=1
         # )
-        return np.concatenate([binary_labels, max_probability], axis=1)
+        return np.concatenate([binary_labels, max_probability], axis=1).transpose()
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
@@ -109,12 +109,37 @@ class CroptypeClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        return ["classification", "probability"]
+        import json
+
+        # Loads the model locally to get the class names, required to be set
+        # on the OpenEO process graph.
+        classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
+        onnx_session = self.load_ort_session(classifier_url)
+
+        # Attempts reading the class names from the model metadata. Should be
+        # automatically set by the catboost model exporter.
+        metadata = onnx_session.get_modelmeta().custom_metadata_map
+
+        if "class_params" not in metadata:
+            self.logger.error(
+                "Could not find `class_params` field in the model metadata. "
+                "Please make sure to export that information in your onnx model. Using fallback method."
+            )
+            raise ValueError("Could not find class names in the model metadata.")
+
+        class_names = json.loads(metadata["class_params"])["class_names"]
+        self.logger.info("Evaluated class names: %s", class_names)
+
+        return ["classification", "max_probability"] + [
+            f"probability_{name}" for name in class_names
+        ]
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
         Predicts labels using the provided features array.
         """
+        import json
+
         import numpy as np
 
         if self.onnx_session is None:
@@ -124,7 +149,7 @@ class CroptypeClassifier(ModelInference):
         outputs = self.onnx_session.run(None, {"features": features})
 
         # Get info on classes from the model
-        class_params = eval(
+        class_params = json.loads(
             self.onnx_session.get_modelmeta().custom_metadata_map["class_params"]
         )
 
@@ -138,7 +163,16 @@ class CroptypeClassifier(ModelInference):
             labels[i] = LUT[label]
             probabilities[i] = int(prob[label] * 100)
 
-        return np.stack([labels, probabilities], axis=0)
+        # Extract per class probabilities
+        output_probabilities = []
+        for output_px in outputs[1]:
+            output_probabilities.append(list(output_px.values()))
+
+        output_probabilities = (np.array(output_probabilities) * 100).astype(np.uint8)
+
+        return np.hstack(
+            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]
+        ).transpose()
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
         classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
@@ -154,11 +188,13 @@ class CroptypeClassifier(ModelInference):
         classification = self.predict(inarr.values)
         self.logger.info("Classification done with shape: %s", inarr.shape)
 
+        output_labels = self.output_labels()
+
         classification_da = xr.DataArray(
-            classification.reshape((2, len(x_coords), len(y_coords))),
+            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),
             dims=["bands", "x", "y"],
             coords={
-                "bands": ["classification", "probability"],
+                "bands": output_labels,
                 "x": x_coords,
                 "y": y_coords,
             },

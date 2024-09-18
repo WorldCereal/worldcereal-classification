@@ -70,7 +70,7 @@ def _cropland_map(
 
     # Postprocess
     if postprocess_parameters.enable:
-        classes = _postprocess(classes, postprocess_parameters)
+        classes = _postprocess(classes, postprocess_parameters, is_binary=True)
 
     # Cast to uint8
     classes = compress_uint8(classes)
@@ -138,7 +138,7 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         # TODO: check how 254 value is treated during postprocessing
-        classes = _postprocess(classes, postprocess_parameters)
+        classes = _postprocess(classes, postprocess_parameters, is_binary=False)
 
     # Cast to uint16
     classes = compress_uint16(classes)
@@ -147,7 +147,9 @@ def _croptype_map(
 
 
 def _postprocess(
-    classes: DataCube, postprocess_parameters: "PostprocessParameters"
+    classes: DataCube,
+    postprocess_parameters: "PostprocessParameters",
+    is_binary: bool = False,
 ) -> DataCube:
     """Method to postprocess the classes.
 
@@ -167,10 +169,13 @@ def _postprocess(
     # Run postprocessing on the raw classification output
     # Note that this uses the `apply_model_inference` method even though
     # it is not truly model inference
+    parameters = postprocess_parameters.model_dump(exclude=["postprocessor"])
+    parameters.update({"is_binary": is_binary})
+
     postprocessed_classes = apply_model_inference(
         model_inference_class=postprocess_parameters.postprocessor,
         cube=classes,
-        parameters=postprocess_parameters.model_dump(),
+        parameters=parameters,
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},

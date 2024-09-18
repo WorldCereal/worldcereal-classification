@@ -13,7 +13,24 @@ def test_cropland_postprocessing(WorldCerealCroplandClassification):
     _ = apply_model_inference_local(
         PostProcessor,
         WorldCerealCroplandClassification,
-        parameters={"ignore_dependencies": True, EPSG_HARMONIZED_NAME: None},
+        parameters={
+            "ignore_dependencies": True,
+            EPSG_HARMONIZED_NAME: None,
+            "is_binary": True,
+        },
     )
 
-    print("Running postprocessing UDF locally")
+
+def test_croptype_postprocessing(WorldCerealCroptypeClassification):
+    """Test the local postprocessing of a croptype product"""
+
+    print("Postprocessing croptype product ...")
+    _ = apply_model_inference_local(
+        PostProcessor,
+        WorldCerealCroptypeClassification,
+        parameters={
+            "ignore_dependencies": True,
+            EPSG_HARMONIZED_NAME: None,
+            "is_binary": False,
+        },
+    )
