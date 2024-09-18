@@ -6,7 +6,6 @@ import geojson
 import geopandas as gpd
 import openeo
 import pandas as pd
-import pystac
 from openeo_gfmap import Backend, TemporalContext
 
 from extract_common import (  # isort: skip
@@ -14,8 +13,6 @@ from extract_common import (  # isort: skip
     filter_extract_true,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
 )  # isort: skip
-
-meteo_asset = pystac.extensions.item_assets.AssetDefinition({})
 
 
 def create_job_dataframe_meteo(
