@@ -1,21 +1,24 @@
 name: worldcereal-official
 channels:
+  - pytorch
   - conda-forge
   - defaults
 dependencies:
   - catboost=1.2.5
+  - cpuonly
+  - duckdb=1.0.0
   - einops=0.8.0
   - fastparquet=2024.2.0
-  - folium=0.16.0
-  - gdal=3.8.5
   - geojson=3.1.0
   - geopandas=0.14.4
   - h5netcdf=1.3.0
   - h5py=3.11.0
+  - leafmap=0.35.1
   - loguru=0.7.2
-  - openeo=0.29.0
+  - openeo=0.31.0
   - pyarrow=16.1.0
   - python=3.10.0
+  - python-duckdb=1.0.0
   - pytorch=2.3.1
   - rasterio=1.3.10
   - rioxarray=0.15.5
