@@ -135,7 +135,6 @@ def query_ground_truth(
     df["geometry"] = df["wkb_geometry"].apply(lambda x: wkb.loads(bytes(x)))
     df.drop(columns=["wkb_geometry"], inplace=True)
 
-    # Convert the pandas DataFrame to a GeoDataFrame
     gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
     gdf.geometry = (
         gdf.geometry.centroid
