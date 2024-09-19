@@ -154,10 +154,15 @@ class PostprocessParameters(BaseModel):
 
     Attributes
     ----------
-
+    enable: bool (default=True)
+        Whether to enable postprocessing.
+    save_intermediate: bool (default=False)
+        Whether to save intermediate results (before the postprocessing).
+        The intermediate results will be saved in the GeoTiff format.
     """
 
     enable: bool = True
+    save_intermediate: bool = False
 
     postprocessor: Type[ModelInference] = Field(default=PostProcessor)
 
@@ -167,4 +172,12 @@ class PostprocessParameters(BaseModel):
         if not issubclass(self.postprocessor, ModelInference):
             raise ValidationError(
                 f"Postprocessor must be a subclass of PostProcessor, got {self.postprocessor}"
+            )
+
+    @model_validator(mode="after")
+    def check_parameters(self):
+        """Validates the validity within the parameters."""
+        if not self.enable and self.save_intermediate:
+            raise ValidationError(
+                "Cannot save intermediate results if postprocessing is disabled."
             )
