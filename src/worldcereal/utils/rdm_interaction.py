@@ -14,17 +14,27 @@ DEFAULT_COLUMNS = [
     "ewoc_code",
 ]
 
+# RDM API Endpoint
+RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
+
 
 def _collections_from_rdm(poly: Polygon) -> List[str]:
-    """
-    Queries the RDM API and finds all intersection collection IDs for a given polygon.
+    """Queries the RDM API and finds all intersection collection IDs for a given polygon.
 
-    :param poly: A user-defined polygon for which all intersection collection IDs need to be found.
-    :return: A List containing the URLs of all intersection collection IDs.
+    Parameters
+    ----------
+    poly : Polygon
+        A user-defined polygon for which all intersection collection IDs need to be found.
+
+    Returns
+    -------
+    List[str]
+        A List containing the URLs of all intersection collection IDs.
     """
+
     bbox = poly.bounds
     bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
-    url = f"https://ewoc-rdm-api.iiasa.ac.at/collections/search?{bbox_str}"
+    url = f"{RDM_ENDPOINT}/collections/search?{bbox_str}"
 
     response = requests.get(url)
     response_json = response.json()
@@ -37,15 +47,21 @@ def _collections_from_rdm(poly: Polygon) -> List[str]:
 
 
 def _get_download_urls(collection_ids: List[str]) -> List[str]:
-    """
-    Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
+    """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
 
-    :param collection_ids: A list of collection IDs.
-    :return: A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
+    Parameters
+    ----------
+    collection_ids : List[str]
+        A list of collection IDs.
+
+    Returns
+    -------
+    List[str]
+        A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
     """
     urls = []
     for id in collection_ids:
-        url = f"https://ewoc-rdm-api.iiasa.ac.at/collections/{id}/sample/download"
+        url = f"{RDM_ENDPOINT}/collections/{id}/sample/download"
         headers = {
             "accept": "*/*",
         }
@@ -56,13 +72,23 @@ def _get_download_urls(collection_ids: List[str]) -> List[str]:
 
 
 def _setup_sql_query(urls: List[str], poly: Polygon, columns) -> str:
-    """
-    Sets up the SQL query for the GeoParquet files.
+    """Sets up the SQL query for the GeoParquet files.
 
-    :param urls: A list of URLs of the GeoParquet files.
-    :param poly: A user-defined polygon.
-    :return: A SQL query for the GeoParquet files.
-    """
+    Parameters
+    ----------
+    urls : List[str]
+        A list of URLs of the GeoParquet files.
+    poly : Polygon
+        A user-defined polygon.
+    columns : _type_
+        A list of column names to extract.
+
+    Returns
+    -------
+    str
+        A SQL query for the GeoParquet files.
+    """    
+
     combined_query = ""
     columns_str = ", ".join(columns)
 
@@ -82,13 +108,18 @@ def _setup_sql_query(urls: List[str], poly: Polygon, columns) -> str:
 
 
 def query_ground_truth(
-    poly: Polygon, output_path=Union[str, Path], columns=DEFAULT_COLUMNS
+    poly: Polygon, output_path: Union[str, Path], columns=DEFAULT_COLUMNS
 ):
-    """
-    Queries the RDM API and generates a GeoParquet file of all intersecting sample IDs.
+    """Queries the RDM API and generates a GeoParquet file of all intersecting sample IDs.
 
-    :param poly: A user-defined polygon.
-    :param output_path: The output path for the GeoParquet file.
+    Parameters
+    ----------
+    poly : Polygon
+        A user-defined polygon.
+    output_path : _type_, optional
+        The output path for the GeoParquet file.
+    columns : _type_, optional
+        A list of column names to extract., by default DEFAULT_COLUMNS
     """
     collection_ids = _collections_from_rdm(poly)
     urls = _get_download_urls(collection_ids)
