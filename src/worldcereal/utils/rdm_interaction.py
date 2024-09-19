@@ -87,7 +87,7 @@ def _setup_sql_query(urls: List[str], poly: Polygon, columns) -> str:
     -------
     str
         A SQL query for the GeoParquet files.
-    """    
+    """
 
     combined_query = ""
     columns_str = ", ".join(columns)
