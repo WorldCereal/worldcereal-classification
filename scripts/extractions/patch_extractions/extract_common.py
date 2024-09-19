@@ -217,9 +217,7 @@ def upload_geoparquet_artifactory(
             timeout=180,
         )
 
-    assert (
-        response.status_code == 201
-    ), f"Error uploading the dataframe to artifactory: {response.text}"
+    response.raise_for_status()
 
     return upload_url
 
