@@ -80,7 +80,7 @@ def _setup_sql_query(urls: List[str], poly: Polygon, columns) -> str:
         A list of URLs of the GeoParquet files.
     poly : Polygon
         A user-defined polygon.
-    columns : _type_
+    columns :
         A list of column names to extract.
 
     Returns
@@ -118,7 +118,7 @@ def query_ground_truth(
         A user-defined polygon.
     output_path : _type_, optional
         The output path for the GeoParquet file.
-    columns : _type_, optional
+    columns : optional
         A list of column names to extract., by default DEFAULT_COLUMNS
     """
     collection_ids = _collections_from_rdm(poly)
