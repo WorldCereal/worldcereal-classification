@@ -17,7 +17,7 @@ class PostProcessor(ModelInference):
     EXCLUDED_VALUES = [254, 255, 65535]
 
     def output_labels(self) -> list:
-        return ["prediction", "max_probability"]
+        return ["classification", "max_probability"]
 
     def dependencies(self) -> list:
         return []
