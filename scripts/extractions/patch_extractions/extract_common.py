@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -14,7 +15,7 @@ import geopandas as gpd
 import pandas as pd
 import pystac
 import requests
-from openeo_gfmap.utils.netcdf import update_nc_attributes
+import xarray as xr
 from shapely import Point
 
 # Logger used for the pipeline
@@ -110,7 +111,13 @@ def post_job_action(
             item.id = item.id.replace(".nc", f"_{row.orbit_state}.nc")
 
         # Saves the new attributes in the netcdf file
-        update_nc_attributes(item_asset_path, new_attributes)
+        ds = xr.open_dataset(item_asset_path)
+
+        ds = ds.assign_attrs(new_attributes)
+
+        with NamedTemporaryFile(delete=False) as temp_file:
+            ds.to_netcdf(temp_file.name)
+            shutil.move(temp_file.name, item_asset_path)
 
     return job_items
 
