@@ -15,6 +15,7 @@ dependencies:
   - h5py=3.11.0
   - leafmap=0.35.1
   - loguru=0.7.2
+  - ipyleaflet=0.19.1
   - openeo=0.31.0
   - pyarrow=16.1.0
   - python=3.10.0
