@@ -46,10 +46,8 @@ def test_query_ground_truth(mock_get_download_urls, sample_polygon, tmp_path):
     file_path = tmp_path / "sample.parquet"
     gdf.to_parquet(file_path)
 
-    # Mock the output of _get_download_urls
     mock_get_download_urls.return_value = [file_path]
 
-    # Call the function with mock dependencies
     query_ground_truth(
         poly=sample_polygon,
         output_path=tmp_path / "output.parquet",
