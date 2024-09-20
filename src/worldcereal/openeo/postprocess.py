@@ -20,7 +20,9 @@ class PostProcessor(ModelInference):
     EXCLUDED_VALUES = [254, 255, 65535]
 
     def output_labels(self) -> list:
-        if self._parameters.get("keep_class_probs", False):
+        if self._parameters.get("keep_class_probs", False) and not self._parameters.get(
+            "is_binary", True
+        ):
             return ["classification", "probability"] + [
                 f"probability_{name}"
                 for name in self._parameters["lookup_table"].keys()

@@ -143,14 +143,16 @@ class CroptypeClassifier(ModelInference):
         probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)
         for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
             labels[i] = lookup_table[label]
-            probabilities[i] = int(prob[label] * 100)
+            probabilities[i] = int(round(prob[label] * 100))
 
         # Extract per class probabilities
         output_probabilities = []
         for output_px in outputs[1]:
             output_probabilities.append(list(output_px.values()))
 
-        output_probabilities = (np.array(output_probabilities) * 100).astype(np.uint8)
+        output_probabilities = (
+            (np.array(output_probabilities) * 100).round().astype(np.uint8)
+        )
 
         return np.hstack(
             [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]
