@@ -269,8 +269,9 @@ def raw_datacube_DEM(
             spatial_extent=spatial_extent,
             bands=["Slope"],
         ).rename_labels(dimension="bands", target=["slope"])
-        # Backend fix for CDSE
-        if "t" not in slope.metadata.get_dimension_names():
+        # Client fix for CDSE, the openeo client might be unsynchronized with
+        # the backend.
+        if "t" not in slope.metadata.dimension_names():
             slope.metadata = slope.metadata.add_dimension("t", "2020-01-01", "temporal")
         slope = slope.min_time()
 
