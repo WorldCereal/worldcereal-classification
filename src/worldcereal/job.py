@@ -72,8 +72,8 @@ def generate_map(
         Parameters for the croptype product inference pipeline. Only required
         whenever `product_type` is set to `WorldCerealProduct.CROPTYPE`, will be
         ignored otherwise.
-    postprocess_parameters: Optional[PostprocessParameters]
-        Parameters for the postprocessing pipeline.
+    postprocess_parameters: PostprocessParameters
+        Parameters for the postprocessing pipeline. By default disabled.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
@@ -102,12 +102,12 @@ def generate_map(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    # Make a connection to the OpenEO backend
     if backend_context.backend == Backend.CDSE:
         connection = openeo.connect(
             "https://openeo.creo.vito.be/openeo/"
         ).authenticate_oidc()
     else:
+        # Make a connection to the OpenEO backend
         connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference

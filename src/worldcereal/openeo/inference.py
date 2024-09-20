@@ -28,7 +28,7 @@ class CroplandClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        return ["classification", "max_probability"]
+        return ["classification", "probability"]
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
@@ -75,7 +75,7 @@ class CroplandClassifier(ModelInference):
             coords={
                 "bands": [
                     "classification",
-                    "max_probability",
+                    "probability",
                 ],
                 "x": x_coords,
                 "y": y_coords,
@@ -114,7 +114,7 @@ class CroptypeClassifier(ModelInference):
     def output_labels(self) -> list:
         class_names = self._parameters["lookup_table"].keys()
 
-        return ["classification", "max_probability"] + [
+        return ["classification", "probability"] + [
             f"probability_{name}" for name in class_names
         ]
 
@@ -124,14 +124,19 @@ class CroptypeClassifier(ModelInference):
         """
         import numpy as np
 
+        # Classes names to codes
+        lookup_table = self._parameters.get("lookup_table", None)
+
+        if lookup_table is None:
+            raise ValueError(
+                "Lookup table is not defined. Please provide lookup_table in the UDFs parameters."
+            )
+
         if self.onnx_session is None:
             raise ValueError("Model has not been loaded. Please load a model first.")
 
         # Prepare input data for ONNX model
         outputs = self.onnx_session.run(None, {"features": features})
-
-        # Get classes LUT
-        lookup_table = self._parameters["lookup_table"]
 
         # Extract classes as INTs and probability of winning class values
         labels = np.zeros((len(outputs[0]),), dtype=np.uint16)

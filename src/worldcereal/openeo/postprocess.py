@@ -20,7 +20,7 @@ class PostProcessor(ModelInference):
     EXCLUDED_VALUES = [254, 255, 65535]
 
     def output_labels(self) -> list:
-        return ["classification", "max_probability"]
+        return ["classification", "probability"]
 
     def dependencies(self) -> list:
         return []
@@ -83,8 +83,6 @@ class PostProcessor(ModelInference):
         new_labels_vals = np.argmax(probabilities.values, axis=0)
         new_max_probs_vals = np.max(probabilities.values, axis=0)
 
-        # TODO we are now reclassifying as integers, but we should use the LUT
-
         new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]
         new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]
 
@@ -92,7 +90,7 @@ class PostProcessor(ModelInference):
             np.stack((new_labels_vals, new_max_probs_vals)),
             dims=["bands", "y", "x"],
             coords={
-                "bands": ["classification", "max_probability"],
+                "bands": ["classification", "probability"],
                 "y": base_labels.y,
                 "x": base_labels.x,
             },
@@ -102,16 +100,12 @@ class PostProcessor(ModelInference):
         # Make some checks on the bands
         if self._parameters.get("is_binary", False):
             # Cast to float for more accurate gaussian smoothing
-            max_probability = (
-                inarr.sel(bands="max_probability").astype("float32") / 100.0
-            )
+            probability = inarr.sel(bands="probability").astype("float32") / 100.0
             classification = inarr.sel(bands="classification").astype("uint8")
 
             # Get the per-class probabilities from the max probability and the
             # classification result.
-            true_prob = xr.where(
-                classification > 0, max_probability, 1.0 - max_probability
-            )
+            true_prob = xr.where(classification > 0, probability, 1.0 - probability)
             false_prob = 1.0 - true_prob
 
             class_probabilities = xr.concat(
@@ -135,7 +129,7 @@ class PostProcessor(ModelInference):
         # Reclassify
         new_labels = PostProcessor.reclassify(
             inarr.sel(bands="classification"),
-            inarr.sel(bands="max_probability"),
+            inarr.sel(bands="probability"),
             class_probabilities,
         )
 

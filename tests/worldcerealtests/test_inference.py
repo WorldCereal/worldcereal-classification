@@ -36,12 +36,12 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
 
     assert list(cropland_classification.bands.values) == [
         "classification",
-        "max_probability",
+        "probability",
     ]
     assert cropland_classification.sel(bands="classification").values.max() <= 1
     assert cropland_classification.sel(bands="classification").values.min() >= 0
-    assert cropland_classification.sel(bands="max_probability").values.max() <= 100
-    assert cropland_classification.sel(bands="max_probability").values.min() >= 0
+    assert cropland_classification.sel(bands="probability").values.max() <= 100
+    assert cropland_classification.sel(bands="probability").values.min() >= 0
     assert cropland_classification.shape == (2, 100, 100)
 
 
@@ -75,7 +75,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     assert list(croptype_classification.bands.values) == [
         "classification",
-        "max_probability",
+        "probability",
         "probability_barley",
         "probability_maize",
         "probability_millet_sorghum",
@@ -89,6 +89,6 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
     #  First assert below depends on the amount of classes in the model
     assert croptype_classification.sel(bands="classification").values.max() <= 7
     assert croptype_classification.sel(bands="classification").values.min() >= 0
-    assert croptype_classification.sel(bands="max_probability").values.max() <= 100
-    assert croptype_classification.sel(bands="max_probability").values.min() >= 0
+    assert croptype_classification.sel(bands="probability").values.max() <= 100
+    assert croptype_classification.sel(bands="probability").values.min() >= 0
     assert croptype_classification.shape == (10, 100, 100)
