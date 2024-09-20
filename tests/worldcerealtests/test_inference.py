@@ -6,6 +6,7 @@ from openeo_gfmap.inference.model_inference import apply_model_inference_local
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.utils.models import load_model_lut
 
 
 def test_cropland_inference(WorldCerealPreprocessedInputs):
@@ -60,12 +61,15 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     print("Running croptype classification inference UDF locally")
 
+    lookup_table = load_model_lut(CroptypeClassifier.CATBOOST_PATH)
+
     croptype_classification = apply_model_inference_local(
         CroptypeClassifier,
         croptype_features,
         parameters={
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
+            "lookup_table": lookup_table,
         },
     )
 

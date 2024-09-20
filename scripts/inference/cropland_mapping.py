@@ -69,7 +69,7 @@ if __name__ == "__main__":
     spatial_extent = BoundingBoxExtent(minx, miny, maxx, maxy, epsg)
     temporal_extent = TemporalContext(start_date, end_date)
 
-    backend_context = BackendContext(Backend.FED)
+    backend_context = BackendContext(Backend.CDSE)
 
     job_results = generate_map(
         spatial_extent,

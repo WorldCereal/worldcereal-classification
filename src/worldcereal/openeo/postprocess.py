@@ -12,6 +12,9 @@ class PostProcessor(ModelInference):
     is_binary: bool
         If the postprocessing is applied on a binary classification model (cropland)
         or a multi-class classification model (croptype). Default is False.
+    lookup_table: Optional[dict]
+        Required if is_binary is False. A lookup table to map the class names
+        to class labels, ordered by model output.
     """
 
     EXCLUDED_VALUES = [254, 255, 65535]
@@ -135,5 +138,16 @@ class PostProcessor(ModelInference):
             inarr.sel(bands="max_probability"),
             class_probabilities,
         )
+
+        # Re-apply labels
+        if not self._parameters.get("is_binary", True):
+            lookup_table = self._parameters.get("lookup_table")
+            class_labels = list(lookup_table.values())
+            for idx, label in enumerate(class_labels):
+                new_labels.loc[{"bands": "classification"}] = xr.where(
+                    new_labels.sel(bands="classification") == idx,
+                    label,
+                    new_labels.sel(bands="classification"),
+                )
 
         return new_labels

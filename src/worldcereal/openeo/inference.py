@@ -94,6 +94,9 @@ class CroptypeClassifier(ModelInference):
     Interesting UDF parameters:
     - classifier_url: A public URL to the ONNX classification model. Default is
       the public Presto model.
+    - lookup_table: A dictionary mapping class names to class labels, ordered by
+      model probability output. This is required for the model to map the output
+      probabilities to class names.
     """
 
     import numpy as np
@@ -109,26 +112,7 @@ class CroptypeClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        import json
-
-        # Loads the model locally to get the class names, required to be set
-        # on the OpenEO process graph.
-        classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
-        onnx_session = self.load_ort_session(classifier_url)
-
-        # Attempts reading the class names from the model metadata. Should be
-        # automatically set by the catboost model exporter.
-        metadata = onnx_session.get_modelmeta().custom_metadata_map
-
-        if "class_params" not in metadata:
-            self.logger.error(
-                "Could not find `class_params` field in the model metadata. "
-                "Please make sure to export that information in your onnx model. Using fallback method."
-            )
-            raise ValueError("Could not find class names in the model metadata.")
-
-        class_names = json.loads(metadata["class_params"])["class_names"]
-        self.logger.info("Evaluated class names: %s", class_names)
+        class_names = self._parameters["lookup_table"].keys()
 
         return ["classification", "max_probability"] + [
             f"probability_{name}" for name in class_names
@@ -138,8 +122,6 @@ class CroptypeClassifier(ModelInference):
         """
         Predicts labels using the provided features array.
         """
-        import json
-
         import numpy as np
 
         if self.onnx_session is None:
@@ -148,19 +130,14 @@ class CroptypeClassifier(ModelInference):
         # Prepare input data for ONNX model
         outputs = self.onnx_session.run(None, {"features": features})
 
-        # Get info on classes from the model
-        class_params = json.loads(
-            self.onnx_session.get_modelmeta().custom_metadata_map["class_params"]
-        )
-
         # Get classes LUT
-        LUT = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+        lookup_table = self._parameters["lookup_table"]
 
         # Extract classes as INTs and probability of winning class values
         labels = np.zeros((len(outputs[0]),), dtype=np.uint16)
         probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)
         for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
-            labels[i] = LUT[label]
+            labels[i] = lookup_table[label]
             probabilities[i] = int(prob[label] * 100)
 
         # Extract per class probabilities

@@ -3,7 +3,9 @@ from openeo_gfmap.inference.model_inference import (
     apply_model_inference_local,
 )
 
+from worldcereal.openeo.inference import CroptypeClassifier
 from worldcereal.openeo.postprocess import PostProcessor
+from worldcereal.utils.models import load_model_lut
 
 
 def test_cropland_postprocessing(WorldCerealCroplandClassification):
@@ -23,6 +25,7 @@ def test_cropland_postprocessing(WorldCerealCroplandClassification):
 
 def test_croptype_postprocessing(WorldCerealCroptypeClassification):
     """Test the local postprocessing of a croptype product"""
+    lookup_table = load_model_lut(CroptypeClassifier.CATBOOST_PATH)
 
     print("Postprocessing croptype product ...")
     _ = apply_model_inference_local(
@@ -32,5 +35,6 @@ def test_croptype_postprocessing(WorldCerealCroptypeClassification):
             "ignore_dependencies": True,
             EPSG_HARMONIZED_NAME: None,
             "is_binary": False,
+            "lookup_table": lookup_table,
         },
     )

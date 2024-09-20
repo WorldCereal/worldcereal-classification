@@ -103,10 +103,12 @@ def generate_map(
         raise ValueError(f"Format {format} not supported.")
 
     # Make a connection to the OpenEO backend
-    connection = openeo.connect(
-        "https://openeo.creo.vito.be/openeo/"
-    ).authenticate_oidc()
-    # connection = BACKEND_CONNECTIONS[backend_context.backend]()
+    if backend_context.backend == Backend.CDSE:
+        connection = openeo.connect(
+            "https://openeo.creo.vito.be/openeo/"
+        ).authenticate_oidc()
+    else:
+        connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
