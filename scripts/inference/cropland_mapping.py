@@ -45,6 +45,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Run postprocessing on the croptype and/or the cropland product after inference.",
     )
+    parser.add_argument(
+        "--class-probabilities",
+        action="store_true",
+        help="Output per-class probabilities in the resulting product",
+    )
 
     args = parser.parse_args()
 
@@ -76,7 +81,9 @@ if __name__ == "__main__":
         temporal_extent,
         args.output_path,
         product_type=WorldCerealProduct(product),
-        postprocess_parameters=PostprocessParameters(enable=args.postprocess),
+        postprocess_parameters=PostprocessParameters(
+            enable=args.postprocess, keep_class_probs=args.class_probabilities
+        ),
         out_format="GTiff",
         backend_context=backend_context,
     )

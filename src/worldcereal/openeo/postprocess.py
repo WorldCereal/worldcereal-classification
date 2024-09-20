@@ -20,6 +20,11 @@ class PostProcessor(ModelInference):
     EXCLUDED_VALUES = [254, 255, 65535]
 
     def output_labels(self) -> list:
+        if self._parameters.get("keep_class_probs", False):
+            return ["classification", "probability"] + [
+                f"probability_{name}"
+                for name in self._parameters["lookup_table"].keys()
+            ]
         return ["classification", "probability"]
 
     def dependencies(self) -> list:
@@ -143,5 +148,9 @@ class PostProcessor(ModelInference):
                     label,
                     new_labels.sel(bands="classification"),
                 )
+
+        # Append the per-class probabalities if required
+        if self._parameters.get("keep_class_probs", False):
+            new_labels = xr.concat([new_labels, class_probabilities], dim="bands")
 
         return new_labels

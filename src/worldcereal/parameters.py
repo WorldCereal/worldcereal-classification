@@ -159,10 +159,13 @@ class PostprocessParameters(BaseModel):
     save_intermediate: bool (default=False)
         Whether to save intermediate results (before the postprocessing).
         The intermediate results will be saved in the GeoTiff format.
+    keep_class_probs: bool (default=False)
+        If the per-class probabilities should be outputted in the final product.
     """
 
     enable: bool = Field(default=True)
     save_intermediate: bool = Field(default=False)
+    keep_class_probs: bool = Field(default=False)
 
     postprocessor: Type[ModelInference] = Field(default=PostProcessor)
 
