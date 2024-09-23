@@ -81,6 +81,14 @@ def post_job_action(
             )
             continue
 
+        if len(geometry_information) > 1:
+            pipeline_log.warning(
+                "Duplicate geomtries found for the sample_id %s in the input geometry, selecting the first one at index: %s.",
+                item_id,
+                geometry_information.index[0],
+            )
+            geometry_information = geometry_information.iloc[0]
+
         sample_id = geometry_information[sample_id_column_name]
         ref_id = geometry_information.ref_id
         valid_time = geometry_information.valid_time
