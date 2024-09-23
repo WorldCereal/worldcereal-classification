@@ -72,7 +72,7 @@ def post_job_action(
 
         geometry_information = extracted_gpd.loc[
             extracted_gpd[sample_id_column_name] == item_id
-        ].squeeze()
+        ]
 
         if len(geometry_information) == 0:
             pipeline_log.warning(
@@ -87,7 +87,8 @@ def post_job_action(
                 item_id,
                 geometry_information.index[0],
             )
-            geometry_information = geometry_information.iloc[0]
+
+        geometry_information = geometry_information.iloc[0]
 
         sample_id = geometry_information[sample_id_column_name]
         ref_id = geometry_information.ref_id
