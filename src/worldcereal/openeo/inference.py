@@ -50,9 +50,7 @@ class CroplandClassifier(ModelInference):
             np.array([[x["False"], x["True"]] for x in outputs[1]]) * 100.0
         ).astype(np.uint8)
         max_probability = np.max(all_probabilities, axis=1, keepdims=True)
-        # return np.concatenate(
-        #     [binary_labels, max_probability, all_probabilities], axis=1
-        # )
+
         return np.concatenate([binary_labels, max_probability], axis=1).transpose()
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
