@@ -16,6 +16,11 @@ def sample_polygon():
     return Polygon([(0, 0), (0, 1), (1, 1), (1, 0), (0, 0)])
 
 
+@pytest.fixture
+def sample_temporal_extent():
+    return ["2021-01-01", "2021-12-31"]
+
+
 @patch("requests.get")
 def test_collections_from_rdm(mock_requests_get, sample_polygon):
 
@@ -24,7 +29,9 @@ def test_collections_from_rdm(mock_requests_get, sample_polygon):
         {"collectionId": "Bar"},
     ]
 
-    collection_ids = _collections_from_rdm(sample_polygon)
+    collection_ids = _collections_from_rdm(
+        geometry=sample_polygon, temporal_extent=sample_temporal_extent
+    )
 
     assert collection_ids == ["Foo", "Bar"]
 
@@ -34,13 +41,26 @@ def test_collections_from_rdm(mock_requests_get, sample_polygon):
 
 
 @patch("worldcereal.rdm_api.rdm_interaction._get_download_urls")
-def test_query_ground_truth(mock_get_download_urls, sample_polygon, tmp_path):
+def test_query_ground_truth(
+    mock_get_download_urls, sample_polygon, sample_temporal_extent, tmp_path
+):
 
     data = {
-        "col1": ["include", "this", "column"],
-        "col2": ["This", "One", "Too"],
-        "col3": ["Not", "This", "One"],
-        "geometry": [Point(0.5, 0.5), Point(0.25, 0.25), Point(2, 3)],
+        "col1": ["must", "include", "this", "column"],
+        "col2": ["and", "this", "One", "Too"],
+        "col3": ["but", "not", "This", "One"],
+        "valid_time": [
+            "2021-01-01",
+            "2021-12-31",
+            "2021-06-01",
+            "2025-05-22",
+        ],  # Last date not within sample_temporal_extent
+        "geometry": [
+            Point(0.5, 0.5),
+            Point(0.25, 0.25),
+            Point(2, 3),
+            Point(0.75, 0.75),
+        ],  # Third point not within sample_polygon
     }
     gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
     file_path = tmp_path / "sample.parquet"
@@ -49,15 +69,16 @@ def test_query_ground_truth(mock_get_download_urls, sample_polygon, tmp_path):
     mock_get_download_urls.return_value = [file_path]
 
     query_ground_truth(
-        poly=sample_polygon,
+        geometry=sample_polygon,
         output_path=tmp_path / "output.parquet",
+        temporal_extent=sample_temporal_extent,
         columns=["col1", "col2"],
     )
 
     result_gdf = gpd.read_parquet(tmp_path / "output.parquet")
 
-    # Check that col3 indeed was not included
+    # Check that col3 and valid_time indeed not included
     assert result_gdf.columns.tolist() == ["col1", "col2", "geometry"]
 
-    # Check that the last geometry was not included, since it's outside the sample_polygon
+    # Check that the third and fourth geometry are not included, as they are outside the spatiotemporal extent
     assert len(result_gdf) == 2
