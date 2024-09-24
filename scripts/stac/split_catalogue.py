@@ -48,18 +48,24 @@ if __name__ == "__main__":
 
     builder_log.info("Loading the catalogues from the directory %s", args.input_folder)
     # List the catalogues in the input folder
-    catalogues = [
-        pickle.load(path.open("rb")) for path in tqdm(args.input_folder.glob("*.pkl"))
-    ]
+    catalogues = []
+    for catalogue_path in tqdm(args.input_folder.glob("*.pkl")):
+        with open(catalogue_path, "rb") as file:
+            catalogue = pickle.load(file)
+            try:
+                catalogue.strategy
+            except AttributeError:
+                setattr(catalogue, "strategy", None)
+            catalogues.append(catalogue)
 
     builder_log.info("Loaded %s catalogues. Merging them...", len(catalogues))
 
     merged_catalogue = None
-    for catalogue in tqdm(catalogues):
+    for catalogue_path in tqdm(catalogues):
         if merged_catalogue is None:
-            merged_catalogue = catalogue
+            merged_catalogue = catalogue_path
         else:
-            merged_catalogue.add_items(catalogue.get_all_items())
+            merged_catalogue.add_items(catalogue_path.get_all_items())
 
     if merged_catalogue is None:
         raise ValueError("No catalogues found in the input folder.")
