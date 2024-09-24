@@ -22,7 +22,9 @@ def sample_temporal_extent():
 
 
 @patch("requests.get")
-def test_collections_from_rdm(mock_requests_get, sample_polygon):
+def test_collections_from_rdm(
+    mock_requests_get, sample_polygon, sample_temporal_extent
+):
 
     mock_requests_get.return_value.json.return_value = [
         {"collectionId": "Foo"},
@@ -36,7 +38,9 @@ def test_collections_from_rdm(mock_requests_get, sample_polygon):
     assert collection_ids == ["Foo", "Bar"]
 
     bbox = sample_polygon.bounds
-    expected_url = f"{RDM_ENDPOINT}/collections/search?Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+    geom = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+    temporal = f"&ValidityTime.Start={sample_temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={sample_temporal_extent[1]}T00%3A00%3A00Z"
+    expected_url = f"{RDM_ENDPOINT}/collections/search?{geom}{temporal}"
     mock_requests_get.assert_called_with(expected_url)
 
 
