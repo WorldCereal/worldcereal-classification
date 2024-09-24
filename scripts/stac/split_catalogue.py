@@ -5,10 +5,8 @@ import argparse
 import logging
 import pickle
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from openeo_gfmap.utils.split_stac import split_collection_by_epsg
-from pystac import CatalogType
 from tqdm import tqdm
 
 # Logger used for the pipeline
@@ -72,12 +70,5 @@ if __name__ == "__main__":
     with open("temp_merged_catalogue.pkl", "wb") as file:
         pickle.dump(merged_catalogue, file)
 
-    with TemporaryDirectory() as temp_dir:
-        builder_log.info("Writing the full catalogue to the temorary directory...")
-        merged_catalogue.normalize_hrefs(temp_dir)
-        merged_catalogue.save(
-            catalog_type=CatalogType.SELF_CONTAINED, dest_href=temp_dir
-        )
-
-        builder_log.info("Splitting the catalogue by the local UTM projection...")
-        split_collection_by_epsg(Path(temp_dir) / "collection.json", args.output_folder)
+    builder_log.info("Splitting the catalogue by the local UTM projection...")
+    split_collection_by_epsg(merged_catalogue, args.output_folder)
