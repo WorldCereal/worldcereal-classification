@@ -5,10 +5,8 @@ import argparse
 import logging
 import pickle
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from openeo_gfmap.utils.split_stac import split_collection_by_epsg
-from pystac import CatalogType
 from tqdm import tqdm
 
 # Logger used for the pipeline
@@ -50,18 +48,24 @@ if __name__ == "__main__":
 
     builder_log.info("Loading the catalogues from the directory %s", args.input_folder)
     # List the catalogues in the input folder
-    catalogues = [
-        pickle.load(path.open("rb")) for path in tqdm(args.input_folder.glob("*.pkl"))
-    ]
+    catalogues = []
+    for catalogue_path in tqdm(args.input_folder.glob("*.pkl")):
+        with open(catalogue_path, "rb") as file:
+            catalogue = pickle.load(file)
+            try:
+                catalogue.strategy
+            except AttributeError:
+                setattr(catalogue, "strategy", None)
+            catalogues.append(catalogue)
 
     builder_log.info("Loaded %s catalogues. Merging them...", len(catalogues))
 
     merged_catalogue = None
-    for catalogue in tqdm(catalogues):
+    for catalogue_path in tqdm(catalogues):
         if merged_catalogue is None:
-            merged_catalogue = catalogue
+            merged_catalogue = catalogue_path
         else:
-            merged_catalogue.add_items(catalogue.get_all_items())
+            merged_catalogue.add_items(catalogue_path.get_all_items())
 
     if merged_catalogue is None:
         raise ValueError("No catalogues found in the input folder.")
@@ -72,12 +76,5 @@ if __name__ == "__main__":
     with open("temp_merged_catalogue.pkl", "wb") as file:
         pickle.dump(merged_catalogue, file)
 
-    with TemporaryDirectory() as temp_dir:
-        builder_log.info("Writing the full catalogue to the temorary directory...")
-        merged_catalogue.normalize_hrefs(temp_dir)
-        merged_catalogue.save(
-            catalog_type=CatalogType.SELF_CONTAINED, dest_href=temp_dir
-        )
-
-        builder_log.info("Splitting the catalogue by the local UTM projection...")
-        split_collection_by_epsg(Path(temp_dir) / "collection.json", args.output_folder)
+    builder_log.info("Splitting the catalogue by the local UTM projection...")
+    split_collection_by_epsg(merged_catalogue, args.output_folder)

@@ -72,7 +72,7 @@ def post_job_action(
 
         geometry_information = extracted_gpd.loc[
             extracted_gpd[sample_id_column_name] == item_id
-        ].squeeze()
+        ]
 
         if len(geometry_information) == 0:
             pipeline_log.warning(
@@ -80,6 +80,15 @@ def post_job_action(
                 item_id,
             )
             continue
+
+        if len(geometry_information) > 1:
+            pipeline_log.warning(
+                "Duplicate geomtries found for the sample_id %s in the input geometry, selecting the first one at index: %s.",
+                item_id,
+                geometry_information.index[0],
+            )
+
+        geometry_information = geometry_information.iloc[0]
 
         sample_id = geometry_information[sample_id_column_name]
         ref_id = geometry_information.ref_id
@@ -217,9 +226,7 @@ def upload_geoparquet_artifactory(
             timeout=180,
         )
 
-    assert (
-        response.status_code == 201
-    ), f"Error uploading the dataframe to artifactory: {response.text}"
+    response.raise_for_status()
 
     return upload_url
 

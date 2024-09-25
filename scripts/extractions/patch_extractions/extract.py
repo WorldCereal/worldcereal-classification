@@ -263,11 +263,12 @@ def manager_main_loop(
             OpenEoApiError,
             OpenEoRestError,
             requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.HTTPError,
         ) as e:
             pipeline_log.exception("An error occurred during the extraction.\n%s", e)
             send_notification(
                 title=f"WorldCereal Extraction {collection.value} - OpenEo Exception",
-                message=f"An OpenEO error occurred during the extraction.\n{e}",
+                message=f"An OpenEO/Artifactory error occurred during the extraction.\n{e}",
             )
             if latest_exception_time is None:
                 latest_exception_time = pd.Timestamp.now()
