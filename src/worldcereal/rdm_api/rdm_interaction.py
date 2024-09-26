@@ -1,7 +1,6 @@
 """Interaction with the WorldCereal RDM API. Used to generate the reference data in geoparquet format for the point extractions."""
 
-from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import duckdb
 import geopandas as gpd
@@ -146,7 +145,6 @@ def _setup_sql_query(
 
 def query_rdm(
     geometry: BaseGeometry,
-    output_path: Union[str, Path],
     temporal_extent: Optional[List[str]] = None,
     columns: List[str] = DEFAULT_COLUMNS,
 ):
@@ -156,13 +154,16 @@ def query_rdm(
     ----------
     geometry : BaseGeometry
         A user-defined polygon. CRS should be EPSG:4326.
-    output_path : Union[str, Path]
-        The output path for the GeoParquet file.
     temporal_extent : List[str], optional
         A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
         Dates should be in the format "YYYY-MM-DD".
     columns : List[str], optional
         A list of column names to extract., by default DEFAULT_COLUMNS
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        A GeoDataFrame containing the extracted columns and the geometry.
     """
     collection_ids = _collections_from_rdm(
         geometry=geometry, temporal_extent=temporal_extent
@@ -183,8 +184,5 @@ def query_rdm(
     df.drop(columns=["wkb_geometry"], inplace=True)
 
     gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
-    gdf.geometry = (
-        gdf.geometry.centroid
-    )  # Ensure that the geometry is a point, can be replaced by a more advanced algorithm
 
-    gdf.to_parquet(output_path, index=False)
+    return gdf

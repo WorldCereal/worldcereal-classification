@@ -7,7 +7,7 @@ from shapely import Point, Polygon
 from worldcereal.rdm_api.rdm_interaction import (
     RDM_ENDPOINT,
     _collections_from_rdm,
-    query_ground_truth,
+    query_rdm,
 )
 
 
@@ -45,8 +45,13 @@ def test_collections_from_rdm(
 
 
 @patch("worldcereal.rdm_api.rdm_interaction._get_download_urls")
-def test_query_ground_truth(
-    mock_get_download_urls, sample_polygon, sample_temporal_extent, tmp_path
+@patch("worldcereal.rdm_api.rdm_interaction._collections_from_rdm")
+def test_query_rdm(
+    mock_get_download_urls,
+    mock_collections_from_rdm,
+    sample_polygon,
+    sample_temporal_extent,
+    tmp_path,
 ):
 
     data = {
@@ -70,16 +75,14 @@ def test_query_ground_truth(
     file_path = tmp_path / "sample.parquet"
     gdf.to_parquet(file_path)
 
+    mock_collections_from_rdm.return_value = [file_path]
     mock_get_download_urls.return_value = [file_path]
 
-    query_ground_truth(
+    result_gdf = query_rdm(
         geometry=sample_polygon,
-        output_path=tmp_path / "output.parquet",
         temporal_extent=sample_temporal_extent,
         columns=["col1", "col2"],
     )
-
-    result_gdf = gpd.read_parquet(tmp_path / "output.parquet")
 
     # Check that col3 and valid_time indeed not included
     assert result_gdf.columns.tolist() == ["col1", "col2", "geometry"]
