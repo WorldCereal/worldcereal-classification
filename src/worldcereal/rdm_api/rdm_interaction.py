@@ -22,6 +22,10 @@ DEFAULT_COLUMNS = [
 RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
 
 
+class NoIntersectingCollections(Exception):
+    """Raised when no spatiotemporally intersecting collection IDs are found in the RDM."""
+
+
 def _collections_from_rdm(
     geometry: BaseGeometry, temporal_extent: Optional[List[str]] = None
 ) -> List[str]:
@@ -56,6 +60,11 @@ def _collections_from_rdm(
     col_ids = []
     for col in response_json:
         col_ids.append(col["collectionId"])
+
+    if len(col_ids) == 0:
+        raise NoIntersectingCollections(
+            f"No spatiotemporally intersecting collection IDs found in the RDM for the given geometry: {bbox} and temporal extent: {temporal_extent}."
+        )
 
     return col_ids
 
@@ -135,7 +144,7 @@ def _setup_sql_query(
     return combined_query
 
 
-def query_ground_truth(
+def query_rdm(
     geometry: BaseGeometry,
     output_path: Union[str, Path],
     temporal_extent: Optional[List[str]] = None,
@@ -146,11 +155,12 @@ def query_ground_truth(
     Parameters
     ----------
     geometry : BaseGeometry
-        A user-defined polygon.
+        A user-defined polygon. CRS should be EPSG:4326.
     output_path : Union[str, Path]
         The output path for the GeoParquet file.
     temporal_extent : List[str], optional
         A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        Dates should be in the format "YYYY-MM-DD".
     columns : List[str], optional
         A list of column names to extract., by default DEFAULT_COLUMNS
     """
