@@ -454,7 +454,7 @@ def get_ui_map():
     return m, draw_control
 
 
-def get_bbox_from_draw(dc, area_limit=100):
+def get_bbox_from_draw(dc, area_limit=250):
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
@@ -473,8 +473,8 @@ def get_bbox_from_draw(dc, area_limit=100):
         if area > area_limit:
             spatial_extent = None
             raise ValueError(
-                "Area of processing extent is too large. "
-                "Please select a smaller area."
+                f"Area of processing extent ({area} km²) is too large. "
+                f"Please select an area smaller than {area_limit} km²."
             )
     spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
 
