@@ -33,6 +33,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "boto3==1.35.30",
     "cftime",  
     "geojson",  
     "geopandas",  
