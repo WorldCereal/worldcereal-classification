@@ -294,6 +294,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Handle NaN values in Presto compatible way
         inarr = inarr.fillna(65535)
 
+        # Add valid_date attribute to the input array
+        # which for now we take as the center timestamp
+        if "valid_date" not in inarr.attrs:
+            self.logger.warning(
+                "No `valid_date` attribute found in input array. Taking center timestamp."
+            )
+            inarr.attrs["valid_date"] = inarr.t.values[5]
+
         # Unzip de dependencies on the backend
         if not ignore_dependencies:
             self.logger.info("Unzipping dependencies")
