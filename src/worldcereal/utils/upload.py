@@ -73,17 +73,6 @@ class AWSSTSCredentials:
             "aws_session_token": self.AWS_SESSION_TOKEN,
         }
 
-    def print_export_details(self) -> None:
-        """If temporary credentials are to be exported to another shell/environment"""
-        print(
-            f"""
-        export AWS_ACCESS_KEY_ID={self.AWS_ACCESS_KEY_ID}
-        export AWS_SECRET_ACCESS_KEY={self.AWS_SECRET_ACCESS_KEY}
-        export AWS_SESSION_TOKEN={self.AWS_SESSION_TOKEN}
-        export AWS_ENDPOINT_URL_S3={OpenEOArtifactHelper.S3_ENDPOINT}
-        """
-        )
-
     @classmethod
     def from_openeo_connection(cls, conn: Connection) -> AWSSTSCredentials:
         """
