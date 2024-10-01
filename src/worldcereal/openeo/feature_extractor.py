@@ -310,6 +310,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         if "slope" not in inarr.bands:
             # If 'slope' is not present we need to compute it here
+            self.logger.warning("`slope` not found in input array. Computing ...")
             resolution = self.evaluate_resolution(inarr.isel(t=0))
             slope = self.compute_slope(inarr.isel(t=0), resolution)
             slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
