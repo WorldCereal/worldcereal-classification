@@ -28,3 +28,17 @@ def SpatialExtent():
     filepath = get_test_resource("spatial_extent.json")
     with open(filepath, "r") as f:
         return geojson.load(f)
+
+
+@pytest.fixture
+def WorldCerealCroplandClassification():
+    filepath = get_test_resource("worldcereal_cropland_classification.nc")
+    arr = xr.open_dataarray(filepath).astype("uint16")
+    return arr
+
+
+@pytest.fixture
+def WorldCerealCroptypeClassification():
+    filepath = get_test_resource("worldcereal_croptype_classification.nc")
+    arr = xr.open_dataarray(filepath).astype("uint16")
+    return arr

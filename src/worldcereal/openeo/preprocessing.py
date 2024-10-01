@@ -260,15 +260,17 @@ def raw_datacube_DEM(
         if isinstance(spatial_extent, BoundingBoxExtent):
             spatial_extent = dict(spatial_extent)
 
-        slope = (
-            connection.load_stac(
-                "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
-                spatial_extent=spatial_extent,
-                bands=["Slope"],
-            )
-            .rename_labels(dimension="bands", target=["slope"])
-            .min_time()
-        )
+        slope = connection.load_stac(
+            "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
+            spatial_extent=spatial_extent,
+            bands=["Slope"],
+        ).rename_labels(dimension="bands", target=["slope"])
+        # Client fix for CDSE, the openeo client might be unsynchronized with
+        # the backend.
+        if "t" not in slope.metadata.dimension_names():
+            slope.metadata = slope.metadata.add_dimension("t", "2020-01-01", "temporal")
+        slope = slope.min_time()
+
         # Note that when slope is available we use it as the base cube
         # to merge DEM with, as it comes at 20m resolution.
         cube = slope.merge_cubes(cube)
