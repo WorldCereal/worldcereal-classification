@@ -305,3 +305,28 @@ def get_processing_dates_for_extent(
     return TemporalContext(
         start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
     )
+
+
+def get_processing_dates_for_focus_time(focus_time: str) -> TemporalContext:
+    """Function to retrieve required temporal range of input products for a
+    given focus time (yyyy-mm-dd). A temporal range is inferred that spans an entire year,
+    by taking the focus time as the middle of the period.
+
+    Args:
+        focus_time (str): Focus time to infer processing dates from.
+
+    Returns:
+        TemporalContext: inferred temporal range
+    """
+
+    focus_time = pd.to_datetime(focus_time)
+    end_date = (focus_time + pd.DateOffset(months=5) + pd.offsets.MonthEnd(0)).strftime(
+        "%Y-%m-%d"
+    )
+    start_date = (focus_time - pd.DateOffset(months=6)).strftime("%Y-%m-%d")
+
+    logger.info(
+        f"Derived the following period for processing: {start_date} " f"- {end_date}"
+    )
+
+    return TemporalContext(start_date, end_date)
