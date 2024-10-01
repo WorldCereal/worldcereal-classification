@@ -63,13 +63,13 @@ def query_public_extractions(
     twisted_bbox_poly = Polygon(
         [(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)]
     )
-    h3_cells_lst: list[str] = []
+    h3_cells_lst = []  # type: ignore
     res = 5
     while len(h3_cells_lst) == 0:
         h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
         res += 1
     if res > 5:
-        h3_cells_lst = list(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))
+        h3_cells_lst = tuple(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))  # type: ignore
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
