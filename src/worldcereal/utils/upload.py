@@ -160,7 +160,7 @@ class OpenEOArtifactHelper:
 
 
 def deploy_model(
-    conn: Connection, model: CatBoostClassifier, pattern=Optional[str]
+    conn: Connection, model: CatBoostClassifier, pattern: Optional[str] = None
 ) -> str:
     """Method to deploy a CatBoost model to s3 using an existing openEO connection.
 
