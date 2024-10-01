@@ -26,7 +26,7 @@ jobs:
         cd ..
     - name: Install Presto from source
       run: |
-        git clone https://github.com/WorldCereal/presto-worldcereal.git
+        git clone -b croptype https://github.com/WorldCereal/presto-worldcereal.git
         cd presto-worldcereal
         pip install .
         cd ..
