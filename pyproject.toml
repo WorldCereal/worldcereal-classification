@@ -10,9 +10,6 @@ exclude = [
   "/bin",
   "/tests",
 ]
-include = [
-  "src/worldcereal/data/**/*",
-]
 
 [tool.hatch.version]
 path = "src/worldcereal/_version.py"
