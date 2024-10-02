@@ -150,7 +150,7 @@ class OpenEOArtifactHelper:
         return f"s3://{bucket}/{key}"
 
     def get_presigned_url(
-        self, s3_uri: str, expires_in_seconds: int = 3600 * 24
+        self, s3_uri: str, expires_in_seconds: int = 3600 * 24 * 6
     ) -> str:
         typed_s3_uri = S3URI.from_str(s3_uri)
         return self.get_s3_client().generate_presigned_url(
