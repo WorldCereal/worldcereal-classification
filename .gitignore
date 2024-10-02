@@ -158,6 +158,8 @@ dmypy.json
 # .idea stuff
 .idea
 
+!src/worldcereal/data/**/*.csv
+
 # Pyre type checker
 .pyre/
 download.zip
