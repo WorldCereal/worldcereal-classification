@@ -86,6 +86,7 @@ class AWSSTSCredentials:
                 RoleArn="arn:aws:iam::000000000000:role/S3Access",
                 RoleSessionName=auth_token[1],
                 WebIdentityToken=auth_token[2],
+                DurationSeconds=43200,
             )
         )
 
