@@ -1,7 +1,7 @@
 """This sub-module contains utilitary function and tools for worldcereal-classification"""
 
-from worldcereal.rdm_api.rdm_interaction import query_rdm
+from worldcereal.rdm_api.rdm_interaction import RdmInteraction
 
 __all__ = [
-    "query_rdm",
+    "RdmInteraction",
 ]

@@ -25,164 +25,205 @@ class NoIntersectingCollections(Exception):
     """Raised when no spatiotemporally intersecting collection IDs are found in the RDM."""
 
 
-def _collections_from_rdm(
-    geometry: BaseGeometry, temporal_extent: Optional[List[str]] = None
-) -> List[str]:
-    """Queries the RDM API and finds all intersection collection IDs for a given geometry and temporal extent.
+class RdmInteraction:
+    def __init__(self):
+        self.headers = None
 
-    Parameters
-    ----------
-    geometry : BaseGeometry
-        A user-defined geometry for which all intersecting collection IDs need to be found.
-    temporal_extent : Optional[List[str]], optional
-        A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
-    Returns
-    -------
-    List[str]
-        A List containing the URLs of all intersection collection IDs.
-    """
+    def authenticate(self, user_id: str, password: str):
+        self.user_id = user_id
+        self.headers = self._get_api_bearer_token(user_id, password)
+        return self
 
-    bbox = geometry.bounds
-    bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+    def _get_api_bearer_token(self, user_id: str, password: str) -> dict[str, str]:
+        data = {
+            "username": user_id,
+            "password": password,
+            "client_id": "worldcereal-rdm",
+            "grant_type": "password",
+        }
 
-    val_time = (
-        f"&ValidityTime.Start={temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={temporal_extent[1]}T00%3A00%3A00Z"
-        if temporal_extent
-        else ""
-    )
-
-    url = f"{RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
-
-    response = requests.get(url)
-    response_json = response.json()
-
-    col_ids = []
-    for col in response_json:
-        col_ids.append(col["collectionId"])
-
-    if len(col_ids) == 0:
-        raise NoIntersectingCollections(
-            f"No spatiotemporally intersecting collection IDs found in the RDM for the given geometry: {bbox} and temporal extent: {temporal_extent}."
+        response = requests.post(
+            "https://sso.terrascope.be/auth/realms/terrascope/protocol/openid-connect/token",
+            data=data,
         )
 
-    return col_ids
+        access_token = response.json()["access_token"]
+        token_type = response.json()["token_type"]
 
+        return {"Authorization": f"{token_type} {access_token}"}
 
-def _get_download_urls(collection_ids: List[str]) -> List[str]:
-    """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
+    def _collections_from_rdm(
+        self,
+        geometry: BaseGeometry,
+        temporal_extent: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Queries the RDM API and finds all intersection collection IDs for a given geometry and temporal extent.
 
-    Parameters
-    ----------
-    collection_ids : List[str]
-        A list of collection IDs.
+        Parameters
+        ----------
+        geometry : BaseGeometry
+            A user-defined geometry for which all intersecting collection IDs need to be found.
+        temporal_extent : Optional[List[str]], optional
+            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        Returns
+        -------
+        List[str]
+            A List containing the URLs of all intersection collection IDs.
+        """
 
-    Returns
-    -------
-    List[str]
-        A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
-    """
-    urls = []
-    for id in collection_ids:
-        url = f"{RDM_ENDPOINT}/collections/{id}/download"
+        bbox = geometry.bounds
+        bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+
+        val_time = (
+            f"&ValidityTime.Start={temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={temporal_extent[1]}T00%3A00%3A00Z"
+            if temporal_extent
+            else ""
+        )
+
+        url = f"{RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
+
+        headers = {}
+
+        if self.headers is not None:
+            headers.update(self.headers)
+
+        response = requests.get(url=url, headers=headers)
+        response_json = response.json()
+
+        col_ids = []
+        for col in response_json:
+            col_ids.append(col["collectionId"])
+
+        if len(col_ids) == 0:
+            raise NoIntersectingCollections(
+                f"No spatiotemporally intersecting collection IDs found in the RDM for the given geometry: {bbox} and temporal extent: {temporal_extent}."
+            )
+
+        return col_ids
+
+    def _get_download_urls(
+        self, collection_ids: List[str], user_id: Optional[str] = None
+    ) -> List[str]:
+        """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
+
+        Parameters
+        ----------
+        collection_ids : List[str]
+            A list of collection IDs.
+
+        Returns
+        -------
+        List[str]
+            A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
+        """
+        urls = []
         headers = {
             "accept": "*/*",
         }
-        response = requests.get(url, headers=headers)
-        urls.append(response.text)
+        if self.headers is not None:
+            headers.update(self.headers)
 
-    return urls
+        for id in collection_ids:
+            url = f"{RDM_ENDPOINT}/collections/{id}/download"
+            response = requests.get(url, headers=headers)
+            urls.append(response.text)
 
+        return urls
 
-def _setup_sql_query(
-    urls: List[str],
-    geometry: BaseGeometry,
-    columns: List[str],
-    temporal_extent: Optional[List[str]] = None,
-) -> str:
-    """Sets up the SQL query for the GeoParquet files.
+    def _setup_sql_query(
+        self,
+        urls: List[str],
+        geometry: BaseGeometry,
+        columns: List[str],
+        temporal_extent: Optional[List[str]] = None,
+    ) -> str:
+        """Sets up the SQL query for the GeoParquet files.
 
-    Parameters
-    ----------
-    urls : List[str]
-        A list of URLs of the GeoParquet files.
-    geometry : BaseGeometry
-        A user-defined geometry.
-    columns :
-        A list of column names to extract.
-    temporal_extent : Optional[List[str]], optional
-        A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        Parameters
+        ----------
+        urls : List[str]
+            A list of URLs of the GeoParquet files.
+        geometry : BaseGeometry
+            A user-defined geometry.
+        columns :
+            A list of column names to extract.
+        temporal_extent : Optional[List[str]], optional
+            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
 
-    Returns
-    -------
-    str
-        A SQL query for the GeoParquet files.
-    """
-
-    combined_query = ""
-    columns_str = ", ".join(columns)
-
-    optional_temporal = (
-        f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
-        if temporal_extent
-        else ""
-    )
-
-    for i, url in enumerate(urls):
-        query = f"""
-            SELECT {columns_str}, ST_AsWKB(ST_Intersection(geometry, ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry
-            FROM read_parquet('{url}')
-            WHERE ST_Intersects(geometry, ST_GeomFromText('{str(geometry)}'))
-            {optional_temporal}
-
+        Returns
+        -------
+        str
+            A SQL query for the GeoParquet files.
         """
-        if i == 0:
-            combined_query = query
-        else:
-            combined_query += f" UNION ALL {query}"
 
-    return combined_query
+        combined_query = ""
+        columns_str = ", ".join(columns)
 
+        optional_temporal = (
+            f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
+            if temporal_extent
+            else ""
+        )
 
-def query_rdm(
-    geometry: BaseGeometry,
-    temporal_extent: Optional[List[str]] = None,
-    columns: List[str] = DEFAULT_COLUMNS,
-):
-    """Queries the RDM API and generates a GeoParquet file of all intersecting sample IDs.
+        for i, url in enumerate(urls):
+            query = f"""
+                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry
+                FROM read_parquet('{url}')
+                WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
+                {optional_temporal}
 
-    Parameters
-    ----------
-    geometry : BaseGeometry
-        A user-defined polygon. CRS should be EPSG:4326.
-    temporal_extent : List[str], optional
-        A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
-        Dates should be in the format "YYYY-MM-DD".
-    columns : List[str], optional
-        A list of column names to extract., by default DEFAULT_COLUMNS
+            """
+            if i == 0:
+                combined_query = query
+            else:
+                combined_query += f" UNION ALL {query}"
 
-    Returns
-    -------
-    gpd.GeoDataFrame
-        A GeoDataFrame containing the extracted columns and the geometry.
-    """
-    collection_ids = _collections_from_rdm(
-        geometry=geometry, temporal_extent=temporal_extent
-    )
-    urls = _get_download_urls(collection_ids)
+        return combined_query
 
-    query = _setup_sql_query(
-        urls=urls, geometry=geometry, columns=columns, temporal_extent=temporal_extent
-    )
+    def query_rdm(
+        self,
+        geometry: BaseGeometry,
+        temporal_extent: Optional[List[str]] = None,
+        columns: List[str] = DEFAULT_COLUMNS,
+    ):
+        """Queries the RDM API and generates a GeoParquet file of all intersecting sample IDs.
 
-    con = duckdb.connect()
-    con.execute("INSTALL spatial;")
-    con.execute("LOAD spatial;")
+        Parameters
+        ----------
+        geometry : BaseGeometry
+            A user-defined polygon. CRS should be EPSG:4326.
+        temporal_extent : List[str], optional
+            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+            Dates should be in the format "YYYY-MM-DD".
+        columns : List[str], optional
+            A list of column names to extract., by default DEFAULT_COLUMNS
 
-    df = con.execute(query).fetch_df()
+        Returns
+        -------
+        gpd.GeoDataFrame
+            A GeoDataFrame containing the extracted columns and the geometry.
+        """
+        collection_ids = self._collections_from_rdm(
+            geometry=geometry, temporal_extent=temporal_extent
+        )
+        urls = self._get_download_urls(collection_ids)
 
-    df["geometry"] = df["wkb_geometry"].apply(lambda x: wkb.loads(bytes(x)))
-    df.drop(columns=["wkb_geometry"], inplace=True)
+        query = self._setup_sql_query(
+            urls=urls,
+            geometry=geometry,
+            columns=columns,
+            temporal_extent=temporal_extent,
+        )
 
-    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+        con = duckdb.connect()
+        con.execute("INSTALL spatial;")
+        con.execute("LOAD spatial;")
 
-    return gdf
+        df = con.execute(query).fetch_df()
+
+        df["geometry"] = df["wkb_geometry"].apply(lambda x: wkb.loads(bytes(x)))
+        df.drop(columns=["wkb_geometry"], inplace=True)
+
+        gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+
+        return gdf
