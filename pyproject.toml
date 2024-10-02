@@ -2,13 +2,16 @@
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.sdist]
+[tool.hatch.build]
 exclude = [
   "/dist",
   "/notebooks",
   "/scripts",
   "/bin",
   "/tests",
+]
+include = [
+  "src/worldcereal/data/**/*",
 ]
 
 [tool.hatch.version]

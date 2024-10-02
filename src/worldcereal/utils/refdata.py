@@ -1,5 +1,5 @@
+import importlib.resources
 import json
-from pathlib import Path
 from typing import Dict
 
 import duckdb
@@ -10,9 +10,7 @@ import pandas as pd
 from loguru import logger
 from shapely.geometry import Polygon
 
-
-def get_data_dir():
-    return Path(__file__).parent.parent / "data"
+from worldcereal.data import croptype_mappings
 
 
 def get_class_mappings() -> Dict:
@@ -23,7 +21,7 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with open(get_data_dir() / "croptype_mappings" / "croptype_classes.json") as f:
+    with importlib.resources.open_text(croptype_mappings, "croptype_classes.json") as f:  # type: ignore
         CLASS_MAPPINGS = json.load(f)
 
     return CLASS_MAPPINGS
@@ -151,14 +149,14 @@ def map_croptypes(
     pd.DataFrame
         mapped crop types
     """
-    wc2ewoc_map = pd.read_csv(
-        get_data_dir() / "croptype_mappings" / "wc2eurocrops_map.csv"
-    )
+    with importlib.resources.open_text(croptype_mappings, "wc2eurocrops_map.csv") as f:  # type: ignore
+        wc2ewoc_map = pd.read_csv(f)
+
     wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
 
-    ewoc_map = pd.read_csv(
-        get_data_dir() / "croptype_mappings" / "eurocrops_map_wcr_edition.csv"
-    )
+    with importlib.resources.open_text(croptype_mappings, "eurocrops_map_wcr_edition.csv") as f:  # type: ignore
+        ewoc_map = pd.read_csv(f)
+
     ewoc_map = ewoc_map[ewoc_map["ewoc_code"].notna()]
     ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
     ewoc_map = ewoc_map.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
