@@ -1,24 +1,17 @@
 """Interaction with the WorldCereal RDM API. Used to generate the reference data in geoparquet format for the point extractions."""
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import duckdb
 import geopandas as gpd
 import requests
+from openeo.rest.auth.oidc import (
+    OidcClientInfo,
+    OidcDeviceAuthenticator,
+    OidcProviderInfo,
+)
 from shapely import wkb
 from shapely.geometry.base import BaseGeometry
-
-# Define the default columns to be extracted from the RDM API
-DEFAULT_COLUMNS = [
-    "sample_id",
-    "ewoc_code",
-    "valid_time",
-    "quality_score_lc",
-    "quality_score_ct",
-]
-
-# RDM API Endpoint
-RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
 
 
 class NoIntersectingCollections(Exception):
@@ -26,31 +19,63 @@ class NoIntersectingCollections(Exception):
 
 
 class RdmInteraction:
+    """Class to interact with the WorldCereal RDM API."""
+
+    # Define the default columns to be extracted from the RDM API
+    DEFAULT_COLUMNS = [
+        "sample_id",
+        "ewoc_code",
+        "valid_time",
+        "quality_score_lc",
+        "quality_score_ct",
+    ]
+
+    # RDM API Endpoint
+    RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
+
     def __init__(self):
         self.headers = None
 
-    def authenticate(self, user_id: str, password: str):
-        self.user_id = user_id
-        self.headers = self._get_api_bearer_token(user_id, password)
+    def authenticate(self):
+        """Authenticate the user with the RDM API via device code flow."""
+        self.headers = self._get_api_bearer_token()
         return self
 
-    def _get_api_bearer_token(self, user_id: str, password: str) -> dict[str, str]:
-        data = {
-            "username": user_id,
-            "password": password,
-            "client_id": "worldcereal-rdm",
-            "grant_type": "password",
-        }
+    def _get_api_bearer_token(self) -> dict[str, str]:
+        """Get API bearer access token via device code flow.
 
-        response = requests.post(
-            "https://sso.terrascope.be/auth/realms/terrascope/protocol/openid-connect/token",
-            data=data,
+        Returns
+        -------
+        dict[str, str]
+            A Dictionary containing the headers.
+        """
+        provider_info = OidcProviderInfo(
+            issuer="https://sso.terrascope.be/auth/realms/terrascope"
         )
 
-        access_token = response.json()["access_token"]
-        token_type = response.json()["token_type"]
+        client_info = OidcClientInfo(
+            client_id="worldcereal-rdm",
+            provider=provider_info,
+        )
 
-        return {"Authorization": f"{token_type} {access_token}"}
+        authenticator = OidcDeviceAuthenticator(client_info=client_info)
+
+        tokens = authenticator.get_tokens()
+
+        return {"Authorization": f"Bearer {tokens.access_token}"}
+
+    def _get_headers(self) -> Dict[str, str]:
+        """
+        Get the headers for the API requests.
+        Returns
+        -------
+        Dict[str, str]
+            A dictionary containing the headers.
+        """
+        headers = {"accept": "*/*"}
+        if self.headers:
+            headers.update(self.headers)
+        return headers
 
     def _collections_from_rdm(
         self,
@@ -80,21 +105,18 @@ class RdmInteraction:
             else ""
         )
 
-        url = f"{RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
+        url = f"{self.RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
 
-        headers = {}
+        response = requests.get(url=url, headers=self._get_headers())
 
-        if self.headers is not None:
-            headers.update(self.headers)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching collections: {response.text}")
 
-        response = requests.get(url=url, headers=headers)
         response_json = response.json()
 
-        col_ids = []
-        for col in response_json:
-            col_ids.append(col["collectionId"])
+        col_ids = [col["collectionId"] for col in response_json]
 
-        if len(col_ids) == 0:
+        if not col_ids:
             raise NoIntersectingCollections(
                 f"No spatiotemporally intersecting collection IDs found in the RDM for the given geometry: {bbox} and temporal extent: {temporal_extent}."
             )
@@ -117,15 +139,14 @@ class RdmInteraction:
             A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
         """
         urls = []
-        headers = {
-            "accept": "*/*",
-        }
-        if self.headers is not None:
-            headers.update(self.headers)
 
         for id in collection_ids:
-            url = f"{RDM_ENDPOINT}/collections/{id}/download"
-            response = requests.get(url, headers=headers)
+            url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
+            response = requests.get(url, headers=self._get_headers())
+            if response.status_code != 200:
+                raise Exception(
+                    f"Failed to get download URL for collection {id}: {response.text}"
+                )
             urls.append(response.text)
 
         return urls

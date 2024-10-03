@@ -4,7 +4,7 @@ import geopandas as gpd
 import pytest
 from shapely import Point, Polygon
 
-from worldcereal.rdm_api.rdm_interaction import RDM_ENDPOINT, RdmInteraction
+from worldcereal.rdm_api.rdm_interaction import RdmInteraction
 
 
 @pytest.fixture
@@ -23,6 +23,7 @@ class TestRdmInteraction:
         self, mock_requests_get, sample_polygon, sample_temporal_extent
     ):
 
+        mock_requests_get.return_value.status_code = 200
         mock_requests_get.return_value.json.return_value = [
             {"collectionId": "Foo"},
             {"collectionId": "Bar"},
@@ -37,8 +38,10 @@ class TestRdmInteraction:
         bbox = sample_polygon.bounds
         geom = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
         temporal = f"&ValidityTime.Start={sample_temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={sample_temporal_extent[1]}T00%3A00%3A00Z"
-        expected_url = f"{RDM_ENDPOINT}/collections/search?{geom}{temporal}"
-        mock_requests_get.assert_called_with(url=expected_url, headers={})
+        expected_url = f"{interaction.RDM_ENDPOINT}/collections/search?{geom}{temporal}"
+        mock_requests_get.assert_called_with(
+            url=expected_url, headers={"accept": "*/*"}
+        )
 
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._get_download_urls")
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._collections_from_rdm")
