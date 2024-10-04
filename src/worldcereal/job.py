@@ -1,12 +1,14 @@
 """Executing inference jobs on the OpenEO backend."""
 
+import json
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
@@ -14,10 +16,28 @@ from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
     PostprocessParameters,
-    WorldCerealProduct,
+    WorldCerealProductType,
 )
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
+
+
+class WorldCerealProduct(TypedDict):
+    """Dataclass representing a WorldCereal inference product.
+
+    Attributes
+    ----------
+    url: str
+        URL to the product.
+    type: WorldCerealProductType
+        Type of the product. Either cropland or croptype.
+    path: Optional[Path]
+        Path to the downloaded product.
+    """
+
+    url: str
+    type: WorldCerealProductType
+    path: Optional[Path]
 
 
 class InferenceResults(BaseModel):
@@ -27,25 +47,22 @@ class InferenceResults(BaseModel):
     ----------
     job_id : str
         Job ID of the finished OpenEO job.
-    product_url : str
-        Public URL to the product accessible of the resulting OpenEO job.
-    output_path : Optional[Union[Path, str]]
-        Path to the output file, if it was downloaded locally.
-    product : WorldCerealProduct
-        Product that was generated.
+    products: Dict[str, WorldCerealProduct]
+        Dictionary with the different products.
+    metadata: Optional[Path]
+        Path to metadata file, if it was downloaded locally.
     """
 
     job_id: str
-    product_url: str
-    output_path: Optional[Union[Path, str]]
-    product: WorldCerealProduct
+    products: Dict[str, WorldCerealProduct]
+    metadata: Optional[Path]
 
 
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     output_path: Optional[Union[Path, str]],
-    product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
+    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
     postprocess_parameters: PostprocessParameters = PostprocessParameters(enable=False),
@@ -63,15 +80,15 @@ def generate_map(
     temporal_extent : TemporalContext
         temporal range to consider
     output_path : Optional[Union[Path, str]]
-        output path to download the product to
-    product_type : WorldCerealProduct, optional
-        product describer, by default WorldCerealProduct.CROPLAND
+        path to directory where products should be downloaded to
+    product_type : WorldCerealProductType, optional
+        product describer, by default WorldCerealProductType.CROPLAND
     cropland_parameters: CropLandParameters
         Parameters for the cropland product inference pipeline.
     croptype_parameters: Optional[CropTypeParameters]
         Parameters for the croptype product inference pipeline. Only required
-        whenever `product_type` is set to `WorldCerealProduct.CROPTYPE`, will be
-        ignored otherwise.
+        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
+        will be ignored otherwise.
     postprocess_parameters: PostprocessParameters
         Parameters for the postprocessing pipeline. By default disabled.
     out_format : str, optional
@@ -96,7 +113,7 @@ def generate_map(
         if the out_format is not supported
     """
 
-    if product_type not in WorldCerealProduct:
+    if product_type not in WorldCerealProductType:
         raise ValueError(f"Product {product_type.value} not supported.")
 
     if out_format not in ["GTiff", "NetCDF"]:
@@ -124,18 +141,19 @@ def generate_map(
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     # Construct the feature extraction and model inference pipeline
-    if product_type == WorldCerealProduct.CROPLAND:
+    if product_type == WorldCerealProductType.CROPLAND:
         classes = _cropland_map(
             inputs,
             cropland_parameters=cropland_parameters,
             postprocess_parameters=postprocess_parameters,
         )
-    elif product_type == WorldCerealProduct.CROPTYPE:
+    elif product_type == WorldCerealProductType.CROPTYPE:
         if not isinstance(croptype_parameters, CropTypeParameters):
             raise ValueError(
-                f"Please provide a valid `croptype_parameters` parameter. Received: {croptype_parameters}"
+                f"Please provide a valid `croptype_parameters` parameter."
+                f" Received: {croptype_parameters}"
             )
-        # First compute cropland map
+        # First compute cropland map and save as additional output
         cropland_mask = (
             _cropland_map(
                 inputs,
@@ -146,7 +164,7 @@ def generate_map(
             .reduce_dimension(
                 dimension="t", reducer="mean"
             )  # Temporary fix to make this work as mask
-        )
+        ).save_result(format="GTiff", options=dict(filename_prefix="cropland-mask"))
 
         classes = _croptype_map(
             inputs,
@@ -167,21 +185,52 @@ def generate_map(
     if job_options is not None:
         JOB_OPTIONS.update(job_options)
 
+    # Compile filename of final product
+    proc_level = "raw" if postprocess_parameters.enable is False else "cleaned"
+    filename = f"{product_type.value}-{proc_level}"
+
+    # Execute the job
     job = classes.execute_batch(
-        outputfile=output_path,
         out_format=out_format,
         job_options=JOB_OPTIONS,
         title="WorldCereal [generate_map] job",
         description="Job that performs end-to-end WorldCereal inference",
+        filename_prefix=filename,
     )
 
-    asset = job.get_results().get_assets()[0]
+    # Get job results
+    job_result = job.get_results()
 
+    # Get the products
+    assets = job_result.get_assets()
+    products = {}
+    for asset in assets:
+        name = asset.name.split("_")[0]
+        prod_type = (
+            WorldCerealProductType.CROPLAND
+            if name.split("-")[0] == "cropland"
+            else WorldCerealProductType.CROPTYPE
+        )
+        if output_path is not None:
+            filepath = asset.download(target=Path(output_path))
+        else:
+            filepath = None
+        products[name] = {
+            "url": asset.href,
+            "type": prod_type,
+            "path": filepath,
+        }
+
+    # Download job metadata if output path is provided
+    if output_path is not None:
+        metadata_file = Path(output_path) / "job-results.json"
+        metadata_file.write_text(json.dumps(job_result.get_metadata()))
+    else:
+        metadata_file = None
+
+    # Compile InferenceResults and return
     return InferenceResults(
-        job_id=job.job_id,
-        product_url=asset.href,
-        output_path=output_path,
-        product=product_type,
+        job_id=job.job_id, products=products, metadata=metadata_file
     )
 
 

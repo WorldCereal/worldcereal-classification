@@ -76,7 +76,9 @@ def _cropland_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
+            classes = classes.save_result(
+                format="GTiff", options=dict(filename_prefix="cropland-raw")
+            )
         classes = _postprocess(classes, postprocess_parameters, is_binary=True)
 
     # Cast to uint8
@@ -155,7 +157,9 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
+            classes = classes.save_result(
+                format="GTiff", options=dict(filename_prefix="croptype-raw")
+            )
         # TODO: check how 254 value is treated during postprocessing
         classes = _postprocess(
             classes, postprocess_parameters, is_binary=False, lookup_table=lookup_table

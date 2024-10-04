@@ -10,7 +10,7 @@ from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 from worldcereal.openeo.postprocess import PostProcessor
 
 
-class WorldCerealProduct(Enum):
+class WorldCerealProductType(Enum):
     """Enum to define the different WorldCereal products."""
 
     CROPLAND = "cropland"
