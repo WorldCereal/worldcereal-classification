@@ -80,13 +80,13 @@ class CropLandParameters(BaseModel):
     )
     features_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_100epochs_30D_random_CROPLAND2_time-token=none_balance=True_augment=True_2017=True.pt",  # NOQA
         use_valid_date_token=False,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_100epochs_30D_random_CROPLAND2_time-token=none_balance=True_augment=True_2017=True_CROPLAND2.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -129,13 +129,13 @@ class CropTypeParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_long-parquet_30D_CROPTYPE0_split%3Drandom_time-token%3Dmonth_balance%3DTrue_augment%3DTrue.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_100epochs_30D_random_CROPTYPE0_time-token=month_balance=True_augment=True_2017=True.pt",  # NOQA
         use_valid_date_token=True,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_100epochs_30D_random_CROPTYPE0_time-token=month_balance=True_augment=True_2017=True_CROPTYPE9.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
