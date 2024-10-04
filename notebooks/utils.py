@@ -3,8 +3,10 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 from loguru import logger
+from openeo_gfmap import BoundingBoxExtent
 from presto.utils import device
 from torch.utils.data import DataLoader
+from worldcereal.seasons import get_season_dates_for_extent
 
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
@@ -27,6 +29,28 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     )
 
     return vbox, checkbox_widgets
+
+
+def suggest_seasons(extent: BoundingBoxExtent, season: str = "tc-annual"):
+    """Method to probe WorldCereal seasonality and suggest start, end and focus time.
+    These will be logged to the screen for informative purposes
+
+    Parameters
+    ----------
+    extent : BoundingBoxExtent
+        extent for which to load seasonality
+    season : str, optional
+        season to load, by default "tc-annual"
+    """
+    seasonal_extent = get_season_dates_for_extent(extent, 2021, season)
+    sos = pd.to_datetime(seasonal_extent.start_date)
+    eos = pd.to_datetime(seasonal_extent.end_date)
+
+    peak = sos + (eos - sos) / 2
+
+    print(f"Start of `{season}` season: {sos.strftime('%B %d')}")
+    print(f"End of `{season}` season: {eos.strftime('%B %d')}")
+    print(f"Suggested focus time of `{season}` season: {peak.strftime('%B %d')}")
 
 
 def get_inputs_outputs(
