@@ -45,7 +45,7 @@ class CroplandClassifier(ModelInference):
 
         # Extract all probabilities
         all_probabilities = np.round(
-            np.array([[x["False"], x["True"]] for x in outputs[1]]) * 100.0
+            np.array([[x[0], x[1]] for x in outputs[1]]) * 100.0
         ).astype(np.uint8)
         max_probability = np.max(all_probabilities, axis=1, keepdims=True)
 
