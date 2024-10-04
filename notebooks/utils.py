@@ -6,6 +6,8 @@ from loguru import logger
 from openeo_gfmap import BoundingBoxExtent
 from presto.utils import device
 from torch.utils.data import DataLoader
+
+from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
 
 
@@ -60,9 +62,9 @@ def get_inputs_outputs(
     from presto.presto import Presto
 
     if task_type == "croptype":
-        presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_long-parquet_30D_CROPTYPE0_split%3Drandom_time-token%3Dmonth_balance%3DTrue_augment%3DTrue.pt"
+        presto_model_url = CropTypeParameters().features_parameters.presto_model_url
     if task_type == "cropland":
-        presto_model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ft-cl_30D_cropland_random.pt"
+        presto_model_url = CropLandParameters().features_parameters.presto_model_url
     logger.info(f"Presto URL: {presto_model_url}")
     presto_model = Presto.load_pretrained(presto_model_url, from_url=True, strict=False)
 
