@@ -81,6 +81,7 @@ class CropLandParameters(BaseModel):
     features_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
+        use_valid_date_token=False,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
@@ -129,6 +130,7 @@ class CropTypeParameters(BaseModel):
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_long-parquet_30D_CROPTYPE0_split%3Drandom_time-token%3Dmonth_balance%3DTrue_augment%3DTrue.pt",  # NOQA
+        use_valid_date_token=True,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)

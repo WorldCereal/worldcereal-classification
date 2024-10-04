@@ -20,6 +20,7 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
             "compile_presto": False,
+            "use_valid_date_token": False,
         },
     )
 
@@ -56,6 +57,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
             "compile_presto": False,
+            "use_valid_date_token": True,
         },
     )
 
