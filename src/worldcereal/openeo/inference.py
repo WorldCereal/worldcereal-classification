@@ -41,7 +41,7 @@ class CroplandClassifier(ModelInference):
         outputs = self.onnx_session.run(None, {"features": features})
 
         # Get the prediction labels
-        binary_labels = (outputs[0] == "True").astype(np.uint8).reshape((-1, 1))
+        binary_labels = outputs[0].astype(np.uint8).reshape((-1, 1))
 
         # Extract all probabilities
         all_probabilities = np.round(
