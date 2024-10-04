@@ -62,9 +62,9 @@ def get_inputs_outputs(
     from presto.presto import Presto
 
     if task_type == "croptype":
-        presto_model_url = CropTypeParameters().features_parameters.presto_model_url
+        presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
     if task_type == "cropland":
-        presto_model_url = CropLandParameters().features_parameters.presto_model_url
+        presto_model_url = CropLandParameters().feature_parameters.presto_model_url
     logger.info(f"Presto URL: {presto_model_url}")
     presto_model = Presto.load_pretrained(presto_model_url, from_url=True, strict=False)
 

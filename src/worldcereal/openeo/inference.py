@@ -17,8 +17,6 @@ class CroplandClassifier(ModelInference):
 
     import numpy as np
 
-    CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
-
     def __init__(self):
         super().__init__()
 
@@ -54,7 +52,10 @@ class CroplandClassifier(ModelInference):
         return np.concatenate([binary_labels, max_probability], axis=1).transpose()
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
-        classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
+
+        if "classifier_url" not in self._parameters:
+            raise ValueError('Missing required parameter "classifier_url"')
+        classifier_url = self._parameters.get("classifier_url")
 
         # shape and indices for output ("xy", "bands")
         x_coords, y_coords = inarr.x.values, inarr.y.values
@@ -98,8 +99,6 @@ class CroptypeClassifier(ModelInference):
     """
 
     import numpy as np
-
-    CATBOOST_PATH = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
 
     def __init__(self):
         super().__init__()
@@ -157,7 +156,10 @@ class CroptypeClassifier(ModelInference):
         ).transpose()
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
-        classifier_url = self._parameters.get("classifier_url", self.CATBOOST_PATH)
+
+        if "classifier_url" not in self._parameters:
+            raise ValueError('Missing required parameter "classifier_url"')
+        classifier_url = self._parameters.get("classifier_url")
 
         # shape and indices for output ("xy", "bands")
         x_coords, y_coords = inarr.x.values, inarr.y.values

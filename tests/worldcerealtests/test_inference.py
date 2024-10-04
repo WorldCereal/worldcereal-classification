@@ -6,6 +6,7 @@ from openeo_gfmap.inference.model_inference import apply_model_inference_local
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.utils.models import load_model_lut
 
 
@@ -21,6 +22,7 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
             "ignore_dependencies": True,
             "compile_presto": False,
             "use_valid_date_token": False,
+            "presto_model_url": CropLandParameters().feature_parameters.presto_model_url,
         },
     )
 
@@ -32,6 +34,7 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
         parameters={
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
+            "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
         },
     )
 
@@ -58,12 +61,15 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
             "ignore_dependencies": True,
             "compile_presto": False,
             "use_valid_date_token": True,
+            "presto_model_url": CropTypeParameters().feature_parameters.presto_model_url,
         },
     )
 
     print("Running croptype classification inference UDF locally")
 
-    lookup_table = load_model_lut(CroptypeClassifier.CATBOOST_PATH)
+    lookup_table = load_model_lut(
+        CropTypeParameters().classifier_parameters.classifier_url
+    )
 
     croptype_classification = apply_model_inference_local(
         CroptypeClassifier,
@@ -72,6 +78,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
             "lookup_table": lookup_table,
+            "classifier_url": CropTypeParameters().classifier_parameters.classifier_url,
         },
     )
 
