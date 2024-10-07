@@ -61,7 +61,7 @@ class InferenceResults(BaseModel):
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    output_path: Optional[Union[Path, str]],
+    output_dir: Optional[Union[Path, str]],
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
@@ -79,7 +79,7 @@ def generate_map(
         spatial extent of the map
     temporal_extent : TemporalContext
         temporal range to consider
-    output_path : Optional[Union[Path, str]]
+    output_dir : Optional[Union[Path, str]]
         path to directory where products should be downloaded to
     product_type : WorldCerealProductType, optional
         product describer, by default WorldCerealProductType.CROPLAND
@@ -161,10 +161,17 @@ def generate_map(
                 postprocess_parameters=postprocess_parameters,
             )
             .filter_bands("classification")
-            .reduce_dimension(
-                dimension="t", reducer="mean"
-            )  # Temporary fix to make this work as mask
-        ).save_result(format="GTiff", options=dict(filename_prefix="cropland-mask"))
+            .reduce_dimension(dimension="t", reducer="mean")
+        )  # Temporary fix to make this work as mask
+
+        # Save final mask if required
+        if postprocess_parameters.save_intermediate:
+            mask_type = WorldCerealProductType.CROPLAND.value
+            proc_level = "raw" if postprocess_parameters.enable is False else "cleaned"
+            cropland_mask = cropland_mask.save_result(
+                format="GTiff",
+                options=dict(filename_prefix=f"{mask_type}-{proc_level}"),
+            )
 
         classes = _croptype_map(
             inputs,
@@ -205,25 +212,22 @@ def generate_map(
     assets = job_result.get_assets()
     products = {}
     for asset in assets:
-        name = asset.name.split("_")[0]
-        prod_type = (
-            WorldCerealProductType.CROPLAND
-            if name.split("-")[0] == "cropland"
-            else WorldCerealProductType.CROPTYPE
-        )
-        if output_path is not None:
-            filepath = asset.download(target=Path(output_path))
+        asset_name = asset.name.split("_")[0]
+        asset_type = asset.name.split("-")[0]
+        asset_type = getattr(WorldCerealProductType, asset_type.upper())
+        if output_dir is not None:
+            filepath = asset.download(target=Path(output_dir))
         else:
             filepath = None
-        products[name] = {
+        products[asset_name] = {
             "url": asset.href,
-            "type": prod_type,
+            "type": asset_type,
             "path": filepath,
         }
 
     # Download job metadata if output path is provided
-    if output_path is not None:
-        metadata_file = Path(output_path) / "job-results.json"
+    if output_dir is not None:
+        metadata_file = Path(output_dir) / "job-results.json"
         metadata_file.write_text(json.dumps(job_result.get_metadata()))
     else:
         metadata_file = None
