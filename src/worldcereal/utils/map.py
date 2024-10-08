@@ -454,27 +454,27 @@ def get_ui_map():
     return m, draw_control
 
 
-def get_bbox_from_draw(dc, area_limit=100):
+def get_bbox_from_draw(dc, area_limit=250):
     obj = dc.last_draw
     if obj.get("geometry") is not None:
         poly = Polygon(shape(obj.get("geometry")))
         bbox = poly.bounds
     else:
         raise ValueError("Please first draw a rectangle on the map before proceeding.")
-    print(f"Your area of interest: {bbox}")
+    logger.info(f"Your area of interest: {bbox}")
 
     # We convert our bounding box to local UTM projection
     # for further processing
     bbox_utm, epsg = _latlon_to_utm(bbox)
     area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
-    print(f"Area of processing extent: {area:.2f} km²")
+    logger.info(f"Area of processing extent: {area:.2f} km²")
 
     if area_limit is not None:
         if area > area_limit:
             spatial_extent = None
             raise ValueError(
-                "Area of processing extent is too large. "
-                "Please select a smaller area."
+                f"Area of processing extent ({area} km²) is too large. "
+                f"Please select an area smaller than {area_limit} km²."
             )
     spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
 

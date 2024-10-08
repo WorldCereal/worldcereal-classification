@@ -26,12 +26,12 @@ jobs:
         cd ..
     - name: Install Presto from source
       run: |
-        git clone https://github.com/WorldCereal/presto-worldcereal.git
+        git clone -b croptype https://github.com/WorldCereal/presto-worldcereal.git
         cd presto-worldcereal
         pip install .
         cd ..
     - name: Install WorldCereal dependencies
-      run: pip install ".[dev]"
+      run: pip install ".[dev,train]"
     - name: Run WorldCereal tests
       run: python -m pytest -s --log-cli-level=INFO tests
       env:

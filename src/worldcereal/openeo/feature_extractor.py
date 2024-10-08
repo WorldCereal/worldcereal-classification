@@ -20,8 +20,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     import functools
 
-    PRESTO_MODEL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt"  # NOQA
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.4-py3-none-any.whl"
+    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.5-py3-none-any.whl"
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
@@ -267,9 +266,9 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
                 "EPSG code is required for Presto feature extraction, but was "
                 "not correctly initialized."
             )
-        presto_model_url = self._parameters.get(
-            "presto_model_url", self.PRESTO_MODEL_URL
-        )
+        if "presto_model_url" not in self._parameters:
+            raise ValueError('Missing required parameter "presto_model_url"')
+        presto_model_url = self._parameters.get("presto_model_url")
         self.logger.info(f'Loading Presto model from "{presto_model_url}"')
         presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
 
@@ -294,6 +293,17 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Handle NaN values in Presto compatible way
         inarr = inarr.fillna(65535)
 
+        # Add valid_date attribute to the input array if we need it and
+        # it's not there. For now we take center timestamp in this case.
+        use_valid_date_token = self._parameters.get("use_valid_date_token", False)
+        if "valid_date" not in inarr.attrs:
+            if use_valid_date_token:
+                # Only log warning if we will use the valid_date token
+                self.logger.warning(
+                    "No `valid_date` attribute found in input array. Taking center timestamp."
+                )
+            inarr.attrs["valid_date"] = inarr.t.values[5]
+
         # Unzip de dependencies on the backend
         if not ignore_dependencies:
             self.logger.info("Unzipping dependencies")
@@ -310,6 +320,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         if "slope" not in inarr.bands:
             # If 'slope' is not present we need to compute it here
+            self.logger.warning("`slope` not found in input array. Computing ...")
             resolution = self.evaluate_resolution(inarr.isel(t=0))
             slope = self.compute_slope(inarr.isel(t=0), resolution)
             slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
@@ -325,6 +336,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             inarr,
             presto_model_url,
             self.epsg,
+            use_valid_date_token=use_valid_date_token,
             batch_size=batch_size,
             compile=compile_presto,
         )

@@ -864,9 +864,6 @@
                 "precipitation-flux",
                 "temperature-mean"
             ],
-            "featureflags": {
-                "tilesize": 1
-            },
             "spatial_extent": {
                 "type": "FeatureCollection",
                 "features": [
@@ -910,11 +907,26 @@
             "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
         }
     },
+    "filterbands1": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "precipitation-flux",
+                "temperature-mean"
+            ],
+            "data": {
+                "from_node": "loadstac1"
+            },
+            "featureflags": {
+                "tilesize": 1
+            }
+        }
+    },
     "renamelabels6": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "loadstac1"
+                "from_node": "filterbands1"
             },
             "dimension": "bands",
             "target": [

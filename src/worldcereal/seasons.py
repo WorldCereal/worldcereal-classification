@@ -125,8 +125,6 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
             ("Required season DOY file " f"`{doy_file}` not found.")
         )
 
-    logger.info(f"Loading DOY data from: {doy_file}")
-
     with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:  # type: ignore
         doy_data = load_reproject(
             doy_file, bounds, epsg, resolution, nodata_value=0, fill_value=np.nan
@@ -243,6 +241,116 @@ def season_doys_to_dates(
     return (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
 
+def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
+    """Funtion to transform SOS and EOS from DOY
+    to exact dates, making use of the reference year
+    in which EOS should be located.
+
+    Args:
+        sos (int): DOY from SOS
+        eos (int): DOY from EOS
+        ref_year (int): ref year to match
+
+    Returns:
+        tuple: (start_date, end_date)
+    """
+
+    # We can derive the end date from ref_year and EOS
+    end_date = datetime.datetime(ref_year, 1, 1) + pd.Timedelta(days=eos)
+
+    if sos < eos:
+        """
+        Straightforward case where entire season
+        is in calendar year
+        """
+        seasonduration = eos - sos
+
+    else:
+        """
+        Nasty case where we cross a calendar year.
+        """
+
+        # Correct DOY for the year crossing
+        eos += 365
+        seasonduration = eos - sos
+
+    # Now we can compute start date from end date and
+    # season duration
+    start_date = end_date - pd.Timedelta(days=seasonduration)
+
+    return start_date, end_date
+
+
+def get_season_dates_for_extent(
+    extent: BoundingBoxExtent,
+    year: int,
+    season: str = "tc-annual",
+    max_seasonality_difference: int = 60,
+) -> TemporalContext:
+    """Function to retrieve seasonality for a specific year based on WorldCereal
+    crop calendars for a given extent and season.
+
+    Args:
+        extent (BoundingBoxExtent): extent for which to infer dates
+        year (int): year in which the end of season needs to be
+        season (str): season identifier for which to infer dates. Defaults to `tc-annual`
+        max_seasonality_difference (int): maximum difference in seasonality for all pixels
+                in extent before raising an exception. Defaults to 60.
+
+    Raises:
+        ValueError: invalid season specified
+        SeasonMaxDiffError: raised when seasonality difference is too large
+
+    Returns:
+        TemporalContext: inferred temporal range
+    """
+
+    if season not in SUPPORTED_SEASONS:
+        raise ValueError(f"Season `{season}` not supported!")
+
+    bounds = (extent.west, extent.south, extent.east, extent.north)
+    epsg = extent.epsg
+
+    # Get DOY of SOS and EOS for the target season
+    sos_doy = doy_from_tiff(season, "SOS", bounds, epsg, 10000).flatten()
+    eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000).flatten()
+
+    # Check if we have seasonality
+    if not np.isfinite(sos_doy).any():
+        raise NoSeasonError(f"No valid SOS DOY found for season `{season}`")
+    if not np.isfinite(eos_doy).any():
+        raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
+
+    # Only consider valid seasonality pixels
+    sos_doy = sos_doy[np.isfinite(sos_doy)]
+    eos_doy = eos_doy[np.isfinite(eos_doy)]
+
+    # Check max seasonality difference
+    seasonality_difference_sos = max_doy_difference(sos_doy)
+    seasonality_difference_eos = max_doy_difference(eos_doy)
+    if seasonality_difference_sos > max_seasonality_difference:
+        raise SeasonMaxDiffError(
+            f"Seasonality difference for SOS too large: {seasonality_difference_sos} days"
+        )
+    if seasonality_difference_eos > max_seasonality_difference:
+        raise SeasonMaxDiffError(
+            f"Seasonality difference for EOS too large: {seasonality_difference_eos} days"
+        )
+
+    # Compute median DOY
+    sos_doy_median = circular_median_day_of_year(sos_doy)
+    eos_doy_median = circular_median_day_of_year(eos_doy)
+
+    # Get the seasonality dates
+    start_date, end_date = season_doys_to_dates_refyear(
+        sos_doy_median, eos_doy_median, year
+    )
+
+    return TemporalContext(
+        start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    )
+
+
 def get_processing_dates_for_extent(
     extent: BoundingBoxExtent,
     year: int,
@@ -305,3 +413,34 @@ def get_processing_dates_for_extent(
     return TemporalContext(
         start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
     )
+
+
+def get_processing_dates_for_focus_time(focus_time: str) -> TemporalContext:
+    """Function to retrieve required temporal range of input products for a
+    given focus time (yyyy-mm-dd). A temporal range is inferred that spans an entire year,
+    by taking the focus time as the middle of the period.
+    Resulting start date will always be the first day of the month.
+    Resulting end date will always be last day of a month.
+
+    Args:
+        focus_time (str): Focus time to infer processing dates from.
+
+    Returns:
+        TemporalContext: inferred temporal range
+    """
+
+    focus_time = pd.to_datetime(focus_time)
+    end_date = (focus_time + pd.DateOffset(months=5) + pd.offsets.MonthEnd(0)).strftime(
+        "%Y-%m-%d"
+    )
+    start_date = (
+        pd.offsets.MonthBegin()
+        .rollback(focus_time - pd.DateOffset(months=6))
+        .strftime("%Y-%m-%d")
+    )
+
+    logger.info(
+        f"Derived the following period for processing: {start_date} " f"- {end_date}"
+    )
+
+    return TemporalContext(start_date, end_date)

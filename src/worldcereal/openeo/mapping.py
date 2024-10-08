@@ -45,7 +45,7 @@ def _cropland_map(
     features = apply_feature_extractor(
         feature_extractor_class=cropland_parameters.feature_extractor,
         cube=inputs,
-        parameters=cropland_parameters.features_parameters.model_dump(),
+        parameters=cropland_parameters.feature_parameters.model_dump(),
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},

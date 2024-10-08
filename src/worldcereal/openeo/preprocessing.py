@@ -199,10 +199,6 @@ def raw_datacube_S1(
             orbit_direction = select_s1_orbitstate_vvvh(
                 backend_context, spatial_extent, temporal_extent
             )
-            print(
-                f"Selected orbit direction: {orbit_direction} from max "
-                "accumulated area overlap between bounds and products."
-            )
         except UncoveredS1Exception as exc:
             orbit_direction = "ASCENDING"
             print(
@@ -325,6 +321,9 @@ def precomposited_datacube_METEO(
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
+    # Another filter_bands to circumvent openEO bug
+    cube = cube.filter_bands(["precipitation-flux", "temperature-mean"])
+
     cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
         dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
