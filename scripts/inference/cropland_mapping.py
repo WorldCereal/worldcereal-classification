@@ -7,7 +7,7 @@ from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
-from worldcereal.job import WorldCerealProduct, generate_map
+from worldcereal.job import WorldCerealProductType, generate_map
 from worldcereal.parameters import PostprocessParameters
 
 if __name__ == "__main__":
@@ -80,7 +80,7 @@ if __name__ == "__main__":
         spatial_extent,
         temporal_extent,
         args.output_path,
-        product_type=WorldCerealProduct(product),
+        product_type=WorldCerealProductType(product),
         postprocess_parameters=PostprocessParameters(
             enable=args.postprocess, keep_class_probs=args.class_probabilities
         ),

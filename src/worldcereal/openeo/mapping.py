@@ -14,6 +14,7 @@ from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
     PostprocessParameters,
+    WorldCerealProductType,
 )
 from worldcereal.utils.models import load_model_lut
 
@@ -76,7 +77,12 @@ def _cropland_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
+            classes = classes.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw"
+                ),
+            )
         classes = _postprocess(classes, postprocess_parameters, is_binary=True)
 
     # Cast to uint8
@@ -155,8 +161,12 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
-        # TODO: check how 254 value is treated during postprocessing
+            classes = classes.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
+                ),
+            )
         classes = _postprocess(
             classes, postprocess_parameters, is_binary=False, lookup_table=lookup_table
         )
