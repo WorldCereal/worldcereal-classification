@@ -74,7 +74,7 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
 def test_worldcereal_preprocessed_inputs_graph_withslope():
     """This version has fetchtype.TILE and should include slope."""
 
-    temporal_extent = TemporalContext("2020-01-01", "2022-03-31")
+    temporal_extent = TemporalContext("2018-03-01", "2019-02-28")
 
     cube = worldcereal_preprocessed_inputs(
         connection=cdse_connection(),
