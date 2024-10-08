@@ -428,6 +428,8 @@ def worldcereal_preprocessed_inputs(
 def _validate_temporal_context(temporal_context: TemporalContext) -> None:
     """validation method to ensure proper specification of temporal context.
     which requires that the start and end date are at the first and last day of a month.
+    We also check if the temporal context does not span more than a year which is
+    currently not supported.
 
     Parameters
     ----------
@@ -438,7 +440,8 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
     ------
     InvalidTemporalContextError
         if start_date is not on the first day of a month or end_date
-        is not on the last day of a month
+        is not on the last day of a month or the span is more than
+        one year.
     """
 
     start_date, end_date = temporal_context.to_datetime()
@@ -453,6 +456,14 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
             f"{temporal_context.start_date} - {temporal_context.end_date}. "
             "You may use `worldcereal.preprocessing.correct_temporal_context()` "
             "to correct the temporal context."
+        )
+        raise InvalidTemporalContextError(error_msg)
+
+    if pd.Timedelta(end_date - start_date).days > 365:
+        error_msg = (
+            "WorldCereal currently does not support temporal ranges spanning "
+            "more than a year. Got: "
+            f"{temporal_context.start_date} - {temporal_context.end_date}."
         )
         raise InvalidTemporalContextError(error_msg)
 
