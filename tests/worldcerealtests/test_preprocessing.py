@@ -49,7 +49,7 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
     This is based on constructing the openEO graph for the job
     that would run, without actually running it."""
 
-    temporal_extent = TemporalContext("2020-01-01", "2022-03-31")
+    temporal_extent = TemporalContext("2020-06-01", "2021-05-31")
 
     cube = worldcereal_preprocessed_inputs(
         connection=cdse_connection(),
