@@ -77,9 +77,11 @@ def _cropland_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            product_type = WorldCerealProductType.CROPLAND.value
             classes = classes.save_result(
-                format="GTiff", options=dict(filename_prefix=f"{product_type}-raw")
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw"
+                ),
             )
         classes = _postprocess(classes, postprocess_parameters, is_binary=True)
 
@@ -159,9 +161,11 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            product_type = WorldCerealProductType.CROPTYPE.value
             classes = classes.save_result(
-                format="GTiff", options=dict(filename_prefix=f"{product_type}-raw")
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
+                ),
             )
         # TODO: check how 254 value is treated during postprocessing
         classes = _postprocess(

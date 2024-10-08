@@ -153,7 +153,7 @@ def generate_map(
                 f"Please provide a valid `croptype_parameters` parameter."
                 f" Received: {croptype_parameters}"
             )
-        # First compute cropland map and save as additional output
+        # First compute cropland map
         cropland_mask = (
             _cropland_map(
                 inputs,
@@ -166,11 +166,13 @@ def generate_map(
 
         # Save final mask if required
         if postprocess_parameters.save_intermediate:
-            mask_type = WorldCerealProductType.CROPLAND.value
-            proc_level = "raw" if postprocess_parameters.enable is False else "cleaned"
+            proc_level = "cleaned" if postprocess_parameters.enable else "raw"
             cropland_mask = cropland_mask.save_result(
                 format="GTiff",
-                options=dict(filename_prefix=f"{mask_type}-{proc_level}"),
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}"
+                    f"-{proc_level}"
+                ),
             )
 
         classes = _croptype_map(
@@ -193,7 +195,7 @@ def generate_map(
         JOB_OPTIONS.update(job_options)
 
     # Compile filename of final product
-    proc_level = "raw" if postprocess_parameters.enable is False else "cleaned"
+    proc_level = "cleaned" if postprocess_parameters.enable else "raw"
     filename = f"{product_type.value}-{proc_level}"
 
     # Execute the job
