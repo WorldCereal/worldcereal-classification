@@ -75,6 +75,7 @@ class WorldCerealInputsDataset(WorldCerealLabelledDataset):
             "POTAPOV-LABEL-10m",
             "location_id",
             "ref_id",
+            "sample_id",
         ]
 
         return sample + (row[attrs].to_dict(),)
@@ -118,7 +119,7 @@ def embeddings_from_parquet_file(
 
     # Convert to wide format
     logger.info("From long to wide format ...")
-    df = process_parquet(df)
+    df = process_parquet(df).reset_index()
 
     # Check if samples remain
     if df.empty:
@@ -254,8 +255,8 @@ if __name__ == "__main__":
     )
 
     spark = True
-    localspark = True
-    debug = True
+    localspark = False
+    debug = False
     sample_repeats = 3
     mask_ratio = 0.25
     valid_date_as_token = False
