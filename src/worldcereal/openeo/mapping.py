@@ -167,7 +167,6 @@ def _croptype_map(
                     filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
                 ),
             )
-        # TODO: check how 254 value is treated during postprocessing
         classes = _postprocess(
             classes, postprocess_parameters, is_binary=False, lookup_table=lookup_table
         )
