@@ -80,13 +80,13 @@ class CropLandParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_100epochs_30D_random_CROPLAND2_time-token=none_balance=True_augment=True_2017=True.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt",  # NOQA
         use_valid_date_token=False,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v001.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v003-ft-cropland-F1metric.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
