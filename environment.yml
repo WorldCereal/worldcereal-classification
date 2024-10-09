@@ -6,7 +6,7 @@ channels:
 dependencies:
   - catboost=1.2.5
   - cpuonly
-  - duckdb=1.0.0
+  - duckdb=1.1.0
   - einops=0.8.0
   - fastparquet=2024.2.0
   - geojson=3.1.0
