@@ -86,7 +86,7 @@ class CropLandParameters(BaseModel):
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_100epochs_30D_random_CROPLAND2_time-token=none_balance=True_augment=True_2017=True_CROPLAND2.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v001.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
