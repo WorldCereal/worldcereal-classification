@@ -302,7 +302,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
                 self.logger.warning(
                     "No `valid_date` attribute found in input array. Taking center timestamp."
                 )
-            inarr.attrs["valid_date"] = inarr.t.values[5]
+            inarr.attrs["valid_date"] = inarr.t.values[6]
 
         # Unzip de dependencies on the backend
         if not ignore_dependencies:
