@@ -1,14 +1,114 @@
-from typing import Tuple
+from calendar import monthrange
+from datetime import datetime, timedelta
+from typing import List, Tuple
 
+import ipywidgets as widgets
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from IPython.display import display
 from loguru import logger
-from openeo_gfmap import BoundingBoxExtent
+from matplotlib.patches import Rectangle
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from presto.utils import device
 from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
+
+
+class date_slider:
+    """Class that provides a slider for selecting a processing period.
+    The processing period is fixed in length, amounting to one year.
+    The processing period will always start the first day of a month and end the last day of a month.
+    """
+
+    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2024, 1, 1)):
+
+        self.start_date = start_date
+        self.end_date = end_date
+
+        dates = pd.date_range(start_date, end_date, freq="MS")
+        options = [(date.strftime("%b %Y"), date) for date in dates]
+        self.interval_slider = widgets.SelectionRangeSlider(
+            options=options,
+            index=(0, 12),  # Default to a 12-month interval
+            orientation="horizontal",
+            continuous_update=False,
+            readout=True,
+            behaviour="drag",
+            layout={"width": "90%", "height": "100px", "margin": "0 auto 0 auto"},
+            style={
+                "handle_color": "dodgerblue",
+            },
+        )
+        self.selected_range = [
+            pd.to_datetime(start_date),
+            pd.to_datetime(start_date) + pd.DateOffset(months=12) - timedelta(days=1),
+        ]
+
+    def on_slider_change(self, change):
+        start, end = change["new"]
+        # keep the interval fixed
+        expected_end = start + pd.DateOffset(months=12)
+        if end != expected_end:
+            end = start + pd.DateOffset(months=12)
+            self.interval_slider.value = (start, end)
+        self.selected_range = (start, end - timedelta(days=1))
+
+    def show_slider(self):
+        self.interval_slider.observe(self.on_slider_change, names="value")
+
+        # Add description widget
+        descr_widget = widgets.HTML(
+            value="""
+            <div style='text-align: center;'>
+                <div style='font-size: 20px; font-weight: bold;'>
+                    Position the slider to select your processing period:
+                </div>
+            </div>
+            """
+        )
+
+        # Generate a list of dates for the ticks every 3 months
+        tick_dates = pd.date_range(
+            self.start_date, self.end_date + pd.DateOffset(months=3), freq="4ME"
+        )
+
+        # Create a list of tick labels in the format "Aug 2023"
+        tick_labels = [date.strftime("%b<br>%Y") for date in tick_dates]
+
+        # Calculate the positions of the ticks to align them with the slider
+        total_days = (self.end_date - self.start_date).days
+        tick_positions = [
+            ((date - self.start_date).days / total_days * 100) for date in tick_dates
+        ]
+
+        # Create a text widget to display the tick labels with calculated positions
+        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 90%; height: 20px; margin-top: -20px;'>"
+        for label, position in zip(tick_labels, tick_positions):
+            tick_widget_html += f"<div style='position: absolute; left: {position}%; transform: translateX(-50%);'>{label}</div>"
+        tick_widget_html += "</div>"
+
+        tick_widget = widgets.HTML(
+            value=tick_widget_html, layout={"width": "90%", "margin": "0 auto"}
+        )
+
+        # Arrange the text widget, interval slider, and tick widget using VBox
+        vbox_with_ticks = widgets.VBox(
+            [descr_widget, self.interval_slider, tick_widget],
+            layout={"height": "200px"},
+        )
+
+        display(vbox_with_ticks)
+
+    def get_processing_period(self):
+
+        start = self.selected_range[0].strftime("%Y-%m-%d")
+        end = self.selected_range[1].strftime("%Y-%m-%d")
+        logger.info(f"Selected processing period: {start} to {end}")
+
+        return TemporalContext(start, end)
 
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
@@ -31,6 +131,104 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     )
 
     return vbox, checkbox_widgets
+
+
+def get_month_decimal(date):
+
+    return date.timetuple().tm_mon + (
+        date.timetuple().tm_mday / monthrange(2021, date.timetuple().tm_mon)[1]
+    )
+
+
+def retrieve_worldcereal_seasons(
+    extent: BoundingBoxExtent, seasons: List[str] = ["s1", "s2"]
+):
+    """Method to retrieve default WorldCereal seasons from global crop calendars.
+    These will be logged to the screen for informative purposes.
+
+    Parameters
+    ----------
+    extent : BoundingBoxExtent
+        extent for which to load seasonality
+    seasons : List[str], optional
+        seasons to load, by default s1 and s2
+    """
+    results = {}
+
+    # prepare figure
+    fig, ax = plt.subplots()
+    plt.title("WorldCereal seasons")
+    ax.set_ylim((0.4, len(seasons) + 0.5))
+    ax.set_xlim((0, 13))
+    ax.set_yticks(range(1, len(seasons) + 1))
+    ax.set_yticklabels(seasons)
+    ax.set_xticks(range(1, 13))
+    ax.set_xticklabels(
+        [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ]
+    )
+    facecolor = "darkgoldenrod"
+
+    # Get the start and end date for each season
+    for idx, season in enumerate(seasons):
+        seasonal_extent = get_season_dates_for_extent(extent, 2021, f"tc-{season}")
+        sos = pd.to_datetime(seasonal_extent.start_date)
+        eos = pd.to_datetime(seasonal_extent.end_date)
+        results[season] = (sos, eos)
+
+        # get start and end month (decimals) for plotting
+        start = get_month_decimal(sos)
+        end = get_month_decimal(eos)
+
+        # add rectangle to plot
+        if start < end:
+            ax.add_patch(
+                Rectangle((start, idx + 0.75), end - start, 0.5, color=facecolor)
+            )
+        else:
+            ax.add_patch(
+                Rectangle((start, idx + 0.75), 12 - start, 0.5, color=facecolor)
+            )
+            ax.add_patch(Rectangle((1, idx + 0.75), end - 1, 0.5, color=facecolor))
+
+        # add labels to plot
+        label_start = sos.strftime("%B %d")
+        label_end = eos.strftime("%B %d")
+        plt.text(
+            start - 0.2,
+            idx + 0.65,
+            label_start,
+            fontsize=8,
+            color="darkgreen",
+            ha="left",
+            va="center",
+        )
+        plt.text(
+            end + 0.2,
+            idx + 0.65,
+            label_end,
+            fontsize=8,
+            color="darkred",
+            ha="right",
+            va="center",
+        )
+
+    # display plot
+    plt.show()
+
+    return results
 
 
 def suggest_seasons(extent: BoundingBoxExtent, season: str = "tc-annual"):
