@@ -1,3 +1,5 @@
+import copy
+import random
 from calendar import monthrange
 from datetime import datetime, timedelta
 from typing import List, Tuple
@@ -6,11 +8,13 @@ import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from presto.utils import device
+from pyproj import Transformer
 from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
@@ -29,7 +33,7 @@ class date_slider:
         self.end_date = end_date
 
         dates = pd.date_range(start_date, end_date, freq="MS")
-        options = [(date.strftime("%b %Y"), date) for date in dates]
+        options = [(date.strftime("%d %b %Y"), date) for date in dates]
         self.interval_slider = widgets.SelectionRangeSlider(
             options=options,
             index=(0, 12),  # Default to a 12-month interval
@@ -37,7 +41,7 @@ class date_slider:
             continuous_update=False,
             readout=True,
             behaviour="drag",
-            layout={"width": "90%", "height": "100px", "margin": "0 auto 0 auto"},
+            layout={"width": "80%", "height": "100px", "margin": "0 auto 0 auto"},
             style={
                 "handle_color": "dodgerblue",
             },
@@ -85,13 +89,13 @@ class date_slider:
         ]
 
         # Create a text widget to display the tick labels with calculated positions
-        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 90%; height: 20px; margin-top: -20px;'>"
+        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 86%; height: 20px; margin-top: -20px;'>"
         for label, position in zip(tick_labels, tick_positions):
             tick_widget_html += f"<div style='position: absolute; left: {position}%; transform: translateX(-50%);'>{label}</div>"
         tick_widget_html += "</div>"
 
         tick_widget = widgets.HTML(
-            value=tick_widget_html, layout={"width": "90%", "margin": "0 auto"}
+            value=tick_widget_html, layout={"width": "80%", "margin": "0 auto 0 auto"}
         )
 
         # Arrange the text widget, interval slider, and tick widget using VBox
@@ -155,9 +159,19 @@ def retrieve_worldcereal_seasons(
     """
     results = {}
 
+    # get lat, lon centroid of extent
+    transformer = Transformer.from_crs(
+        f"EPSG:{extent.epsg}", "EPSG:4326", always_xy=True
+    )
+    minx, miny = transformer.transform(extent.west, extent.south)
+    maxx, maxy = transformer.transform(extent.east, extent.north)
+    lat = (maxy + miny) / 2
+    lon = (maxx + minx) / 2
+    location = f"lat={lat:.2f}, lon={lon:.2f}"
+
     # prepare figure
     fig, ax = plt.subplots()
-    plt.title("WorldCereal seasons")
+    plt.title(f"WorldCereal seasons ({location})")
     ax.set_ylim((0.4, len(seasons) + 0.5))
     ax.set_xlim((0, 13))
     ax.set_yticks(range(1, len(seasons) + 1))
@@ -229,28 +243,6 @@ def retrieve_worldcereal_seasons(
     plt.show()
 
     return results
-
-
-def suggest_seasons(extent: BoundingBoxExtent, season: str = "tc-annual"):
-    """Method to probe WorldCereal seasonality and suggest start, end and focus time.
-    These will be logged to the screen for informative purposes
-
-    Parameters
-    ----------
-    extent : BoundingBoxExtent
-        extent for which to load seasonality
-    season : str, optional
-        season to load, by default "tc-annual"
-    """
-    seasonal_extent = get_season_dates_for_extent(extent, 2021, season)
-    sos = pd.to_datetime(seasonal_extent.start_date)
-    eos = pd.to_datetime(seasonal_extent.end_date)
-
-    peak = sos + (eos - sos) / 2
-
-    print(f"Start of `{season}` season: {sos.strftime('%B %d')}")
-    print(f"End of `{season}` season: {eos.strftime('%B %d')}")
-    print(f"Suggested focus time of `{season}` season: {peak.strftime('%B %d')}")
 
 
 def get_inputs_outputs(
@@ -379,3 +371,137 @@ def train_classifier(inputs, targets):
     confuson_matrix = confusion_matrix(targets_val, pred)
 
     return custom_downstream_model, report, confuson_matrix
+
+
+def get_probability_cmap():
+    colormap = plt.get_cmap("RdYlGn")
+    cmap = {}
+    for i in range(101):
+        cmap[i] = tuple((np.array(colormap(int(2.55 * i))) * 255).astype(int))
+    return cmap
+
+
+NODATAVALUE = {
+    "cropland": 255,
+    "croptype": 255,
+    "confidence": 255,
+}
+
+
+COLORMAP = {
+    "active-cropland": {
+        0: (232, 55, 39, 255),  # inactive
+        1: (77, 216, 39, 255),  # active
+    },
+    "cropland": {
+        0: (186, 186, 186, 0),  # no cropland
+        1: (224, 24, 28, 200),  # cropland
+    },
+    "confidence": get_probability_cmap(),
+}
+
+
+def _get_nodata(product_type):
+    return NODATAVALUE[product_type]
+
+
+def generate_random_color():
+    return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+
+
+def color_distance(c1, c2):
+    return sum((a - b) ** 2 for a, b in zip(c1, c2)) ** 0.5
+
+
+def generate_distinct_colors(n, min_distance=100):
+    colors = []
+    while len(colors) < n:
+        new_color = generate_random_color()
+        if all(color_distance(new_color, c) > min_distance for c in colors):
+            colors.append(new_color)
+    return colors
+
+
+def _get_colormap(product, lut=None):
+
+    if product in COLORMAP.keys():
+        colormap = copy.deepcopy(COLORMAP[product])
+    else:
+        if lut is not None:
+            logger.info((f"Assigning random color map for product {product}. "))
+            colormap = {}
+            distinct_colors = generate_distinct_colors(len(lut))
+            for i, color in enumerate(distinct_colors):
+                colormap[i] = (*color, 255)
+        else:
+            colormap = None
+
+    return colormap
+
+
+def prepare_visualization(results, processing_period):
+
+    final_paths = {}
+
+    for product, product_params in results.products.items():
+
+        paths = {}
+
+        basepath = product_params["path"]
+        if basepath is None:
+            logger.warning("No products downloaded. Aborting!")
+            return None
+        product_type = product_params["type"].value
+        if product_type == "cropland":
+            lut = {"other": 0, "cropland": 1}
+        else:
+            lut = product_params["lut"]
+
+        # get properties and data from input file
+        with rasterio.open(basepath, "r") as src:
+            labels = src.read(1)
+            probs = src.read(2)
+            meta = src.meta
+
+        nodata = _get_nodata(product_type)
+        colormap = _get_colormap(product_type, lut)
+
+        # construct dictionary of output files to be generated
+        outfiles = {
+            "classification": {
+                "data": labels,
+                "colormap": colormap,
+                "nodata": nodata,
+                "lut": lut,
+            },
+            "confidence": {
+                "data": probs,
+                "colormap": _get_colormap("confidence"),
+                "nodata": _get_nodata("confidence"),
+                "lut": None,
+            },
+        }
+
+        # write output files
+        meta.update(count=1)
+        for label, settings in outfiles.items():
+            # construct final output path
+            start = processing_period.start_date.replace("-", "")
+            end = processing_period.end_date.replace("-", "")
+            filename = f"{product}_{label}_{start}_{end}.tif"
+            outpath = basepath.parent / filename
+            bandnames = [label]
+            with rasterio.open(outpath, "w", **meta) as dst:
+                dst.write(settings["data"], indexes=1)
+                dst.nodata = settings["nodata"]
+                for i, b in enumerate(bandnames):
+                    dst.update_tags(i + 1, band_name=b)
+                    if settings["lut"] is not None:
+                        dst.update_tags(i + 1, lut=settings["lut"])
+                if settings["colormap"] is not None:
+                    dst.write_colormap(1, settings["colormap"])
+            paths[label] = outpath
+
+        final_paths[product] = paths
+
+    return final_paths
