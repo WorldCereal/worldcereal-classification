@@ -20,13 +20,18 @@ basedir = Path(os.path.dirname(os.path.realpath(__file__)))
 def test_temporal_context_validation():
     """Test the validation of temporal context."""
 
-    temporal_context = TemporalContext("2020-01-01", "2022-03-31")
+    temporal_context = TemporalContext("2020-01-01", "2020-12-31")
     _validate_temporal_context(temporal_context)
 
-    incorrect_temporal_context = TemporalContext("2022-01-05", "2020-03-15")
+    incorrect_temporal_context = TemporalContext("2020-01-05", "2020-03-15")
 
     with pytest.raises(InvalidTemporalContextError):
         _validate_temporal_context(incorrect_temporal_context)
+
+    more_than_one_year = TemporalContext("2019-01-05", "2021-03-15")
+
+    with pytest.raises(InvalidTemporalContextError):
+        _validate_temporal_context(more_than_one_year)
 
 
 def test_temporal_context_correction():
@@ -44,7 +49,7 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
     This is based on constructing the openEO graph for the job
     that would run, without actually running it."""
 
-    temporal_extent = TemporalContext("2020-01-01", "2022-03-31")
+    temporal_extent = TemporalContext("2020-06-01", "2021-05-31")
 
     cube = worldcereal_preprocessed_inputs(
         connection=cdse_connection(),
@@ -69,7 +74,7 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
 def test_worldcereal_preprocessed_inputs_graph_withslope():
     """This version has fetchtype.TILE and should include slope."""
 
-    temporal_extent = TemporalContext("2020-01-01", "2022-03-31")
+    temporal_extent = TemporalContext("2018-03-01", "2019-02-28")
 
     cube = worldcereal_preprocessed_inputs(
         connection=cdse_connection(),

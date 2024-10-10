@@ -10,7 +10,7 @@ from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 from worldcereal.openeo.postprocess import PostProcessor
 
 
-class WorldCerealProduct(Enum):
+class WorldCerealProductType(Enum):
     """Enum to define the different WorldCereal products."""
 
     CROPLAND = "cropland"
@@ -63,7 +63,7 @@ class CropLandParameters(BaseModel):
         Feature extractor to use for the inference. This class must be a
         subclass of GFMAP's `PatchFeatureExtractor` and returns float32
         features.
-    features_parameters : FeaturesParameters
+    feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
         dictionnary and passed in the process graph.
     classifier : CroplandClassifier
@@ -78,14 +78,15 @@ class CropLandParameters(BaseModel):
     feature_extractor: Type[PatchFeatureExtractor] = Field(
         default=PrestoFeatureExtractor
     )
-    features_parameters: FeaturesParameters = FeaturesParameters(
+    feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt",  # NOQA
+        use_valid_date_token=False,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v003-ft-cropland-F1metric.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -111,7 +112,7 @@ class CropTypeParameters(BaseModel):
         Feature extractor to use for the inference. This class must be a
         subclass of GFMAP's `PatchFeatureExtractor` and returns float32
         features.
-    features_parameters : FeaturesParameters
+    feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
         dictionnary and passed in the process graph.
     classifier : CroptypeClassifier
@@ -129,6 +130,7 @@ class CropTypeParameters(BaseModel):
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
+        use_valid_date_token=True,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)

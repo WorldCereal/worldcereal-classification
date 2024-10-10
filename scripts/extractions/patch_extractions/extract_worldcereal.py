@@ -270,7 +270,6 @@ def postprocess_extracted_file(
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "COP-DEM": "elevation",
         "AGERA5-TMEAN": "temperature_2m",
         "AGERA5-PRECIP": "total_precipitation",
     }
