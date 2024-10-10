@@ -41,8 +41,7 @@ class PostProcessor(ModelInference):
         kernel_size: int,
         conf_threshold: int,
     ) -> xr.DataArray:
-        """
-        Majority vote is performed using a sliding local kernel.
+        """Majority vote is performed using a sliding local kernel.
         For each pixel, the voting of a final class is done from
         neighbours values weighted with the confidence threshold.
         Pixels that have one of the specified excluded values are
@@ -54,12 +53,21 @@ class PostProcessor(ModelInference):
         neighbors of that class, then the new probability is the sum of the
         old probabilities of each pixels divided by 3)
 
-        :param base_labels: The original predicted classification labels.
-        :param max_probabilities: The original probabilities of the winning class (ranging between 0 and 100).
-        :param kernel_size: The size of the kernel used for the neighbour around the pixel.
-        :param conf_threshold: Pixels under this confidence threshold do not count into the voting process.
+        Parameters
+        ----------
+        base_labels : xr.DataArray
+            The original predicted classification labels.
+        max_probabilities : xr.DataArray
+            The original probabilities of the winning class (ranging between 0 and 100).
+        kernel_size : int
+            The size of the kernel used for the neighbour around the pixel.
+        conf_threshold : int
+            Pixels under this confidence threshold do not count into the voting process.
 
-        :returns: the cleaned classification labels and associated probabilities.
+        Returns
+        -------
+        xr.DataArray
+            The cleaned classification labels and associated probabilities.
         """
 
         import numpy as np
@@ -198,11 +206,10 @@ class PostProcessor(ModelInference):
             )
             probabilities_vals[class_idx][excluded_mask] = 0
 
-        # Sum of probabilities should be 1
-        probabilities_vals = probabilities_vals / probabilities_vals.sum(axis=0)
-
-        # Cast back to uint16
-        probabilities_vals = np.round(probabilities_vals * 100.0).astype("uint16")
+        # Sum of probabilities should be 1, cast to uint16
+        probabilities_vals = np.round(
+            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0
+        ).astype("uint16")
 
         return xr.DataArray(
             probabilities_vals,
