@@ -4,9 +4,10 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - boto3=1.35.30
+  - cftime=1.6.4
   - catboost=1.2.5
   - cpuonly
-  - duckdb=1.1.0
   - einops=0.8.0
   - fastparquet=2024.2.0
   - geojson=3.1.0
@@ -15,15 +16,25 @@ dependencies:
   - h5py=3.11.0
   - leafmap=0.35.1
   - loguru=0.7.2
+  - netcdf4
+  - numpy<2.0.0
   - ipyleaflet=0.19.1
   - openeo=0.31.0
+  - pip
   - pyarrow=16.1.0
+  - pydantic=2.8.0
   - python=3.10.0
-  - python-duckdb=1.1.0
   - pytorch=2.3.1
   - rasterio=1.3.10
   - rioxarray=0.15.5
   - scikit-image=0.22.0
   - scikit-learn=1.5.0
+  - scipy
   - shapely=2.0.4
+  - pip:
+    - duckdb==1.1.0
+    - h3==3.7.7
+    - openeo-gfmap==0.2.0
+    - git+https://github.com/worldcereal/worldcereal-classification@135-refactor-demo
+    - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
 
