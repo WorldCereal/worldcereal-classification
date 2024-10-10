@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import geojson
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -42,3 +43,9 @@ def WorldCerealCroptypeClassification():
     filepath = get_test_resource("worldcereal_croptype_classification.nc")
     arr = xr.open_dataarray(filepath).astype("uint16")
     return arr
+
+
+@pytest.fixture
+def WorldCerealExtractionsDF():
+    filepath = get_test_resource("test_public_extractions.parquet")
+    return pd.read_parquet(filepath)
