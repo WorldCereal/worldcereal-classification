@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Tuple
 
 import ipywidgets as widgets
+import leafmap
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -373,6 +374,9 @@ def train_classifier(inputs, targets):
     return custom_downstream_model, report, confuson_matrix
 
 
+############# PRODUCT POSTPROCESSING #############
+
+
 def get_probability_cmap():
     colormap = plt.get_cmap("RdYlGn")
     cmap = {}
@@ -389,10 +393,6 @@ NODATAVALUE = {
 
 
 COLORMAP = {
-    "active-cropland": {
-        0: (232, 55, 39, 255),  # inactive
-        1: (77, 216, 39, 255),  # active
-    },
     "cropland": {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
@@ -439,11 +439,11 @@ def _get_colormap(product, lut=None):
     return colormap
 
 
-def prepare_visualization(results, processing_period):
+def prepare_visualization(products, processing_period):
 
     final_paths = {}
 
-    for product, product_params in results.products.items():
+    for product, product_params in products.items():
 
         paths = {}
 
@@ -505,3 +505,129 @@ def prepare_visualization(results, processing_period):
         final_paths[product] = paths
 
     return final_paths
+
+
+############# PRODUCT VISUALIZATION #############
+
+
+LOCALTILESERVER_PORT = 8889
+
+COLORLEGEND = {
+    "temporary-crops": {
+        "Temporary crops": (224, 24, 28, 1),
+        "Other land cover": (186, 186, 186, 1),
+    },
+    "croptype": {
+        "Barley": (103, 60, 32, 1),
+        "Maize": (252, 207, 5, 1),
+        "Millet/Sorghum": (247, 185, 29, 1),
+        "Other crop": (186, 186, 186, 1),
+        "Rapeseed": (167, 245, 66, 1),
+        "Soybean": (85, 218, 218, 1),
+        "Sunflower": (245, 66, 111, 1),
+        "Wheat": (186, 113, 53, 1),
+        "No cropland": (186, 186, 186, 0),
+    },
+}
+
+
+def visualize_products(products, port=LOCALTILESERVER_PORT):
+    """
+    Function to visualize raster layers using leafmap.
+    Only the first band of the input rasters is visualized.
+
+    Args:
+        products (dict): dictionary of products to visualize {label: path}
+        port (int): port to use for localtileserver application
+
+    Returns:
+        leafmap Map instance
+    """
+
+    m = leafmap.Map()
+    m.add_basemap("Esri.WorldImagery")
+    for label, path in products.items():
+        m.add_raster(path, indexes=[1], layer_name=label, port=port)
+    m.add_colormap(
+        "RdYlGn",
+        label="Probabilities (%)",
+        width=8.0,
+        height=0.4,
+        orientation="horizontal",
+        vmin=0,
+        vmax=100,
+    )
+
+    return m
+
+
+def show_color_legend(product):
+    import math
+
+    from matplotlib import pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    if product not in COLORLEGEND.keys():
+        raise ValueError(f"Unknown product `{product}`: cannot generate color legend")
+
+    colors = copy.deepcopy(COLORLEGEND.get(product))
+    for key, value in colors.items():
+        # apply scaling of RGB values
+        rgb = [c / 255 for c in value[:-1]]
+        rgb.extend([value[-1]])
+        colors[key] = tuple(rgb)
+
+    cell_width = 212
+    cell_height = 22
+    swatch_width = 48
+    margin = 12
+    ncols = 1
+
+    names = list(colors)
+
+    n = len(names)
+    nrows = math.ceil(n / ncols)
+
+    width = cell_width * ncols + 2 * margin
+    height = cell_height * nrows + 2 * margin
+    dpi = 72
+
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    fig.subplots_adjust(
+        margin / width,
+        margin / height,
+        (width - margin) / width,
+        (height - margin) / height,
+    )
+    ax.set_xlim(0, cell_width * ncols)
+    ax.set_ylim(cell_height * (nrows - 0.5), -cell_height / 2.0)
+    ax.yaxis.set_visible(False)
+    ax.xaxis.set_visible(False)
+    ax.set_axis_off()
+
+    for i, name in enumerate(names):
+        row = i % nrows
+        col = i // nrows
+        y = row * cell_height
+
+        swatch_start_x = cell_width * col
+        text_pos_x = cell_width * col + swatch_width + 7
+
+        ax.text(
+            text_pos_x,
+            y,
+            name,
+            fontsize=14,
+            horizontalalignment="left",
+            verticalalignment="center",
+        )
+
+        ax.add_patch(
+            Rectangle(
+                xy=(swatch_start_x, y - 9),
+                width=swatch_width,
+                height=18,
+                facecolor=colors[name],
+                edgecolor="0.7",
+            )
+        )
