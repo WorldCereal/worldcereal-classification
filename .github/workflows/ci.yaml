@@ -18,12 +18,12 @@ jobs:
       with:
         python-version: 3.9
         cache: 'pip'
-    - name: Install openEO-GFMAP from source
-      run: |
-        git clone https://github.com/Open-EO/openeo-gfmap.git
-        cd openeo-gfmap
-        pip install .
-        cd ..
+    # - name: Install openEO-GFMAP from source
+    #   run: |
+    #     git clone https://github.com/Open-EO/openeo-gfmap.git
+    #     cd openeo-gfmap
+    #     pip install .
+    #     cd ..
     - name: Install Presto from source
       run: |
         git clone -b croptype https://github.com/WorldCereal/presto-worldcereal.git
