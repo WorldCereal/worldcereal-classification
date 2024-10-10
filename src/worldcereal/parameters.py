@@ -80,13 +80,13 @@ class CropLandParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_100epochs_30D_random_CROPLAND2_time-token=none_balance=True_augment=True_2017=True.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt",  # NOQA
         use_valid_date_token=False,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v001.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v003-ft-cropland-F1metric.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -122,6 +122,8 @@ class CropTypeParameters(BaseModel):
     classifier_parameters : ClassifierParameters
         Parameters for the classifier UDF. Will be serialized into a dictionnary
         and passed in the process graph.
+    save_mask : bool (default=False)
+        Whether or not to save the cropland mask as an intermediate result.
     """
 
     feature_extractor: Type[PatchFeatureExtractor] = Field(
@@ -137,6 +139,7 @@ class CropTypeParameters(BaseModel):
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
     )
+    save_mask: bool = Field(default=False)
 
     @model_validator(mode="after")
     def check_udf_types(self):
@@ -158,14 +161,23 @@ class PostprocessParameters(BaseModel):
     ----------
     enable: bool (default=True)
         Whether to enable postprocessing.
+    method: str (default="smooth_probabilities")
+        The method to use for postprocessing. Must be one of ["smooth_probabilities", "majority_vote"]
+    kernel_size: int (default=5)
+        Used for majority vote postprocessing. Must be smaller than 25.
+    conf_threshold: int (default=30)
+        Used for majority vote postprocessing. Must be between 0 and 100.
     save_intermediate: bool (default=False)
-        Whether to save intermediate results (before the postprocessing).
+        Whether to save intermediate results (before applying the postprocessing).
         The intermediate results will be saved in the GeoTiff format.
     keep_class_probs: bool (default=False)
         If the per-class probabilities should be outputted in the final product.
     """
 
     enable: bool = Field(default=True)
+    method: str = Field(default="smooth_probabilities")
+    kernel_size: int = Field(default=5)
+    conf_threshold: int = Field(default=30)
     save_intermediate: bool = Field(default=False)
     keep_class_probs: bool = Field(default=False)
 
@@ -182,9 +194,25 @@ class PostprocessParameters(BaseModel):
 
     @model_validator(mode="after")
     def check_parameters(self):
-        """Validates boolean parameters."""
+        """Validates parameters."""
         if not self.enable and self.save_intermediate:
             raise ValidationError(
                 "Cannot save intermediate results if postprocessing is disabled."
             )
+
+        if self.method not in ["smooth_probabilities", "majority_vote"]:
+            raise ValidationError(
+                f"Method must be one of ['smooth_probabilities', 'majority_vote'], got {self.method}"
+            )
+
+        if self.method == "majority_vote":
+            if self.kernel_size > 25:
+                raise ValidationError(
+                    f"Kernel size must be smaller than 25, got {self.kernel_size}"
+                )
+            if self.conf_threshold < 0 or self.conf_threshold > 100:
+                raise ValidationError(
+                    f"Confidence threshold must be between 0 and 100, got {self.conf_threshold}"
+                )
+
         return self
