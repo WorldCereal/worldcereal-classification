@@ -1,5 +1,7 @@
+import ast
 import copy
 import random
+import warnings
 from calendar import monthrange
 from datetime import datetime, timedelta
 from typing import List, Tuple
@@ -439,11 +441,11 @@ def _get_colormap(product, lut=None):
     return colormap
 
 
-def prepare_visualization(products, processing_period):
+def prepare_visualization(results, processing_period):
 
     final_paths = {}
 
-    for product, product_params in products.items():
+    for product, product_params in results.products.items():
 
         paths = {}
 
@@ -459,8 +461,8 @@ def prepare_visualization(products, processing_period):
 
         # get properties and data from input file
         with rasterio.open(basepath, "r") as src:
-            labels = src.read(1)
-            probs = src.read(2)
+            labels = src.read(1).astype(np.uint8)
+            probs = src.read(2).astype(np.uint8)
             meta = src.meta
 
         nodata = _get_nodata(product_type)
@@ -491,15 +493,17 @@ def prepare_visualization(products, processing_period):
             filename = f"{product}_{label}_{start}_{end}.tif"
             outpath = basepath.parent / filename
             bandnames = [label]
-            with rasterio.open(outpath, "w", **meta) as dst:
-                dst.write(settings["data"], indexes=1)
-                dst.nodata = settings["nodata"]
-                for i, b in enumerate(bandnames):
-                    dst.update_tags(i + 1, band_name=b)
-                    if settings["lut"] is not None:
-                        dst.update_tags(i + 1, lut=settings["lut"])
-                if settings["colormap"] is not None:
-                    dst.write_colormap(1, settings["colormap"])
+            with warnings.catch_warnings():  # ignore skimage warnings
+                warnings.simplefilter("ignore")
+                with rasterio.open(outpath, "w", **meta) as dst:
+                    dst.write(settings["data"], indexes=1)
+                    dst.nodata = settings["nodata"]
+                    for i, b in enumerate(bandnames):
+                        dst.update_tags(i + 1, band_name=b)
+                        if settings["lut"] is not None:
+                            dst.update_tags(i + 1, lut=settings["lut"])
+                    if settings["colormap"] is not None:
+                        dst.write_colormap(1, settings["colormap"])
             paths[label] = outpath
 
         final_paths[product] = paths
@@ -510,35 +514,20 @@ def prepare_visualization(products, processing_period):
 ############# PRODUCT VISUALIZATION #############
 
 
-LOCALTILESERVER_PORT = 8889
-
-COLORLEGEND = {
-    "temporary-crops": {
-        "Temporary crops": (224, 24, 28, 1),
-        "Other land cover": (186, 186, 186, 1),
-    },
-    "croptype": {
-        "Barley": (103, 60, 32, 1),
-        "Maize": (252, 207, 5, 1),
-        "Millet/Sorghum": (247, 185, 29, 1),
-        "Other crop": (186, 186, 186, 1),
-        "Rapeseed": (167, 245, 66, 1),
-        "Soybean": (85, 218, 218, 1),
-        "Sunflower": (245, 66, 111, 1),
-        "Wheat": (186, 113, 53, 1),
-        "No cropland": (186, 186, 186, 0),
-    },
-}
-
-
-def visualize_products(products, port=LOCALTILESERVER_PORT):
+def visualize_products(rasters, port):
     """
     Function to visualize raster layers using leafmap.
     Only the first band of the input rasters is visualized.
 
-    Args:
-        products (dict): dictionary of products to visualize {label: path}
-        port (int): port to use for localtileserver application
+    Parameters
+    ----------
+    rasters : Dict[str, Dict[str, Path]]
+        Dictionary containing all generated rasters.
+        Output of function prepare_visualization.
+    port : int
+        port to use for localtileserver application
+        (in case you are working on a remote server, make sure the
+        port is forwarded to your local machine)
 
     Returns:
         leafmap Map instance
@@ -546,36 +535,50 @@ def visualize_products(products, port=LOCALTILESERVER_PORT):
 
     m = leafmap.Map()
     m.add_basemap("Esri.WorldImagery")
-    for label, path in products.items():
-        m.add_raster(path, indexes=[1], layer_name=label, port=port)
-    m.add_colormap(
-        "RdYlGn",
-        label="Probabilities (%)",
-        width=8.0,
-        height=0.4,
-        orientation="horizontal",
-        vmin=0,
-        vmax=100,
-    )
+    for product, items in rasters.items():
+        for label, path in items.items():
+            m.add_raster(
+                str(path), indexes=[1], layer_name=f"{product}-{label}", port=port
+            )
 
     return m
 
 
-def show_color_legend(product):
+def show_color_legend(rasters, product):
+    """Display the color legend of a product based on its colormap and LUT.
+    The latter should be present as metadata in the .tif file.
+
+    Parameters
+    ----------
+    rasters : Dict[str, Dict[str, Path]]
+        Dictionary containing all generated rasters.
+        Output of function prepare_visualization.
+    product : str
+        The product for which to display the color legend.
+        Needs to be a key in the rasters dictionary.
+    """
     import math
 
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle
 
-    if product not in COLORLEGEND.keys():
-        raise ValueError(f"Unknown product `{product}`: cannot generate color legend")
+    if product not in rasters:
+        raise ValueError(f"Product {product} not found in rasters.")
 
-    colors = copy.deepcopy(COLORLEGEND.get(product))
-    for key, value in colors.items():
+    tif_file = rasters[product]["classification"]
+    with rasterio.open(tif_file) as src:
+        nodata = src.nodata
+        colormap = src.colormap(1)
+        lut = ast.literal_eval(src.tags(1)["lut"])
+
+    # get rid of all (0, 0, 0, 255) items
+    colormap = {k: v for k, v in colormap.items() if v != (0, 0, 0, 255)}
+
+    # apply scaling of RGB values
+    for key, value in colormap.items():
         # apply scaling of RGB values
-        rgb = [c / 255 for c in value[:-1]]
-        rgb.extend([value[-1]])
-        colors[key] = tuple(rgb)
+        rgb = [c / 255 for c in value]
+        colormap[key] = tuple(rgb)
 
     cell_width = 212
     cell_height = 22
@@ -583,10 +586,9 @@ def show_color_legend(product):
     margin = 12
     ncols = 1
 
-    names = list(colors)
+    raster_values = list(colormap)
 
-    n = len(names)
-    nrows = math.ceil(n / ncols)
+    nrows = math.ceil(len(raster_values) / ncols)
 
     width = cell_width * ncols + 2 * margin
     height = cell_height * nrows + 2 * margin
@@ -605,13 +607,19 @@ def show_color_legend(product):
     ax.xaxis.set_visible(False)
     ax.set_axis_off()
 
-    for i, name in enumerate(names):
+    for i, raster_value in enumerate(raster_values):
         row = i % nrows
         col = i // nrows
         y = row * cell_height
 
         swatch_start_x = cell_width * col
         text_pos_x = cell_width * col + swatch_width + 7
+
+        # Get the name of the class
+        if raster_value == nodata:
+            name = "No data"
+        else:
+            name = [k for k, v in lut.items() if v == raster_value][0]
 
         ax.text(
             text_pos_x,
@@ -627,7 +635,7 @@ def show_color_legend(product):
                 xy=(swatch_start_x, y - 9),
                 width=swatch_width,
                 height=18,
-                facecolor=colors[name],
+                facecolor=colormap[raster_value],
                 edgecolor="0.7",
             )
         )
