@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Type
 
+from loguru import logger
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -196,23 +197,26 @@ class PostprocessParameters(BaseModel):
     def check_parameters(self):
         """Validates parameters."""
         if not self.enable and self.save_intermediate:
-            raise ValidationError(
+            raise ValueError(
                 "Cannot save intermediate results if postprocessing is disabled."
-            )
-
-        if self.method not in ["smooth_probabilities", "majority_vote"]:
-            raise ValidationError(
-                f"Method must be one of ['smooth_probabilities', 'majority_vote'], got {self.method}"
             )
 
         if self.method == "majority_vote":
             if self.kernel_size > 25:
-                raise ValidationError(
+                raise ValueError(
                     f"Kernel size must be smaller than 25, got {self.kernel_size}"
                 )
             if self.conf_threshold < 0 or self.conf_threshold > 100:
-                raise ValidationError(
+                raise ValueError(
                     f"Confidence threshold must be between 0 and 100, got {self.conf_threshold}"
                 )
+        elif self.method == "smooth_probabilities":
+            logger.warning(
+                "Parameters 'kernel_size' and 'conf_threshold' are not used for 'smooth_probabilities' method."
+            )
+        else:
+            raise ValueError(
+                f"Method must be one of ['smooth_probabilities', 'majority_vote'], got {self.method}"
+            )
 
         return self
