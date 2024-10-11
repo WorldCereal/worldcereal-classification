@@ -201,6 +201,11 @@ class PostprocessParameters(BaseModel):
                 "Cannot save intermediate results if postprocessing is disabled."
             )
 
+        if self.method not in ["smooth_probabilities", "majority_vote"]:
+            raise ValueError(
+                f"Method must be one of ['smooth_probabilities', 'majority_vote'], got {self.method}"
+            )
+
         if self.method == "majority_vote":
             if self.kernel_size > 25:
                 raise ValueError(
