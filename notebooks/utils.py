@@ -1,7 +1,6 @@
 import ast
 import copy
 import random
-import warnings
 from calendar import monthrange
 from datetime import datetime, timedelta
 from typing import List, Tuple
@@ -408,7 +407,7 @@ def _get_nodata(product_type):
 
 
 def generate_random_color():
-    return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+    return (random.randint(0, 255), random.randint(0, 255), random.randint(1, 255))
 
 
 def color_distance(c1, c2):
@@ -416,12 +415,12 @@ def color_distance(c1, c2):
 
 
 def generate_distinct_colors(n, min_distance=100):
-    colors = []
+    colors = [(186, 186, 186)]  # grey is reserved for no-cropland
     while len(colors) < n:
         new_color = generate_random_color()
         if all(color_distance(new_color, c) > min_distance for c in colors):
             colors.append(new_color)
-    return colors
+    return colors[1:]
 
 
 def _get_colormap(product, lut=None):
@@ -435,6 +434,8 @@ def _get_colormap(product, lut=None):
             distinct_colors = generate_distinct_colors(len(lut))
             for i, color in enumerate(distinct_colors):
                 colormap[i] = (*color, 255)
+            if product == "croptype":
+                colormap[254] = (186, 186, 186, 255)  # add no cropland color
         else:
             colormap = None
 
@@ -444,6 +445,7 @@ def _get_colormap(product, lut=None):
 def prepare_visualization(results, processing_period):
 
     final_paths = {}
+    colormaps = {}
 
     for product, product_params in results.products.items():
 
@@ -456,6 +458,10 @@ def prepare_visualization(results, processing_period):
         product_type = product_params["type"].value
         if product_type == "cropland":
             lut = {"other": 0, "cropland": 1}
+        elif product_type == "croptype":
+            lut = product_params["lut"]
+            # add no cropland class
+            lut["no_cropland"] = 254
         else:
             lut = product_params["lut"]
 
@@ -466,13 +472,14 @@ def prepare_visualization(results, processing_period):
             meta = src.meta
 
         nodata = _get_nodata(product_type)
-        colormap = _get_colormap(product_type, lut)
+        if product_type not in colormaps:
+            colormaps[product_type] = _get_colormap(product_type, lut)
 
         # construct dictionary of output files to be generated
         outfiles = {
             "classification": {
                 "data": labels,
-                "colormap": colormap,
+                "colormap": colormaps[product_type],
                 "nodata": nodata,
                 "lut": lut,
             },
@@ -486,6 +493,7 @@ def prepare_visualization(results, processing_period):
 
         # write output files
         meta.update(count=1)
+        meta.update(dtype=rasterio.uint8)
         for label, settings in outfiles.items():
             # construct final output path
             start = processing_period.start_date.replace("-", "")
@@ -493,17 +501,16 @@ def prepare_visualization(results, processing_period):
             filename = f"{product}_{label}_{start}_{end}.tif"
             outpath = basepath.parent / filename
             bandnames = [label]
-            with warnings.catch_warnings():  # ignore skimage warnings
-                warnings.simplefilter("ignore")
-                with rasterio.open(outpath, "w", **meta) as dst:
-                    dst.write(settings["data"], indexes=1)
-                    dst.nodata = settings["nodata"]
-                    for i, b in enumerate(bandnames):
-                        dst.update_tags(i + 1, band_name=b)
-                        if settings["lut"] is not None:
-                            dst.update_tags(i + 1, lut=settings["lut"])
-                    if settings["colormap"] is not None:
-                        dst.write_colormap(1, settings["colormap"])
+            meta.update(nodata=settings["nodata"])
+            with rasterio.open(outpath, "w", **meta) as dst:
+                dst.write(settings["data"], indexes=1)
+                dst.nodata = settings["nodata"]
+                for i, b in enumerate(bandnames):
+                    dst.update_tags(i + 1, band_name=b)
+                    if settings["lut"] is not None:
+                        dst.update_tags(i + 1, lut=settings["lut"])
+                if settings["colormap"] is not None:
+                    dst.write_colormap(1, settings["colormap"])
             paths[label] = outpath
 
         final_paths[product] = paths
