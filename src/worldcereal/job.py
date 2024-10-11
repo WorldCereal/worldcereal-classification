@@ -142,6 +142,7 @@ def generate_map(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        disable_meteo=True,
     )
 
     # Explicit filtering again for bbox because of METEO low
