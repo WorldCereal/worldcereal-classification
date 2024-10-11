@@ -117,6 +117,48 @@ class date_slider:
         return TemporalContext(start, end)
 
 
+LANDCOVER_LUT = {
+    10: "Unspecified cropland",
+    11: "Temporary crops",
+    12: "Perennial crops",
+    13: "Grassland",
+    20: "Herbaceous vegetation",
+    30: "Shrubland",
+    40: "Deciduous forest",
+    41: "Evergreen forest",
+    42: "Mixed forest",
+    50: "Bare or sparse vegetation",
+    60: "Built-up",
+    70: "Water",
+    80: "Snow and ice",
+    98: "No temporary crops nor perennial crops",
+    99: "No temporary crops",
+}
+
+
+def select_landcover(df: pd.DataFrame):
+
+    import ipywidgets as widgets
+
+    df["LANDCOVER_LABEL"] = df["LANDCOVER_LABEL"].astype(int)
+    df = df.loc[df["LANDCOVER_LABEL"] != 0]
+    potential_classes = df["LANDCOVER_LABEL"].value_counts().reset_index()
+
+    checkbox_widgets = [
+        widgets.Checkbox(
+            value=False,
+            description=f"{LANDCOVER_LUT[row['LANDCOVER_LABEL']]} ({row['count']} samples)",
+        )
+        for ii, row in potential_classes.iterrows()
+    ]
+    vbox = widgets.VBox(
+        checkbox_widgets,
+        layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
+    )
+
+    return vbox, checkbox_widgets
+
+
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
 
@@ -293,7 +335,7 @@ def get_inputs_outputs(
     return encodings_np, targets
 
 
-def get_custom_labels(df, checkbox_widgets):
+def get_custom_croptype_labels(df, checkbox_widgets):
     selected_crops = [
         checkbox.description.split(" ")[0]
         for checkbox in checkbox_widgets
@@ -303,6 +345,23 @@ def get_custom_labels(df, checkbox_widgets):
     df.loc[df["croptype_name"].isin(selected_crops), "downstream_class"] = df[
         "croptype_name"
     ]
+
+    return df
+
+
+def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
+
+    # read selected classes from widget
+    selected_lc = [
+        checkbox.description.split(" (")[0]
+        for checkbox in checkbox_widgets
+        if checkbox.value
+    ]
+    # convert to landcover labels matching those in df
+    selected_lc = [k for k, v in LANDCOVER_LUT.items() if v in selected_lc]
+    # assign new labels
+    df["downstream_class"] = "other"
+    df.loc[df["LANDCOVER_LABEL"].isin(selected_lc), "downstream_class"] = new_label
 
     return df
 
