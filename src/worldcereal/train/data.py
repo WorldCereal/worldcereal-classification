@@ -76,7 +76,10 @@ class WorldCerealTrainingDataset(WorldCerealLabelledDataset):
             "location_id",
             "ref_id",
             "sample_id",
+            "downstream_class",
         ]
+
+        attrs = [attr for attr in attrs if attr in row.index]
 
         return sample + (row[attrs].to_dict(),)
 
@@ -86,6 +89,7 @@ def get_training_df(
     presto_model: Presto,
     batch_size: int = 2048,
     valid_date_as_token: bool = False,
+    num_workers: int = 0,
 ) -> pd.DataFrame:
     """Function to extract Presto embeddings, targets and relevant
     auxiliary attributes from a dataset.
@@ -100,6 +104,8 @@ def get_training_df(
         by default 2048
     valid_date_as_token : bool, optional
         use valid_date as token in Presto, by default False
+    num_workers : int, optional
+        number of workers to use in DataLoader, by default 0
 
     Returns
     -------
@@ -112,7 +118,7 @@ def get_training_df(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=num_workers,
     )
 
     # Initialize final dataframe
