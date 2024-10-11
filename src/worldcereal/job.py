@@ -18,6 +18,7 @@ from worldcereal.parameters import (
     PostprocessParameters,
     WorldCerealProductType,
 )
+from worldcereal.utils.models import load_model_lut
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
 
@@ -33,11 +34,14 @@ class WorldCerealProduct(TypedDict):
         Type of the product. Either cropland or croptype.
     path: Optional[Path]
         Path to the downloaded product.
+    lut: Optional[Dict]
+        Look-up table for the product.
     """
 
     url: str
     type: WorldCerealProductType
     path: Optional[Path]
+    lut: Optional[Dict]
 
 
 class InferenceResults(BaseModel):
@@ -61,11 +65,11 @@ class InferenceResults(BaseModel):
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    output_dir: Optional[Union[Path, str]],
+    output_dir: Optional[Union[Path, str]] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(enable=False),
+    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
@@ -119,6 +123,10 @@ def generate_map(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     if backend_context.backend == Backend.CDSE:
         connection = openeo.connect(
             "https://openeo.creo.vito.be/openeo/"
@@ -147,6 +155,7 @@ def generate_map(
             cropland_parameters=cropland_parameters,
             postprocess_parameters=postprocess_parameters,
         )
+
     elif product_type == WorldCerealProductType.CROPTYPE:
         if not isinstance(croptype_parameters, CropTypeParameters):
             raise ValueError(
@@ -165,13 +174,11 @@ def generate_map(
         )  # Temporary fix to make this work as mask
 
         # Save final mask if required
-        if postprocess_parameters.save_intermediate:
-            proc_level = "cleaned" if postprocess_parameters.enable else "raw"
+        if croptype_parameters.save_mask:
             cropland_mask = cropland_mask.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}"
-                    f"-{proc_level}"
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}",
                 ),
             )
 
@@ -194,18 +201,27 @@ def generate_map(
     if job_options is not None:
         JOB_OPTIONS.update(job_options)
 
-    # Compile filename of final product
-    proc_level = "cleaned" if postprocess_parameters.enable else "raw"
-    filename = f"{product_type.value}-{proc_level}"
-
     # Execute the job
     job = classes.execute_batch(
         out_format=out_format,
         job_options=JOB_OPTIONS,
         title="WorldCereal [generate_map] job",
         description="Job that performs end-to-end WorldCereal inference",
-        filename_prefix=filename,
+        filename_prefix=product_type.value,
     )
+
+    # Get look-up tables
+    luts = {}
+    luts[WorldCerealProductType.CROPLAND.value] = load_model_lut(
+        cropland_parameters.classifier_parameters.classifier_url
+    )
+    if (
+        product_type == WorldCerealProductType.CROPTYPE
+        and croptype_parameters is not None
+    ):
+        luts[WorldCerealProductType.CROPTYPE.value] = load_model_lut(
+            croptype_parameters.classifier_parameters.classifier_url
+        )
 
     # Get job results
     job_result = job.get_results()
@@ -215,21 +231,22 @@ def generate_map(
     products = {}
     for asset in assets:
         asset_name = asset.name.split("_")[0]
-        asset_type = asset.name.split("-")[0]
+        asset_type = asset_name.split("-")[0]
         asset_type = getattr(WorldCerealProductType, asset_type.upper())
         if output_dir is not None:
-            filepath = asset.download(target=Path(output_dir))
+            filepath = asset.download(target=output_dir)
         else:
             filepath = None
         products[asset_name] = {
             "url": asset.href,
             "type": asset_type,
             "path": filepath,
+            "lut": luts[asset_type.value],
         }
 
     # Download job metadata if output path is provided
     if output_dir is not None:
-        metadata_file = Path(output_dir) / "job-results.json"
+        metadata_file = output_dir / "job-results.json"
         metadata_file.write_text(json.dumps(job_result.get_metadata()))
     else:
         metadata_file = None
