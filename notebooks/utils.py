@@ -1,16 +1,22 @@
+import ast
+import copy
+import random
 from calendar import monthrange
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
 import ipywidgets as widgets
+import leafmap
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from presto.utils import device
+from pyproj import Transformer
 from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
@@ -29,7 +35,7 @@ class date_slider:
         self.end_date = end_date
 
         dates = pd.date_range(start_date, end_date, freq="MS")
-        options = [(date.strftime("%b %Y"), date) for date in dates]
+        options = [(date.strftime("%d %b %Y"), date) for date in dates]
         self.interval_slider = widgets.SelectionRangeSlider(
             options=options,
             index=(0, 12),  # Default to a 12-month interval
@@ -37,7 +43,7 @@ class date_slider:
             continuous_update=False,
             readout=True,
             behaviour="drag",
-            layout={"width": "90%", "height": "100px", "margin": "0 auto 0 auto"},
+            layout={"width": "80%", "height": "100px", "margin": "0 auto 0 auto"},
             style={
                 "handle_color": "dodgerblue",
             },
@@ -85,13 +91,13 @@ class date_slider:
         ]
 
         # Create a text widget to display the tick labels with calculated positions
-        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 90%; height: 20px; margin-top: -20px;'>"
+        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 86%; height: 20px; margin-top: -20px;'>"
         for label, position in zip(tick_labels, tick_positions):
             tick_widget_html += f"<div style='position: absolute; left: {position}%; transform: translateX(-50%);'>{label}</div>"
         tick_widget_html += "</div>"
 
         tick_widget = widgets.HTML(
-            value=tick_widget_html, layout={"width": "90%", "margin": "0 auto"}
+            value=tick_widget_html, layout={"width": "80%", "margin": "0 auto 0 auto"}
         )
 
         # Arrange the text widget, interval slider, and tick widget using VBox
@@ -109,6 +115,48 @@ class date_slider:
         logger.info(f"Selected processing period: {start} to {end}")
 
         return TemporalContext(start, end)
+
+
+LANDCOVER_LUT = {
+    10: "Unspecified cropland",
+    11: "Temporary crops",
+    12: "Perennial crops",
+    13: "Grassland",
+    20: "Herbaceous vegetation",
+    30: "Shrubland",
+    40: "Deciduous forest",
+    41: "Evergreen forest",
+    42: "Mixed forest",
+    50: "Bare or sparse vegetation",
+    60: "Built-up",
+    70: "Water",
+    80: "Snow and ice",
+    98: "No temporary crops nor perennial crops",
+    99: "No temporary crops",
+}
+
+
+def select_landcover(df: pd.DataFrame):
+
+    import ipywidgets as widgets
+
+    df["LANDCOVER_LABEL"] = df["LANDCOVER_LABEL"].astype(int)
+    df = df.loc[df["LANDCOVER_LABEL"] != 0]
+    potential_classes = df["LANDCOVER_LABEL"].value_counts().reset_index()
+
+    checkbox_widgets = [
+        widgets.Checkbox(
+            value=False,
+            description=f"{LANDCOVER_LUT[row['LANDCOVER_LABEL']]} ({row['count']} samples)",
+        )
+        for ii, row in potential_classes.iterrows()
+    ]
+    vbox = widgets.VBox(
+        checkbox_widgets,
+        layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
+    )
+
+    return vbox, checkbox_widgets
 
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
@@ -155,9 +203,19 @@ def retrieve_worldcereal_seasons(
     """
     results = {}
 
+    # get lat, lon centroid of extent
+    transformer = Transformer.from_crs(
+        f"EPSG:{extent.epsg}", "EPSG:4326", always_xy=True
+    )
+    minx, miny = transformer.transform(extent.west, extent.south)
+    maxx, maxy = transformer.transform(extent.east, extent.north)
+    lat = (maxy + miny) / 2
+    lon = (maxx + minx) / 2
+    location = f"lat={lat:.2f}, lon={lon:.2f}"
+
     # prepare figure
     fig, ax = plt.subplots()
-    plt.title("WorldCereal seasons")
+    plt.title(f"WorldCereal seasons ({location})")
     ax.set_ylim((0.4, len(seasons) + 0.5))
     ax.set_xlim((0, 13))
     ax.set_yticks(range(1, len(seasons) + 1))
@@ -277,7 +335,7 @@ def get_inputs_outputs(
     return encodings_np, targets
 
 
-def get_custom_labels(df, checkbox_widgets):
+def get_custom_croptype_labels(df, checkbox_widgets):
     selected_crops = [
         checkbox.description.split(" ")[0]
         for checkbox in checkbox_widgets
@@ -287,6 +345,23 @@ def get_custom_labels(df, checkbox_widgets):
     df.loc[df["croptype_name"].isin(selected_crops), "downstream_class"] = df[
         "croptype_name"
     ]
+
+    return df
+
+
+def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
+
+    # read selected classes from widget
+    selected_lc = [
+        checkbox.description.split(" (")[0]
+        for checkbox in checkbox_widgets
+        if checkbox.value
+    ]
+    # convert to landcover labels matching those in df
+    selected_lc = [k for k, v in LANDCOVER_LUT.items() if v in selected_lc]
+    # assign new labels
+    df["downstream_class"] = "other"
+    df.loc[df["LANDCOVER_LABEL"].isin(selected_lc), "downstream_class"] = new_label
 
     return df
 
@@ -357,3 +432,276 @@ def train_classifier(inputs, targets):
     confuson_matrix = confusion_matrix(targets_val, pred)
 
     return custom_downstream_model, report, confuson_matrix
+
+
+############# PRODUCT POSTPROCESSING #############
+
+
+def get_probability_cmap():
+    colormap = plt.get_cmap("RdYlGn")
+    cmap = {}
+    for i in range(101):
+        cmap[i] = tuple((np.array(colormap(int(2.55 * i))) * 255).astype(int))
+    return cmap
+
+
+NODATAVALUE = {
+    "cropland": 255,
+    "croptype": 255,
+    "confidence": 255,
+}
+
+
+COLORMAP = {
+    "cropland": {
+        0: (186, 186, 186, 0),  # no cropland
+        1: (224, 24, 28, 200),  # cropland
+    },
+    "confidence": get_probability_cmap(),
+}
+
+
+def _get_nodata(product_type):
+    return NODATAVALUE[product_type]
+
+
+def generate_random_color():
+    return (random.randint(0, 255), random.randint(0, 255), random.randint(1, 255))
+
+
+def color_distance(c1, c2):
+    return sum((a - b) ** 2 for a, b in zip(c1, c2)) ** 0.5
+
+
+def generate_distinct_colors(n, min_distance=100):
+    colors = [(186, 186, 186)]  # grey is reserved for no-cropland
+    while len(colors) < n:
+        new_color = generate_random_color()
+        if all(color_distance(new_color, c) > min_distance for c in colors):
+            colors.append(new_color)
+    return colors[1:]
+
+
+def _get_colormap(product, lut=None):
+
+    if product in COLORMAP.keys():
+        colormap = copy.deepcopy(COLORMAP[product])
+    else:
+        if lut is not None:
+            logger.info((f"Assigning random color map for product {product}. "))
+            colormap = {}
+            distinct_colors = generate_distinct_colors(len(lut))
+            for i, color in enumerate(distinct_colors):
+                colormap[i] = (*color, 255)
+            if product == "croptype":
+                colormap[254] = (186, 186, 186, 255)  # add no cropland color
+        else:
+            colormap = None
+
+    return colormap
+
+
+def prepare_visualization(results, processing_period):
+
+    final_paths = {}
+    colormaps = {}
+
+    for product, product_params in results.products.items():
+
+        paths = {}
+
+        basepath = product_params["path"]
+        if basepath is None:
+            logger.warning("No products downloaded. Aborting!")
+            return None
+        product_type = product_params["type"].value
+        if product_type == "cropland":
+            lut = {"other": 0, "cropland": 1}
+        elif product_type == "croptype":
+            lut = product_params["lut"]
+            # add no cropland class
+            lut["no_cropland"] = 254
+        else:
+            lut = product_params["lut"]
+
+        # get properties and data from input file
+        with rasterio.open(basepath, "r") as src:
+            labels = src.read(1).astype(np.uint8)
+            probs = src.read(2).astype(np.uint8)
+            meta = src.meta
+
+        nodata = _get_nodata(product_type)
+        if product_type not in colormaps:
+            colormaps[product_type] = _get_colormap(product_type, lut)
+
+        # construct dictionary of output files to be generated
+        outfiles = {
+            "classification": {
+                "data": labels,
+                "colormap": colormaps[product_type],
+                "nodata": nodata,
+                "lut": lut,
+            },
+            "confidence": {
+                "data": probs,
+                "colormap": _get_colormap("confidence"),
+                "nodata": _get_nodata("confidence"),
+                "lut": None,
+            },
+        }
+
+        # write output files
+        meta.update(count=1)
+        meta.update(dtype=rasterio.uint8)
+        for label, settings in outfiles.items():
+            # construct final output path
+            start = processing_period.start_date.replace("-", "")
+            end = processing_period.end_date.replace("-", "")
+            filename = f"{product}_{label}_{start}_{end}.tif"
+            outpath = basepath.parent / filename
+            bandnames = [label]
+            meta.update(nodata=settings["nodata"])
+            with rasterio.open(outpath, "w", **meta) as dst:
+                dst.write(settings["data"], indexes=1)
+                dst.nodata = settings["nodata"]
+                for i, b in enumerate(bandnames):
+                    dst.update_tags(i + 1, band_name=b)
+                    if settings["lut"] is not None:
+                        dst.update_tags(i + 1, lut=settings["lut"])
+                if settings["colormap"] is not None:
+                    dst.write_colormap(1, settings["colormap"])
+            paths[label] = outpath
+
+        final_paths[product] = paths
+
+    return final_paths
+
+
+############# PRODUCT VISUALIZATION #############
+
+
+def visualize_products(rasters, port):
+    """
+    Function to visualize raster layers using leafmap.
+    Only the first band of the input rasters is visualized.
+
+    Parameters
+    ----------
+    rasters : Dict[str, Dict[str, Path]]
+        Dictionary containing all generated rasters.
+        Output of function prepare_visualization.
+    port : int
+        port to use for localtileserver application
+        (in case you are working on a remote server, make sure the
+        port is forwarded to your local machine)
+
+    Returns:
+        leafmap Map instance
+    """
+
+    m = leafmap.Map()
+    m.add_basemap("Esri.WorldImagery")
+    for product, items in rasters.items():
+        for label, path in items.items():
+            m.add_raster(
+                str(path), indexes=[1], layer_name=f"{product}-{label}", port=port
+            )
+
+    return m
+
+
+def show_color_legend(rasters, product):
+    """Display the color legend of a product based on its colormap and LUT.
+    The latter should be present as metadata in the .tif file.
+
+    Parameters
+    ----------
+    rasters : Dict[str, Dict[str, Path]]
+        Dictionary containing all generated rasters.
+        Output of function prepare_visualization.
+    product : str
+        The product for which to display the color legend.
+        Needs to be a key in the rasters dictionary.
+    """
+    import math
+
+    from matplotlib import pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    if product not in rasters:
+        raise ValueError(f"Product {product} not found in rasters.")
+
+    tif_file = rasters[product]["classification"]
+    with rasterio.open(tif_file) as src:
+        nodata = src.nodata
+        colormap = src.colormap(1)
+        lut = ast.literal_eval(src.tags(1)["lut"])
+
+    # get rid of all (0, 0, 0, 255) items
+    colormap = {k: v for k, v in colormap.items() if v != (0, 0, 0, 255)}
+
+    # apply scaling of RGB values
+    for key, value in colormap.items():
+        # apply scaling of RGB values
+        rgb = [c / 255 for c in value]
+        colormap[key] = tuple(rgb)
+
+    cell_width = 212
+    cell_height = 22
+    swatch_width = 48
+    margin = 12
+    ncols = 1
+
+    raster_values = list(colormap)
+
+    nrows = math.ceil(len(raster_values) / ncols)
+
+    width = cell_width * ncols + 2 * margin
+    height = cell_height * nrows + 2 * margin
+    dpi = 72
+
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    fig.subplots_adjust(
+        margin / width,
+        margin / height,
+        (width - margin) / width,
+        (height - margin) / height,
+    )
+    ax.set_xlim(0, cell_width * ncols)
+    ax.set_ylim(cell_height * (nrows - 0.5), -cell_height / 2.0)
+    ax.yaxis.set_visible(False)
+    ax.xaxis.set_visible(False)
+    ax.set_axis_off()
+
+    for i, raster_value in enumerate(raster_values):
+        row = i % nrows
+        col = i // nrows
+        y = row * cell_height
+
+        swatch_start_x = cell_width * col
+        text_pos_x = cell_width * col + swatch_width + 7
+
+        # Get the name of the class
+        if raster_value == nodata:
+            name = "No data"
+        else:
+            name = [k for k, v in lut.items() if v == raster_value][0]
+
+        ax.text(
+            text_pos_x,
+            y,
+            name,
+            fontsize=14,
+            horizontalalignment="left",
+            verticalalignment="center",
+        )
+
+        ax.add_patch(
+            Rectangle(
+                xy=(swatch_start_x, y - 9),
+                width=swatch_width,
+                height=18,
+                facecolor=colormap[raster_value],
+                edgecolor="0.7",
+            )
+        )

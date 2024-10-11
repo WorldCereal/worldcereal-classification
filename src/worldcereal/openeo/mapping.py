@@ -167,8 +167,12 @@ def _croptype_map(
                     filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
                 ),
             )
+        is_binary = True if len(lookup_table) == 2 else False
         classes = _postprocess(
-            classes, postprocess_parameters, is_binary=False, lookup_table=lookup_table
+            classes,
+            postprocess_parameters,
+            is_binary=is_binary,
+            lookup_table=lookup_table,
         )
 
     # Cast to uint16
