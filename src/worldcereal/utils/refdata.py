@@ -48,7 +48,7 @@ def query_public_extractions(
         DataFrame containing the extractions matching the request.
     """
 
-    logger.info(f"Applying a buffer of {buffer/1000} km to the selected area ...")
+    logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
 
     bbox_poly = (
         gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
@@ -67,7 +67,9 @@ def query_public_extractions(
         h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
         res += 1
     if res > 5:
-        h3_cells_lst = tuple(np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst]))  # type: ignore
+        h3_cells_lst = tuple(
+            np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst])
+        )  # type: ignore
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
@@ -154,7 +156,10 @@ def map_croptypes(
 
     wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
 
-    with importlib.resources.open_text(croptype_mappings, "eurocrops_map_wcr_edition.csv") as f:  # type: ignore
+    # type: ignore
+    with importlib.resources.open_text(
+        croptype_mappings, "eurocrops_map_wcr_edition.csv"
+    ) as f:
         ewoc_map = pd.read_csv(f)
 
     ewoc_map = ewoc_map[ewoc_map["ewoc_code"].notna()]
