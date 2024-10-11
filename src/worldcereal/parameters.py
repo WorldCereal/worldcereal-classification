@@ -30,12 +30,15 @@ class FeaturesParameters(BaseModel):
     presto_model_url : str
         Public URL to the Presto model used for feature extraction. The file
         should be a PyTorch serialized model.
+    use_valid_date_token : bool (default=False)
+        Whether to use the valid date/month token in the Presto encoder.
     compile_presto : bool (default=False)
         Whether to compile the Presto encoder for speeding up large-scale inference.
     """
 
     rescale_s1: bool
     presto_model_url: str
+    use_valid_date_token: bool
     compile_presto: bool
 
 
