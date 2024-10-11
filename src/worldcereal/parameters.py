@@ -1,7 +1,6 @@
 from enum import Enum
 from typing import Type
 
-from loguru import logger
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -215,13 +214,5 @@ class PostprocessParameters(BaseModel):
                 raise ValueError(
                     f"Confidence threshold must be between 0 and 100, got {self.conf_threshold}"
                 )
-        elif self.method == "smooth_probabilities":
-            logger.warning(
-                "Parameters 'kernel_size' and 'conf_threshold' are not used for 'smooth_probabilities' method."
-            )
-        else:
-            raise ValueError(
-                f"Method must be one of ['smooth_probabilities', 'majority_vote'], got {self.method}"
-            )
 
         return self
