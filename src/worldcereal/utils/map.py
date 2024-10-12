@@ -6,7 +6,7 @@ from shapely import geometry
 from shapely.geometry import Polygon, shape
 
 
-def handle_draw(self, action, geo_json, area_limit=250):
+def handle_draw(instance, action, geo_json, area_limit=250):
     if action == "created":
         poly = Polygon(shape(geo_json.get("geometry")))
         bbox = poly.bounds
@@ -23,20 +23,21 @@ def handle_draw(self, action, geo_json, area_limit=250):
                 f"Area of processing extent is too large. "
                 f"Please select an area smaller than {area_limit} km²."
             )
-            self.last_draw = {"type": "Feature", "geometry": None}
+            instance.last_draw = {"type": "Feature", "geometry": None}
 
     elif action == "deleted":
-        self.clear()
-        self.last_draw = {"type": "Feature", "geometry": None}
+        instance.clear()
+        instance.last_draw = {"type": "Feature", "geometry": None}
 
     else:
         raise ValueError(f"Unknown action: {action}")
 
 
 class ui_map:
-    def __init__(self):
+    def __init__(self, area_limit=250):
         from ipyleaflet import basemap_to_tiles
 
+        self.area_limit = area_limit
         osm = basemap_to_tiles(basemaps.OpenStreetMap.Mapnik)
         osm.base = True
         osm.name = "Open street map"
@@ -67,8 +68,12 @@ class ui_map:
         self.draw_control.circlemarker = {}
         self.draw_control.polygon = {}
 
+        # Wrapper to pass additional arguments
+        def draw_handler(instance, action, geo_json):
+            handle_draw(instance, action, geo_json, area_limit=self.area_limit)
+
         # Attach the event listener to the draw control
-        self.draw_control.on_draw(handle_draw)
+        self.draw_control.on_draw(draw_handler)
 
         self.map.add_control(self.draw_control)
 
