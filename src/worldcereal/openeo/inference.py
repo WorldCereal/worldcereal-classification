@@ -161,6 +161,7 @@ class CroptypeClassifier(ModelInference):
         if "classifier_url" not in self._parameters:
             raise ValueError('Missing required parameter "classifier_url"')
         classifier_url = self._parameters.get("classifier_url")
+        self.logger.info(f'Loading classifier model from "{classifier_url}"')
 
         # shape and indices for output ("xy", "bands")
         x_coords, y_coords = inarr.x.values, inarr.y.values

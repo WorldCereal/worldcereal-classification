@@ -29,12 +29,15 @@ class FeaturesParameters(BaseModel):
     presto_model_url : str
         Public URL to the Presto model used for feature extraction. The file
         should be a PyTorch serialized model.
+    use_valid_date_token : bool (default=False)
+        Whether to use the valid date/month token in the Presto encoder.
     compile_presto : bool (default=False)
         Whether to compile the Presto encoder for speeding up large-scale inference.
     """
 
     rescale_s1: bool
     presto_model_url: str
+    use_valid_date_token: bool
     compile_presto: bool
 
 
@@ -86,7 +89,7 @@ class CropLandParameters(BaseModel):
     )
     classifier: Type[ModelInference] = Field(default=CroplandClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v003-ft-cropland-F1metric.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v004-ft-cropland.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -131,13 +134,13 @@ class CropTypeParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True.pt",  # NOQA
         use_valid_date_token=True,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"  # NOQA
     )
     save_mask: bool = Field(default=False)
 

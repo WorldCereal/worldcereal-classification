@@ -15,10 +15,10 @@ dependencies:
   - h5netcdf=1.3.0
   - h5py=3.11.0
   - leafmap=0.35.1
+  - localtileserver=0.10.4
   - loguru=0.7.2
   - netcdf4
   - numpy<2.0.0
-  - ipyleaflet=0.19.1
   - openeo=0.31.0
   - pip
   - pyarrow=16.1.0
@@ -31,6 +31,7 @@ dependencies:
   - scikit-learn=1.5.0
   - scipy
   - shapely=2.0.4
+  - tqdm
   - pip:
     - duckdb==1.1.0
     - h3==3.7.7

@@ -3,14 +3,11 @@ from pathlib import Path
 from typing import Union
 
 import pandas as pd
-import torch
 from loguru import logger
 from presto.presto import Presto
-from presto.utils import device, process_parquet
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from presto.utils import process_parquet
 
-from worldcereal.train.dataset import WorldCerealTrainingDataset
+from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
 
 def embeddings_from_parquet_file(
@@ -19,6 +16,7 @@ def embeddings_from_parquet_file(
     sample_repeats: int = 1,
     mask_ratio: float = 0.0,
     valid_date_as_token: bool = False,
+    exclude_meteo: bool = False,
 ) -> pd.DataFrame:
     """Method to compute Presto embeddings from a parquet file of preprocessed inputs
 
@@ -34,6 +32,8 @@ def embeddings_from_parquet_file(
         mask ratio to apply, by default 0.0
     valid_date_as_token : bool, optional
         feed valid date as a token to Presto, by default False
+    exclude_meteo : bool, optional
+        if True, meteo will be masked during embedding computation, by default False
 
     Returns
     -------
@@ -48,6 +48,11 @@ def embeddings_from_parquet_file(
     # Original file is partitioned by ref_id so we have to add
     # ref_id as a column manually
     df["ref_id"] = Path(parquet_file).parent.stem.split("=")[1]
+
+    # Put meteo to nodata if needed
+    if exclude_meteo:
+        logger.warning("Excluding meteo data ...")
+        df.loc[:, df.columns.str.contains("AGERA5")] = 65535
 
     # Convert to wide format
     logger.info("From long to wide format ...")
@@ -72,48 +77,13 @@ def embeddings_from_parquet_file(
         logger.warning("No valid samples in dataset: returning None")
         return None
 
-    dl = DataLoader(
+    return get_training_df(
         ds,
+        pretrained_model,
         batch_size=2048,
-        shuffle=True,
+        valid_date_as_token=valid_date_as_token,
         num_workers=4,
     )
-
-    # Initialize final dataframe
-    final_df = None
-
-    # Iterate through dataloader to consume all samples
-    for x, _, dw, latlons, month, valid_month, variable_mask, attrs in tqdm(dl):
-        x_f, dw_f, latlons_f, month_f, valid_month_f, variable_mask_f = [
-            t.to(device) for t in (x, dw, latlons, month, valid_month, variable_mask)
-        ]
-
-        # Compute Presto embeddings; only feed valid date as token if valid_date_as_token is True
-        with torch.no_grad():
-            encodings = (
-                pretrained_model.encoder(
-                    x_f,
-                    dynamic_world=dw_f.long(),
-                    mask=variable_mask_f,
-                    latlons=latlons_f,
-                    month=month_f,
-                    valid_month=valid_month_f if valid_date_as_token else None,
-                )
-                .cpu()
-                .numpy()
-            )
-
-        # Convert to dataframe
-        attrs = pd.DataFrame.from_dict(attrs)
-        encodings = pd.DataFrame(
-            encodings, columns=[f"presto_ft_{i}" for i in range(encodings.shape[1])]
-        )
-        result = pd.concat([encodings, attrs], axis=1)
-
-        # Append to final dataframe
-        final_df = result if final_df is None else pd.concat([final_df, result])
-
-    return final_df
 
 
 def main(
@@ -125,6 +95,7 @@ def main(
     sample_repeats: int = 1,
     mask_ratio: float = 0.0,
     valid_date_as_token: bool = False,
+    exclude_meteo: bool = False,
 ):
 
     logger.info(
@@ -140,7 +111,9 @@ def main(
 
     # Load model
     logger.info("Loading model ...")
-    pretrained_model = Presto.load_pretrained(model_path=presto_model, strict=False)
+    pretrained_model = Presto.load_pretrained(
+        model_path=presto_model, strict=False, valid_month_as_token=valid_date_as_token
+    )
 
     if sc is not None:
         logger.info(f"Parallelizing {len(parquet_files)} files ...")
@@ -148,7 +121,12 @@ def main(
             sc.parallelize(parquet_files, len(parquet_files))
             .map(
                 lambda x: embeddings_from_parquet_file(
-                    x, pretrained_model, sample_repeats, mask_ratio, valid_date_as_token
+                    x,
+                    pretrained_model,
+                    sample_repeats,
+                    mask_ratio,
+                    valid_date_as_token,
+                    exclude_meteo,
                 )
             )
             .filter(lambda x: x is not None)
@@ -164,6 +142,7 @@ def main(
                     sample_repeats,
                     mask_ratio,
                     valid_date_as_token,
+                    exclude_meteo,
                 )
             )
 
@@ -189,8 +168,8 @@ if __name__ == "__main__":
     spark = True
     localspark = False
     debug = False
+    exclude_meteo = False
     sample_repeats = 1
-    mask_ratio = 0.25
     valid_date_as_token = False
     presto_dir = Path("/vitodata/worldcereal/presto/finetuning")
     presto_model = (
@@ -228,6 +207,6 @@ if __name__ == "__main__":
         sc=sc,
         debug=debug,
         sample_repeats=sample_repeats,
-        mask_ratio=mask_ratio,
         valid_date_as_token=valid_date_as_token,
+        exclude_meteo=exclude_meteo,
     )

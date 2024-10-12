@@ -3,7 +3,7 @@ import copy
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List
 
 import ipywidgets as widgets
 import leafmap
@@ -15,9 +15,7 @@ from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
-from presto.utils import device
 from pyproj import Transformer
-from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
@@ -289,50 +287,54 @@ def retrieve_worldcereal_seasons(
     return results
 
 
-def get_inputs_outputs(
+def prepare_training_dataframe(
     df: pd.DataFrame, batch_size: int = 256, task_type: str = "croptype"
-) -> Tuple[np.ndarray, np.ndarray]:
-    from presto.dataset import WorldCerealLabelledDataset
+) -> pd.DataFrame:
     from presto.presto import Presto
+
+    from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
     if task_type == "croptype":
         presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
-    if task_type == "cropland":
+        use_valid_date_token = (
+            CropTypeParameters().feature_parameters.use_valid_date_token
+        )
+    elif task_type == "cropland":
         presto_model_url = CropLandParameters().feature_parameters.presto_model_url
+        use_valid_date_token = (
+            CropLandParameters().feature_parameters.use_valid_date_token
+        )
+    else:
+        raise ValueError(f"Unknown task type: {task_type}")
+
+    # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto.load_pretrained(presto_model_url, from_url=True, strict=False)
+    presto_model = Presto.load_pretrained(
+        presto_model_url,
+        from_url=True,
+        strict=False,
+        valid_month_as_token=use_valid_date_token,
+    )
 
-    tds = WorldCerealLabelledDataset(df, task_type=task_type)
-    tdl = DataLoader(tds, batch_size=batch_size, shuffle=False)
-
-    encoding_list, targets = [], []
-
+    # Initialize dataset
+    df = df.reset_index()
+    ds = WorldCerealTrainingDataset(
+        df,
+        task_type=task_type,
+        augment=True,
+        repeats=1,
+    )
     logger.info("Computing Presto embeddings ...")
-    for x, y, dw, latlons, month, valid_month, variable_mask in tdl:
-        x_f, dw_f, latlons_f, month_f, valid_month_f, variable_mask_f = [
-            t.to(device) for t in (x, dw, latlons, month, valid_month, variable_mask)
-        ]
-        input_d = {
-            "x": x_f,
-            "dynamic_world": dw_f.long(),
-            "latlons": latlons_f,
-            "mask": variable_mask_f,
-            "month": month_f,
-            "valid_month": valid_month_f,
-        }
-
-        presto_model.eval()
-        encodings = presto_model.encoder(**input_d).detach().numpy()
-
-        encoding_list.append(encodings)
-        targets.append(y)
-
-    encodings_np = np.concatenate(encoding_list)
-    targets = np.concatenate(targets)
+    df = get_training_df(
+        ds,
+        presto_model,
+        batch_size=batch_size,
+        valid_date_as_token=use_valid_date_token,
+    )
 
     logger.info("Done.")
 
-    return encodings_np, targets
+    return df
 
 
 def get_custom_croptype_labels(df, checkbox_widgets):
@@ -366,7 +368,7 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
     return df
 
 
-def train_classifier(inputs, targets):
+def train_classifier(training_dataframe: pd.DataFrame):
     import numpy as np
     from catboost import CatBoostClassifier, Pool
     from presto.utils import DEFAULT_SEED
@@ -375,61 +377,84 @@ def train_classifier(inputs, targets):
     from sklearn.utils.class_weight import compute_class_weight
 
     logger.info("Split train/test ...")
-    inputs_train, inputs_val, targets_train, targets_val = train_test_split(
-        inputs,
-        targets,
-        stratify=targets,
-        test_size=0.3,
+    samples_train, samples_test = train_test_split(
+        training_dataframe,
+        test_size=0.2,
         random_state=DEFAULT_SEED,
+        stratify=training_dataframe["downstream_class"],
     )
 
-    if np.unique(targets_train).shape[0] > 2:
+    # Define loss function and eval metric
+    if np.unique(samples_train["downstream_class"]).shape[0] < 2:
+        raise ValueError("Not enough classes to train a classifier.")
+    elif np.unique(samples_train["downstream_class"]).shape[0] > 2:
         eval_metric = "MultiClass"
         loss_function = "MultiClass"
     else:
         eval_metric = "F1"
         loss_function = "Logloss"
 
+    # Compute sample weights
     logger.info("Computing class weights ...")
-    class_weights = compute_class_weight(
-        class_weight="balanced", classes=np.unique(targets_train), y=targets_train
+    class_weights = np.round(
+        compute_class_weight(
+            class_weight="balanced",
+            classes=np.unique(samples_train["downstream_class"]),
+            y=samples_train["downstream_class"],
+        ),
+        3,
     )
-    class_weights = {k: v for k, v in zip(np.unique(targets_train), class_weights)}
-    logger.info("Class weights:", class_weights)
+    class_weights = {
+        k: v
+        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+    }
+    logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(targets_train),))
-    sample_weights_val = np.ones((len(targets_val),))
+    sample_weights = np.ones((len(samples_train["downstream_class"]),))
+    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
     for k, v in class_weights.items():
-        sample_weights[targets_train == k] = v
-        sample_weights_val[targets_val == k] = v
+        sample_weights[samples_train["downstream_class"] == k] = v
+        sample_weights_val[samples_test["downstream_class"] == k] = v
+    samples_train["weight"] = sample_weights
+    samples_test["weight"] = sample_weights_val
 
+    # Define classifier
     custom_downstream_model = CatBoostClassifier(
         iterations=8000,
         depth=8,
-        # learning_rate=0.05,
         early_stopping_rounds=50,
-        # l2_leaf_reg=30,
-        # colsample_bylevel=0.9,
-        # l2_leaf_reg=3,
         loss_function=loss_function,
         eval_metric=eval_metric,
         random_state=DEFAULT_SEED,
         verbose=25,
-        class_names=np.unique(targets_train),
+        class_names=np.unique(samples_train["downstream_class"]),
     )
 
+    # Setup dataset Pool
+    bands = [f"presto_ft_{i}" for i in range(128)]
+    calibration_data = Pool(
+        data=samples_train[bands],
+        label=samples_train["downstream_class"],
+        weight=samples_train["weight"],
+    )
+    eval_data = Pool(
+        data=samples_test[bands],
+        label=samples_test["downstream_class"],
+        weight=samples_test["weight"],
+    )
+
+    # Train classifier
     logger.info("Training CatBoost classifier ...")
     custom_downstream_model.fit(
-        inputs_train,
-        targets_train,
-        sample_weight=sample_weights,
-        eval_set=Pool(inputs_val, targets_val, weight=sample_weights_val),
+        calibration_data,
+        eval_set=eval_data,
     )
 
-    pred = custom_downstream_model.predict(inputs_val).flatten()
+    # Make predictions
+    pred = custom_downstream_model.predict(samples_test[bands]).flatten()
 
-    report = classification_report(targets_val, pred)
-    confuson_matrix = confusion_matrix(targets_val, pred)
+    report = classification_report(samples_test["downstream_class"], pred)
+    confuson_matrix = confusion_matrix(samples_test["downstream_class"], pred)
 
     return custom_downstream_model, report, confuson_matrix
 

@@ -45,9 +45,10 @@ dependencies = [
     "openeo==0.31.0",  
     "openeo-gfmap==0.2.0",  
     "pyarrow",  
-    "pydantic>=2.6",  
+    "pydantic==2.8.0",  
     "rioxarray>=0.13.0",  
-    "scipy",  
+    "scipy",
+    "tqdm",
     "xarray>=2022.3.0"
   ]
 
@@ -63,7 +64,7 @@ dev = [
 ]
 train = [
   "catboost==1.2.5",
-  "presto-worldcereal==0.1.5",
+  "presto-worldcereal==0.1.6",
   "scikit-learn==1.5.0",
   "torch==2.3.1",
   "ipywidgets==8.1.3",
