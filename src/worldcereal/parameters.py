@@ -135,7 +135,7 @@ class CropTypeParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True.pt",  # NOQA
         use_valid_date_token=True,
         compile_presto=False,
     )
