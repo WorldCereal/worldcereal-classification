@@ -135,13 +135,13 @@ class CropTypeParameters(BaseModel):
     )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
+        presto_model_url="presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True",  # NOQA
         use_valid_date_token=True,
         compile_presto=False,
     )
     classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"  # NOQA
     )
     save_mask: bool = Field(default=False)
 
