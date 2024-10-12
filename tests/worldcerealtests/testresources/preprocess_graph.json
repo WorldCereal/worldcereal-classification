@@ -907,32 +907,29 @@
             "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
         }
     },
-    "filterbands1": {
-        "process_id": "filter_bands",
-        "arguments": {
-            "bands": [
-                "precipitation-flux",
-                "temperature-mean"
-            ],
-            "data": {
-                "from_node": "loadstac1"
-            },
-            "featureflags": {
-                "tilesize": 1
-            }
-        }
-    },
     "renamelabels6": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "filterbands1"
+                "from_node": "loadstac1"
             },
             "dimension": "bands",
             "target": [
                 "AGERA5-PRECIP",
                 "AGERA5-TMEAN"
             ]
+        }
+    },
+    "resamplecubespatial2": {
+        "process_id": "resample_cube_spatial",
+        "arguments": {
+            "data": {
+                "from_node": "renamelabels6"
+            },
+            "method": "bilinear",
+            "target": {
+                "from_node": "apply2"
+            }
         }
     },
     "mergecubes3": {
@@ -942,7 +939,7 @@
                 "from_node": "mergecubes2"
             },
             "cube2": {
-                "from_node": "renamelabels6"
+                "from_node": "resamplecubespatial2"
             }
         },
         "result": true
