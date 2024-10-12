@@ -42,7 +42,7 @@ ${SPARK_HOME}/bin/spark-submit \
 --conf spark.shuffle.service.enabled=true --conf spark.dynamicAllocation.enabled=true \
 --conf spark.driver.maxResultSize=0 \
 --master yarn --deploy-mode cluster --queue default \
---py-files "/vitodata/worldcereal/software/wheels/presto_worldcereal-0.1.5-py3-none-any.whl" \
+--py-files "/vitodata/worldcereal/software/wheels/presto_worldcereal-0.1.6-py3-none-any.whl" \
 --archives "dist/worldcereal.zip#wczip","hdfs:///tapdata/worldcereal/worldcereal.tar.gz#ewocenv" \
 --conf spark.app.name="worldcereal-presto_features" \
 scripts/spark/compute_presto_features.py \
