@@ -321,10 +321,8 @@ def precomposited_datacube_METEO(
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
-    # Another filter_bands to circumvent openEO bug
-    cube = cube.filter_bands(["precipitation-flux", "temperature-mean"])
 
-    cube.result_node().update_arguments(featureflags={"tilesize": 1})
+    # cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
         dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
     )
@@ -419,6 +417,9 @@ def worldcereal_preprocessed_inputs(
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
         )
+
+        # Explicitly resample meteo with bilinear interpolation
+        meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
 
         data = data.merge_cubes(meteo_data)
 
