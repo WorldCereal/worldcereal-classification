@@ -1,5 +1,6 @@
 import ast
 import copy
+import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -19,6 +20,8 @@ from pyproj import Transformer
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
+
+logging.getLogger("rasterio").setLevel(logging.ERROR)
 
 
 class date_slider:
