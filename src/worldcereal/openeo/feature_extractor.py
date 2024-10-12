@@ -20,7 +20,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     import functools
 
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.5-py3-none-any.whl"
+    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl"
     BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
     DEPENDENCY_NAME = "worldcereal_deps.zip"
 
@@ -271,6 +271,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         presto_model_url = self._parameters.get("presto_model_url")
         self.logger.info(f'Loading Presto model from "{presto_model_url}"')
         presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
+        self.logger.info(f'Loading Presto wheel from "{presto_wheel_url}"')
 
         ignore_dependencies = self._parameters.get("ignore_dependencies", False)
         if ignore_dependencies:
