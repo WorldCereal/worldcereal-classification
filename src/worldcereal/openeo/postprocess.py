@@ -295,6 +295,11 @@ class PostProcessor(ModelInference):
                 conf_threshold=conf_threshold,
             )
 
+            # Append the per-class probabalities if required
+            if self._parameters.get("keep_class_probs", False):
+                class_probabilities = inarr.isel(bands=slice(2, None))
+                new_labels = xr.concat([new_labels, class_probabilities], dim="bands")
+
         else:
             raise ValueError(
                 f"Unknown post-processing method: {self._parameters.get('method')}"
