@@ -3,11 +3,12 @@
 
 
 
-<div style="text-align: center;">
+<p align="center">
   <a href="https://esa-worldcereal.org/en" target="_blank">
     <img src="assets/worldcereal_logo.jpg" alt="logo" width="300"/>
   </a>
-</div>
+</p>
+
 
 ## Overview
 
