@@ -5,7 +5,7 @@ from openeo_gfmap.inference.model_inference import ModelInference
 
 
 class CropClassifier(ModelInference):
-    """Binary of multi-class crop classifier using ONNX to load a catboost model.
+    """Binary or multi-class crop classifier using ONNX to load a catboost model.
 
     The classifier use the embeddings computed from the Presto Feature
     Extractor.
