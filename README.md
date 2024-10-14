@@ -37,27 +37,57 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 
 If you prefer to install the package locally, you can create the environment using **Conda** or **pip**.
 
-##### Conda Installation
+First clone the repository:
+```bash
+git clone https://github.com/WorldCereal/worldcereal-classification.git
+cd worldcereal-classification
+```
+Next, install the package locally:
+- for Conda: `conda env create -f environment.yml`
+- for Pip: `pip install .`
 
-To create the Conda environment:
+#### Cloud Processing with openEO and CDSE
+WorldCereal uses openEO under the hood to run classifications in the cloud, taking advantage of the Copernicus Data Space Ecosystem.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/WorldCereal/worldcereal-classification.git
-   cd worldcereal-classification
+#### Usage Example
 
-2. Create the environment using the provided environment file:
-    ```
-    conda env create -f environment.yml
-    conda activate worldcereal
-    ```
-Installation instructions:
-For Conda: `conda env create -f environment.yml`
-For Pip: `pip install .`
+```
+simple code snippet
+```
 
-Launch the _beta_ version of a V1 version of the new system:
+#### Usage Example
 
-[![Binder](https://replay.notebooks.egi.eu/badge_logo.svg)](https://replay.notebooks.egi.eu/v2/gh/WorldCereal/worldcereal-binder/main?urlpath=git-pull%3Frepo%3Dhttps%253A%252F%252Fgithub.com%252FWorldCereal%252Fworldcereal-classification%26urlpath%3Dlab%252Ftree%252Fworldcereal-classification%252Fnotebooks%252Fsystem_v1_demo.ipynb%26branch%3Dsystem-v1-demo)
+Comprehensive documentation is available at the following link:
+
+#### License
+
+This project is licensed under the terms of the MIT License. See the [LICENSE](/home/kristofvt/git/worldcereal-classification/LICENSE) file for details.
+
+#### Acknowledgments
+
+...
 
 
-*Van Tricht, K., Degerickx, J., Gilliams, S., Zanaga, D., Battude, M., Grosu, A., Brombacher, J., Lesiv, M., Bayas, J. C. L., Karanam, S., Fritz, S., Becker-Reshef, I., Franch, B., Mollà-Bononad, B., Boogaard, H., Pratihast, A. K., & Szantoi, Z. (2023). WorldCereal: A dynamic open-source system for global-scale, seasonal, and reproducible crop and irrigation mapping. Earth System Science Data Discussions, 1–36. https://doi.org/10.5194/essd-2023-184*
+#### How to cite
+
+If you use the WorldCereal classification package in your work, please cite it as follows:
+
+```bibtex
+
+@article{van_tricht_worldcereal_2023,
+	title = {{WorldCereal}: a dynamic open-source system for global-scale, seasonal, and reproducible crop and irrigation mapping},
+	volume = {15},
+	issn = {1866-3516},
+	shorttitle = {{WorldCereal}},
+	url = {https://essd.copernicus.org/articles/15/5491/2023/},
+	doi = {10.5194/essd-15-5491-2023},
+	number = {12},
+	urldate = {2024-03-01},
+	journal = {Earth System Science Data},
+	author = {Van Tricht, Kristof and Degerickx, Jeroen and Gilliams, Sven and Zanaga, Daniele and Battude, Marjorie and Grosu, Alex and Brombacher, Joost and Lesiv, Myroslava and Bayas, Juan Carlos Laso and Karanam, Santosh and Fritz, Steffen and Becker-Reshef, Inbal and Franch, Belén and Mollà-Bononad, Bertran and Boogaard, Hendrik and Pratihast, Arun Kumar and Koetz, Benjamin and Szantoi, Zoltan},
+	month = dec,
+	year = {2023},
+	pages = {5491--5515},
+}
+```
+
