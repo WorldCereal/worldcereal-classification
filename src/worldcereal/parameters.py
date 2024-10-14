@@ -6,7 +6,7 @@ from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.openeo.inference import CropClassifier
 from worldcereal.openeo.postprocess import PostProcessor
 
 
@@ -69,7 +69,7 @@ class CropLandParameters(BaseModel):
     feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
         dictionnary and passed in the process graph.
-    classifier : CroplandClassifier
+    classifier : CropClassifier
         Classifier to use for the inference. This class must be a subclass of
         GFMAP's `ModelInference` and returns predictions/probabilities for
         cropland.
@@ -87,9 +87,9 @@ class CropLandParameters(BaseModel):
         use_valid_date_token=False,
         compile_presto=False,
     )
-    classifier: Type[ModelInference] = Field(default=CroplandClassifier)
+    classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v004-ft-cropland-balancedrefids.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v005-ft-cropland-logloss.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -118,7 +118,7 @@ class CropTypeParameters(BaseModel):
     feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
         dictionnary and passed in the process graph.
-    classifier : CroptypeClassifier
+    classifier : CropClassifier
         Classifier to use for the inference. This class must be a subclass of
         GFMAP's `ModelInference` and returns predictions/probabilities for
         cropland classes.
@@ -138,7 +138,7 @@ class CropTypeParameters(BaseModel):
         use_valid_date_token=True,
         compile_presto=False,
     )
-    classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
+    classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"  # NOQA
     )

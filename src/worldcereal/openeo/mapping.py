@@ -57,12 +57,18 @@ def _cropland_map(
     )
 
     # Run model inference on features
+    parameters = cropland_parameters.classifier_parameters.model_dump(
+        exclude=["classifier"]
+    )
+
+    lookup_table = load_model_lut(
+        cropland_parameters.classifier_parameters.classifier_url
+    )
+    parameters.update({"lookup_table": lookup_table})
     classes = apply_model_inference(
         model_inference_class=cropland_parameters.classifier,
         cube=features,
-        parameters=cropland_parameters.classifier_parameters.model_dump(
-            exclude=["classifier"]
-        ),
+        parameters=parameters,
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
@@ -83,7 +89,7 @@ def _cropland_map(
                     filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw"
                 ),
             )
-        classes = _postprocess(classes, postprocess_parameters, is_binary=True)
+        classes = _postprocess(classes, postprocess_parameters, lookup_table)
 
     # Cast to uint8
     classes = compress_uint8(classes)
@@ -167,11 +173,9 @@ def _croptype_map(
                     filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
                 ),
             )
-        is_binary = True if len(lookup_table) == 2 else False
         classes = _postprocess(
             classes,
             postprocess_parameters,
-            is_binary=is_binary,
             lookup_table=lookup_table,
         )
 
@@ -184,8 +188,7 @@ def _croptype_map(
 def _postprocess(
     classes: DataCube,
     postprocess_parameters: "PostprocessParameters",
-    is_binary: bool = False,
-    lookup_table: Optional[dict] = None,
+    lookup_table: Optional[dict],
 ) -> DataCube:
     """Method to postprocess the classes.
 
@@ -195,26 +198,19 @@ def _postprocess(
         classes to postprocess
     postprocess_parameters : PostprocessParameters
         parameter class for postprocessing
-    is_binary : bool, optional
-        whether the classes are binary, by default False
-    lookup_table: dict, optional
+    lookup_table: dict
         Mapping of class names to class labels, ordered by model output.
-        Required if the classes are not binary.
     Returns
     -------
     DataCube
         postprocessed classes
     """
-    if not is_binary and lookup_table is None:
-        raise ValueError("Lookup table is required for non-binary classes.")
 
     # Run postprocessing on the raw classification output
     # Note that this uses the `apply_model_inference` method even though
     # it is not truly model inference
     parameters = postprocess_parameters.model_dump(exclude=["postprocessor"])
-    parameters.update({"is_binary": is_binary})
-    if lookup_table is not None:
-        parameters.update({"lookup_table": lookup_table})
+    parameters.update({"lookup_table": lookup_table})
 
     postprocessed_classes = apply_model_inference(
         model_inference_class=postprocess_parameters.postprocessor,

@@ -9,21 +9,15 @@ class PostProcessor(ModelInference):
     the per-class probabilities.
 
     Interesting UDF parameters:
-    is_binary: bool
-        If the postprocessing is applied on a binary classification model (cropland)
-        or a multi-class classification model (croptype). Default is False.
     lookup_table: Optional[dict]
-        Required if is_binary is False. A lookup table to map the class names
-        to class labels, ordered by model output.
+        A lookup table to map the class names to class labels, ordered by model output.
     """
 
     EXCLUDED_VALUES = [254, 255, 65535]
     NODATA = 255
 
     def output_labels(self) -> list:
-        if self._parameters.get("keep_class_probs", False) and not self._parameters.get(
-            "is_binary", True
-        ):
+        if self._parameters.get("keep_class_probs", False):
             return ["classification", "probability"] + [
                 f"probability_{name}"
                 for name in self._parameters["lookup_table"].keys()
@@ -253,26 +247,10 @@ class PostProcessor(ModelInference):
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
 
         if self._parameters.get("method") == "smooth_probabilities":
-            # Make some checks on the bands
-            if self._parameters.get("is_binary", False):
-                # Cast to float for more accurate gaussian smoothing
-                probability = inarr.sel(bands="probability").astype("float32") / 100.0
-                classification = inarr.sel(bands="classification").astype("uint8")
-
-                # Get the per-class probabilities from the max probability and the
-                # classification result.
-                true_prob = xr.where(classification > 0, probability, 1.0 - probability)
-                false_prob = 1.0 - true_prob
-
-                class_probabilities = xr.concat(
-                    [false_prob, true_prob], dim="bands"
-                ).assign_coords(bands=["probability_False", "probability_True"])
-
-            else:
-                # Cast to float for more accurate gaussian smoothing
-                class_probabilities = (
-                    inarr.isel(bands=slice(2, None)).astype("float32") / 100.0
-                )
+            # Cast to float for more accurate gaussian smoothing
+            class_probabilities = (
+                inarr.isel(bands=slice(2, None)).astype("float32") / 100.0
+            )
 
             # Peform probability smoothing
             class_probabilities = PostProcessor.smooth_probabilities(
@@ -287,20 +265,19 @@ class PostProcessor(ModelInference):
             )
 
             # Re-apply labels
-            if not self._parameters.get("is_binary", True):
-                lookup_table = self._parameters.get("lookup_table")
-                class_labels = list(lookup_table.values())
-                # create a final labels array with same dimensions as new_labels
-                final_labels = xr.full_like(new_labels, fill_value=float("nan"))
-                for idx, label in enumerate(class_labels):
-                    final_labels.loc[{"bands": "classification"}] = xr.where(
-                        new_labels.sel(bands="classification") == idx,
-                        label,
-                        final_labels.sel(bands="classification"),
-                    )
-                new_labels.sel(bands="classification").values = final_labels.sel(
-                    bands="classification"
-                ).values
+            lookup_table = self._parameters.get("lookup_table")
+            class_labels = list(lookup_table.values())
+            # create a final labels array with same dimensions as new_labels
+            final_labels = xr.full_like(new_labels, fill_value=float("nan"))
+            for idx, label in enumerate(class_labels):
+                final_labels.loc[{"bands": "classification"}] = xr.where(
+                    new_labels.sel(bands="classification") == idx,
+                    label,
+                    final_labels.sel(bands="classification"),
+                )
+            new_labels.sel(bands="classification").values = final_labels.sel(
+                bands="classification"
+            ).values
 
             # Append the per-class probabalities if required
             if self._parameters.get("keep_class_probs", False):
