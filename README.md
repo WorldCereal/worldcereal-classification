@@ -28,7 +28,7 @@ In order to run classification jobs on CDSE, users can get started with **monthl
 
 You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment.
 
-[![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url)
+[![Terrascope Environment](https://img.shields.io/badge/run%20on-Terrascope-blue)](https://terrascope-url)
 
 #### Option 2: Install Locally
 
