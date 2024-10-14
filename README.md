@@ -9,17 +9,6 @@
   </a>
 </div>
 
-- [Overview](#overview)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Usage Example](#usage-example)
-- [Documentation](#documentation)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-- [How to cite](#how-to-cite)
-
-
-
 ## Overview
 
 **WorldCereal** is a Python package designed for generating cropland and crop type maps at a wide range of spatial scales, leveraging satellite and auxiliary data, and state-of-the-art classification workflows. It uses [openEO](https://openeo.org/) to run classification tasks in the cloud, by default the [Copernicus Data Space Ecosystem (CDSE)](https://dataspace.copernicus.eu/). 
@@ -39,13 +28,13 @@ In order to run classification jobs on CDSE, users can get started with **monthl
 
 ## Quick Start
 
-#### Option 1: Run on Terrascope <!-- omit in toc -->
+#### Option 1: Run on Terrascope
 
 You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment.
 
 [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url)
 
-#### Option 2: Install Locally <!-- omit in toc -->
+#### Option 2: Install Locally
 
 If you prefer to install the package locally, you can create the environment using **Conda** or **pip**.
 
