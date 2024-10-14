@@ -19,7 +19,7 @@ In order to run classification jobs on CDSE, users can get started with **monthl
 
 - **Scalable**: Generate maps at a wide range of spatial scales.
 - **Cloud-based Processing**: Leverages openEO to run classifications in the cloud.
-- **Customizable**: Users can pick any region or temporal range and apply either default models or train their own and produce custom maps.
+- **Customizable**: Users can pick any region or temporal range and apply either default models or train their own and produce custom maps, interacting with publicly available training data.
 - **Easy to Use**: Integrates into Jupyter notebooks and other Python environments.
 
 ## Quick Start
