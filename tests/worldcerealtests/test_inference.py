@@ -46,8 +46,8 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
     assert list(cropland_classification.bands.values) == [
         "classification",
         "probability",
-        "probability_cropland",
         "probability_other",
+        "probability_cropland",
     ]
     assert cropland_classification.sel(bands="classification").values.max() <= 1
     assert cropland_classification.sel(bands="classification").values.min() >= 0
