@@ -7,6 +7,7 @@ import geopandas as gpd
 import h3
 import numpy as np
 import pandas as pd
+import requests
 from loguru import logger
 from shapely.geometry import Polygon
 
@@ -75,30 +76,66 @@ def query_public_extractions(
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    parquet_path = "s3://geoparquet/worldcereal_extractions_phase1/*/*.parquet"
+    metadata_s3_path = "s3://geoparquet/ref_id_extent.parquet"
+
+    query_metadata = f"""
+    set s3_endpoint='s3.waw3-1.cloudferro.com';
+    set enable_progress_bar=false;
+    select distinct ref_id
+    from read_parquet('{metadata_s3_path}') metadata
+    where ST_Intersects(ST_MakeValid(ST_GeomFromText(str_geom)), ST_GeomFromText('{str(twisted_bbox_poly)}'))
+    """
+    ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
+
+    logger.info(
+        f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
+    )
 
     # only querying the croptype data here
     logger.info(
         "Querying WorldCereal global extractions database (this can take a while) ..."
     )
+
+    all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
+    f = requests.get(all_extractions_url)
+    all_dataset_names = f.text.split("\n")
+    matching_dataset_names = [
+        xx
+        for xx in all_dataset_names
+        if xx.endswith(".parquet")
+        and xx.startswith("worldcereal_extractions_phase1")
+        and any([yy in xx for yy in ref_ids_lst])
+    ]
+    base_s3_path = "s3://geoparquet/"
+    s3_urls_lst = [f"{base_s3_path}{xx}" for xx in matching_dataset_names]
+
     if filter_cropland:
-        query = f"""
-        set s3_endpoint='s3.waw3-1.cloudferro.com';
-        set enable_progress_bar=false;
-        select *
-        from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
-        where original_data.h3_l5_cell in {h3_cells_lst}
+        query = "set s3_endpoint='s3.waw3-1.cloudferro.com';"
+        for i, url in enumerate(s3_urls_lst):
+            query = f"""
+        SELECT *
+        FROM read_parquet('{url}')
+        where ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
         and original_data.LANDCOVER_LABEL = 11
         and original_data.CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
         """
+            if i == 0:
+                query += query
+            else:
+                query += f"UNION ALL {query}"
     else:
-        query = f"""
-            set s3_endpoint='s3.waw3-1.cloudferro.com';
-            set enable_progress_bar=false;
-            select *
-            from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
-            where original_data.h3_l5_cell in {h3_cells_lst}
+        query = "set s3_endpoint='s3.waw3-1.cloudferro.com';"
+        for i, url in enumerate(s3_urls_lst):
+            query = f"""
+        SELECT *
+        FROM read_parquet('{url}')
+        where ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
+
         """
+            if i == 0:
+                query += query
+            else:
+                query += f"UNION ALL {query}"
 
     public_df_raw = db.sql(query).df()
 
