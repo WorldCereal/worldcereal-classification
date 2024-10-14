@@ -14,6 +14,7 @@ from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
     PostprocessParameters,
+    WorldCerealProductType,
 )
 from worldcereal.utils.models import load_model_lut
 
@@ -44,7 +45,7 @@ def _cropland_map(
     features = apply_feature_extractor(
         feature_extractor_class=cropland_parameters.feature_extractor,
         cube=inputs,
-        parameters=cropland_parameters.features_parameters.model_dump(),
+        parameters=cropland_parameters.feature_parameters.model_dump(),
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
@@ -76,7 +77,12 @@ def _cropland_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
+            classes = classes.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw"
+                ),
+            )
         classes = _postprocess(classes, postprocess_parameters, is_binary=True)
 
     # Cast to uint8
@@ -155,10 +161,18 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            classes = classes.save_result(format="GTiff")
-        # TODO: check how 254 value is treated during postprocessing
+            classes = classes.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
+                ),
+            )
+        is_binary = True if len(lookup_table) == 2 else False
         classes = _postprocess(
-            classes, postprocess_parameters, is_binary=False, lookup_table=lookup_table
+            classes,
+            postprocess_parameters,
+            is_binary=is_binary,
+            lookup_table=lookup_table,
         )
 
     # Cast to uint16

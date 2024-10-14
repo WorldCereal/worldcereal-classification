@@ -39,8 +39,8 @@
                 "srs": "EPSG:4326"
             },
             "temporal_extent": [
-                "2020-01-01",
-                "2022-03-31"
+                "2018-03-01",
+                "2019-02-28"
             ]
         }
     },
@@ -76,8 +76,8 @@
                 "srs": "EPSG:4326"
             },
             "temporal_extent": [
-                "2020-01-01",
-                "2022-03-31"
+                "2018-03-01",
+                "2019-02-28"
             ]
         }
     },
@@ -293,8 +293,8 @@
                 "srs": "EPSG:4326"
             },
             "temporal_extent": [
-                "2020-01-01",
-                "2022-03-31"
+                "2018-03-01",
+                "2019-02-28"
             ]
         }
     },
@@ -778,9 +778,6 @@
                 "precipitation-flux",
                 "temperature-mean"
             ],
-            "featureflags": {
-                "tilesize": 1
-            },
             "spatial_extent": {
                 "west": 44.432274,
                 "south": 51.317362,
@@ -790,8 +787,8 @@
                 "srs": "EPSG:4326"
             },
             "temporal_extent": [
-                "2020-01-01",
-                "2022-03-31"
+                "2018-03-01",
+                "2019-02-28"
             ],
             "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
         }
@@ -809,6 +806,18 @@
             ]
         }
     },
+    "resamplecubespatial2": {
+        "process_id": "resample_cube_spatial",
+        "arguments": {
+            "data": {
+                "from_node": "renamelabels7"
+            },
+            "method": "bilinear",
+            "target": {
+                "from_node": "apply2"
+            }
+        }
+    },
     "mergecubes4": {
         "process_id": "merge_cubes",
         "arguments": {
@@ -816,7 +825,7 @@
                 "from_node": "mergecubes3"
             },
             "cube2": {
-                "from_node": "renamelabels7"
+                "from_node": "resamplecubespatial2"
             }
         },
         "result": true
