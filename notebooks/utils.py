@@ -4,7 +4,7 @@ import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 import ipywidgets as widgets
 import leafmap
@@ -371,7 +371,9 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
     return df
 
 
-def train_classifier(training_dataframe: pd.DataFrame):
+def train_classifier(
+    training_dataframe: pd.DataFrame, class_names: Optional[List[str]] = None
+):
     import numpy as np
     from catboost import CatBoostClassifier, Pool
     from presto.utils import DEFAULT_SEED
@@ -394,7 +396,7 @@ def train_classifier(training_dataframe: pd.DataFrame):
         eval_metric = "MultiClass"
         loss_function = "MultiClass"
     else:
-        eval_metric = "F1"
+        eval_metric = "Logloss"
         loss_function = "Logloss"
 
     # Compute sample weights
@@ -430,7 +432,11 @@ def train_classifier(training_dataframe: pd.DataFrame):
         eval_metric=eval_metric,
         random_state=DEFAULT_SEED,
         verbose=25,
-        class_names=np.unique(samples_train["downstream_class"]),
+        class_names=(
+            class_names
+            if class_names is not None
+            else np.unique(samples_train["downstream_class"])
+        ),
     )
 
     # Setup dataset Pool
@@ -460,6 +466,10 @@ def train_classifier(training_dataframe: pd.DataFrame):
     confuson_matrix = confusion_matrix(samples_test["downstream_class"], pred)
 
     return custom_downstream_model, report, confuson_matrix
+
+
+def train_cropland_classifier(training_dataframe: pd.DataFrame):
+    return train_classifier(training_dataframe, class_names=["other", "cropland"])
 
 
 ############# PRODUCT POSTPROCESSING #############
