@@ -15,7 +15,7 @@ from openeo_gfmap.features.feature_extractor import (
 from openeo_gfmap.inference.model_inference import apply_model_inference_local
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier
+from worldcereal.openeo.inference import CropClassifier
 
 TEST_FILE_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/presto/localtestdata/local_presto_inputs.nc"
 TEST_FILE_PATH = Path.cwd() / "presto_test_inputs.nc"
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     print("Running classification inference UDF locally")
 
     classification = apply_model_inference_local(
-        CroplandClassifier,
+        CropClassifier,
         features,
         parameters={
             EPSG_HARMONIZED_NAME: 32631,

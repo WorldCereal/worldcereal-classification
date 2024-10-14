@@ -5,7 +5,7 @@ from openeo_gfmap.features.feature_extractor import (
 from openeo_gfmap.inference.model_inference import apply_model_inference_local
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
+from worldcereal.openeo.inference import CropClassifier
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.utils.models import load_model_lut
 
@@ -28,12 +28,17 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
 
     print("Running cropland classification inference UDF locally")
 
+    lookup_table = load_model_lut(
+        CropLandParameters().classifier_parameters.classifier_url
+    )
+
     cropland_classification = apply_model_inference_local(
-        CroplandClassifier,
+        CropClassifier,
         cropland_features,
         parameters={
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
+            "lookup_table": lookup_table,
             "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
         },
     )
@@ -41,12 +46,14 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
     assert list(cropland_classification.bands.values) == [
         "classification",
         "probability",
+        "probability_cropland",
+        "probability_other",
     ]
     assert cropland_classification.sel(bands="classification").values.max() <= 1
     assert cropland_classification.sel(bands="classification").values.min() >= 0
     assert cropland_classification.sel(bands="probability").values.max() <= 100
     assert cropland_classification.sel(bands="probability").values.min() >= 0
-    assert cropland_classification.shape == (2, 100, 100)
+    assert cropland_classification.shape == (4, 100, 100)
 
 
 def test_croptype_inference(WorldCerealPreprocessedInputs):
@@ -72,7 +79,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
     )
 
     croptype_classification = apply_model_inference_local(
-        CroptypeClassifier,
+        CropClassifier,
         croptype_features,
         parameters={
             EPSG_HARMONIZED_NAME: 32631,
