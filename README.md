@@ -1,5 +1,6 @@
-# WorldCereal classification module
-[![Tests](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml/badge.svg)](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml) [![DOI](https://zenodo.org/badge/621251443.svg)](https://zenodo.org/badge/latestdoi/621251443) [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://your-terrascope-url)
+# WorldCereal classification module <!-- omit in toc -->
+[![Tests](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml/badge.svg)](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml) [![DOI](https://zenodo.org/badge/621251443.svg)](https://zenodo.org/badge/latestdoi/621251443) [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url) [![Documentation](https://img.shields.io/badge/docs-WorldCereal%20Documentation-blue)](https://worldcereal.github.io/worldcereal-documentation/)
+
 
 
 <div style="text-align: center;">
@@ -7,6 +8,17 @@
     <img src="assets/worldcereal_logo.jpg" alt="logo" width="200"/>
   </a>
 </div>
+
+- [Overview](#overview)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Usage Example](#usage-example)
+- [Documentation](#documentation)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+- [How to cite](#how-to-cite)
+
+
 
 ## Overview
 
@@ -27,13 +39,13 @@ In order to run classification jobs on CDSE, users can get started with **monthl
 
 ## Quick Start
 
-#### Option 1: Run on Terrascope
+#### Option 1: Run on Terrascope <!-- omit in toc -->
 
 You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment.
 
-[Run WorldCereal on Terrascope](https://your-terrascope-url)
+[![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url)
 
-#### Option 2: Install Locally
+#### Option 2: Install Locally <!-- omit in toc -->
 
 If you prefer to install the package locally, you can create the environment using **Conda** or **pip**.
 
@@ -46,29 +58,26 @@ Next, install the package locally:
 - for Conda: `conda env create -f environment.yml`
 - for Pip: `pip install .`
 
-#### Cloud Processing with openEO and CDSE
-WorldCereal uses openEO under the hood to run classifications in the cloud, taking advantage of the Copernicus Data Space Ecosystem.
-
-#### Usage Example
+## Usage Example
 
 ```
 simple code snippet
 ```
 
-#### Usage Example
+## Documentation
 
-Comprehensive documentation is available at the following link:
+Comprehensive documentation is available at the following link: https://worldcereal.github.io/worldcereal-documentation/
 
-#### License
+## License
 
 This project is licensed under the terms of the MIT License. See the [LICENSE](/home/kristofvt/git/worldcereal-classification/LICENSE) file for details.
 
-#### Acknowledgments
+## Acknowledgments
 
 ...
 
 
-#### How to cite
+## How to cite
 
 If you use the WorldCereal classification package in your work, please cite it as follows:
 
