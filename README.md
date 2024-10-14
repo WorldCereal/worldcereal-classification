@@ -53,6 +53,9 @@ simple code snippet
 
 Comprehensive documentation is available at the following link: https://worldcereal.github.io/worldcereal-documentation/
 
+## Support
+Questions, suggestions, feedback? Use [our forum**](https://forum.esa-worldcereal.org/) to get in touch with us and the rest of the community!
+
 ## License
 
 This project is licensed under the terms of the MIT License. See the [LICENSE](LICENSE) file for details.
