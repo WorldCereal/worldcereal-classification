@@ -231,7 +231,7 @@ def generate_map(
     assets = job_result.get_assets()
     products = {}
     for asset in assets:
-        asset_name = asset.name.split("_")[0]
+        asset_name = asset.name.split(".")[0].split("_")[0]
         asset_type = asset_name.split("-")[0]
         asset_type = getattr(WorldCerealProductType, asset_type.upper())
         if output_dir is not None:

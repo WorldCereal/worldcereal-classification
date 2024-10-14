@@ -1,5 +1,6 @@
 import ast
 import copy
+import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -20,6 +21,8 @@ from pyproj import Transformer
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
 
+logging.getLogger("rasterio").setLevel(logging.ERROR)
+
 
 class date_slider:
     """Class that provides a slider for selecting a processing period.
@@ -27,16 +30,16 @@ class date_slider:
     The processing period will always start the first day of a month and end the last day of a month.
     """
 
-    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2024, 1, 1)):
+    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2023, 12, 1)):
 
         self.start_date = start_date
         self.end_date = end_date
 
         dates = pd.date_range(start_date, end_date, freq="MS")
-        options = [(date.strftime("%d %b %Y"), date) for date in dates]
+        options = [(date.strftime("%b %Y"), date) for date in dates]
         self.interval_slider = widgets.SelectionRangeSlider(
             options=options,
-            index=(0, 12),  # Default to a 12-month interval
+            index=(0, 11),  # Default to a 11-month interval
             orientation="horizontal",
             continuous_update=False,
             readout=True,
@@ -54,11 +57,11 @@ class date_slider:
     def on_slider_change(self, change):
         start, end = change["new"]
         # keep the interval fixed
-        expected_end = start + pd.DateOffset(months=12)
+        expected_end = start + pd.DateOffset(months=11)
         if end != expected_end:
-            end = start + pd.DateOffset(months=12)
+            end = start + pd.DateOffset(months=11)
             self.interval_slider.value = (start, end)
-        self.selected_range = (start, end - timedelta(days=1))
+        self.selected_range = (start, end + pd.DateOffset(months=1) - timedelta(days=1))
 
     def show_slider(self):
         self.interval_slider.observe(self.on_slider_change, names="value")
