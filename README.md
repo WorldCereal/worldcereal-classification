@@ -15,8 +15,6 @@ Users can leverage the system in a notebook environment through [Terrascope](htt
 
 In order to run classification jobs on CDSE, users can get started with **monthly free processing credits** by registering on the CDSE platform. Additional credits can be purchased, or users may soon be able to request them through the **ESA Network of Resources**.
 
----
-
 ## Features
 
 - **Scalable**: Generate maps at a wide range of spatial scales.
