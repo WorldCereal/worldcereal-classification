@@ -6,6 +6,7 @@ sub-module.
 from typing import Optional
 
 from openeo import DataCube
+from openeo_gfmap import TemporalContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
 from openeo_gfmap.inference.model_inference import apply_model_inference
 from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
@@ -21,6 +22,7 @@ from worldcereal.utils.models import load_model_lut
 
 def _cropland_map(
     inputs: DataCube,
+    temporal_extent: TemporalContext,
     cropland_parameters: CropLandParameters,
     postprocess_parameters: PostprocessParameters,
 ) -> DataCube:
@@ -80,13 +82,18 @@ def _cropland_map(
         ],
     )
 
+    # Get rid of temporal dimension
+    classes = classes.reduce_dimension(dimension="t", reducer="mean")
+
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
+            start = temporal_extent.start_date.replace("-", "")
+            end = temporal_extent.end_date.replace("-", "")
             classes = classes.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw"
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw_{start}_{end}"
                 ),
             )
         classes = _postprocess(classes, postprocess_parameters, lookup_table)
@@ -99,6 +106,7 @@ def _cropland_map(
 
 def _croptype_map(
     inputs: DataCube,
+    temporal_extent: TemporalContext,
     croptype_parameters: "CropTypeParameters",
     postprocess_parameters: "PostprocessParameters",
     cropland_mask: DataCube = None,
@@ -110,6 +118,8 @@ def _croptype_map(
     ----------
     inputs : DataCube
         preprocessed input cube
+    temporal_extent : TemporalContext
+        temporal extent of the input cube
     cropland_mask : DataCube, optional
         optional cropland mask, by default None
     lookup_table: dict,
@@ -160,6 +170,9 @@ def _croptype_map(
         ],
     )
 
+    # Get rid of temporal dimension
+    classes = classes.reduce_dimension(dimension="t", reducer="mean")
+
     # Mask cropland
     if cropland_mask is not None:
         classes = classes.mask(cropland_mask == 0, replacement=254)
@@ -167,10 +180,12 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
+            start = temporal_extent.start_date.replace("-", "")
+            end = temporal_extent.end_date.replace("-", "")
             classes = classes.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw"
+                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw_{start}_{end}"
                 ),
             )
         classes = _postprocess(
@@ -219,7 +234,6 @@ def _postprocess(
         size=[
             {"dimension": "x", "unit": "px", "value": 100},
             {"dimension": "y", "unit": "px", "value": 100},
-            {"dimension": "t", "value": "P1D"},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
