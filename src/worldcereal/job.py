@@ -193,7 +193,7 @@ def generate_map(
     # Submit the job
     JOB_OPTIONS = {
         "driver-memory": "4g",
-        "executor-memory": "1g",
+        "executor-memory": "2g",
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
         "soft-errors": "true",
