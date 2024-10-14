@@ -64,7 +64,7 @@ This project is licensed under the terms of the MIT License. See the [LICENSE](L
 
 ## How to cite
 
-If you use the WorldCereal classification package in your work, please cite it as follows:
+If you use WorldCereal resources in your work, please cite it as follows:
 
 ```bibtex
 
