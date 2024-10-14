@@ -264,6 +264,7 @@ def collect_inputs(
     output_path: Union[Path, str],
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
+    job_options: Optional[dict] = None,
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -281,6 +282,8 @@ def collect_inputs(
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128
         so it uses the OpenEO default setting.
+    job_options: dict, optional
+        Additional job options to pass to the OpenEO backend, by default None
     """
 
     # Make a connection to the OpenEO backend
@@ -295,16 +298,20 @@ def collect_inputs(
         tile_size=tile_size,
     )
 
+    JOB_OPTIONS = {
+        "driver-memory": "4g",
+        "executor-memory": "1g",
+        "executor-memoryOverhead": "1g",
+        "python-memory": "2g",
+        "soft-errors": "true",
+    }
+    if job_options is not None:
+        JOB_OPTIONS.update(job_options)
+
     inputs.execute_batch(
         outputfile=output_path,
         out_format="NetCDF",
         title="WorldCereal [collect_inputs] job",
         description="Job that collects inputs for WorldCereal inference",
-        job_options={
-            "driver-memory": "4g",
-            "executor-memory": "1g",
-            "executor-memoryOverhead": "1g",
-            "python-memory": "2g",
-            "soft-errors": "true",
-        },
+        job_options=job_options,
     )
