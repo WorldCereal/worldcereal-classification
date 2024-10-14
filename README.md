@@ -55,7 +55,7 @@ Comprehensive documentation is available at the following link: https://worldcer
 
 ## License
 
-This project is licensed under the terms of the MIT License. See the [LICENSE](/home/kristofvt/git/worldcereal-classification/LICENSE) file for details.
+This project is licensed under the terms of the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
