@@ -1,4 +1,4 @@
-# WorldCereal classification module <!-- omit in toc -->
+# ESA WorldCereal classification module <!-- omit in toc -->
 [![Tests](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml/badge.svg)](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml) [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![DOI](https://img.shields.io/badge/DOI-10.5194/essd--15--5491--2023-blue)](https://doi.org/10.5194/essd-15-5491-2023)
  [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url) [![Documentation](https://img.shields.io/badge/docs-WorldCereal%20Documentation-blue)](https://worldcereal.github.io/worldcereal-documentation/) [![Discuss Forum](https://img.shields.io/badge/discuss-forum-ED1965?logo=discourse&logoColor=white)](https://forum.esa-worldcereal.org/)
 
