@@ -554,9 +554,7 @@ def prepare_visualization(results):
             logger.warning("No products downloaded. Aborting!")
             return None
         product_type = product_params["type"].value
-        period = product_params["period"]
-        start = period.split("_")[0]
-        end = period.split("_")[1]
+        temporal_extent = product_params["temporal_extent"]
         lut = product_params["lut"]
 
         # Adjust LUT for crop type product
@@ -595,7 +593,7 @@ def prepare_visualization(results):
         meta.update(dtype=rasterio.uint8)
         for label, settings in outfiles.items():
             # construct final output path
-            filename = f"{product}_{label}_{start}_{end}.tif"
+            filename = f"{product}_{label}_{temporal_extent.start_date}_{temporal_extent.end_date}.tif"
             outpath = basepath.parent / filename
             bandnames = [label]
             meta.update(nodata=settings["nodata"])

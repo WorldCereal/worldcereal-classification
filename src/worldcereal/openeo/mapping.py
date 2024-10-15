@@ -33,6 +33,8 @@ def _cropland_map(
     ----------
     inputs : DataCube
         preprocessed input cube
+    temporal_extent : TemporalContext
+        temporal extent of the input cube
     cropland_parameters: CropLandParameters
         Parameters for the cropland product inference pipeline
     postprocess_parameters: PostprocessParameters
@@ -88,12 +90,10 @@ def _cropland_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            start = temporal_extent.start_date.replace("-", "")
-            end = temporal_extent.end_date.replace("-", "")
             classes = classes.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw_{start}_{end}"
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw_{temporal_extent.start_date}_{temporal_extent.end_date}"
                 ),
             )
         classes = _postprocess(classes, postprocess_parameters, lookup_table)
@@ -180,12 +180,10 @@ def _croptype_map(
     # Postprocess
     if postprocess_parameters.enable:
         if postprocess_parameters.save_intermediate:
-            start = temporal_extent.start_date.replace("-", "")
-            end = temporal_extent.end_date.replace("-", "")
             classes = classes.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw_{start}_{end}"
+                    filename_prefix=f"{WorldCerealProductType.CROPTYPE.value}-raw_{temporal_extent.start_date}_{temporal_extent.end_date}"
                 ),
             )
         classes = _postprocess(

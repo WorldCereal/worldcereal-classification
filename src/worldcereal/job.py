@@ -32,7 +32,7 @@ class WorldCerealProduct(TypedDict):
         URL to the product.
     type: WorldCerealProductType
         Type of the product. Either cropland or croptype.
-    period: str
+    temporal_extent: TemporalContext
         Period of time for which the product has been generated.
     path: Optional[Path]
         Path to the downloaded product.
@@ -43,7 +43,7 @@ class WorldCerealProduct(TypedDict):
 
     url: str
     type: WorldCerealProductType
-    period: str
+    temporal_extent: TemporalContext
     path: Optional[Path]
     lut: Optional[Dict]
 
@@ -139,10 +139,6 @@ def generate_map(
         # Make a connection to the OpenEO backend
         connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
-    # Get start and end dates for product file naming
-    start = temporal_extent.start_date.replace("-", "")
-    end = temporal_extent.end_date.replace("-", "")
-
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
         connection=connection,
@@ -185,7 +181,7 @@ def generate_map(
             cropland_mask = cropland_mask.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{start}_{end}",
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
                 ),
             )
 
@@ -214,13 +210,12 @@ def generate_map(
         JOB_OPTIONS.update(job_options)
 
     # Execute the job
-    filename_output = f"{product_type.value}_{start}_{end}"
     job = classes.execute_batch(
         out_format=out_format,
         job_options=JOB_OPTIONS,
         title="WorldCereal [generate_map] job",
         description="Job that performs end-to-end WorldCereal inference",
-        filename_prefix=filename_output,
+        filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
     )
 
     # Get look-up tables
@@ -253,7 +248,7 @@ def generate_map(
         products[asset_name] = {
             "url": asset.href,
             "type": asset_type,
-            "period": f"{start}_{end}",
+            "temporal_extent": temporal_extent,
             "path": filepath,
             "lut": luts[asset_type.value],
         }
