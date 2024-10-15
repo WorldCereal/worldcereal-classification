@@ -372,7 +372,9 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
 
 
 def train_classifier(
-    training_dataframe: pd.DataFrame, class_names: Optional[List[str]] = None
+    training_dataframe: pd.DataFrame,
+    class_names: Optional[List[str]] = None,
+    balance_classes: bool = False,
 ):
     import numpy as np
     from catboost import CatBoostClassifier, Pool
@@ -400,28 +402,32 @@ def train_classifier(
         loss_function = "Logloss"
 
     # Compute sample weights
-    logger.info("Computing class weights ...")
-    class_weights = np.round(
-        compute_class_weight(
-            class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
-        ),
-        3,
-    )
-    class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
-    }
-    logger.info(f"Class weights: {class_weights}")
+    if balance_classes:
+        logger.info("Computing class weights ...")
+        class_weights = np.round(
+            compute_class_weight(
+                class_weight="balanced",
+                classes=np.unique(samples_train["downstream_class"]),
+                y=samples_train["downstream_class"],
+            ),
+            3,
+        )
+        class_weights = {
+            k: v
+            for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+        }
+        logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(samples_train["downstream_class"]),))
-    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
-    for k, v in class_weights.items():
-        sample_weights[samples_train["downstream_class"] == k] = v
-        sample_weights_val[samples_test["downstream_class"] == k] = v
-    samples_train["weight"] = sample_weights
-    samples_test["weight"] = sample_weights_val
+        sample_weights = np.ones((len(samples_train["downstream_class"]),))
+        sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
+        for k, v in class_weights.items():
+            sample_weights[samples_train["downstream_class"] == k] = v
+            sample_weights_val[samples_test["downstream_class"] == k] = v
+        samples_train["weight"] = sample_weights
+        samples_test["weight"] = sample_weights_val
+    else:
+        samples_train["weight"] = 1
+        samples_test["weight"] = 1
 
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
