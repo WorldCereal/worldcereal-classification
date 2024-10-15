@@ -202,9 +202,9 @@ def map_croptypes(
     df["ewoc_code"] = df["CROPTYPE_LABEL"].map(
         wc2ewoc_map.set_index("croptype")["ewoc_code"]
     )
-    df["landcover_name"] = df["ewoc_code"].map(ewoc_map["landcover_name"])
-    df["cropgroup_name"] = df["ewoc_code"].map(ewoc_map["cropgroup_name"])
-    df["croptype_name"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
+    df["label_level1"] = df["ewoc_code"].map(ewoc_map["cropland_name"])
+    df["label_level2"] = df["ewoc_code"].map(ewoc_map["landcover_name"])
+    df["label_level3"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
 
     df["downstream_class"] = df["ewoc_code"].map(
         {int(k): v for k, v in get_class_mappings()[downstream_classes].items()}
