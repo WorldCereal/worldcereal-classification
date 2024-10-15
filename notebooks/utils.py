@@ -4,7 +4,7 @@ import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 
 import ipywidgets as widgets
 import leafmap
@@ -12,11 +12,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
+from catboost import CatBoostClassifier, Pool
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from presto.utils import DEFAULT_SEED
 from pyproj import Transformer
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
@@ -375,13 +380,28 @@ def train_classifier(
     training_dataframe: pd.DataFrame,
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
-):
-    import numpy as np
-    from catboost import CatBoostClassifier, Pool
-    from presto.utils import DEFAULT_SEED
-    from sklearn.metrics import classification_report, confusion_matrix
-    from sklearn.model_selection import train_test_split
-    from sklearn.utils.class_weight import compute_class_weight
+) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
+    """Method to train a custom CatBoostClassifier on a training dataframe.
+
+    Parameters
+    ----------
+    training_dataframe : pd.DataFrame
+        training dataframe containing inputs and targets
+    class_names : Optional[List[str]], optional
+        class names to use, by default None
+    balance_classes : bool, optional
+        if True, class weights are used during training to balance the classes, by default False
+
+    Returns
+    -------
+    Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]
+        The trained CatBoost model, the classification report, and the confusion matrix
+
+    Raises
+    ------
+    ValueError
+        When not enough classes are present in the training dataframe to train a model
+    """
 
     logger.info("Split train/test ...")
     samples_train, samples_test = train_test_split(
