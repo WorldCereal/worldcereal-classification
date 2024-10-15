@@ -4,9 +4,9 @@ from typing import Dict
 
 import duckdb
 import geopandas as gpd
-import h3
 import numpy as np
 import pandas as pd
+import requests
 from loguru import logger
 from shapely.geometry import Polygon
 
@@ -58,49 +58,78 @@ def query_public_extractions(
     )
 
     xmin, ymin, xmax, ymax = bbox_poly.bounds
-    twisted_bbox_poly = Polygon(
-        [(ymin, xmin), (ymin, xmax), (ymax, xmax), (ymax, xmin)]
-    )
-    h3_cells_lst = []  # type: ignore
-    res = 5
-    while len(h3_cells_lst) == 0:
-        h3_cells_lst = list(h3.polyfill(twisted_bbox_poly.__geo_interface__, res))
-        res += 1
-    if res > 5:
-        h3_cells_lst = tuple(
-            np.unique([h3.h3_to_parent(xx, 5) for xx in h3_cells_lst])
-        )  # type: ignore
+    bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    parquet_path = "s3://geoparquet/worldcereal_extractions_phase1/*/*.parquet"
+    metadata_s3_path = "s3://geoparquet/ref_id_extent.parquet"
+
+    query_metadata = f"""
+    SET s3_endpoint='s3.waw3-1.cloudferro.com';
+    SET enable_progress_bar=false;
+    SELECT distinct ref_id
+    FROM read_parquet('{metadata_s3_path}') metadata
+    WHERE ST_Intersects(ST_GeomFromText(str_geom), ST_GeomFromText('{str(bbox_poly)}'))
+    """
+    ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
+
+    if len(ref_ids_lst) == 0:
+        logger.error(
+            "No datasets found in WorldCereal global extractions database that intersect with the selected area."
+        )
+        raise ValueError()
+
+    logger.info(
+        f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
+    )
 
     # only querying the croptype data here
     logger.info(
         "Querying WorldCereal global extractions database (this can take a while) ..."
     )
-    if filter_cropland:
-        query = f"""
-        set s3_endpoint='s3.waw3-1.cloudferro.com';
-        set enable_progress_bar=false;
-        select *
-        from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
-        where original_data.h3_l5_cell in {h3_cells_lst}
-        and original_data.LANDCOVER_LABEL = 11
-        and original_data.CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
-        """
-    else:
-        query = f"""
-            set s3_endpoint='s3.waw3-1.cloudferro.com';
-            set enable_progress_bar=false;
-            select *
-            from read_parquet('{parquet_path}', hive_partitioning = 1) original_data
-            where original_data.h3_l5_cell in {h3_cells_lst}
-        """
 
-    public_df_raw = db.sql(query).df()
+    all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
+    f = requests.get(all_extractions_url)
+    all_dataset_names = f.text.split("\n")
+    matching_dataset_names = [
+        xx
+        for xx in all_dataset_names
+        if xx.endswith(".parquet")
+        and xx.startswith("worldcereal_extractions_phase1")
+        and any([yy in xx for yy in ref_ids_lst])
+    ]
+    base_s3_path = "s3://geoparquet/"
+    s3_urls_lst = [f"{base_s3_path}{xx}" for xx in matching_dataset_names]
+
+    main_query = "SET s3_endpoint='s3.waw3-1.cloudferro.com';"
+    if filter_cropland:
+        for i, url in enumerate(s3_urls_lst):
+            query = f"""
+SELECT *
+FROM read_parquet('{url}')
+WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
+AND LANDCOVER_LABEL = 11
+AND CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
+"""
+            if i == 0:
+                main_query += query
+            else:
+                main_query += f"UNION ALL {query}"
+    else:
+        for i, url in enumerate(s3_urls_lst):
+            query = f"""
+SELECT *
+FROM read_parquet('{url}')
+WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
+"""
+            if i == 0:
+                main_query += query
+            else:
+                main_query += f"UNION ALL {query}"
+
+    public_df_raw = db.sql(main_query).df()
 
     # Process the parquet into the format we need for training
     processed_public_df = process_parquet(public_df_raw)

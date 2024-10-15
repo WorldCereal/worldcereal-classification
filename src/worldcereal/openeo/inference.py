@@ -65,7 +65,9 @@ class CropClassifier(ModelInference):
         # Extract per class probabilities
         output_probabilities = []
         for output_px in outputs[1]:
-            output_probabilities.append(list(output_px.values()))
+            output_probabilities.append(
+                [output_px[label] for label in self._parameters["lookup_table"].keys()]
+            )
 
         output_probabilities = (
             (np.array(output_probabilities) * 100).round().astype(np.uint8)

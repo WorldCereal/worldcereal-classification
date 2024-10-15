@@ -32,14 +32,18 @@ class WorldCerealProduct(TypedDict):
         URL to the product.
     type: WorldCerealProductType
         Type of the product. Either cropland or croptype.
+    temporal_extent: TemporalContext
+        Period of time for which the product has been generated.
     path: Optional[Path]
         Path to the downloaded product.
     lut: Optional[Dict]
         Look-up table for the product.
+
     """
 
     url: str
     type: WorldCerealProductType
+    temporal_extent: TemporalContext
     path: Optional[Path]
     lut: Optional[Dict]
 
@@ -68,7 +72,7 @@ def generate_map(
     output_dir: Optional[Union[Path, str]] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
+    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
@@ -153,6 +157,7 @@ def generate_map(
     if product_type == WorldCerealProductType.CROPLAND:
         classes = _cropland_map(
             inputs,
+            temporal_extent,
             cropland_parameters=cropland_parameters,
             postprocess_parameters=postprocess_parameters,
         )
@@ -164,27 +169,29 @@ def generate_map(
                 f" Received: {croptype_parameters}"
             )
         # First compute cropland map
-        cropland_mask = (
-            _cropland_map(
-                inputs,
-                cropland_parameters=cropland_parameters,
-                postprocess_parameters=postprocess_parameters,
-            )
-            .filter_bands("classification")
-            .reduce_dimension(dimension="t", reducer="mean")
-        )  # Temporary fix to make this work as mask
+        cropland_mask = _cropland_map(
+            inputs,
+            temporal_extent,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
+        )
 
         # Save final mask if required
         if croptype_parameters.save_mask:
             cropland_mask = cropland_mask.save_result(
                 format="GTiff",
                 options=dict(
-                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}",
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
                 ),
             )
 
+        # To use it as a mask, we need to filter out the classification band
+        cropland_mask = cropland_mask.filter_bands("classification")
+
+        # Generate crop type map
         classes = _croptype_map(
             inputs,
+            temporal_extent,
             croptype_parameters=croptype_parameters,
             cropland_mask=cropland_mask,
             postprocess_parameters=postprocess_parameters,
@@ -193,7 +200,7 @@ def generate_map(
     # Submit the job
     JOB_OPTIONS = {
         "driver-memory": "4g",
-        "executor-memory": "1g",
+        "executor-memory": "2g",
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
         "soft-errors": "true",
@@ -206,9 +213,9 @@ def generate_map(
     job = classes.execute_batch(
         out_format=out_format,
         job_options=JOB_OPTIONS,
-        title="WorldCereal [generate_map] job",
+        title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
-        filename_prefix=product_type.value,
+        filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
     )
 
     # Get look-up tables
@@ -216,10 +223,7 @@ def generate_map(
     luts[WorldCerealProductType.CROPLAND.value] = load_model_lut(
         cropland_parameters.classifier_parameters.classifier_url
     )
-    if (
-        product_type == WorldCerealProductType.CROPTYPE
-        and croptype_parameters is not None
-    ):
+    if product_type == WorldCerealProductType.CROPTYPE:
         luts[WorldCerealProductType.CROPTYPE.value] = load_model_lut(
             croptype_parameters.classifier_parameters.classifier_url
         )
@@ -241,6 +245,7 @@ def generate_map(
         products[asset_name] = {
             "url": asset.href,
             "type": asset_type,
+            "temporal_extent": temporal_extent,
             "path": filepath,
             "lut": luts[asset_type.value],
         }

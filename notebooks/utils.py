@@ -539,7 +539,7 @@ def _get_colormap(product, lut=None):
     return colormap
 
 
-def prepare_visualization(results, processing_period):
+def prepare_visualization(results):
 
     final_paths = {}
     colormaps = {}
@@ -548,19 +548,19 @@ def prepare_visualization(results, processing_period):
 
         paths = {}
 
+        # Get product parameters
         basepath = product_params["path"]
         if basepath is None:
             logger.warning("No products downloaded. Aborting!")
             return None
         product_type = product_params["type"].value
-        if product_type == "cropland":
-            lut = {"other": 0, "cropland": 1}
-        elif product_type == "croptype":
-            lut = product_params["lut"]
+        temporal_extent = product_params["temporal_extent"]
+        lut = product_params["lut"]
+
+        # Adjust LUT for crop type product
+        if product_type == "croptype":
             # add no cropland class
             lut["no_cropland"] = 254
-        else:
-            lut = product_params["lut"]
 
         # get properties and data from input file
         with rasterio.open(basepath, "r") as src:
@@ -593,9 +593,7 @@ def prepare_visualization(results, processing_period):
         meta.update(dtype=rasterio.uint8)
         for label, settings in outfiles.items():
             # construct final output path
-            start = processing_period.start_date.replace("-", "")
-            end = processing_period.end_date.replace("-", "")
-            filename = f"{product}_{label}_{start}_{end}.tif"
+            filename = f"{product}_{label}_{temporal_extent.start_date}_{temporal_extent.end_date}.tif"
             outpath = basepath.parent / filename
             bandnames = [label]
             meta.update(nodata=settings["nodata"])
