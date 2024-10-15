@@ -46,9 +46,26 @@ Next, install the package locally:
 - for Pip: `pip install .`
 
 ## Usage Example
+In it's most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
 
-```
-simple code snippet
+```python
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from worldcereal.job import generate_map
+
+# Specify the spatial extent
+spatial_extent = BoundingBoxExtent(
+    west=44.432274,
+    south=51.317362,
+    east=44.698802,
+    north=51.428224,
+    epsg=4326
+)
+
+# Specify the temporal extent (this has to be one year)
+temporal_extent = TemporalContext('2022-11-01', '2023-10-31')
+
+# Launch processing job (result will automatically be downloaded)
+results = generate_map(spatial_extent, temporal_extent, output_dir='.')
 ```
 
 ## Documentation
@@ -64,7 +81,10 @@ This project is licensed under the terms of the MIT License. See the [LICENSE](L
 
 ## Acknowledgments
 
-...
+The WorldCereal project is funded by the European Space Agency under grant no. 4000130569/20/I-NB.
+
+
+
 
 
 ## How to cite
