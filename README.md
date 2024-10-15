@@ -83,9 +83,7 @@ This project is licensed under the terms of the MIT License. See the [LICENSE](L
 
 The WorldCereal project is funded by the European Space Agency under grant no. 4000130569/20/I-NB.
 
-
-
-
+The pre-configured Jupyter notebook environment in which users can train custom models and launch WorldCereal jobs is provided by [Terrascope](https://terrascope.be/en), the Belgian Earth observation data space, managed by [VITO Remote Sensing](https://remotesensing.vito.be/) on behalf of the [Belgian Science Policy Office](https://www.belspo.be/belspo/index_en.stm)
 
 ## How to cite
 
