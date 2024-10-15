@@ -170,13 +170,14 @@ if __name__ == "__main__":
     debug = False
     exclude_meteo = False
     sample_repeats = 1
+    mask_ratio = 0.5
     valid_date_as_token = False
     presto_dir = Path("/vitodata/worldcereal/presto/finetuning")
     presto_model = (
         presto_dir
         / "presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt"
     )
-    identifier = ""
+    identifier = f"-maxmaskratio{mask_ratio}"
 
     if spark:
         from worldcereal.utils.spark import get_spark_context
@@ -207,6 +208,7 @@ if __name__ == "__main__":
         sc=sc,
         debug=debug,
         sample_repeats=sample_repeats,
+        mask_ratio=mask_ratio,
         valid_date_as_token=valid_date_as_token,
         exclude_meteo=exclude_meteo,
     )
