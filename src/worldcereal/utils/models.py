@@ -2,19 +2,21 @@
 
 import json
 from functools import lru_cache
+from pathlib import Path
+from typing import Union
 
 import onnxruntime as ort
 import requests
 
 
 @lru_cache(maxsize=2)
-def load_model_onnx(model_url) -> ort.InferenceSession:
-    """Load an ONNX model from a URL.
+def load_model_onnx(model_path: Union[str, Path]) -> ort.InferenceSession:
+    """Load an ONNX model from a file or URL.
 
     Parameters
     ----------
-    model_url: str
-        URL to the ONNX model.
+    model_path: Union[str, Path]
+        path to the ONNX model, either a local path or a public URL.
 
     Returns
     -------
@@ -22,8 +24,11 @@ def load_model_onnx(model_url) -> ort.InferenceSession:
         ONNX model loaded with ONNX runtime.
     """
     # Two minutes timeout to download the model
-    response = requests.get(model_url, timeout=120)
-    model = response.content
+    if str(model_path).startswith("http"):
+        response = requests.get(str(model_path), timeout=120)
+        model = response.content
+    else:
+        model = str(model_path)
 
     return ort.InferenceSession(model)
 
