@@ -15,7 +15,7 @@
 
 Users can leverage the system in a notebook environment through [Terrascope](https://terrascope.be/en) or set up the environment locally using the provided installation options.
 
-In order to run classification jobs on CDSE, users can get started with **monthly free processing credits** by registering on the CDSE platform. Additional credits can be purchased, or users may soon be able to request them through the **ESA Network of Resources**.
+In order to run classification jobs on CDSE, users can get started with [**monthly free openEO processing credits**](https://documentation.dataspace.copernicus.eu/Quotas.html) by registering on the CDSE platform. Additional credits can be purchased, or users may soon be able to request them through the **ESA Network of Resources**.
 
 ## Features
 
