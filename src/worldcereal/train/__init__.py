@@ -315,6 +315,8 @@ def process_training_data(
     # 1. Determine class weights in order to reach requested ratio
     # 2. Adjust sample-specific weights based on label
 
+    # df["sampleweight"] = 1
+
     # Compute class weight to get balanced samples
     binaryoutputs = df[outputlabel].copy()
     binaryoutputs[binaryoutputs.isin(options["targetlabels"])] = 1
@@ -355,19 +357,6 @@ def process_training_data(
     # Adjust sample weights by the class weights and assign as final weights
     sample_weights *= df["sampleweight"].values
     df["sampleweight"] = sample_weights
-
-    # Balancing by ref_id
-    logger.info("Balancing for ref_ids ...")
-
-    ref_id_classweights = class_weight.compute_class_weight(
-        class_weight="balanced", classes=np.unique(df["ref_id"]), y=df["ref_id"]
-    )
-    ref_id_classweights = {
-        k: v for k, v in zip(np.unique(np.unique(df["ref_id"])), ref_id_classweights)
-    }
-    for ref_id in ref_id_classweights.keys():
-        ref_id_classweights[ref_id] = min(ref_id_classweights[ref_id], MAX_WEIGHT)
-        df.loc[df["ref_id"] == ref_id, "sampleweight"] *= ref_id_classweights[ref_id]
 
     # ----------------------------------------------------------------------
     # PART XI: Log various things on the situation as of now
