@@ -476,7 +476,7 @@ def get_training_data(
     for current_df in dfs:
         df_data = pd.concat([df_data, pd.read_parquet(current_df)])
 
-    # For annual cropland, need to throw out some unreliable datasets
+    # For cropland/croptype, we have to exclude some ref_ids
     if "cropland" in detector:
         ignore_list = [
             "2017_",
