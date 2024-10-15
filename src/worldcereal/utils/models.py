@@ -10,12 +10,12 @@ import requests
 
 
 @lru_cache(maxsize=2)
-def load_model_onnx(model_path: Union[str, Path]) -> ort.InferenceSession:
+def load_model_onnx(model_url: Union[str, Path]) -> ort.InferenceSession:
     """Load an ONNX model from a file or URL.
 
     Parameters
     ----------
-    model_path: Union[str, Path]
+    model_url: Union[str, Path]
         path to the ONNX model, either a local path or a public URL.
 
     Returns
@@ -24,11 +24,11 @@ def load_model_onnx(model_path: Union[str, Path]) -> ort.InferenceSession:
         ONNX model loaded with ONNX runtime.
     """
     # Two minutes timeout to download the model
-    if str(model_path).startswith("http"):
-        response = requests.get(str(model_path), timeout=120)
+    if str(model_url).startswith("http"):
+        response = requests.get(str(model_url), timeout=120)
         model = response.content
     else:
-        model = str(model_path)
+        model = str(model_url)
 
     return ort.InferenceSession(model)
 
