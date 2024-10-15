@@ -33,11 +33,10 @@ class PostProcessor(ModelInference):
         base_labels: xr.DataArray,
         max_probabilities: xr.DataArray,
         kernel_size: int,
-        conf_threshold: int,
     ) -> xr.DataArray:
         """Majority vote is performed using a sliding local kernel.
-        For each pixel, the voting of a final class is done from
-        neighbours values weighted with the confidence threshold.
+        For each pixel, the voting of a final class is done by counting
+        neighbours values.
         Pixels that have one of the specified excluded values are
         excluded in the voting process and are unchanged.
 
@@ -55,8 +54,6 @@ class PostProcessor(ModelInference):
             The original probabilities of the winning class (ranging between 0 and 100).
         kernel_size : int
             The size of the kernel used for the neighbour around the pixel.
-        conf_threshold : int
-            Pixels under this confidence threshold do not count into the voting process.
 
         Returns
         -------
@@ -92,9 +89,6 @@ class PostProcessor(ModelInference):
         for cls_idx, cls_value in index_value_lut:
             # Take the binary mask of the interest class, and multiply by the probabilities
             class_mask = ((prediction == cls_value) * probability).astype(np.uint16)
-
-            # Sets to 0 the class scores where the threshold is lower
-            class_mask[probability <= conf_threshold] = 0
 
             # Set to 0 the class scores where the label is excluded
             for excluded_value in cls.EXCLUDED_VALUES:
@@ -156,7 +150,7 @@ class PostProcessor(ModelInference):
         # Setting excluded values back to their original values
         for excluded_value in cls.EXCLUDED_VALUES:
             aggregated_predictions[prediction == excluded_value] = excluded_value
-            aggregated_probabilities[prediction == excluded_value] = cls.NODATA
+            aggregated_probabilities[prediction == excluded_value] = excluded_value
 
         return xr.DataArray(
             np.stack((aggregated_predictions, aggregated_probabilities)),
@@ -286,13 +280,11 @@ class PostProcessor(ModelInference):
         elif self._parameters.get("method") == "majority_vote":
 
             kernel_size = self._parameters.get("kernel_size")
-            conf_threshold = self._parameters.get("conf_threshold")
 
             new_labels = PostProcessor.majority_vote(
                 inarr.sel(bands="classification"),
                 inarr.sel(bands="probability"),
                 kernel_size=kernel_size,
-                conf_threshold=conf_threshold,
             )
 
             # Append the per-class probabalities if required

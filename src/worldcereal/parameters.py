@@ -168,8 +168,6 @@ class PostprocessParameters(BaseModel):
         The method to use for postprocessing. Must be one of ["smooth_probabilities", "majority_vote"]
     kernel_size: int (default=5)
         Used for majority vote postprocessing. Must be smaller than 25.
-    conf_threshold: int (default=30)
-        Used for majority vote postprocessing. Must be between 0 and 100.
     save_intermediate: bool (default=False)
         Whether to save intermediate results (before applying the postprocessing).
         The intermediate results will be saved in the GeoTiff format.
@@ -180,7 +178,6 @@ class PostprocessParameters(BaseModel):
     enable: bool = Field(default=True)
     method: str = Field(default="smooth_probabilities")
     kernel_size: int = Field(default=5)
-    conf_threshold: int = Field(default=30)
     save_intermediate: bool = Field(default=False)
     keep_class_probs: bool = Field(default=False)
 
@@ -212,10 +209,6 @@ class PostprocessParameters(BaseModel):
             if self.kernel_size > 25:
                 raise ValueError(
                     f"Kernel size must be smaller than 25, got {self.kernel_size}"
-                )
-            if self.conf_threshold < 0 or self.conf_threshold > 100:
-                raise ValueError(
-                    f"Confidence threshold must be between 0 and 100, got {self.conf_threshold}"
                 )
 
         return self
