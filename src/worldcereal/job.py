@@ -72,7 +72,7 @@ def generate_map(
     output_dir: Optional[Union[Path, str]] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
+    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
@@ -223,10 +223,7 @@ def generate_map(
     luts[WorldCerealProductType.CROPLAND.value] = load_model_lut(
         cropland_parameters.classifier_parameters.classifier_url
     )
-    if (
-        product_type == WorldCerealProductType.CROPTYPE
-        and croptype_parameters is not None
-    ):
+    if product_type == WorldCerealProductType.CROPTYPE:
         luts[WorldCerealProductType.CROPTYPE.value] = load_model_lut(
             croptype_parameters.classifier_parameters.classifier_url
         )
