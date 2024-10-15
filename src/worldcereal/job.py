@@ -206,7 +206,7 @@ def generate_map(
     job = classes.execute_batch(
         out_format=out_format,
         job_options=JOB_OPTIONS,
-        title="WorldCereal [generate_map] job",
+        title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
         filename_prefix=product_type.value,
     )
