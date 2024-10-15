@@ -10,12 +10,9 @@ from loguru import logger
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 
 from worldcereal.train import get_training_data
-
-# from worldcereal.classification.models import WorldCerealCatBoostModel
-# from worldcereal.classification.weights import get_refid_weight
 from worldcereal.utils.spark import get_spark_context
 
-MODELVERSION = "005-ft-cropland-logloss"
+MODELVERSION = "006-ft-cropland-maxmaskratio05"
 
 
 class Trainer:
@@ -152,8 +149,6 @@ class Trainer:
 
         # Plot feature importances
         self._plot_feature_importance(self.model, outputdir)
-
-        logger.success("Base model trained!")
 
     def train(self, sc=None, **kwargs):
         # train model
@@ -339,7 +334,7 @@ class Trainer:
             learning_rate=0.05,
             early_stopping_rounds=50,
             l2_leaf_reg=3,
-            eval_metric="Logloss",
+            eval_metric="F1",
             train_dir=self.modeldir,
         )
 
@@ -503,7 +498,7 @@ if __name__ == "__main__":
 
     trainingsettings = {
         "trainingfile": trainingdir
-        / "training_df_presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True_presto-worldcereal.parquet",
+        / "training_df_presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True_presto-worldcereal-maxmaskratio0.5.parquet",
         "outputlabel": "LANDCOVER_LABEL",
         "targetlabels": [11],
         "ignorelabels": [10],
@@ -512,7 +507,7 @@ if __name__ == "__main__":
         "filter_worldcover": True,
         "classes": {0: "other", 1: "cropland"},
         "bands": BANDS_CROPLAND_PRESTO,
-        "pos_neg_ratio": 0.45,
+        "pos_neg_ratio": 0.50,
         "minsamples": 500,
     }
 
