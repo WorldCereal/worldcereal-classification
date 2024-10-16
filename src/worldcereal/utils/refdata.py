@@ -273,7 +273,7 @@ def process_parquet(
         # save the true valid_date for later
         true_valid_date_map = sample_dates.set_index("sample_id")["valid_date"]
 
-        # calculate the shifts and assignt new valid date
+        # calculate the shifts and assign new valid date
         sample_dates["true_valid_date_month"] = public_df_raw["valid_date"].dt.month
         sample_dates["proposed_valid_date_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_forward"] = sample_dates.apply(
