@@ -459,8 +459,42 @@ def retrieve_worldcereal_seasons(
 
 
 def prepare_training_dataframe(
-    df: pd.DataFrame, batch_size: int = 256, task_type: str = "croptype"
+    df: pd.DataFrame,
+    batch_size: int = 256,
+    task_type: str = "croptype",
+    augment: bool = True,
+    mask_ratio: float = 0.30,
+    repeats: int = 1,
 ) -> pd.DataFrame:
+    """Method to generate a training dataframe with Presto embeddings for downstream Catboost training.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        input dataframe with required input features for Presto
+    batch_size : int, optional
+        by default 256
+    task_type : str, optional
+        cropland or croptype task, by default "croptype"
+    augment : bool, optional
+        if True, temporal jittering is enabled, by default True
+    mask_ratio : float, optional
+        if > 0, inputs are randomly masked before computing Presto embeddings, by default 0.30
+    repeats: int, optional
+        number of times to repeat each, by default 1
+
+    Returns
+    -------
+    pd.DataFrame
+        output training dataframe for downstream training
+
+    Raises
+    ------
+    ValueError
+        if an unknown tasktype is specified
+    ValueError
+        if repeats > 1 and augment=False and mask_ratio=0
+    """
     from presto.presto import Presto
 
     from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
@@ -478,6 +512,9 @@ def prepare_training_dataframe(
     else:
         raise ValueError(f"Unknown task type: {task_type}")
 
+    if repeats > 1 and not augment and mask_ratio == 0:
+        raise ValueError("Repeats > 1 requires augment=True or mask_ratio > 0.")
+
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
     presto_model = Presto.load_pretrained(
@@ -493,7 +530,8 @@ def prepare_training_dataframe(
         df,
         task_type=task_type,
         augment=True,
-        repeats=1,
+        mask_ratio=mask_ratio,
+        repeats=repeats,
     )
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
