@@ -143,7 +143,7 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
 
 def month_diff(month1: int, month2: int) -> int:
     """This function computes the difference between `month1` and `month2`
-    assuming that `month2` is in the past relative to `month1`.
+    assuming that `month1` is in the past relative to `month2`.
     The difference is calculated such that it falls within the range of 0 to 12 months.
 
     Parameters
@@ -158,6 +158,7 @@ def month_diff(month1: int, month2: int) -> int:
     int
         The difference between `month1` and `month2`.
     """
+
     return month2 - month1 if month2 >= month1 else 12 - month1 + month2
 
 
@@ -278,13 +279,13 @@ def process_parquet(
         sample_dates["proposed_valid_date_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_forward"] = sample_dates.apply(
             lambda xx: month_diff(
-                xx["true_valid_date_month"], xx["proposed_valid_date_month"]
+                xx["proposed_valid_date_month"], xx["true_valid_date_month"]
             ),
             axis=1,
         )
         sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
-                xx["proposed_valid_date_month"], xx["true_valid_date_month"]
+                xx["true_valid_date_month"], xx["proposed_valid_date_month"]
             ),
             axis=1,
         )
