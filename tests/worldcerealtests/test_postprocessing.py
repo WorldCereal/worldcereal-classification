@@ -50,7 +50,6 @@ def test_cropland_postprocessing_majority_vote(WorldCerealCroplandClassification
             "lookup_table": lookup_table,
             "method": "majority_vote",
             "kernel_size": 7,
-            "conf_threshold": 30,
         },
     )
 
@@ -90,7 +89,6 @@ def test_croptype_postprocessing_majority_vote(WorldCerealCroptypeClassification
             "lookup_table": lookup_table,
             "method": "majority_vote",
             "kernel_size": 7,
-            "conf_threshold": 30,
         },
     )
 
@@ -103,7 +101,6 @@ def test_postprocessing_parameters():
         "enable": True,
         "method": "smooth_probabilities",
         "kernel_size": 5,
-        "conf_threshold": 30,
         "save_intermediate": False,
         "keep_class_probs": False,
     }
@@ -115,12 +112,6 @@ def test_postprocessing_parameters():
 
     # This one should fail with invalid kernel size
     params["kernel_size"] = 30
-    with pytest.raises(ValueError):
-        PostprocessParameters(**params)
-
-    # This one should fail with invalid conf_threshold
-    params["kernel_size"] = 5
-    params["conf_threshold"] = 101
     with pytest.raises(ValueError):
         PostprocessParameters(**params)
 

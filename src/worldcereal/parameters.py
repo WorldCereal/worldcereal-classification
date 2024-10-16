@@ -89,7 +89,7 @@ class CropLandParameters(BaseModel):
     )
     classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v005-ft-cropland-logloss.onnx"  # NOQA
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx"  # NOQA
     )
 
     @model_validator(mode="after")
@@ -167,9 +167,7 @@ class PostprocessParameters(BaseModel):
     method: str (default="smooth_probabilities")
         The method to use for postprocessing. Must be one of ["smooth_probabilities", "majority_vote"]
     kernel_size: int (default=5)
-        Used for majority vote postprocessing. Must be smaller than 25.
-    conf_threshold: int (default=30)
-        Used for majority vote postprocessing. Must be between 0 and 100.
+        Used for majority vote postprocessing. Must be an odd number, larger than 1 and smaller than 25.
     save_intermediate: bool (default=False)
         Whether to save intermediate results (before applying the postprocessing).
         The intermediate results will be saved in the GeoTiff format.
@@ -180,7 +178,6 @@ class PostprocessParameters(BaseModel):
     enable: bool = Field(default=True)
     method: str = Field(default="smooth_probabilities")
     kernel_size: int = Field(default=5)
-    conf_threshold: int = Field(default=30)
     save_intermediate: bool = Field(default=False)
     keep_class_probs: bool = Field(default=False)
 
@@ -209,13 +206,17 @@ class PostprocessParameters(BaseModel):
             )
 
         if self.method == "majority_vote":
+            if self.kernel_size % 2 == 0:
+                raise ValueError(
+                    f"Kernel size for majority filtering should be an odd number, got {self.kernel_size}"
+                )
             if self.kernel_size > 25:
                 raise ValueError(
-                    f"Kernel size must be smaller than 25, got {self.kernel_size}"
+                    f"Kernel size for majority filtering should be an odd number smaller than 25, got {self.kernel_size}"
                 )
-            if self.conf_threshold < 0 or self.conf_threshold > 100:
+            if self.kernel_size < 3:
                 raise ValueError(
-                    f"Confidence threshold must be between 0 and 100, got {self.conf_threshold}"
+                    f"Kernel size for majority filtering should be an odd number larger than 1, got {self.kernel_size}"
                 )
 
         return self

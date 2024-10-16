@@ -4,7 +4,7 @@ import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 
 import ipywidgets as widgets
 import leafmap
@@ -12,11 +12,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
+from catboost import CatBoostClassifier, Pool
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from presto.utils import DEFAULT_SEED
 from pyproj import Transformer
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
@@ -79,7 +84,7 @@ class date_slider:
 
         # Generate a list of dates for the ticks every 3 months
         tick_dates = pd.date_range(
-            self.start_date, self.end_date + pd.DateOffset(months=3), freq="4ME"
+            self.start_date, self.end_date + pd.DateOffset(months=3), freq="5ME"
         )
 
         # Create a list of tick labels in the format "Aug 2023"
@@ -116,6 +121,14 @@ class date_slider:
         logger.info(f"Selected processing period: {start} to {end}")
 
         return TemporalContext(start, end)
+
+
+def get_input(label):
+    while True:
+        modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
+        if " " not in modelname:
+            return modelname
+        print("Invalid input. Please enter a name without spaces.")
 
 
 LANDCOVER_LUT = {
@@ -163,23 +176,178 @@ def select_landcover(df: pd.DataFrame):
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
 
-    potential_classes = df["croptype_name"].value_counts().reset_index()
-    potential_classes = potential_classes[
-        potential_classes["count"] > samples_threshold
-    ]
+    # CREATING A HIERARCHICAL LAYOUT OF OPTIONS
+    # ==========================================
+    _class_map = dict(df[["ewoc_code", "label_level3"]].value_counts().index.to_list())
+    class_counts = pd.DataFrame(
+        df[["label_level1", "label_level2", "label_level3"]].value_counts().sort_index()
+    ).reset_index()
+    class_counts["original_label_level3"] = class_counts["label_level3"]
+    level2_class_counts = class_counts.groupby("label_level2")["label_level3"].nunique()
 
-    checkbox_widgets = [
-        widgets.Checkbox(
-            value=False, description=f"{row['croptype_name']} ({row['count']} samples)"
-        )
-        for ii, row in potential_classes.iterrows()
-    ]
-    vbox = widgets.VBox(
-        checkbox_widgets,
-        layout=widgets.Layout(width="50%", display="inline-flex", flex_flow="row wrap"),
+    for index, row in class_counts.iterrows():
+        if (row["label_level3"] != row["label_level2"]) & (
+            row["count"] < samples_threshold
+        ):
+            class_counts.loc[index, "label_level3"] = f"other_{row['label_level1']}"
+            class_counts.loc[index, "label_level2"] = f"other_{row['label_level1']}"
+            ewoc_codes_to_change = df[df["label_level3"] == row["label_level3"]][
+                "ewoc_code"
+            ].to_list()
+            for ewoc_code in ewoc_codes_to_change:
+                _class_map[ewoc_code] = f"other_{row['label_level1']}"
+        elif (
+            (row["label_level3"] == row["label_level2"])
+            & (row["count"] < samples_threshold)
+            & (level2_class_counts[row["label_level2"]] > 1)
+        ):
+            class_counts.loc[index, "label_level3"] = "ambiguous_class"
+            ewoc_codes_to_change = df[df["label_level3"] == row["label_level3"]][
+                "ewoc_code"
+            ].to_list()
+            for ewoc_code in ewoc_codes_to_change:
+                _class_map[ewoc_code] = "ambiguous_class"
+    class_counts = class_counts[class_counts["label_level3"] != "ambiguous_class"]
+    class_counts = (
+        class_counts.groupby(["label_level1", "label_level2", "label_level3"])
+        .sum()
+        .sort_index()
+        .reset_index()
+    )
+    level2_class_counts = class_counts.groupby("label_level2")["label_level3"].nunique()
+
+    for index, row in class_counts.iterrows():
+        level_2_label = row["label_level2"]
+        if (level2_class_counts[level_2_label] == 1) & (
+            row["count"] < samples_threshold
+        ):
+            class_counts.loc[index, "label_level3"] = f"other_{row['label_level1']}"
+            class_counts.loc[index, "label_level2"] = f"other_{row['label_level1']}"
+            ewoc_codes_to_change = df[
+                df["label_level3"] == row["original_label_level3"]
+            ]["ewoc_code"].to_list()
+            ewoc_codes_to_change.extend(
+                df[df["label_level3"] == row["label_level3"]]["ewoc_code"].to_list()
+            )
+            for ewoc_code in np.unique(ewoc_codes_to_change):
+                _class_map[ewoc_code] = f"other_{row['label_level1']}"
+    class_counts = (
+        class_counts.groupby(["label_level1", "label_level2", "label_level3"])
+        .sum()
+        .sort_index()
+        .reset_index()
     )
 
-    return vbox, checkbox_widgets
+    if len(class_counts) == 1:
+        logger.warning(
+            f"Only one class remained after aggregation with threshold {samples_threshold}. Consider lowering the threshold."
+        )
+
+    # Convert to a hierarchically arranged dictionary
+    class_counts = class_counts[class_counts["label_level3"] != "other_temporary_crops"]
+    level2_class_counts = class_counts.groupby("label_level2")["label_level3"].nunique()
+    hierarchical_dict = {}  # type: ignore
+    for _, row in class_counts.iterrows():
+        label_level1 = row["label_level2"]
+        label_level2 = row["label_level3"]
+
+        if label_level1 not in hierarchical_dict:
+            hierarchical_dict[label_level1] = []
+        if (label_level2 not in hierarchical_dict[label_level1]) & (
+            level2_class_counts[label_level1] > 1
+        ):
+            hierarchical_dict[label_level1].append(label_level2)
+    # ==========================================
+
+    # CONSTRUCTING A WIDGET FOR SELECTING CROPTYPES
+    # ==========================================
+    options = hierarchical_dict
+
+    # Create a description widget
+    description_widget = widgets.HTML(
+        value="""
+        <div style='text-align: left;'>
+            <div style='font-size: 16px; font-weight: bold;'>
+                Croptype Picker
+            </div>
+            <div style='font-size: 14px; margin-top: 10px;'>
+                Use the checkboxes below to select croptypes for analysis.<br>
+                All classes that are not selected will be merged into <i>other_temporary_crops</i> class.<br>
+                Note that depending on the <i>samples_threshold</i>, you will see different options.
+            </div>
+        </div>
+        """,
+        layout=widgets.Layout(margin="10px 0px 20px 0px"),
+    )
+
+    # Create checkboxes for categories and sub-options
+    checkboxes = {}
+    for category, sub_options in options.items():
+        category_count = class_counts.loc[
+            class_counts["label_level2"] == category, "count"
+        ].sum()
+        if sub_options:  # Only create sub-option checkboxes if sub_options is not empty
+            category_checkbox = widgets.Checkbox(
+                value=False,
+                description=f"{category} ({category_count}) samples",
+                layout=widgets.Layout(margin="0 0 0 0px", width="auto"),
+            )
+            sub_option_checkboxes = [
+                widgets.Checkbox(
+                    value=True,
+                    description=f"{sub_option} ({class_counts.loc[class_counts['label_level3'] == sub_option, 'count'].iloc[0]}) samples",
+                    layout=widgets.Layout(margin="0 0 0 30px", width="auto"),
+                )
+                for sub_option in sub_options
+            ]
+            checkboxes[category] = {
+                "category_checkbox": category_checkbox,
+                "sub_option_checkboxes": sub_option_checkboxes,
+            }
+
+            # Define the event handler for the category checkbox
+            def on_category_checkbox_change(
+                change, sub_option_checkboxes=sub_option_checkboxes
+            ):
+                for sub_option_checkbox in sub_option_checkboxes:
+                    sub_option_checkbox.disabled = change["new"]
+                    if change["new"]:
+                        sub_option_checkbox.value = False
+
+            # Attach the event handler to the category checkbox
+            category_checkbox.observe(on_category_checkbox_change, names="value")
+        else:
+            category_checkbox = widgets.Checkbox(
+                value=True,
+                description=f"{category} ({category_count}) samples",
+                layout=widgets.Layout(margin="0 0 0 0px", width="auto"),
+            )
+            checkboxes[category] = {
+                "category_checkbox": category_checkbox,
+                "sub_option_checkboxes": [],
+            }
+
+    # Function to get all selected values
+    def get_selected_values(button=None):
+        global selected_values
+        selected_values = {}
+        for category, widgets_dict in checkboxes.items():
+            selected_values[category] = [
+                sub_option_checkbox.description
+                for sub_option_checkbox in widgets_dict["sub_option_checkboxes"]
+                if sub_option_checkbox.value
+            ]
+        return selected_values
+
+    # Create a VBox to group the checkboxes and the description widget
+    vbox_items = [description_widget]
+    for category, widgets_dict in checkboxes.items():
+        vbox_items.append(widgets_dict["category_checkbox"])
+        for sub_option_checkbox in widgets_dict["sub_option_checkboxes"]:
+            vbox_items.append(sub_option_checkbox)
+    vbox = widgets.VBox(vbox_items, layout=widgets.Layout(align_items="flex-start"))
+
+    return vbox, vbox_items, _class_map
 
 
 def get_month_decimal(date):
@@ -340,16 +508,24 @@ def prepare_training_dataframe(
     return df
 
 
-def get_custom_croptype_labels(df, checkbox_widgets):
+def get_custom_croptype_labels(df, checkbox_widgets, class_map):
+
     selected_crops = [
         checkbox.description.split(" ")[0]
         for checkbox in checkbox_widgets
         if checkbox.value
     ]
-    df["downstream_class"] = "other"
-    df.loc[df["croptype_name"].isin(selected_crops), "downstream_class"] = df[
-        "croptype_name"
-    ]
+
+    df["downstream_class"] = df["ewoc_code"].map(class_map)
+
+    df = df[df["downstream_class"] != "ambiguous_class"]
+
+    level2_classes = [xx for xx in selected_crops if xx in df["label_level2"].unique()]
+    for crop in level2_classes:
+        df.loc[df["label_level2"] == crop, "downstream_class"] = crop
+    df.loc[~df["downstream_class"].isin(selected_crops), "downstream_class"] = (
+        "other_temporary_crops"
+    )
 
     return df
 
@@ -372,14 +548,31 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
 
 
 def train_classifier(
-    training_dataframe: pd.DataFrame, class_names: Optional[List[str]] = None
-):
-    import numpy as np
-    from catboost import CatBoostClassifier, Pool
-    from presto.utils import DEFAULT_SEED
-    from sklearn.metrics import classification_report, confusion_matrix
-    from sklearn.model_selection import train_test_split
-    from sklearn.utils.class_weight import compute_class_weight
+    training_dataframe: pd.DataFrame,
+    class_names: Optional[List[str]] = None,
+    balance_classes: bool = False,
+) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
+    """Method to train a custom CatBoostClassifier on a training dataframe.
+
+    Parameters
+    ----------
+    training_dataframe : pd.DataFrame
+        training dataframe containing inputs and targets
+    class_names : Optional[List[str]], optional
+        class names to use, by default None
+    balance_classes : bool, optional
+        if True, class weights are used during training to balance the classes, by default False
+
+    Returns
+    -------
+    Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]
+        The trained CatBoost model, the classification report, and the confusion matrix
+
+    Raises
+    ------
+    ValueError
+        When not enough classes are present in the training dataframe to train a model
+    """
 
     logger.info("Split train/test ...")
     samples_train, samples_test = train_test_split(
@@ -400,28 +593,32 @@ def train_classifier(
         loss_function = "Logloss"
 
     # Compute sample weights
-    logger.info("Computing class weights ...")
-    class_weights = np.round(
-        compute_class_weight(
-            class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
-        ),
-        3,
-    )
-    class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
-    }
-    logger.info(f"Class weights: {class_weights}")
+    if balance_classes:
+        logger.info("Computing class weights ...")
+        class_weights = np.round(
+            compute_class_weight(
+                class_weight="balanced",
+                classes=np.unique(samples_train["downstream_class"]),
+                y=samples_train["downstream_class"],
+            ),
+            3,
+        )
+        class_weights = {
+            k: v
+            for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+        }
+        logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(samples_train["downstream_class"]),))
-    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
-    for k, v in class_weights.items():
-        sample_weights[samples_train["downstream_class"] == k] = v
-        sample_weights_val[samples_test["downstream_class"] == k] = v
-    samples_train["weight"] = sample_weights
-    samples_test["weight"] = sample_weights_val
+        sample_weights = np.ones((len(samples_train["downstream_class"]),))
+        sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
+        for k, v in class_weights.items():
+            sample_weights[samples_train["downstream_class"] == k] = v
+            sample_weights_val[samples_test["downstream_class"] == k] = v
+        samples_train["weight"] = sample_weights
+        samples_test["weight"] = sample_weights_val
+    else:
+        samples_train["weight"] = 1
+        samples_test["weight"] = 1
 
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
