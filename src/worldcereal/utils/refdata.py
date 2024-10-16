@@ -45,6 +45,9 @@ def query_public_extractions(
         buffer (in meters) to apply to the requested area, by default 250000
     filter_cropland : bool, optional
         limit the query to samples on cropland only, by default True
+    processing_period : TemporalContext, optional
+        user-defined temporal extent to align the samples with, by default None,
+        which means that 12-month processing window will be aligned around each sample's original valid_date.
 
     Returns
     -------
@@ -92,7 +95,7 @@ def query_public_extractions(
         logger.error(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
-        display(Markdown(nodata_helper_message))
+        Markdown(nodata_helper_message)
         raise ValueError(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
