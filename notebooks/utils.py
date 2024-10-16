@@ -237,6 +237,11 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
         .reset_index()
     )
 
+    if len(class_counts) == 1:
+        logger.warning(
+            f"Only one class remained after aggregation with threshold {samples_threshold}. Consider lowering the threshold."
+        )
+
     # Convert to a hierarchically arranged dictionary
     level2_class_counts = class_counts.groupby("label_level2")["label_level3"].nunique()
     hierarchical_dict = {}  # type: ignore
