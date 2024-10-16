@@ -54,7 +54,7 @@ def query_public_extractions(
     pd.DataFrame
         DataFrame containing the extractions matching the request.
     """
-    from IPython.display import Markdown, display
+    from IPython.display import Markdown
 
     nodata_helper_message = f"""
 ### What to do?
@@ -154,7 +154,7 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         logger.error(
             f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)}km2."
         )
-        display(Markdown(nodata_helper_message))
+        Markdown(nodata_helper_message)
         raise ValueError(
             "No samples from the WorldCereal global extractions database fall into the selected area."
         )
