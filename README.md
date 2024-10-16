@@ -11,17 +11,17 @@
 
 ## Overview
 
-**WorldCereal** is a Python package designed for generating cropland and crop type maps at a wide range of spatial scales, leveraging satellite and auxiliary data, and state-of-the-art classification workflows. It uses [openEO](https://openeo.org/) to run classification tasks in the cloud, by default the [Copernicus Data Space Ecosystem (CDSE)](https://dataspace.copernicus.eu/). 
+**WorldCereal** is a Python package designed for generating cropland and crop type maps at a wide range of spatial scales, leveraging satellite and auxiliary data, and state-of-the-art classification workflows. It uses [**openEO**](https://openeo.org/) to run classification tasks in the cloud, by default the [**Copernicus Data Space Ecosystem (CDSE)**](https://dataspace.copernicus.eu/). 
 
 Users can leverage the system in a notebook environment through [Terrascope](https://terrascope.be/en) or set up the environment locally using the provided installation options.
 
-In order to run classification jobs on CDSE, users can get started with [**monthly free openEO processing credits**](https://documentation.dataspace.copernicus.eu/Quotas.html) by registering on the CDSE platform. Additional credits can be purchased, or users may soon be able to request them through the **ESA Network of Resources**.
+In order to run classification jobs on CDSE, users can get started with [monthly free openEO processing credits](https://documentation.dataspace.copernicus.eu/Quotas.html) by registering on the CDSE platform. Additional credits can be purchased, or users may soon be able to request them through the **ESA Network of Resources**.
 
 ## Features
 
 - **Scalable**: Generate maps at a wide range of spatial scales.
 - **Cloud-based Processing**: Leverages openEO to run classifications in the cloud.
-- **Powerful classification pipeline**: WorldCereal builds upon [**Presto**](https://arxiv.org/abs/2304.14065), a pretrained transformer-based model, leveraging global self-supervised learning of multimodal input timeseries, leading to better accuracies and higher generalizability in space and time of downstream crop classification models. The Presto backbone of WorldCereal classification pipelines is developed [here](https://github.com/WorldCereal/presto-worldcereal).
+- **Powerful classification pipeline**: WorldCereal builds upon [Presto](https://arxiv.org/abs/2304.14065), a pretrained transformer-based model, leveraging global self-supervised learning of multimodal input timeseries, leading to better accuracies and higher generalizability in space and time of downstream crop classification models. The Presto backbone of WorldCereal classification pipelines is developed [here](https://github.com/WorldCereal/presto-worldcereal).
 - **Customizable**: Users can pick any region or temporal range and apply either default models or train their own and produce custom maps, interacting with publicly available training data.
 - **Easy to Use**: Integrates into Jupyter notebooks and other Python environments.
 
@@ -84,6 +84,8 @@ This project is licensed under the terms of the MIT License. See the [LICENSE](L
 ## Acknowledgments
 
 The WorldCereal project is funded by the [European Space Agency (ESA)](https://www.esa.int/) under grant no. 4000130569/20/I-NB.
+
+WorldCereal's classification backbone makes use of the Presto model, originally implemented [here](https://github.com/nasaharvest/presto/). Without the groundbreaking work being done by Gabriel Tseng and the rest of the [NASA Harvest](https://www.nasaharvest.org/) team, both in the original Presto implementation as well as its adaptation for WorldCereal, this package would simply not exist in its present form 🙏.
 
 The pre-configured Jupyter notebook environment in which users can train custom models and launch WorldCereal jobs is provided by [Terrascope](https://terrascope.be/en), the Belgian Earth observation data space, managed by [VITO Remote Sensing](https://remotesensing.vito.be/) on behalf of the [Belgian Science Policy Office](https://www.belspo.be/belspo/index_en.stm)
 
