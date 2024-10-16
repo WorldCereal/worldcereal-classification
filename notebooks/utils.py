@@ -189,12 +189,13 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
         if (row["label_level3"] != row["label_level2"]) & (
             row["count"] < samples_threshold
         ):
-            class_counts.loc[index, "label_level3"] = f"other_{row['label_level2']}"
+            class_counts.loc[index, "label_level3"] = f"other_{row['label_level1']}"
+            class_counts.loc[index, "label_level2"] = f"other_{row['label_level1']}"
             ewoc_codes_to_change = df[df["label_level3"] == row["label_level3"]][
                 "ewoc_code"
             ].to_list()
             for ewoc_code in ewoc_codes_to_change:
-                _class_map[ewoc_code] = f"other_{row['label_level2']}"
+                _class_map[ewoc_code] = f"other_{row['label_level1']}"
         elif (
             (row["label_level3"] == row["label_level2"])
             & (row["count"] < samples_threshold)
@@ -243,6 +244,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
         )
 
     # Convert to a hierarchically arranged dictionary
+    class_counts = class_counts[class_counts["label_level3"] != "other_temporary_crops"]
     level2_class_counts = class_counts.groupby("label_level2")["label_level3"].nunique()
     hierarchical_dict = {}  # type: ignore
     for _, row in class_counts.iterrows():
