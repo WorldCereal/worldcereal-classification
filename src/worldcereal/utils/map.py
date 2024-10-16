@@ -1,42 +1,47 @@
 import geopandas as gpd
+import numpy as np
 from ipyleaflet import DrawControl, LayersControl, Map, SearchControl, basemaps
+from IPython.display import display
+from ipywidgets import widgets
 from loguru import logger
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
 from shapely.geometry import Polygon, shape
 
 
-def handle_draw(instance, action, geo_json, area_limit=250):
-    if action == "created":
-        poly = Polygon(shape(geo_json.get("geometry")))
-        bbox = poly.bounds
-        logger.info(f"Your processing extent: {bbox}")
+def handle_draw(instance, action, geo_json, output, area_limit):
+    with output:
+        if action == "created":
+            poly = Polygon(shape(geo_json.get("geometry")))
+            bbox = poly.bounds
+            logger.info(f"Your processing extent: {bbox}")
 
-        # We convert our bounding box to local UTM projection
-        # for further processing
-        bbox_utm, epsg = _latlon_to_utm(bbox)
-        area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
-        logger.info(f"Area of processing extent: {area:.2f} km²")
+            # We convert our bounding box to local UTM projection
+            # for further processing
+            bbox_utm, epsg = _latlon_to_utm(bbox)
+            area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
+            logger.info(f"Area of processing extent: {area:.2f} km²")
 
-        if area_limit is not None and area > area_limit:
-            logger.error(
-                f"Area of processing extent is too large. "
-                f"Please select an area smaller than {area_limit} km²."
-            )
+            if (area > area_limit) or (area > 750):
+                logger.error(
+                    f"Area of processing extent is too large. "
+                    f"Please select an area smaller than {np.min([area_limit, 750])} km²."
+                )
+                instance.last_draw = {"type": "Feature", "geometry": None}
+
+        elif action == "deleted":
+            instance.clear()
             instance.last_draw = {"type": "Feature", "geometry": None}
 
-    elif action == "deleted":
-        instance.clear()
-        instance.last_draw = {"type": "Feature", "geometry": None}
-
-    else:
-        raise ValueError(f"Unknown action: {action}")
+        else:
+            raise ValueError(f"Unknown action: {action}")
 
 
 class ui_map:
-    def __init__(self, area_limit=250):
+    def __init__(self, area_limit=750):
         from ipyleaflet import basemap_to_tiles
 
+        self.output = widgets.Output()
         self.area_limit = area_limit
         osm = basemap_to_tiles(basemaps.OpenStreetMap.Mapnik)
         osm.base = True
@@ -70,7 +75,9 @@ class ui_map:
 
         # Wrapper to pass additional arguments
         def draw_handler(instance, action, geo_json):
-            handle_draw(instance, action, geo_json, area_limit=self.area_limit)
+            handle_draw(
+                instance, action, geo_json, self.output, area_limit=self.area_limit
+            )
 
         # Attach the event listener to the draw control
         self.draw_control.on_draw(draw_handler)
@@ -89,7 +96,11 @@ class ui_map:
         self.poly = None
 
     def show_map(self):
-        return self.map
+        vbox = widgets.VBox(
+            [self.map, self.output],
+            layout={"height": "600px"},
+        )
+        return display(vbox)
 
     def get_processing_extent(self):
 

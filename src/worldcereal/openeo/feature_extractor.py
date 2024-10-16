@@ -348,3 +348,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         if parameters.get("rescale_s1", None) is None:
             parameters.update({"rescale_s1": False})
         return super()._execute(cube, parameters)
+
+    def dependencies(self) -> list:
+        # We are just overriding the parent method to suppress the warning
+        return []
