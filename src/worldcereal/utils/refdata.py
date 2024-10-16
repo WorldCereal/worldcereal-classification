@@ -260,7 +260,7 @@ def process_parquet(
 
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
-        processing_period_middle_ts = start_date + pd.DateOffset(months=5)
+        processing_period_middle_ts = start_date + pd.DateOffset(months=6)
         processing_period_middle_month = processing_period_middle_ts.month
 
         # get a lighter subset with only the necessary columns
