@@ -84,7 +84,7 @@ class date_slider:
 
         # Generate a list of dates for the ticks every 3 months
         tick_dates = pd.date_range(
-            self.start_date, self.end_date + pd.DateOffset(months=3), freq="4ME"
+            self.start_date, self.end_date + pd.DateOffset(months=3), freq="5ME"
         )
 
         # Create a list of tick labels in the format "Aug 2023"
