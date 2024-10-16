@@ -51,7 +51,16 @@ def query_public_extractions(
     pd.DataFrame
         DataFrame containing the extractions matching the request.
     """
+    from IPython.display import Markdown, display
 
+    nodata_helper_message = f"""
+### What to do?
+1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
+    *Current setting is: {buffer} m².*
+2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://ewoc-rdm-ui.iiasa.ac.at/map).
+3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
+4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
+"""
     logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
 
     bbox_poly = (
@@ -80,22 +89,10 @@ def query_public_extractions(
     ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
     if len(ref_ids_lst) == 0:
-        from IPython.display import Markdown, display
-
-        helper_message = f"""
-### What to do?
-1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
-    *Current setting is: {buffer} m².*
-2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://ewoc-rdm-ui.iiasa.ac.at/map).
-3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
-4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
-"""
-
         logger.error(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
-        display(Markdown(helper_message))
-
+        display(Markdown(nodata_helper_message))
         raise ValueError(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
@@ -149,6 +146,15 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
                 main_query += f"UNION ALL {query}"
 
     public_df_raw = db.sql(main_query).df()
+
+    if public_df_raw.empty:
+        logger.error(
+            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)}km2."
+        )
+        display(Markdown(nodata_helper_message))
+        raise ValueError(
+            "No samples from the WorldCereal global extractions database fall into the selected area."
+        )
 
     # Process the parquet into the format we need for training
     processed_public_df = process_parquet(public_df_raw, processing_period)
