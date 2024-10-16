@@ -1,4 +1,5 @@
 import geopandas as gpd
+import numpy as np
 from ipyleaflet import DrawControl, LayersControl, Map, SearchControl, basemaps
 from IPython.display import display
 from ipywidgets import widgets
@@ -24,7 +25,7 @@ def handle_draw(instance, action, geo_json, output, area_limit):
             if (area > area_limit) or (area > 750):
                 logger.error(
                     f"Area of processing extent is too large. "
-                    f"Please select an area smaller than {area_limit} km²."
+                    f"Please select an area smaller than {np.min([area_limit, 750])} km²."
                 )
                 instance.last_draw = {"type": "Feature", "geometry": None}
 
