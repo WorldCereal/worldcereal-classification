@@ -158,7 +158,7 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         raise ValueError(
             "No samples from the WorldCereal global extractions database fall into the selected area."
         )
-    if public_df_raw["croptype_name"].nunique() == 1:
+    if public_df_raw["CROPTYPE_LABEL"].nunique() == 1:
         logger.error(
             f"Queried data contains only one class: {public_df_raw['croptype_name'].unique()[0]}. Cannot train a model with only one class."
         )
