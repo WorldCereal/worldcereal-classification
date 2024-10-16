@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple, Union
 
 import ipywidgets as widgets
 import leafmap
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -648,6 +649,80 @@ def prepare_visualization(results):
 
 
 ############# PRODUCT VISUALIZATION #############
+
+
+def visualize_classification(rasters, product):
+    """Function to visualize a classification raster using matplotlib.
+
+    Parameters
+    ----------
+    rasters : Dict[str, Dict[str, Path]]
+        Dictionary containing all generated rasters.
+        Output of function prepare_visualization.
+    product : str
+        Name of the product you wish to visualize.
+        e.g. "cropland"
+    """
+
+    filepath = rasters[product]["classification"]
+
+    # Helper function to scale RGB values
+    def scale_rgb(color):
+        # Scaling only RGB, ignoring alpha
+        return tuple(c / 255 for c in color[:3])
+
+    with rasterio.open(filepath, "r") as src:
+        arr_classif = src.read().squeeze()
+        colormap = src.colormap(1)
+        lut = ast.literal_eval(src.tags(1)["lut"])
+
+    # Filter colormap based on LUT (lookup table)
+    colormap = {k: v for k, v in colormap.items() if k in lut.values()}
+
+    # Apply RGB scaling
+    colormap = {key: scale_rgb(value) for key, value in colormap.items()}
+
+    # Create a custom ListedColormap
+    cmap = mpl.colors.ListedColormap([colormap[key] for key in sorted(colormap.keys())])
+
+    fig, ax = plt.subplots()
+
+    # create a second axes for the colorbar
+    ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
+
+    # Get class labels and set colorbar boundaries
+    classlabels = list(lut.keys())
+    bounds = list(np.unique(arr_classif))  # Class boundaries
+
+    # Define a norm for the colormap
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+
+    # plot the raster
+    ax.imshow(arr_classif, cmap=cmap, norm=norm)
+
+    # Create a colorbar with class labels
+    bounds_colorbar = np.linspace(0, len(classlabels), len(classlabels) + 1)
+    norm_colorbar = mpl.colors.BoundaryNorm(bounds_colorbar, cmap.N)
+    cb = mpl.colorbar.ColorbarBase(
+        ax2,
+        cmap=cmap,
+        norm=norm_colorbar,
+        spacing="proportional",
+        boundaries=bounds_colorbar,
+        # Middle of each class
+        ticks=np.arange(len(classlabels)) + 0.5,
+        format="%1i",
+    )
+
+    # Set the colorbar ticks and labels
+    cb.set_ticks(np.arange(len(classlabels)) + 0.5)
+    cb.set_ticklabels(classlabels)
+
+    # Turn off axis
+    ax.axis("off")
+
+    # Display the plot
+    plt.show()
 
 
 def visualize_products(rasters, port):
