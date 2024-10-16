@@ -142,37 +142,23 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
 
 
 def month_diff(month1: int, month2: int) -> int:
-    """
-    Calculate the number of months between two given arbitrary months.
-    This function computes the difference in months between `month1` and `month2`
+    """This function computes the difference between `month1` and `month2`
     assuming that `month2` is in the past relative to `month1`.
     The difference is calculated such that it falls within the range of 0 to 12 months.
-    Args:
-        month1 (int): The reference month (1-12).
-        month2 (int): The month to compare against (1-12).
-    Returns:
-        int: The number of months between `month1` and `month2`.
+
+    Parameters
+    ----------
+    month1 : int
+        The reference month (1-12).
+    month2 : int
+        The month to compare against (1-12).
+
+    Returns
+    -------
+    int
+        The difference between `month1` and `month2`.
     """
-
-    dummy_year = 2020
-    dummy_date1 = pd.to_datetime(f"{dummy_year}-{month1}-01")
-
-    date2_candidate1 = pd.to_datetime(f"{dummy_year}-{month2}-01")
-    date2_candidate2 = pd.to_datetime(f"{dummy_year-1}-{month2}-01")
-
-    shift1 = (dummy_date1.year * 12 + dummy_date1.month) - (
-        date2_candidate1.year * 12 + date2_candidate1.month
-    )
-
-    shift2 = (dummy_date1.year * 12 + dummy_date1.month) - (
-        date2_candidate2.year * 12 + date2_candidate2.month
-    )
-
-    shift = [xx for xx in [shift1, shift2] if (xx > 0) and (xx <= 12)][0]
-    if shift == 12:
-        shift = 0
-
-    return shift
+    return month2 - month1 if month2 >= month1 else 12 - month1 + month2
 
 
 def get_best_valid_date(row):
