@@ -125,7 +125,7 @@ class PostProcessor(ModelInference):
             # Takes the indices that have the biggest scores
             aggregated_predictions_indices = np.argmax(counts, axis=2)
 
-            # Get the new confidence score for the indices
+            # Get the new probabilities of the predictions
             aggregated_probabilities = np.take_along_axis(
                 probabilities,
                 aggregated_predictions_indices.reshape(

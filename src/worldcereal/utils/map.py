@@ -22,10 +22,10 @@ def handle_draw(instance, action, geo_json, output, area_limit):
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
             logger.info(f"Area of processing extent: {area:.2f} km²")
 
-            if (area > area_limit) or (area > 750):
+            if (area > area_limit) or (area > 2500):
                 logger.error(
                     f"Area of processing extent is too large. "
-                    f"Please select an area smaller than {np.min([area_limit, 750])} km²."
+                    f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
                 )
                 instance.last_draw = {"type": "Feature", "geometry": None}
 
@@ -38,7 +38,7 @@ def handle_draw(instance, action, geo_json, output, area_limit):
 
 
 class ui_map:
-    def __init__(self, area_limit=750):
+    def __init__(self, area_limit=2500):
         from ipyleaflet import basemap_to_tiles
 
         self.output = widgets.Output()
