@@ -262,6 +262,24 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     # CONSTRUCTING A WIDGET FOR SELECTING CROPTYPES
     # ==========================================
     options = hierarchical_dict
+
+    # Create a description widget
+    description_widget = widgets.HTML(
+        value="""
+        <div style='text-align: left;'>
+            <div style='font-size: 16px; font-weight: bold;'>
+                Croptype Picker
+            </div>
+            <div style='font-size: 14px; margin-top: 10px;'>
+                Use the checkboxes below to select croptypes for analysis.<br>
+                All classes that are not selected will be merged into <i>other_temporary_crops</i> class.<br>
+                Note that depending on the <i>samples_threshold</i>, you will see different options.
+            </div>
+        </div>
+        """,
+        layout=widgets.Layout(margin="10px 0px 20px 0px"),
+    )
+
     # Create checkboxes for categories and sub-options
     checkboxes = {}
     for category, sub_options in options.items():
@@ -321,8 +339,8 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
             ]
         return selected_values
 
-    # Create a VBox to group the checkboxes
-    vbox_items = []
+    # Create a VBox to group the checkboxes and the description widget
+    vbox_items = [description_widget]
     for category, widgets_dict in checkboxes.items():
         vbox_items.append(widgets_dict["category_checkbox"])
         for sub_option_checkbox in widgets_dict["sub_option_checkboxes"]:
