@@ -29,7 +29,7 @@ In order to run classification jobs on CDSE, users can get started with [**month
 
 #### Option 1: Run on Terrascope
 
-You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment.
+You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment. Just register as a new user on Terrascope or use one of the supported EGI eduGAIN login methods to get started.
 
 [![Terrascope Environment](https://img.shields.io/badge/run%20on-Terrascope-blue)](https://terrascope-url)
 
