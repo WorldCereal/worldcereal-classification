@@ -4,7 +4,7 @@ import logging
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 
 import ipywidgets as widgets
 import leafmap
@@ -12,11 +12,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
+from catboost import CatBoostClassifier, Pool
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from presto.utils import DEFAULT_SEED
 from pyproj import Transformer
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.seasons import get_season_dates_for_extent
@@ -116,6 +121,14 @@ class date_slider:
         logger.info(f"Selected processing period: {start} to {end}")
 
         return TemporalContext(start, end)
+
+
+def get_input(label):
+    while True:
+        modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
+        if " " not in modelname:
+            return modelname
+        print("Invalid input. Please enter a name without spaces.")
 
 
 LANDCOVER_LUT = {
@@ -510,14 +523,31 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
 
 
 def train_classifier(
-    training_dataframe: pd.DataFrame, class_names: Optional[List[str]] = None
-):
-    import numpy as np
-    from catboost import CatBoostClassifier, Pool
-    from presto.utils import DEFAULT_SEED
-    from sklearn.metrics import classification_report, confusion_matrix
-    from sklearn.model_selection import train_test_split
-    from sklearn.utils.class_weight import compute_class_weight
+    training_dataframe: pd.DataFrame,
+    class_names: Optional[List[str]] = None,
+    balance_classes: bool = False,
+) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
+    """Method to train a custom CatBoostClassifier on a training dataframe.
+
+    Parameters
+    ----------
+    training_dataframe : pd.DataFrame
+        training dataframe containing inputs and targets
+    class_names : Optional[List[str]], optional
+        class names to use, by default None
+    balance_classes : bool, optional
+        if True, class weights are used during training to balance the classes, by default False
+
+    Returns
+    -------
+    Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]
+        The trained CatBoost model, the classification report, and the confusion matrix
+
+    Raises
+    ------
+    ValueError
+        When not enough classes are present in the training dataframe to train a model
+    """
 
     logger.info("Split train/test ...")
     samples_train, samples_test = train_test_split(
@@ -538,28 +568,32 @@ def train_classifier(
         loss_function = "Logloss"
 
     # Compute sample weights
-    logger.info("Computing class weights ...")
-    class_weights = np.round(
-        compute_class_weight(
-            class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
-        ),
-        3,
-    )
-    class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
-    }
-    logger.info(f"Class weights: {class_weights}")
+    if balance_classes:
+        logger.info("Computing class weights ...")
+        class_weights = np.round(
+            compute_class_weight(
+                class_weight="balanced",
+                classes=np.unique(samples_train["downstream_class"]),
+                y=samples_train["downstream_class"],
+            ),
+            3,
+        )
+        class_weights = {
+            k: v
+            for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+        }
+        logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(samples_train["downstream_class"]),))
-    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
-    for k, v in class_weights.items():
-        sample_weights[samples_train["downstream_class"] == k] = v
-        sample_weights_val[samples_test["downstream_class"] == k] = v
-    samples_train["weight"] = sample_weights
-    samples_test["weight"] = sample_weights_val
+        sample_weights = np.ones((len(samples_train["downstream_class"]),))
+        sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
+        for k, v in class_weights.items():
+            sample_weights[samples_train["downstream_class"] == k] = v
+            sample_weights_val[samples_test["downstream_class"] == k] = v
+        samples_train["weight"] = sample_weights
+        samples_test["weight"] = sample_weights_val
+    else:
+        samples_train["weight"] = 1
+        samples_test["weight"] = 1
 
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
