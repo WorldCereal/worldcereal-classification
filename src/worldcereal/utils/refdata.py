@@ -161,21 +161,27 @@ def month_diff(month1: int, month2: int) -> int:
     return month2 - month1 if month2 >= month1 else 12 - month1 + month2
 
 
-def get_best_valid_date(row):
-    """
-    Determine the best valid date for a given row based on forward and backward shifts.
+def get_best_valid_date(row: pd.Series):
+    """Determine the best valid date for a given row based on forward and backward shifts.
     This function checks if shifting the valid date forward or backward by a specified number of months
     will fit within the existing extraction dates. It returns the new valid date based on the shifts or
     NaN if neither shift is possible.
-    Parameters:
-    row (pd.Series): A pandas Series containing the following keys:
+
+    Parameters
+    ----------
+    row : pd.Series
+        A row from raw flattened dataframe from the global database that contains the following columns:
+        - "sample_id" (str): The unique sample identifier.
         - "valid_date" (pd.Timestamp): The original valid date.
         - "valid_month_shift_forward" (int): Number of months to shift forward.
         - "valid_month_shift_backward" (int): Number of months to shift backward.
         - "start_date" (pd.Timestamp): The start date of the extraction period.
         - "end_date" (pd.Timestamp): The end date of the extraction period.
-    Returns:
-    pd.Timestamp or np.nan: The new valid date after applying the shift, or NaN if neither shift is possible.
+
+    Returns
+    -------
+    pd.Datetime
+        shifted valid date
     """
 
     from presto.dataops import MIN_EDGE_BUFFER, NUM_TIMESTEPS
