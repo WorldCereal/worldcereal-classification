@@ -25,7 +25,7 @@ def make_mask_no_dw(
     Make a mask for a given strategy and percentage of masked values.
     Args:
         strategy: The masking strategy to use. One of MASK_STRATEGIES
-        mask_ratio: The percentage of values to mask. Between 0 and 1.
+        mask_ratio: The max percentage of values to mask. Between 0 and 1.
     """
     # we assume that topography is never "naturally" masked
     mask = existing_mask.copy()
