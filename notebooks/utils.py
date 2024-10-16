@@ -520,7 +520,7 @@ def get_probability_cmap():
 NODATAVALUE = {
     "cropland": 255,
     "croptype": 255,
-    "confidence": 255,
+    "probability": 255,
 }
 
 
@@ -529,7 +529,7 @@ COLORMAP = {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
     },
-    "confidence": get_probability_cmap(),
+    "probability": get_probability_cmap(),
 }
 
 
@@ -614,10 +614,10 @@ def prepare_visualization(results):
                 "nodata": nodata,
                 "lut": lut,
             },
-            "confidence": {
+            "probability": {
                 "data": probs,
-                "colormap": _get_colormap("confidence"),
-                "nodata": _get_nodata("confidence"),
+                "colormap": _get_colormap("probability"),
+                "nodata": _get_nodata("probability"),
                 "lut": None,
             },
         }
