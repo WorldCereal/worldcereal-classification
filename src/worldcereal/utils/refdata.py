@@ -158,6 +158,14 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         raise ValueError(
             "No samples from the WorldCereal global extractions database fall into the selected area."
         )
+    if public_df_raw["croptype_name"].nunique() == 1:
+        logger.error(
+            f"Queried data contains only one class: {public_df_raw['croptype_name'].unique()[0]}. Cannot train a model with only one class."
+        )
+        Markdown(nodata_helper_message)
+        raise ValueError(
+            "Queried data contains only one class. Cannot train a model with only one class."
+        )
 
     # Process the parquet into the format we need for training
     processed_public_df = process_parquet(public_df_raw, processing_period)
