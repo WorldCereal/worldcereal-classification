@@ -8,7 +8,7 @@ from shapely import geometry
 from shapely.geometry import Polygon, shape
 
 
-def handle_draw(instance, action, geo_json, output, area_limit=250):
+def handle_draw(instance, action, geo_json, output, area_limit):
     with output:
         if action == "created":
             poly = Polygon(shape(geo_json.get("geometry")))
@@ -21,7 +21,7 @@ def handle_draw(instance, action, geo_json, output, area_limit=250):
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
             logger.info(f"Area of processing extent: {area:.2f} km²")
 
-            if area_limit is not None and area > area_limit:
+            if (area > area_limit) or (area > 750):
                 logger.error(
                     f"Area of processing extent is too large. "
                     f"Please select an area smaller than {area_limit} km²."
@@ -37,7 +37,7 @@ def handle_draw(instance, action, geo_json, output, area_limit=250):
 
 
 class ui_map:
-    def __init__(self, area_limit=250):
+    def __init__(self, area_limit=750):
         from ipyleaflet import basemap_to_tiles
 
         self.output = widgets.Output()
