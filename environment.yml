@@ -1,4 +1,4 @@
-name: worldcereal-official
+name: worldcereal
 channels:
   - pytorch
   - conda-forge
