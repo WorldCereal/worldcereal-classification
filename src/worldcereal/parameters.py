@@ -167,7 +167,7 @@ class PostprocessParameters(BaseModel):
     method: str (default="smooth_probabilities")
         The method to use for postprocessing. Must be one of ["smooth_probabilities", "majority_vote"]
     kernel_size: int (default=5)
-        Used for majority vote postprocessing. Must be smaller than 25.
+        Used for majority vote postprocessing. Must be an odd number, larger than 1 and smaller than 25.
     save_intermediate: bool (default=False)
         Whether to save intermediate results (before applying the postprocessing).
         The intermediate results will be saved in the GeoTiff format.
@@ -206,9 +206,17 @@ class PostprocessParameters(BaseModel):
             )
 
         if self.method == "majority_vote":
+            if self.kernel_size % 2 == 0:
+                raise ValueError(
+                    f"Kernel size for majority filtering should be an odd number, got {self.kernel_size}"
+                )
             if self.kernel_size > 25:
                 raise ValueError(
-                    f"Kernel size must be smaller than 25, got {self.kernel_size}"
+                    f"Kernel size for majority filtering should be an odd number smaller than 25, got {self.kernel_size}"
+                )
+            if self.kernel_size < 3:
+                raise ValueError(
+                    f"Kernel size for majority filtering should be an odd number larger than 1, got {self.kernel_size}"
                 )
 
         return self

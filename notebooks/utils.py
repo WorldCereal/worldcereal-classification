@@ -123,6 +123,14 @@ class date_slider:
         return TemporalContext(start, end)
 
 
+def get_input(label):
+    while True:
+        modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
+        if " " not in modelname:
+            return modelname
+        print("Invalid input. Please enter a name without spaces.")
+
+
 LANDCOVER_LUT = {
     10: "Unspecified cropland",
     11: "Temporary crops",
