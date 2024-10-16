@@ -1,6 +1,6 @@
 # ESA WorldCereal classification module <!-- omit in toc -->
 [![Tests](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml/badge.svg)](https://github.com/WorldCereal/worldcereal-classification/actions/workflows/ci.yaml) [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![DOI](https://img.shields.io/badge/DOI-10.5194/essd--15--5491--2023-blue)](https://doi.org/10.5194/essd-15-5491-2023)
- [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)](https://terrascope-url) [![Documentation](https://img.shields.io/badge/docs-WorldCereal%20Documentation-blue)](https://worldcereal.github.io/worldcereal-documentation/) [![Discuss Forum](https://img.shields.io/badge/discuss-forum-ED1965?logo=discourse&logoColor=white)](https://forum.esa-worldcereal.org/)
+ [![Terrascope Environment](https://img.shields.io/badge/try%20on-Terrascope-blue)]([https://terrascope-url](https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_default_cropland.ipynb&branch=main)) [![Documentation](https://img.shields.io/badge/docs-WorldCereal%20Documentation-blue)](https://worldcereal.github.io/worldcereal-documentation/) [![Discuss Forum](https://img.shields.io/badge/discuss-forum-ED1965?logo=discourse&logoColor=white)](https://forum.esa-worldcereal.org/)
 
 
 <p align="center">
@@ -31,7 +31,7 @@ In order to run classification jobs on CDSE, users can get started with [**month
 
 You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment. Just register as a new user on Terrascope or use one of the supported EGI eduGAIN login methods to get started. Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. 
 
-[![Terrascope Environment](https://img.shields.io/badge/run%20on-Terrascope-blue)](https://terrascope-url)
+[![Terrascope Environment](https://img.shields.io/badge/run%20on-Terrascope-blue)]([https://terrascope-url](https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_default_cropland.ipynb&branch=main))
 
 #### Option 2: Install Locally
 
