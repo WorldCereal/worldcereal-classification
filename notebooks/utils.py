@@ -653,7 +653,7 @@ def train_classifier(
 
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
-        iterations=8000,
+        iterations=2000,  # Not too high to avoid too large model size
         depth=8,
         early_stopping_rounds=50,
         loss_function=loss_function,
