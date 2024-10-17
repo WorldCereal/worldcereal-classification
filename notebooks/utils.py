@@ -50,7 +50,7 @@ class date_slider:
             continuous_update=False,
             readout=True,
             behaviour="drag",
-            layout={"width": "80%", "height": "100px", "margin": "0 auto 0 auto"},
+            layout={"width": "90%", "height": "100px", "margin": "0 auto 0 auto"},
             style={
                 "handle_color": "dodgerblue",
             },
@@ -83,34 +83,13 @@ class date_slider:
             """
         )
 
-        # Generate a list of dates for the ticks every 3 months
-        tick_dates = pd.date_range(
-            self.start_date, self.end_date + pd.DateOffset(months=3), freq="5ME"
-        )
-
-        # Create a list of tick labels in the format "Aug 2023"
-        tick_labels = [date.strftime("%b<br>%Y") for date in tick_dates]
-
-        # Calculate the positions of the ticks to align them with the slider
-        total_days = (self.end_date - self.start_date).days
-        tick_positions = [
-            ((date - self.start_date).days / total_days * 100) for date in tick_dates
-        ]
-
-        # Create a text widget to display the tick labels with calculated positions
-        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 86%; height: 20px; margin-top: -20px;'>"
-        for label, position in zip(tick_labels, tick_positions):
-            tick_widget_html += f"<div style='position: absolute; left: {position}%; transform: translateX(-50%);'>{label}</div>"
-        tick_widget_html += "</div>"
-
-        tick_widget = widgets.HTML(
-            value=tick_widget_html, layout={"width": "80%", "margin": "0 auto 0 auto"}
-        )
-
         # Arrange the text widget, interval slider, and tick widget using VBox
         vbox_with_ticks = widgets.VBox(
-            [descr_widget, self.interval_slider, tick_widget],
-            layout={"height": "200px"},
+            [
+                descr_widget,
+                self.interval_slider,
+            ],
+            layout={"height": "150px"},
         )
 
         display(vbox_with_ticks)
