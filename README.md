@@ -28,7 +28,10 @@ In order to run classification jobs on CDSE, users can get started with [monthly
 
 #### Option 1: Run on Terrascope
 
-You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment. Just register as a new user on Terrascope or use one of the supported EGI eduGAIN login methods to get started. Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. Did you chose "Terrascope" by accident? Then go to File > Hub Control Panel > Stop my server, and click the link below once again. 
+You can use a preconfigured environment on [**Terrascope**](https://terrascope.be/en) to run the workflows in a Jupyter notebook environment. Just register as a new user on Terrascope or use one of the supported EGI eduGAIN login methods to get started.
+
+| :point_up:    | Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. Did you choose "Terrascope" by accident? Then go to File > Hub Control Panel > Stop my server, and click the link below once again.  |
+|---------------|:------------------------|
 
 - For a cropland map generation demo without any model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_default_cropland.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
 - For a croptype map generation demo with model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_custom_croptype.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20croptype%20demo-Terrascope-brightgreen" alt="Run croptype demo" valign="middle"></a>
