@@ -1,6 +1,7 @@
 import ast
 import copy
 import logging
+import pickle
 import random
 from calendar import monthrange
 from datetime import datetime, timedelta
@@ -847,6 +848,39 @@ def prepare_visualization(results):
         final_paths[product] = paths
 
     return final_paths
+
+
+def _results_to_pickle(results, output_dir):
+    """Save the results of an openeo inference run to a pickle file.
+
+    Parameters
+    ----------
+    results : WorldCereal InferenceResults object
+        Results object containing the results to save.
+    output_dir : Path
+        Directory where the results will be saved.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "results.pkl", "wb") as f:
+        pickle.dump(results, f)
+
+
+def _results_from_pickle(output_dir):
+    """Load the results from a pickle file.
+
+    Parameters
+    ----------
+    output_dir : Path
+        Path to the output directory containing the results.
+
+    Returns
+    -------
+    WorldCereal InferenceResults
+        Results object containing the loaded results from an openeo inference run.
+    """
+    with open(output_dir / "results.pkl", "rb") as f:
+        results = pickle.load(f)
+    return results
 
 
 ############# PRODUCT VISUALIZATION #############
