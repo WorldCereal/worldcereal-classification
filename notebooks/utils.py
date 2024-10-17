@@ -176,6 +176,15 @@ def select_landcover(df: pd.DataFrame):
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
+    from IPython.display import Markdown
+
+    nodata_helper_message = """
+    ### What to do?
+    1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
+    2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://ewoc-rdm-ui.iiasa.ac.at/map).
+    3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
+    4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
+    """
 
     # CREATING A HIERARCHICAL LAYOUT OF OPTIONS
     # ==========================================
@@ -240,8 +249,12 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     )
 
     if len(class_counts) == 1:
-        logger.warning(
+        logger.error(
             f"Only one class remained after aggregation with threshold {samples_threshold}. Consider lowering the threshold."
+        )
+        Markdown(nodata_helper_message)
+        raise ValueError(
+            "Only one class remained after aggregation. Please lower the threshold."
         )
 
     # Convert to a hierarchically arranged dictionary
