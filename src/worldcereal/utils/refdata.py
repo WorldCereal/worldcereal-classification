@@ -333,9 +333,14 @@ def process_parquet(
         public_df_raw["valid_date"] = public_df_raw["sample_id"].map(
             sample_dates.set_index("sample_id")["proposed_valid_date"]
         )
-        logger.warning(
-            f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
-        )
+        if public_df_raw.empty:
+            error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        else:
+            logger.warning(
+                f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
+            )
 
     public_df = process_parquet_for_presto(public_df_raw)
 
