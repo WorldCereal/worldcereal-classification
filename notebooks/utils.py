@@ -49,9 +49,9 @@ class date_slider:
             index=(0, 11),  # Default to a 11-month interval
             orientation="horizontal",
             continuous_update=False,
-            readout=True,
+            readout=False,
             behaviour="drag",
-            layout={"width": "80%", "height": "100px", "margin": "0 auto 0 auto"},
+            layout={"width": "90%", "height": "100px", "margin": "0 auto 0 auto"},
             style={
                 "handle_color": "dodgerblue",
             },
@@ -61,6 +61,14 @@ class date_slider:
             pd.to_datetime(start_date) + pd.DateOffset(months=12) - timedelta(days=1),
         ]
 
+        self.selected_range_widget = widgets.HTML(
+            value=self._get_selected_range_html(),
+            layout={"width": "100%", "margin": "0 auto 0 auto"},
+        )
+
+    def _get_selected_range_html(self):
+        return f"<div style='text-align: center; font-size: 14px; position: relative; width: 100%; height: 10px; margin-top: 20px;'>Selected range: {self.selected_range[0].strftime('%d %b %Y')} to {self.selected_range[1].strftime('%d %b %Y')}</div>"
+
     def on_slider_change(self, change):
         start, end = change["new"]
         # keep the interval fixed
@@ -69,6 +77,7 @@ class date_slider:
             end = start + pd.DateOffset(months=11)
             self.interval_slider.value = (start, end)
         self.selected_range = (start, end + pd.DateOffset(months=1) - timedelta(days=1))
+        self.selected_range_widget.value = self._get_selected_range_html()
 
     def show_slider(self):
         self.interval_slider.observe(self.on_slider_change, names="value")
@@ -86,7 +95,7 @@ class date_slider:
 
         # Generate a list of dates for the ticks every 3 months
         tick_dates = pd.date_range(
-            self.start_date, self.end_date + pd.DateOffset(months=3), freq="5ME"
+            self.start_date, self.end_date + pd.DateOffset(months=3), freq="4ME"
         )
 
         # Create a list of tick labels in the format "Aug 2023"
@@ -99,19 +108,25 @@ class date_slider:
         ]
 
         # Create a text widget to display the tick labels with calculated positions
-        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; width: 86%; height: 20px; margin-top: -20px;'>"
+        tick_widget_html = "<div style='text-align: center; font-size: 12px; position: relative; height: 20px; margin-top: -40px; margin-left: 50px; margin-right: 80px'>"
         for label, position in zip(tick_labels, tick_positions):
             tick_widget_html += f"<div style='position: absolute; left: {position}%; transform: translateX(-50%);'>{label}</div>"
         tick_widget_html += "</div>"
 
         tick_widget = widgets.HTML(
-            value=tick_widget_html, layout={"width": "80%", "margin": "0 auto 0 auto"}
+            value=tick_widget_html,
+            layout={"width": "100%", "margin": "0 auto 100 auto"},
         )
 
         # Arrange the text widget, interval slider, and tick widget using VBox
         vbox_with_ticks = widgets.VBox(
-            [descr_widget, self.interval_slider, tick_widget],
-            layout={"height": "200px"},
+            [
+                descr_widget,
+                self.interval_slider,
+                tick_widget,
+                self.selected_range_widget,
+            ],
+            layout={"height": "220px"},
         )
 
         display(vbox_with_ticks)
