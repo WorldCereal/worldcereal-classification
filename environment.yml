@@ -36,5 +36,6 @@ dependencies:
     - duckdb==1.1.0
     - h3==3.7.7
     - openeo-gfmap==0.2.0
+    - git+https://github.com/worldcereal/worldcereal-classification
     - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
 
