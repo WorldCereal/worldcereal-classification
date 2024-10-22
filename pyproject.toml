@@ -48,6 +48,7 @@ dependencies = [
     "pydantic==2.8.0",  
     "rioxarray>=0.13.0",  
     "scipy",
+    "duckdb>=1.1.0",
     "tqdm",
     "xarray>=2022.3.0"
   ]
