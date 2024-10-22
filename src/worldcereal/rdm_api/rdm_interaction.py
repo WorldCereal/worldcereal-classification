@@ -10,8 +10,10 @@ from openeo.rest.auth.oidc import (
     OidcDeviceAuthenticator,
     OidcProviderInfo,
 )
+from requests.adapters import HTTPAdapter
 from shapely import wkb
 from shapely.geometry.base import BaseGeometry
+from urllib3.util.retry import Retry
 
 
 class NoIntersectingCollections(Exception):
@@ -33,8 +35,24 @@ class RdmInteraction:
     # RDM API Endpoint
     RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
 
-    def __init__(self):
+    MAX_RETRIES = 5
+
+    def __init__(self, resilient: bool = True):
         self.headers = None
+        self.session = requests.Session()
+        if resilient:
+            self._make_resilient()
+
+    def _make_resilient(self):
+        """Make the session resilient to connection errors."""
+        retries = Retry(
+            total=self.MAX_RETRIES,
+            backoff_factor=0.1,
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retries))
+        self.session.mount("http://", HTTPAdapter(max_retries=retries))
 
     def authenticate(self):
         """Authenticate the user with the RDM API via device code flow."""
@@ -107,7 +125,7 @@ class RdmInteraction:
 
         url = f"{self.RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
 
-        response = requests.get(url=url, headers=self._get_headers())
+        response = self.session.get(url=url, headers=self._get_headers(), timeout=10)
 
         if response.status_code != 200:
             raise Exception(f"Error fetching collections: {response.text}")
@@ -142,7 +160,7 @@ class RdmInteraction:
 
         for id in collection_ids:
             url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
-            response = requests.get(url, headers=self._get_headers())
+            response = self.session.get(url, headers=self._get_headers(), timeout=10)
             if response.status_code != 200:
                 raise Exception(
                     f"Failed to get download URL for collection {id}: {response.text}"

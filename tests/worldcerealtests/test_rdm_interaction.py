@@ -18,7 +18,7 @@ def sample_temporal_extent():
 
 
 class TestRdmInteraction:
-    @patch("requests.get")
+    @patch("requests.Session.get")
     def test_collections_from_rdm(
         self, mock_requests_get, sample_polygon, sample_temporal_extent
     ):
@@ -40,7 +40,7 @@ class TestRdmInteraction:
         temporal = f"&ValidityTime.Start={sample_temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={sample_temporal_extent[1]}T00%3A00%3A00Z"
         expected_url = f"{interaction.RDM_ENDPOINT}/collections/search?{geom}{temporal}"
         mock_requests_get.assert_called_with(
-            url=expected_url, headers={"accept": "*/*"}
+            url=expected_url, headers={"accept": "*/*"}, timeout=10
         )
 
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._get_download_urls")
