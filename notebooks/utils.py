@@ -885,7 +885,7 @@ def visualize_classification(rasters, product):
 
     # Get class labels and set colorbar boundaries
     classlabels = list(lut.keys())
-    bounds = list(np.unique(arr_classif))  # Class boundaries
+    bounds = np.linspace(0, len(classlabels), len(classlabels) + 1)
 
     # Define a norm for the colormap
     norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
@@ -894,14 +894,12 @@ def visualize_classification(rasters, product):
     ax.imshow(arr_classif, cmap=cmap, norm=norm)
 
     # Create a colorbar with class labels
-    bounds_colorbar = np.linspace(0, len(classlabels), len(classlabels) + 1)
-    norm_colorbar = mpl.colors.BoundaryNorm(bounds_colorbar, cmap.N)
     cb = mpl.colorbar.ColorbarBase(
         ax2,
         cmap=cmap,
-        norm=norm_colorbar,
+        norm=norm,
         spacing="proportional",
-        boundaries=bounds_colorbar,
+        boundaries=bounds,
         # Middle of each class
         ticks=np.arange(len(classlabels)) + 0.5,
         format="%1i",
