@@ -199,10 +199,6 @@ def raw_datacube_S1(
             orbit_direction = select_s1_orbitstate_vvvh(
                 backend_context, spatial_extent, temporal_extent
             )
-            print(
-                f"Selected orbit direction: {orbit_direction} from max "
-                "accumulated area overlap between bounds and products."
-            )
         except UncoveredS1Exception as exc:
             orbit_direction = "ASCENDING"
             print(
@@ -264,15 +260,17 @@ def raw_datacube_DEM(
         if isinstance(spatial_extent, BoundingBoxExtent):
             spatial_extent = dict(spatial_extent)
 
-        slope = (
-            connection.load_stac(
-                "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
-                spatial_extent=spatial_extent,
-                bands=["Slope"],
-            )
-            .rename_labels(dimension="bands", target=["slope"])
-            .min_time()
-        )
+        slope = connection.load_stac(
+            "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
+            spatial_extent=spatial_extent,
+            bands=["Slope"],
+        ).rename_labels(dimension="bands", target=["slope"])
+        # Client fix for CDSE, the openeo client might be unsynchronized with
+        # the backend.
+        if "t" not in slope.metadata.dimension_names():
+            slope.metadata = slope.metadata.add_dimension("t", "2020-01-01", "temporal")
+        slope = slope.min_time()
+
         # Note that when slope is available we use it as the base cube
         # to merge DEM with, as it comes at 20m resolution.
         cube = slope.merge_cubes(cube)
@@ -323,7 +321,8 @@ def precomposited_datacube_METEO(
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
-    cube.result_node().update_arguments(featureflags={"tilesize": 1})
+
+    # cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
         dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
     )
@@ -419,6 +418,9 @@ def worldcereal_preprocessed_inputs(
             temporal_extent=temporal_extent,
         )
 
+        # Explicitly resample meteo with bilinear interpolation
+        meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
+
         data = data.merge_cubes(meteo_data)
 
     return data
@@ -427,6 +429,8 @@ def worldcereal_preprocessed_inputs(
 def _validate_temporal_context(temporal_context: TemporalContext) -> None:
     """validation method to ensure proper specification of temporal context.
     which requires that the start and end date are at the first and last day of a month.
+    We also check if the temporal context does not span more than a year which is
+    currently not supported.
 
     Parameters
     ----------
@@ -437,7 +441,8 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
     ------
     InvalidTemporalContextError
         if start_date is not on the first day of a month or end_date
-        is not on the last day of a month
+        is not on the last day of a month or the span is more than
+        one year.
     """
 
     start_date, end_date = temporal_context.to_datetime()
@@ -452,6 +457,14 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
             f"{temporal_context.start_date} - {temporal_context.end_date}. "
             "You may use `worldcereal.preprocessing.correct_temporal_context()` "
             "to correct the temporal context."
+        )
+        raise InvalidTemporalContextError(error_msg)
+
+    if pd.Timedelta(end_date - start_date).days > 365:
+        error_msg = (
+            "WorldCereal currently does not support temporal ranges spanning "
+            "more than a year. Got: "
+            f"{temporal_context.start_date} - {temporal_context.end_date}."
         )
         raise InvalidTemporalContextError(error_msg)
 

@@ -187,7 +187,8 @@ def post_job_action(
             "S2-L2A-B12",
             "S1-SIGMA0-VH",
             "S1-SIGMA0-VV",
-            "COP-DEM",
+            "elevation",
+            "slope",
             "AGERA5-PRECIP",
             "AGERA5-TMEAN",
         ]

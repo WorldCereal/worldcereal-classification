@@ -7,7 +7,8 @@ from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
-from worldcereal.job import WorldCerealProduct, generate_map
+from worldcereal.job import WorldCerealProductType, generate_map
+from worldcereal.parameters import PostprocessParameters
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -39,6 +40,16 @@ if __name__ == "__main__":
         default=4326,
         help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
     )
+    parser.add_argument(
+        "--postprocess",
+        action="store_true",
+        help="Run postprocessing on the croptype and/or the cropland product after inference.",
+    )
+    parser.add_argument(
+        "--class-probabilities",
+        action="store_true",
+        help="Output per-class probabilities in the resulting product",
+    )
 
     args = parser.parse_args()
 
@@ -63,13 +74,16 @@ if __name__ == "__main__":
     spatial_extent = BoundingBoxExtent(minx, miny, maxx, maxy, epsg)
     temporal_extent = TemporalContext(start_date, end_date)
 
-    backend_context = BackendContext(Backend.FED)
+    backend_context = BackendContext(Backend.CDSE)
 
     job_results = generate_map(
         spatial_extent,
         temporal_extent,
         args.output_path,
-        product_type=WorldCerealProduct(product),
+        product_type=WorldCerealProductType(product),
+        postprocess_parameters=PostprocessParameters(
+            enable=args.postprocess, keep_class_probs=args.class_probabilities
+        ),
         out_format="GTiff",
         backend_context=backend_context,
     )
