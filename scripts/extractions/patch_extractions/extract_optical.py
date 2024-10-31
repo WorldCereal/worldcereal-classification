@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
 
-from extract_common import (  # isort: skip
+from worldcereal.openeo.extract_common import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
