@@ -24,9 +24,10 @@ from patch_extractions.extract_optical import (
     create_datacube_optical,
     create_job_dataframe_s2,
 )
-from point_extractions.extract_point import (
+from point_extractions.extract_worldcereal import (
     create_datacube_point,
     create_job_dataframe_point,
+    generate_output_path_point,
 )
 
 from worldcereal.openeo.extract import (
@@ -206,6 +207,7 @@ def setup_extraction_functions(
         ExtractionCollection.WORLDCEREAL: partial(
             generate_output_path_worldcereal, s2_grid=load_s2_grid()
         ),
+        ExtractionCollection.POINT: partial(generate_output_path_point),
     }
 
     path_fn = path_fns.get(

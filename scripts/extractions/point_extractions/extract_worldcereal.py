@@ -17,17 +17,29 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 # from worldcereal.openeo.extract_common import pipeline_log
 
 
-# TODO: this is an example output_path. Adjust this function to your needs for production.
-def generate_output_path(root_folder: Path, geometry_index: int, row: pd.Series):
+def generate_output_path_point(root_folder: Path, geometry_index: int, row: pd.Series):
+    """
+    For point extractions, only one asset (a geoparquet file) is generated per job.
+    Therefore geometry_index is always 0.
+    It has to be included in the function signature to be compatible with the GFMapJobManager.
+    """
     features = geojson.loads(row.geometry)
-    sample_id = features[geometry_index].properties.get("sample_id", None)
-    if sample_id is None:
-        sample_id = features[geometry_index].properties["sampleID"]
+    ref_id = features[geometry_index].properties["ref_id"]
 
     s2_tile_id = row.s2_tile
 
-    subfolder = root_folder / s2_tile_id
-    return subfolder / f"{sample_id}{row.out_extension}"
+    subfolder = root_folder / ref_id / s2_tile_id
+
+    # Subfolder is not necessarily unique, so we create numbered folders.
+    if not any(subfolder.iterdir()):
+        real_subfolder = subfolder / "0"
+    else:
+        i = 0
+        while (subfolder / str(i)).exists():
+            i += 1
+        real_subfolder = subfolder / str(i)
+
+    return real_subfolder / f"point_extractions{row.out_extension}"
 
 
 def create_job_dataframe_point(
