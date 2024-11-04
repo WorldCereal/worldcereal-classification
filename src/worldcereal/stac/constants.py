@@ -12,6 +12,7 @@ class ExtractionCollection(Enum):
     SENTINEL2 = "SENTINEL2"
     METEO = "METEO"
     WORLDCEREAL = "WORLDCEREAL"
+    POINTS = "POINTS"
 
 
 # Define the sentinel 1 asset

@@ -11,27 +11,38 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import requests
-from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo
-from extract_optical import create_datacube_optical, create_job_dataframe_s2
 from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
+from patch_extractions.extract_meteo import (
+    create_datacube_meteo,
+    create_job_dataframe_meteo,
+)
+from patch_extractions.extract_optical import (
+    create_datacube_optical,
+    create_job_dataframe_s2,
+)
+from point_extractions.extract_point import (
+    create_datacube_point,
+    create_job_dataframe_point,
+)
 
-from worldcereal.openeo.extract_common import (
+from worldcereal.openeo.extract import (
     generate_output_path,
     pipeline_log,
     post_job_action,
 )
 from worldcereal.stac.constants import ExtractionCollection
 
-from extract_sar import (  # isort: skip
+from patch_extractions.extract_sar import (  # isort: skip
     create_datacube_sar,
     create_job_dataframe_s1,
 )
 
-from extract_worldcereal import (  # isort: skip
+
+from patch_extractions.extract_worldcereal import (  # isort: skip
     create_datacube_worldcereal,
     create_job_dataframe_worldcereal,
     post_job_action_worldcereal,
@@ -112,6 +123,7 @@ def prepare_job_dataframe(
         ExtractionCollection.SENTINEL2: create_job_dataframe_s2,
         ExtractionCollection.METEO: create_job_dataframe_meteo,
         ExtractionCollection.WORLDCEREAL: create_job_dataframe_worldcereal,
+        ExtractionCollection.POINT: create_job_dataframe_point,
     }
 
     create_job_dataframe_fn = collection_switch.get(
@@ -162,6 +174,12 @@ def setup_extraction_functions(
         ),
         ExtractionCollection.WORLDCEREAL: partial(
             create_datacube_worldcereal,
+            executor_memory=memory,
+            python_memory=python_memory,
+            max_executors=max_executors,
+        ),
+        ExtractionCollection.POINT: partial(
+            create_datacube_point,
             executor_memory=memory,
             python_memory=python_memory,
             max_executors=max_executors,

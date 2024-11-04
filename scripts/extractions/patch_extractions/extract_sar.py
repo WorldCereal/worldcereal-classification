@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S1
 
-from worldcereal.openeo.extract_common import (  # isort: skip
+from worldcereal.openeo.extract import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip

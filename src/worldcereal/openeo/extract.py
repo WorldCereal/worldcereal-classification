@@ -40,7 +40,6 @@ class ManagerLoggerFilter(logging.Filter):
 
 stream_handler.addFilter(ManagerLoggerFilter())
 
-
 def post_job_action(
     job_items: List[pystac.Item],
     row: pd.Series,
