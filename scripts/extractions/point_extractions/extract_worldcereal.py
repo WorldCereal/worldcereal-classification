@@ -138,7 +138,7 @@ def create_datacube_point(
     )
 
 
-def post_job_action(
+def post_job_action_point(
     job_items: List[pystac.Item], row: pd.Series, parameters: Optional[dict] = None
 ) -> list:
     for idx, item in enumerate(job_items):

@@ -247,6 +247,9 @@ def setup_extraction_functions(
             title="WorldCereal inputs",
             spatial_resolution="10m",
         ),
+        ExtractionCollection.POINT: partial(
+            post_job_action,
+        ),
     }
 
     post_job_fn = post_job_actions.get(
