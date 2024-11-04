@@ -11,7 +11,7 @@ import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
-from worldcereal.openeo.extract import get_job_nb_points, pipeline_log
+from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 # from worldcereal.openeo.extract_common import pipeline_log
@@ -29,6 +29,8 @@ def generate_output_path_point(root_folder: Path, geometry_index: int, row: pd.S
     s2_tile_id = row.s2_tile
 
     subfolder = root_folder / ref_id / s2_tile_id
+
+    subfolder.mkdir(parents=True, exist_ok=True)
 
     # Subfolder is not necessarily unique, so we create numbered folders.
     if not any(subfolder.iterdir()):
@@ -116,7 +118,7 @@ def create_datacube_point(
     cube = inputs.aggregate_spatial(geometries=geometry, reducer="mean")
 
     # Increase the memory of the jobs depending on the number of polygons to extract
-    number_points = get_job_nb_points(row)
+    number_points = get_job_nb_polygons(row)
     if pipeline_log is not None:
         pipeline_log.debug("Number of polygons to extract %s", number_points)
 
@@ -164,7 +166,6 @@ def post_job_action_point(
             "S1-SIGMA0-VH",
             "S1-SIGMA0-VV",
             "elevation",
-            "slope",
             "AGERA5-PRECIP",
             "AGERA5-TMEAN",
         ]
