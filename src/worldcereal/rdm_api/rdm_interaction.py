@@ -37,9 +37,10 @@ class RdmInteraction:
 
     MAX_RETRIES = 5
 
-    def __init__(self, resilient: bool = True):
+    def __init__(self, sample: bool = True, resilient: bool = True):
         self.headers = None
         self.session = requests.Session()
+        self.sample = sample
         if resilient:
             self._make_resilient()
 
@@ -159,7 +160,10 @@ class RdmInteraction:
         urls = []
 
         for id in collection_ids:
-            url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
+            if self.sample:
+                url = f"{self.RDM_ENDPOINT}/collections/{id}/sample/download"
+            else:
+                url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
             response = self.session.get(url, headers=self._get_headers(), timeout=10)
             if response.status_code != 200:
                 raise Exception(
