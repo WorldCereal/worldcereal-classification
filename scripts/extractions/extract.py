@@ -24,7 +24,7 @@ from patch_extractions.extract_optical import (
     create_datacube_optical,
     create_job_dataframe_s2,
 )
-from point_extractions.extract_worldcereal import (
+from point_extractions.extract_point import (
     create_datacube_point,
     create_job_dataframe_point,
     generate_output_path_point,

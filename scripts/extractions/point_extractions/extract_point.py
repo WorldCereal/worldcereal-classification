@@ -17,8 +17,6 @@ from worldcereal.openeo.preprocessing import (
     worldcereal_preprocessed_inputs,
 )
 
-# from worldcereal.openeo.extract_common import pipeline_log
-
 
 def generate_output_path_point(root_folder: Path, geometry_index: int, row: pd.Series):
     """
