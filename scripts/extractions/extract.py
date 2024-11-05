@@ -28,6 +28,7 @@ from point_extractions.extract_worldcereal import (
     create_datacube_point,
     create_job_dataframe_point,
     generate_output_path_point,
+    post_job_action_point,
 )
 
 from worldcereal.openeo.extract import (
@@ -248,7 +249,7 @@ def setup_extraction_functions(
             spatial_resolution="10m",
         ),
         ExtractionCollection.POINT: partial(
-            post_job_action,
+            post_job_action_point,
         ),
     }
 

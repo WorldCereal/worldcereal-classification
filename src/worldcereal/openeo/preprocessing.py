@@ -337,12 +337,14 @@ def worldcereal_preprocessed_inputs(
     temporal_extent: TemporalContext,
     fetch_type: Optional[FetchType] = FetchType.TILE,
     disable_meteo: bool = False,
+    validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
 ) -> DataCube:
 
     # First validate the temporal context
-    _validate_temporal_context(temporal_extent)
+    if validate_temporal_context:
+        _validate_temporal_context(temporal_extent)
 
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(

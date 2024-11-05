@@ -12,7 +12,10 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
 from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+from worldcereal.openeo.preprocessing import (
+    worldcereal_preprocessed_inputs,
+    correct_temporal_context,
+)
 
 # from worldcereal.openeo.extract_common import pipeline_log
 
@@ -95,7 +98,9 @@ def create_datacube_point(
     """Creates an OpenEO BatchJob from the given row information."""
 
     # Load the temporal and spatial extent
-    temporal_extent = TemporalContext(row.start_date, row.end_date)
+    temporal_extent = correct_temporal_context(
+        TemporalContext(row.start_date, row.end_date)
+    )
 
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
@@ -112,6 +117,7 @@ def create_datacube_point(
         spatial_extent=geometry,
         temporal_extent=temporal_extent,
         fetch_type=FetchType.POINT,
+        validate_temporal_context=False,
     )
 
     # Finally, create a vector cube based on the Point geometries
