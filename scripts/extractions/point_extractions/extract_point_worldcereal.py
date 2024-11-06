@@ -12,10 +12,7 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
 from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
-from worldcereal.openeo.preprocessing import (
-    correct_temporal_context,
-    worldcereal_preprocessed_inputs,
-)
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 
 def generate_output_path_point_worldcereal(
@@ -98,9 +95,7 @@ def create_job_point_worldcereal(
     """Creates an OpenEO BatchJob from the given row information."""
 
     # Load the temporal and spatial extent
-    temporal_extent = correct_temporal_context(
-        TemporalContext(row.start_date, row.end_date)
-    )
+    temporal_extent = TemporalContext(row.start_date, row.end_date)
 
     # Get the feature collection containing the geometry to the job
     geometry = geojson.loads(row.geometry)
