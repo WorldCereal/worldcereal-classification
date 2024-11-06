@@ -41,7 +41,7 @@ class ManagerLoggerFilter(logging.Filter):
 stream_handler.addFilter(ManagerLoggerFilter())
 
 
-def post_job_action(
+def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
     extract_value: int,
@@ -131,7 +131,7 @@ def post_job_action(
     return job_items
 
 
-def generate_output_path(
+def generate_output_path_patch(
     root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
 ):
     """Generate the output path for the extracted data, from a base path and

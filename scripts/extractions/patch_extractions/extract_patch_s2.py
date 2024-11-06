@@ -23,7 +23,7 @@ from worldcereal.openeo.extract import (  # isort: skip
 S2_L2A_CATALOGUE_BEGIN_DATE = datetime(2017, 1, 1)
 
 
-def create_job_dataframe_s2(
+def create_job_dataframe_patch_s2(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
 ) -> pd.DataFrame:
@@ -67,7 +67,7 @@ def create_job_dataframe_s2(
     return pd.DataFrame(rows)
 
 
-def create_datacube_optical(
+def create_job_patch_s2(
     row: pd.Series,
     connection: openeo.DataCube,
     provider=None,

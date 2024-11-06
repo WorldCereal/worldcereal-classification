@@ -18,7 +18,9 @@ from worldcereal.openeo.preprocessing import (
 )
 
 
-def generate_output_path_point(root_folder: Path, geometry_index: int, row: pd.Series):
+def generate_output_path_point_worldcereal(
+    root_folder: Path, geometry_index: int, row: pd.Series
+):
     """
     For point extractions, only one asset (a geoparquet file) is generated per job.
     Therefore geometry_index is always 0.
@@ -45,7 +47,7 @@ def generate_output_path_point(root_folder: Path, geometry_index: int, row: pd.S
     return real_subfolder / f"point_extractions{row.out_extension}"
 
 
-def create_job_dataframe_point(
+def create_job_dataframe_point_worldcereal(
     backend: Backend, split_jobs: List[gpd.GeoDataFrame]
 ) -> pd.DataFrame:
     """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
@@ -84,7 +86,7 @@ def create_job_dataframe_point(
     return pd.DataFrame(rows)
 
 
-def create_datacube_point(
+def create_job_point_worldcereal(
     row: pd.Series,
     connection: openeo.DataCube,
     provider,
@@ -144,7 +146,7 @@ def create_datacube_point(
     )
 
 
-def post_job_action_point(
+def post_job_action_point_worldcereal(
     job_items: List[pystac.Item], row: pd.Series, parameters: Optional[dict] = None
 ) -> list:
     for idx, item in enumerate(job_items):

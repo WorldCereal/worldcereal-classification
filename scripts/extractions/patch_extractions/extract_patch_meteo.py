@@ -15,13 +15,13 @@ from worldcereal.openeo.extract import (  # isort: skip
 )  # isort: skip
 
 
-def create_job_dataframe_meteo(
+def create_job_dataframe_patch_meteo(
     backend: Backend, split_jobs: List[gpd.GeoDataFrame]
 ) -> pd.DataFrame:
     raise NotImplementedError("This function is not implemented yet.")
 
 
-def create_datacube_meteo(
+def create_job_patch_meteo(
     row: pd.Series,
     connection: openeo.DataCube,
     provider=None,

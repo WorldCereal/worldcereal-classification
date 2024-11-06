@@ -43,7 +43,7 @@ from worldcereal.openeo.extract import (  # isort: skip
 WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 
 
-def create_job_dataframe_worldcereal(
+def create_job_dataframe_patch_worldcereal(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
 ) -> pd.DataFrame:
@@ -119,7 +119,7 @@ def create_job_dataframe_worldcereal(
     return pd.DataFrame(rows)
 
 
-def create_datacube_worldcereal(
+def create_job_patch_worldcereal(
     row: pd.Series,
     connection: openeo.DataCube,
     provider,
@@ -333,7 +333,7 @@ def postprocess_extracted_file(
     shutil.move(tempfile, item_asset_path)
 
 
-def post_job_action_worldcereal(
+def post_job_action_patch_worldcereal(
     job_items: List[pystac.Item],
     row: pd.Series,
     extract_value: int,
@@ -397,7 +397,7 @@ def post_job_action_worldcereal(
     return job_items
 
 
-def generate_output_path_worldcereal(
+def generate_output_path_patch_worldcereal(
     root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
 ):
     """Generate the output path for the extracted data, from a base path and

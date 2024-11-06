@@ -30,7 +30,7 @@ from worldcereal.openeo.extract import (  # isort: skip
 S1_GRD_CATALOGUE_BEGIN_DATE = datetime(2014, 10, 1)
 
 
-def create_job_dataframe_s1(
+def create_job_dataframe_patch_s1(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
 ) -> pd.DataFrame:
@@ -117,7 +117,7 @@ def create_job_dataframe_s1(
     return pd.DataFrame(rows)
 
 
-def create_datacube_sar(
+def create_job_patch_s1(
     row: pd.Series,
     connection: openeo.DataCube,
     provider,
