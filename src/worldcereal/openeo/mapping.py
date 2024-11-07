@@ -51,8 +51,8 @@ def _cropland_map(
         cube=inputs,
         parameters=cropland_parameters.feature_parameters.model_dump(),
         size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
@@ -74,8 +74,8 @@ def _cropland_map(
         cube=features,
         parameters=parameters,
         size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
             {"dimension": "t", "value": "P1D"},
         ],
         overlap=[
@@ -136,8 +136,8 @@ def _croptype_map(
         cube=inputs,
         parameters=croptype_parameters.feature_parameters.model_dump(),
         size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
@@ -160,8 +160,8 @@ def _croptype_map(
         cube=features,
         parameters=parameters,
         size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
             {"dimension": "t", "value": "P1D"},
         ],
         overlap=[
@@ -230,8 +230,8 @@ def _postprocess(
         cube=classes,
         parameters=parameters,
         size=[
-            {"dimension": "x", "unit": "px", "value": 100},
-            {"dimension": "y", "unit": "px", "value": 100},
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
