@@ -11,27 +11,44 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import requests
-from extract_common import generate_output_path, pipeline_log, post_job_action
-from extract_meteo import create_datacube_meteo, create_job_dataframe_meteo
-from extract_optical import create_datacube_optical, create_job_dataframe_s2
 from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
-
-from worldcereal.stac.constants import ExtractionCollection
-
-from extract_sar import (  # isort: skip
-    create_datacube_sar,
-    create_job_dataframe_s1,
+from patch_extractions.extract_patch_meteo import (
+    create_job_dataframe_patch_meteo,
+    create_job_patch_meteo,
+)
+from patch_extractions.extract_patch_s2 import (
+    create_job_dataframe_patch_s2,
+    create_job_patch_s2,
+)
+from point_extractions.extract_point_worldcereal import (
+    create_job_dataframe_point_worldcereal,
+    create_job_point_worldcereal,
+    generate_output_path_point_worldcereal,
+    post_job_action_point_worldcereal,
 )
 
-from extract_worldcereal import (  # isort: skip
-    create_datacube_worldcereal,
-    create_job_dataframe_worldcereal,
-    post_job_action_worldcereal,
-    generate_output_path_worldcereal,
+from worldcereal.openeo.extract import (
+    generate_output_path_patch,
+    pipeline_log,
+    post_job_action_patch,
+)
+from worldcereal.stac.constants import ExtractionCollection
+
+from patch_extractions.extract_patch_s1 import (  # isort: skip
+    create_job_patch_s1,
+    create_job_dataframe_patch_s1,
+)
+
+
+from patch_extractions.extract_patch_worldcereal import (  # isort: skip
+    create_job_patch_worldcereal,
+    create_job_dataframe_patch_worldcereal,
+    post_job_action_patch_worldcereal,
+    generate_output_path_patch_worldcereal,
 )
 
 
@@ -104,10 +121,11 @@ def prepare_job_dataframe(
 
     pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
     collection_switch: dict[ExtractionCollection, typing.Callable] = {
-        ExtractionCollection.SENTINEL1: create_job_dataframe_s1,
-        ExtractionCollection.SENTINEL2: create_job_dataframe_s2,
-        ExtractionCollection.METEO: create_job_dataframe_meteo,
-        ExtractionCollection.WORLDCEREAL: create_job_dataframe_worldcereal,
+        ExtractionCollection.PATCH_SENTINEL1: create_job_dataframe_patch_s1,
+        ExtractionCollection.PATCH_SENTINEL2: create_job_dataframe_patch_s2,
+        ExtractionCollection.PATCH_METEO: create_job_dataframe_patch_meteo,
+        ExtractionCollection.PATCH_WORLDCEREAL: create_job_dataframe_patch_worldcereal,
+        ExtractionCollection.POINT_WORLDCEREAL: create_job_dataframe_point_worldcereal,
     }
 
     create_job_dataframe_fn = collection_switch.get(
@@ -138,26 +156,32 @@ def setup_extraction_functions(
     """
 
     datacube_creation = {
-        ExtractionCollection.SENTINEL1: partial(
-            create_datacube_sar,
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            create_job_patch_s1,
             executor_memory=memory,
             python_memory=python_memory,
             max_executors=max_executors,
         ),
-        ExtractionCollection.SENTINEL2: partial(
-            create_datacube_optical,
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            create_job_patch_s2,
             executor_memory=memory,
             python_memory=python_memory,
             max_executors=max_executors,
         ),
-        ExtractionCollection.METEO: partial(
-            create_datacube_meteo,
+        ExtractionCollection.PATCH_METEO: partial(
+            create_job_patch_meteo,
             executor_memory=memory,
             python_memory=python_memory,
             max_executors=max_executors,
         ),
-        ExtractionCollection.WORLDCEREAL: partial(
-            create_datacube_worldcereal,
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            create_job_patch_worldcereal,
+            executor_memory=memory,
+            python_memory=python_memory,
+            max_executors=max_executors,
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            create_job_point_worldcereal,
             executor_memory=memory,
             python_memory=python_memory,
             max_executors=max_executors,
@@ -172,17 +196,20 @@ def setup_extraction_functions(
     )
 
     path_fns = {
-        ExtractionCollection.SENTINEL1: partial(
-            generate_output_path, s2_grid=load_s2_grid()
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
         ),
-        ExtractionCollection.SENTINEL2: partial(
-            generate_output_path, s2_grid=load_s2_grid()
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
         ),
-        ExtractionCollection.METEO: partial(
-            generate_output_path, s2_grid=load_s2_grid()
+        ExtractionCollection.PATCH_METEO: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
         ),
-        ExtractionCollection.WORLDCEREAL: partial(
-            generate_output_path_worldcereal, s2_grid=load_s2_grid()
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            generate_output_path_patch_worldcereal, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            generate_output_path_point_worldcereal
         ),
     }
 
@@ -194,34 +221,37 @@ def setup_extraction_functions(
     )
 
     post_job_actions = {
-        ExtractionCollection.SENTINEL1: partial(
-            post_job_action,
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            post_job_action_patch,
             extract_value=extract_value,
             description="Sentinel1 GRD raw observations, unprocessed.",
             title="Sentinel-1 GRD",
             spatial_resolution="20m",
             s1_orbit_fix=True,
         ),
-        ExtractionCollection.SENTINEL2: partial(
-            post_job_action,
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            post_job_action_patch,
             extract_value=extract_value,
             description="Sentinel2 L2A observations, processed.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
         ),
-        ExtractionCollection.METEO: partial(
-            post_job_action,
+        ExtractionCollection.PATCH_METEO: partial(
+            post_job_action_patch,
             extract_value=extract_value,
             description="Meteo observations",
             title="Meteo observations",
             spatial_resolution="1deg",
         ),
-        ExtractionCollection.WORLDCEREAL: partial(
-            post_job_action_worldcereal,
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            post_job_action_patch_worldcereal,
             extract_value=extract_value,
             description="WorldCereal preprocessed inputs",
             title="WorldCereal inputs",
             spatial_resolution="10m",
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            post_job_action_point_worldcereal,
         ),
     }
 

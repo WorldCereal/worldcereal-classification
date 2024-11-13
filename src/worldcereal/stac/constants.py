@@ -8,10 +8,11 @@ import pystac
 class ExtractionCollection(Enum):
     """Collections that can be extracted in the extraction scripts."""
 
-    SENTINEL1 = "SENTINEL1"
-    SENTINEL2 = "SENTINEL2"
-    METEO = "METEO"
-    WORLDCEREAL = "WORLDCEREAL"
+    PATCH_SENTINEL1 = "PATCH_SENTINEL1"
+    PATCH_SENTINEL2 = "PATCH_SENTINEL2"
+    PATCH_METEO = "PATCH_METEO"
+    PATCH_WORLDCEREAL = "PATCH_WORLDCEREAL"
+    POINT_WORLDCEREAL = "POINT_WORLDCEREAL"
 
 
 # Define the sentinel 1 asset
@@ -181,34 +182,34 @@ METEO_ASSET = pystac.extensions.item_assets.AssetDefinition({})
 
 
 COLLECTION_IDS = {
-    ExtractionCollection.SENTINEL1: "SENTINEL1-EXTRACTION",
-    ExtractionCollection.SENTINEL2: "sentinel2-EXTRACTION",
-    ExtractionCollection.METEO: "METEO-EXTRACTION",
-    ExtractionCollection.WORLDCEREAL: "WORLDCEREAL-INPUTS",
+    ExtractionCollection.PATCH_SENTINEL1: "SENTINEL1-EXTRACTION",
+    ExtractionCollection.PATCH_SENTINEL2: "sentinel2-EXTRACTION",
+    ExtractionCollection.PATCH_METEO: "METEO-EXTRACTION",
+    ExtractionCollection.PATCH_WORLDCEREAL: "WORLDCEREAL-INPUTS",
 }
 
 COLLECTION_DESCRIPTIONS = {
-    ExtractionCollection.SENTINEL1: "Sentinel1 GRD data extraction.",
-    ExtractionCollection.SENTINEL2: "Sentinel2 L2A data extraction.",
-    ExtractionCollection.METEO: "Meteo data extraction.",
-    ExtractionCollection.WORLDCEREAL: "WorldCereal preprocessed inputs extraction.",
+    ExtractionCollection.PATCH_SENTINEL1: "Sentinel1 GRD data extraction.",
+    ExtractionCollection.PATCH_SENTINEL2: "Sentinel2 L2A data extraction.",
+    ExtractionCollection.PATCH_METEO: "Meteo data extraction.",
+    ExtractionCollection.PATCH_WORLDCEREAL: "WorldCereal preprocessed inputs extraction.",
 }
 
 CONSTELLATION_NAMES = {
-    ExtractionCollection.SENTINEL1: "sentinel1",
-    ExtractionCollection.SENTINEL2: "sentinel2",
-    ExtractionCollection.METEO: "agera5",
-    ExtractionCollection.WORLDCEREAL: "worldcereal",
+    ExtractionCollection.PATCH_SENTINEL1: "sentinel1",
+    ExtractionCollection.PATCH_SENTINEL2: "sentinel2",
+    ExtractionCollection.PATCH_METEO: "agera5",
+    ExtractionCollection.PATCH_WORLDCEREAL: "worldcereal",
 }
 
 ITEM_ASSETS = {
-    ExtractionCollection.SENTINEL1: {"sentinel1": SENTINEL1_ASSET},
-    ExtractionCollection.SENTINEL2: {"sentinel2": SENTINEL2_ASSET},
-    ExtractionCollection.METEO: {"agera5": METEO_ASSET},
-    ExtractionCollection.WORLDCEREAL: None,
+    ExtractionCollection.PATCH_SENTINEL1: {"sentinel1": SENTINEL1_ASSET},
+    ExtractionCollection.PATCH_SENTINEL2: {"sentinel2": SENTINEL2_ASSET},
+    ExtractionCollection.PATCH_METEO: {"agera5": METEO_ASSET},
+    ExtractionCollection.PATCH_WORLDCEREAL: None,
 }
 
 COLLECTION_REGEXES = {
-    ExtractionCollection.SENTINEL1: r"^S1-SIGMA0-10m_(?:ASCENDING|DESCENDING)_(.*)_[0-9]{4,5}_([0-9]{4}-[0-9]{2}-[0-9]{2}(?:_)?){2}.nc$",
-    ExtractionCollection.SENTINEL2: r"^S2-L2A-10m_(.*)_[0-9]{4,5}_([0-9]{4}-[0-9]{2}-[0-9]{2}(?:_)?){2}.nc$",
+    ExtractionCollection.PATCH_SENTINEL1: r"^S1-SIGMA0-10m_(?:ASCENDING|DESCENDING)_(.*)_[0-9]{4,5}_([0-9]{4}-[0-9]{2}-[0-9]{2}(?:_)?){2}.nc$",
+    ExtractionCollection.PATCH_SENTINEL2: r"^S2-L2A-10m_(.*)_[0-9]{4,5}_([0-9]{4}-[0-9]{2}-[0-9]{2}(?:_)?){2}.nc$",
 }
