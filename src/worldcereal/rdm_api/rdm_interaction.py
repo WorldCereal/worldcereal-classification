@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 import duckdb
 import geopandas as gpd
+import pandas as pd
 import requests
 from loguru import logger
 from openeo.rest.auth.oidc import (
@@ -209,6 +210,52 @@ class RdmInteraction:
 
         return urls
 
+    def get_crop_counts(self, cropcode: int,
+                        collection_ids: Optional[List[str]] = None,
+                        ) -> pd.DataFrame:
+        """Counts the number of items matching a specific crop type for each collection id.
+
+        Parameters
+        ----------
+        cropcode : int
+            The crop code to check for.
+        collection_ids : Optional(List[str]), optional
+            List of collection IDs to check.
+            If not specified, all public collections containing the crop of interest will be checked.
+
+        Returns
+        -------
+        Pandas DataFrame
+            Dataframe containing for each collection id the number of items matching the crop code.
+            If stats are not available, the count will be -9999.
+        """
+        
+        # If no collection IDs are provided,
+        # get all public collections containing the crop of interest
+        if not collection_ids:
+            collection_ids = self.query_collections(ewoc_codes=[cropcode])
+        
+        result = {}
+
+        for col_id in collection_ids:
+            itemUrl = f'{self.RDM_ENDPOINT}/collections/{col_id}/items/codestats'
+            itemsResponse = requests.get(itemUrl)
+            res = itemsResponse.json()
+            if 'ewocStats' in res:
+                stats = res['ewocStats']
+                for stat in stats:
+                    if stat['code'] == cropcode:
+                        result[col_id] = stat['count']
+                        break
+            else:
+                # statistics not available
+                result[col_id] = -9999
+
+        result = pd.DataFrame(result.items(),
+                              columns=['collectionId', 'count'])
+        return result
+        
+        
     def _setup_sql_query(
         self,
         urls: List[str],
