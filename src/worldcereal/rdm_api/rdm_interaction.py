@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import duckdb
 import geopandas as gpd
 import requests
+from loguru import logger
 from openeo.rest.auth.oidc import (
     OidcClientInfo,
     OidcDeviceAuthenticator,
@@ -95,48 +96,87 @@ class RdmInteraction:
             headers.update(self.headers)
         return headers
 
-    def _collections_from_rdm(
+    def query_collections(
         self,
-        geometry: BaseGeometry,
+        geometry: Optional[BaseGeometry] = None,
         temporal_extent: Optional[List[str]] = None,
+        include_public: Optional[bool] = True,
+        include_private: Optional[bool] = False,
+        ewoc_codes: Optional[List[int]] = None,
     ) -> List[str]:
-        """Queries the RDM API and finds all intersection collection IDs for a given geometry and temporal extent.
+        """Queries the RDM API and finds all intersecting collection IDs
+        for a given geometry and temporal extent.
 
         Parameters
         ----------
-        geometry : BaseGeometry
+        geometry : Optional[BaseGeometry], optional
             A user-defined geometry for which all intersecting collection IDs need to be found.
         temporal_extent : Optional[List[str]], optional
             A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        include_public: Optional[bool] = True
+            Whether or not to include public collections.
+        include_private: Optional[bool] = False
+            Whether or not to include private collections.
+            If True, the user must be authenticated. 
+        ewoc_codes: Optional[List[int]] = None
+            A list of EWOC codes to filter the collections by.
+            
         Returns
         -------
         List[str]
-            A List containing the URLs of all intersection collection IDs.
+            A List containing the collection IDs of all collections matching the criteria.
         """
-
-        bbox = geometry.bounds
+        
+        # If user requests private collections, they must be authenticated
+        if include_private:
+            if not self.headers or "Authorization" not in self.headers:
+                logger.error("You must be authenticated to access private collections.")
+                return []
+                
+        # Handle geometry
+        bbox = (
+            geometry.bounds 
+            if geometry
+            else [-180, -90, 180, 90])
         bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
 
+        # Handle temporal extent
         val_time = (
             f"&ValidityTime.Start={temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={temporal_extent[1]}T00%3A00%3A00Z"
             if temporal_extent
             else ""
         )
+        
+        # Handle EWOC codes
+        ewoc_codes_str = (
+            ''.join([f"&EwocCodes={str(ewoc_code)}" for ewoc_code in ewoc_codes])
+            if ewoc_codes
+            else "")
+        
+        # Construct the URL  
+        url = f"{self.RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}{ewoc_codes_str}"
 
-        url = f"{self.RDM_ENDPOINT}/collections/search?{bbox_str}{val_time}"
-
+        # Process the request
         response = self.session.get(url=url, headers=self._get_headers(), timeout=10)
 
         if response.status_code != 200:
             raise Exception(f"Error fetching collections: {response.text}")
 
-        response_json = response.json()
+        collections = response.json()
+       
+        # Filter out public and private collections if needed
+        if not include_public:
+            collections = [col for col in collections if col["accessType"] != 'Public']
 
-        col_ids = [col["collectionId"] for col in response_json]
-
+        if not include_private:
+            collections = [col for col in collections if col["accessType"] == 'Public']
+            
+        # Get the ID's
+        col_ids = [col["collectionId"] for col in collections]
+        
         if not col_ids:
             raise NoIntersectingCollections(
-                f"No spatiotemporally intersecting collection IDs found in the RDM for the given geometry: {bbox} and temporal extent: {temporal_extent}."
+                "No collections found in the RDM for your search criteria."
             )
 
         return col_ids
@@ -219,7 +259,7 @@ class RdmInteraction:
 
         return combined_query
 
-    def query_rdm(
+    def query_items(
         self,
         geometry: BaseGeometry,
         temporal_extent: Optional[List[str]] = None,
