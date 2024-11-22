@@ -15,7 +15,10 @@ from openeo.rest.auth.oidc import (
 from requests.adapters import HTTPAdapter
 from shapely import wkb
 from shapely.geometry.base import BaseGeometry
+from shapely.geometry import Polygon
 from urllib3.util.retry import Retry
+
+from worldcereal.rdm_api.rdm_data import RdmCollection
 
 
 class NoIntersectingCollections(Exception):
@@ -32,6 +35,8 @@ class RdmInteraction:
         "valid_time",
         "quality_score_lc",
         "quality_score_ct",
+        "extract",
+        "h3_l3_cell",
     ]
 
     # RDM API Endpoint
@@ -104,8 +109,8 @@ class RdmInteraction:
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
         ewoc_codes: Optional[List[int]] = None,
-    ) -> List[str]:
-        """Queries the RDM API and finds all intersecting collection IDs
+    ) -> List[RdmCollection]:
+        """Queries the RDM API and finds all intersecting collections
         for a given geometry and temporal extent.
 
         Parameters
@@ -126,15 +131,15 @@ class RdmInteraction:
 
         Returns
         -------
-        List[str]
-            A List containing the collection IDs of all collections matching the criteria.
+        List[RdmCollection]
+            A List containing the collections matching the criteria.
         """
 
         # If user requests private collections, they must be authenticated
         if include_private:
             if not self.headers or "Authorization" not in self.headers:
-                logger.error("You must be authenticated to access private collections.")
-                return []
+                logger.info("To access private collections, you need to authenticate.")
+                self.authenticate()
 
         # Handle geometry
         bbox = geometry.bounds if geometry else [-180, -90, 180, 90]
@@ -163,24 +168,23 @@ class RdmInteraction:
         if response.status_code != 200:
             raise Exception(f"Error fetching collections: {response.text}")
 
-        collections = response.json()
+        collections = [RdmCollection(**col) for col in response.json()]
 
         # Filter out public and private collections if needed
         if not include_public:
-            collections = [col for col in collections if col["accessType"] != "Public"]
+            collections = [col for col in collections if col.access_type != "Public"]
 
         if not include_private:
-            collections = [col for col in collections if col["accessType"] == "Public"]
+            collections = [col for col in collections if col.access_type == "Public"]
 
         if not collections:
-            raise NoIntersectingCollections(
-                "No collections found in the RDM for your search criteria."
-            )
+            logger.info("No collections found in the RDM for your search criteria.")
 
         return collections
 
     def _get_download_urls(
-        self, collection_ids: List[str], user_id: Optional[str] = None
+        self,
+        collection_ids: List[str],
     ) -> List[str]:
         """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
 
@@ -209,32 +213,63 @@ class RdmInteraction:
 
     def get_crop_counts(
         self,
-        cropcode: int,
+        ewoc_codes: Optional[List[int]] = None,
         collection_ids: Optional[List[str]] = None,
+        geometry: Optional[BaseGeometry] = None,
+        temporal_extent: Optional[List[str]] = None,
+        include_public: Optional[bool] = True,
+        include_private: Optional[bool] = False,
     ) -> pd.DataFrame:
-        """Counts the number of items matching a specific crop type for each collection id.
+        """Counts the number of items matching a specific crop type or types
+            for one or multiple collections. In case collection id's are not
+            provided, the collections can be filtered using geometry, temporal extent,
+            include_public and include_private parameters.
 
         Parameters
         ----------
-        cropcode : int
-            The crop code to check for.
+        ewoc_codes: Optional[List[int]] = None
+            A list of EWOC codes for which crop counts need to be fetched.
         collection_ids : Optional(List[str]), optional
             List of collection IDs to check.
-            If not specified, all public collections containing the crop of interest will be checked.
+            If not specified, all collections containing the crop of interest will be checked,
+            which match any of the criteria specified in the other parameters.
+        geometry : Optional[BaseGeometry], optional
+            A user-defined geometry for which all intersecting collections need to be found.
+            CRS should be EPSG:4326.
+            If None, all available data will be queried. By default None.
+        temporal_extent : Optional[List[str]], optional
+            A list of two strings representing the temporal extent, by default None.
+            If None, all available data will be queried.
+        include_public: Optional[bool] = True
+            Whether or not to include public collections.
+        include_private: Optional[bool] = False
+            Whether or not to include private collections.
 
         Returns
         -------
         Pandas DataFrame
-            Dataframe containing for each collection id the number of items matching the crop code.
+            Dataframe containing for each collection id the number of items matching the requested crop types.
             If stats are not available, the count will be -9999.
         """
 
         # If no collection IDs are provided,
-        # get all public collections containing the crop of interest
+        # get all collections containing the crop types of interest
         if not collection_ids:
-            collection_ids = self.query_collections(ewoc_codes=[cropcode])
+            collections = self.get_collections(
+                geometry=geometry,
+                temporal_extent=temporal_extent,
+                ewoc_codes=ewoc_codes,
+                include_private=include_private,
+                include_public=include_public,
+            )
+            if not collections:
+                return pd.DataFrame()
+            collection_ids = [col.id for col in collections]
 
-        result = {}
+        logger.info(f"Querying {len(collection_ids)} collections...")
+
+        # Prepare result
+        result = []
 
         for col_id in collection_ids:
             itemUrl = f"{self.RDM_ENDPOINT}/collections/{col_id}/items/codestats"
@@ -242,16 +277,30 @@ class RdmInteraction:
             res = itemsResponse.json()
             if "ewocStats" in res:
                 stats = res["ewocStats"]
-                for stat in stats:
-                    if stat["code"] == cropcode:
-                        result[col_id] = stat["count"]
-                        break
+                for cropcode in ewoc_codes:
+                    count = 0
+                    for stat in stats:
+                        if stat["code"] == cropcode:
+                            count = stat["count"]
+                            break
+                    result.append(
+                        {"collectionId": col_id, "EwocCode": cropcode, "count": count}
+                    )
             else:
                 # statistics not available
-                result[col_id] = -9999
+                for cropcode in ewoc_codes:
+                    result.append(
+                        {"collectionId": col_id, "EwocCode": cropcode, "count": -9999}
+                    )
 
-        result = pd.DataFrame(result.items(), columns=["collectionId", "count"])
-        return result
+        result_df = pd.DataFrame(result)
+
+        # Pivot the DataFrame to have collections in rows and crop types in columns
+        pivot_df = result_df.pivot(
+            index="collectionId", columns="EwocCode", values="count"
+        ).fillna(0)
+
+        return pivot_df
 
     def _setup_sql_query(
         self,
@@ -259,6 +308,7 @@ class RdmInteraction:
         geometry: BaseGeometry,
         columns: List[str],
         temporal_extent: Optional[List[str]] = None,
+        ewoc_codes: Optional[List[int]] = None,
     ) -> str:
         """Sets up the SQL query for the GeoParquet files.
 
@@ -272,6 +322,8 @@ class RdmInteraction:
             A list of column names to extract.
         temporal_extent : Optional[List[str]], optional
             A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        ewoc_codes: Optional[List[int]] = None
+            A list of EWOC codes to filter the samples by.
 
         Returns
         -------
@@ -288,12 +340,19 @@ class RdmInteraction:
             else ""
         )
 
+        optional_ewoc_codes = (
+            f"AND ewoc_code IN ({', '.join([str(code) for code in ewoc_codes])})"
+            if ewoc_codes
+            else ""
+        )
+
         for i, url in enumerate(urls):
             query = f"""
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
                 {optional_temporal}
+                {optional_ewoc_codes}
 
             """
             if i == 0:
@@ -303,34 +362,40 @@ class RdmInteraction:
 
         return combined_query
 
-    def query_items(
+    def download_samples(
         self,
-        geometry: Optional[BaseGeometry] = None,
-        temporal_extent: Optional[List[str]] = None,
         collection_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
+        geometry: Optional[BaseGeometry] = None,
+        temporal_extent: Optional[List[str]] = None,
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
     ):
-        """Queries the RDM API and generates a GeoParquet file of all returned samples.
+        """Queries the RDM API and generates a Pandas GeoDataframe of all samples meeting the search criteria.
 
         Parameters
         ----------
+        collection_ids : Optional(List[str]), optional
+            List of collection IDs to download samples from.
+            If not specified, all collections matching the search criteria defined by
+            the other input parameters will be queried.
+        columns : List[str], optional
+            A list of column names to extract., by default DEFAULT_COLUMNS
         geometry : Optional[BaseGeometry], optional
-            A user-defined geometry for which all intersecting collection IDs need to be found.
+            A user-defined geometry for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried., by default None
         temporal_extent : List[str], optional
-            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+            A list of two strings representing the temporal extent, by default None.
+            If None, all available data will be queried.
             Dates should be in the format "YYYY-MM-DD".
-        collection_ids : Optional(List[str]), optional
-            List of collection IDs to download samples from.
-            If not specified, all public and private collections matching the search criteria will be queried.
-        columns : List[str], optional
-            A list of column names to extract., by default DEFAULT_COLUMNS
         ewoc_codes: Optional[List[int]] = None
             If specified, only samples with the specified EWOC codes will be extracted.
+        include_public: Optional[bool] = True
+            Whether or not to include public collections.
+        include_private: Optional[bool] = False
+            Whether or not to include private collections.
 
         Returns
         -------
@@ -338,43 +403,59 @@ class RdmInteraction:
             A GeoDataFrame containing the extracted columns and the geometry.
         """
 
-        # Determine which collections need to be queried
+        # Determine which collections need to be queried if they are not specified
         if not collection_ids:
-            # if user is authenticated, include private collections
-
-            collection_ids = self.get_collections(
+            collections = self.get_collections(
                 geometry=geometry,
                 temporal_extent=temporal_extent,
                 ewoc_codes=ewoc_codes,
+                include_public=include_public,
+                include_private=include_private,
             )
-        collection_ids = self._collections_from_rdm(
-            geometry=geometry, temporal_extent=temporal_extent
-        )
+            if not collections:
+                return gpd.GeoDataFrame()
+            collection_ids = [col.id for col in collections]
+
+        logger.info(f"Querying {len(collection_ids)} collections...")
+
+        # For each collection, get the download URL
         urls = self._get_download_urls(collection_ids)
 
+        # Ensure we have a valid geometry
+        if not geometry:
+            bbox = [-180, -90, 180, 90]
+            # convert bbox to shapely geometry
+            geometry = Polygon(
+                [
+                    (bbox[0], bbox[1]),  # Bottom-left corner
+                    (bbox[0], bbox[3]),  # Top-left corner
+                    (bbox[2], bbox[3]),  # Top-right corner
+                    (bbox[2], bbox[1]),  # Bottom-right corner
+                    (bbox[0], bbox[1]),
+                ]
+            )
+
+        # Set up the SQL query
         query = self._setup_sql_query(
             urls=urls,
             geometry=geometry,
             columns=columns,
             temporal_extent=temporal_extent,
+            ewoc_codes=ewoc_codes,
         )
 
+        # Execute the query
         con = duckdb.connect()
         con.execute("INSTALL spatial;")
         con.execute("LOAD spatial;")
 
         df = con.execute(query).fetch_df()
 
+        # Convert the WKB geometry to a Shapely geometry
         df["geometry"] = df["wkb_geometry"].apply(lambda x: wkb.loads(bytes(x)))
         df.drop(columns=["wkb_geometry"], inplace=True)
 
+        # Convert the DataFrame to a GeoDataFrame
         gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
         return gdf
-
-
-if __name__ == "__main__":
-
-    rdm = RdmInteraction()
-    rdm.authenticate()
-    collections = rdm.get_collections(include_public=False, include_private=True)
