@@ -151,14 +151,14 @@ class RdmInteraction:
         # Handle temporal extent
         val_time = (
             f"&ValidityTime.Start={temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={temporal_extent[1]}T00%3A00%3A00Z"
-            if temporal_extent
+            if temporal_extent is not None
             else ""
         )
 
         # Handle EWOC codes
         ewoc_codes_str = (
             "".join([f"&EwocCodes={str(ewoc_code)}" for ewoc_code in ewoc_codes])
-            if ewoc_codes
+            if ewoc_codes is not None
             else ""
         )
 
@@ -339,13 +339,13 @@ class RdmInteraction:
 
         optional_temporal = (
             f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
-            if temporal_extent
+            if temporal_extent is not None
             else ""
         )
 
         optional_ewoc_codes = (
             f"AND ewoc_code IN ({', '.join([str(code) for code in ewoc_codes])})"
-            if ewoc_codes
+            if ewoc_codes is not None
             else ""
         )
 
