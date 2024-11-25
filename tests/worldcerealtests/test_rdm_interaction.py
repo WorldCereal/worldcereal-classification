@@ -54,7 +54,7 @@ class TestRdmInteraction:
 
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction.get_collections")
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._get_download_urls")
-    def test_query_rdm(
+    def test_download_samples(
         self,
         mock_get_download_urls,
         mock_collections_from_rdm,
@@ -64,20 +64,27 @@ class TestRdmInteraction:
     ):
 
         data = {
-            "col1": ["must", "include", "this", "column"],
-            "col2": ["and", "this", "One", "Too"],
-            "col3": ["but", "not", "This", "One"],
+            "col1": ["must", "include", "this", "column", "definitely", "check"],
+            "col2": ["and", "this", "One", "Too", "please", "check"],
+            "col3": ["but", "not", "This", "One", "please", "check"],
             "valid_time": [
                 "2021-01-01",
                 "2021-12-31",
                 "2021-06-01",
                 "2025-05-22",
-            ],  # Last date not within sample_temporal_extent
+                "2021-06-01",
+                "2021-06-01",
+            ],  # Fourth date not within sample_temporal_extent
+            "ewoc_code": ["1", "2", "3", "4", "5", "1"],
+            # Fifth crop code not within list of ewoc_codes
+            "extract": [1, 1, 1, 1, 2, 0],
             "geometry": [
                 Point(0.5, 0.5),
                 Point(0.25, 0.25),
                 Point(2, 3),
                 Point(0.75, 0.75),
+                Point(0.75, 0.78),
+                Point(0.78, 0.75),
             ],  # Third point not within sample_polygon
         }
         gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
@@ -100,10 +107,15 @@ class TestRdmInteraction:
             geometry=sample_polygon,
             temporal_extent=sample_temporal_extent,
             columns=["col1", "col2"],
+            ewoc_codes=["1", "2", "3", "4"],
+            subset=True,
         )
 
         # Check that col3 and valid_time indeed not included
         assert result_gdf.columns.tolist() == ["col1", "col2", "geometry"]
 
-        # Check that the third and fourth geometry are not included, as they are outside the spatiotemporal extent
+        # Check that the third up till last geometry are not included
+        # third and fourth are outside the spatiotemporal extent
+        # fifth has a crop type not in the list of ewoc_codes
+        # last sample is not to be extracted
         assert len(result_gdf) == 2
