@@ -247,37 +247,43 @@ class RdmInteraction:
             if "ewocStats" in res:
                 stats = res["ewocStats"]
                 if ewoc_codes is None:
-                    ewoc_codes = [stat["code"] for stat in stats]
-                for cropcode in ewoc_codes:
-                    count = 0
+                    # get counts for all crops
                     for stat in stats:
-                        if stat["code"] == cropcode:
-                            count = stat["count"]
-                            break
-                    result.append(
-                        {"collectionId": col_id, "EwocCode": cropcode, "count": count}
-                    )
-            else:
-                # statistics not available
-                if ewoc_codes is not None:
+                        result.append(
+                            {
+                                "collectionId": col_id,
+                                "EwocCode": stat["code"],
+                                "count": stat["count"],
+                            }
+                        )
+                else:
+                    # get counts for specific crops
                     for cropcode in ewoc_codes:
+                        count = 0
+                        for stat in stats:
+                            if stat["code"] == cropcode:
+                                count = stat["count"]
+                                break
                         result.append(
                             {
                                 "collectionId": col_id,
                                 "EwocCode": cropcode,
-                                "count": -9999,
+                                "count": count,
                             }
                         )
-                # if no crop codes are specified, we ignore the collection
+            else:
+                # crop counts not available
+                logger.warning(f"No crop counts available for collection {col_id}")
 
         result_df = pd.DataFrame(result)
 
-        # Pivot the DataFrame to have collections in rows and crop types in columns
-        pivot_df = result_df.pivot(
-            index="collectionId", columns="EwocCode", values="count"
-        ).fillna(0)
+        if len(result) > 0:
+            # Pivot the DataFrame to have collections in rows and crop types in columns
+            result_df = result_df.pivot(
+                index="collectionId", columns="EwocCode", values="count"
+            ).fillna(0)
 
-        return pivot_df
+        return result_df
 
     def _setup_sql_query(
         self,
