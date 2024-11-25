@@ -234,7 +234,7 @@ class RdmInteraction:
         -------
         Pandas DataFrame
             Dataframe containing for each collection id the number of items matching the requested crop types.
-            If stats are not available, the count will be -9999.
+            If stats are not available for a collection, a warning will be issued.
         """
 
         # Prepare result
