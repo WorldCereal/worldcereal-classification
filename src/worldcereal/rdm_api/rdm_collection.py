@@ -9,6 +9,17 @@ class RdmCollection:
         RdmCollection can be initialized directly from the RDM API response resulting from
         a query to the collections endpoint (see get_collections function in rdmi_interaction.py).
         """
+        # check presence of mandatory metadata items
+        if not metadata.get("collectionId"):
+            raise ValueError(
+                "Collection ID is missing, cannot create RdmCollection object."
+            )
+        if not metadata.get("accessType"):
+            raise ValueError(
+                "Access type is missing, cannot create RdmCollection object."
+            )
+
+        # Get all metadata items
         self.id = metadata.get("collectionId")
         self.title = metadata.get("title")
         self.feature_count = metadata.get("featureCount")
