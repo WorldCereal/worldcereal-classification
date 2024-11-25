@@ -334,7 +334,7 @@ class RdmInteraction:
             else ""
         )
 
-        optional_subset = f"AND extract > 0" if subset else ""
+        optional_subset = "AND extract > 0" if subset else ""
 
         for i, url in enumerate(urls):
             query = f"""
