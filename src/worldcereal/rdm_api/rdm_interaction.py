@@ -18,7 +18,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.geometry import Polygon
 from urllib3.util.retry import Retry
 
-from worldcereal.rdm_api import RdmCollection
+from .rdm_collection import RdmCollection
 
 
 class NoIntersectingCollections(Exception):
