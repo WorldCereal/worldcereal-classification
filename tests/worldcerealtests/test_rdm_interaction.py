@@ -4,7 +4,7 @@ import geopandas as gpd
 import pytest
 from shapely import Point, Polygon
 
-from worldcereal.rdm_api.rdm_interaction import RdmInteraction, RdmCollection
+from worldcereal.rdm_api.rdm_interaction import RdmCollection, RdmInteraction
 
 
 @pytest.fixture
