@@ -142,7 +142,10 @@ class RdmInteraction:
                 self.authenticate()
 
         # Handle geometry
-        bbox = geometry.bounds if geometry else [-180, -90, 180, 90]
+        bbox = geometry.bounds if geometry is not None else [-180, -90, 180, 90]
+        # check if the geometry is valid
+        if bbox[0] < -180 or bbox[1] < -90 or bbox[2] > 180 or bbox[3] > 90:
+            raise ValueError("Invalid geometry. CRS should be EPSG:4326.")
         bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
 
         # Handle temporal extent
