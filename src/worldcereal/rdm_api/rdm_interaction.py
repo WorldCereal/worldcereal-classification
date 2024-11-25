@@ -363,8 +363,8 @@ class RdmInteraction:
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
-    ):
-        """Queries the RDM API and generates a Pandas GeoDataframe of all samples meeting the search criteria.
+    ) -> gpd.GeoDataFrame:
+        """Queries the RDM API and generates a GeoPandas GeoDataframe of all samples meeting the search criteria.
 
         Parameters
         ----------
@@ -396,7 +396,7 @@ class RdmInteraction:
         Returns
         -------
         gpd.GeoDataFrame
-            A GeoDataFrame containing the extracted columns and the geometry.
+            A GeoDataFrame containing the extracted samples.
         """
 
         # Determine which collections need to be queried if they are not specified
