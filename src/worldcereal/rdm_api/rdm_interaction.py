@@ -216,37 +216,19 @@ class RdmInteraction:
 
     def get_crop_counts(
         self,
+        collection_ids: List[str],
         ewoc_codes: Optional[List[int]] = None,
-        collection_ids: Optional[List[str]] = None,
-        geometry: Optional[BaseGeometry] = None,
-        temporal_extent: Optional[List[str]] = None,
-        include_public: Optional[bool] = True,
-        include_private: Optional[bool] = False,
     ) -> pd.DataFrame:
         """Counts the number of items matching a specific crop type or types
-            for one or multiple collections. In case collection id's are not
-            provided, the collections can be filtered using geometry, temporal extent,
-            include_public and include_private parameters.
+            for one or multiple collections.
 
         Parameters
         ----------
+        collection_ids : List[str]
+            List of collection IDs to check.
         ewoc_codes: Optional[List[int]] = None
             A list of EWOC codes for which crop counts need to be fetched.
-        collection_ids : Optional(List[str]), optional
-            List of collection IDs to check.
-            If not specified, all collections containing the crop of interest will be checked,
-            which match any of the criteria specified in the other parameters.
-        geometry : Optional[BaseGeometry], optional
-            A user-defined geometry for which all intersecting collections need to be found.
-            CRS should be EPSG:4326.
-            If None, all available data will be queried. By default None.
-        temporal_extent : Optional[List[str]], optional
-            A list of two strings representing the temporal extent, by default None.
-            If None, all available data will be queried.
-        include_public: Optional[bool] = True
-            Whether or not to include public collections.
-        include_private: Optional[bool] = False
-            Whether or not to include private collections.
+            If None, all available crop types will be counted.
 
         Returns
         -------
@@ -254,22 +236,6 @@ class RdmInteraction:
             Dataframe containing for each collection id the number of items matching the requested crop types.
             If stats are not available, the count will be -9999.
         """
-
-        # If no collection IDs are provided,
-        # get all collections containing the crop types of interest
-        if not collection_ids:
-            collections = self.get_collections(
-                geometry=geometry,
-                temporal_extent=temporal_extent,
-                ewoc_codes=ewoc_codes,
-                include_private=include_private,
-                include_public=include_public,
-            )
-            if not collections:
-                return pd.DataFrame()
-            collection_ids = [col.id for col in collections]
-
-        logger.info(f"Querying {len(collection_ids)} collections...")
 
         # Prepare result
         result = []
@@ -280,6 +246,8 @@ class RdmInteraction:
             res = itemsResponse.json()
             if "ewocStats" in res:
                 stats = res["ewocStats"]
+                if ewoc_codes is None:
+                    ewoc_codes = [stat["code"] for stat in stats]
                 for cropcode in ewoc_codes:
                     count = 0
                     for stat in stats:
@@ -291,10 +259,16 @@ class RdmInteraction:
                     )
             else:
                 # statistics not available
-                for cropcode in ewoc_codes:
-                    result.append(
-                        {"collectionId": col_id, "EwocCode": cropcode, "count": -9999}
-                    )
+                if ewoc_codes is not None:
+                    for cropcode in ewoc_codes:
+                        result.append(
+                            {
+                                "collectionId": col_id,
+                                "EwocCode": cropcode,
+                                "count": -9999,
+                            }
+                        )
+                # if no crop codes are specified, we ignore the collection
 
         result_df = pd.DataFrame(result)
 
