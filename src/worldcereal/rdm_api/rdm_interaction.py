@@ -292,6 +292,7 @@ class RdmInteraction:
         columns: List[str],
         temporal_extent: Optional[List[str]] = None,
         ewoc_codes: Optional[List[int]] = None,
+        subset: Optional[bool] = False,
     ) -> str:
         """Sets up the SQL query for the GeoParquet files.
 
@@ -307,6 +308,10 @@ class RdmInteraction:
             A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
         ewoc_codes: Optional[List[int]] = None
             A list of EWOC codes to filter the samples by.
+        subset : Optional[bool], optional
+            If True, only download a subset of the samples (for which extract attribute ==1)
+            If False, extract all samples.
+            Default is False.
 
         Returns
         -------
@@ -329,6 +334,8 @@ class RdmInteraction:
             else ""
         )
 
+        optional_subset = f"AND extract > 0" if subset else ""
+
         for i, url in enumerate(urls):
             query = f"""
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry
@@ -336,6 +343,7 @@ class RdmInteraction:
                 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
                 {optional_temporal}
                 {optional_ewoc_codes}
+                {optional_subset}
 
             """
             if i == 0:
@@ -349,6 +357,7 @@ class RdmInteraction:
         self,
         collection_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
+        subset: Optional[bool] = False,
         geometry: Optional[BaseGeometry] = None,
         temporal_extent: Optional[List[str]] = None,
         ewoc_codes: Optional[List[int]] = None,
@@ -365,6 +374,10 @@ class RdmInteraction:
             the other input parameters will be queried.
         columns : List[str], optional
             A list of column names to extract., by default DEFAULT_COLUMNS
+        subset : Optional[bool], optional
+            If True, only download a subset of the samples (for which extract attribute ==1)
+            If False, extract all samples.
+            Default is False.
         geometry : Optional[BaseGeometry], optional
             A user-defined geometry for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
@@ -396,6 +409,9 @@ class RdmInteraction:
                 include_private=include_private,
             )
             if not collections:
+                logger.warning(
+                    "No collections found in the RDM for your search criteria."
+                )
                 return gpd.GeoDataFrame()
             collection_ids = [col.id for col in collections]
 
@@ -425,6 +441,7 @@ class RdmInteraction:
             columns=columns,
             temporal_extent=temporal_extent,
             ewoc_codes=ewoc_codes,
+            subset=subset,
         )
 
         # Execute the query
