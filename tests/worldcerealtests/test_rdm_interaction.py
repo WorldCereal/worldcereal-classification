@@ -4,7 +4,7 @@ import geopandas as gpd
 import pytest
 from shapely import Point, Polygon
 
-from worldcereal.rdm_api.rdm_interaction import RdmInteraction
+from worldcereal.rdm_api.rdm_interaction import RdmInteraction, RdmCollection
 
 
 @pytest.fixture
@@ -25,13 +25,22 @@ class TestRdmInteraction:
 
         mock_requests_get.return_value.status_code = 200
         mock_requests_get.return_value.json.return_value = [
-            {"collectionId": "Foo"},
-            {"collectionId": "Bar"},
+            {
+                "collectionId": "Foo",
+                "title": "Foo_title",
+                "accessType": "Public",
+            },
+            {
+                "collectionId": "Bar",
+                "title": "Bar_title",
+                "accessType": "Public",
+            },
         ]
         interaction = RdmInteraction()
-        collection_ids = interaction._collections_from_rdm(
+        collections = interaction.get_collections(
             geometry=sample_polygon, temporal_extent=sample_temporal_extent
         )
+        collection_ids = [collection.id for collection in collections]
 
         assert collection_ids == ["Foo", "Bar"]
 
@@ -43,8 +52,8 @@ class TestRdmInteraction:
             url=expected_url, headers={"accept": "*/*"}, timeout=10
         )
 
+    @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction.get_collections")
     @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._get_download_urls")
-    @patch("worldcereal.rdm_api.rdm_interaction.RdmInteraction._collections_from_rdm")
     def test_query_rdm(
         self,
         mock_get_download_urls,
@@ -75,11 +84,19 @@ class TestRdmInteraction:
         file_path = tmp_path / "sample.parquet"
         gdf.to_parquet(file_path)
 
-        mock_collections_from_rdm.return_value = [file_path]
+        mock_collections_from_rdm.return_value = [
+            RdmCollection(
+                **{
+                    "collectionId": "Foo",
+                    "title": "Foo_title",
+                    "accessType": "Public",
+                }
+            ),
+        ]
         mock_get_download_urls.return_value = [file_path]
 
         interaction = RdmInteraction()
-        result_gdf = interaction.query_rdm(
+        result_gdf = interaction.download_samples(
             geometry=sample_polygon,
             temporal_extent=sample_temporal_extent,
             columns=["col1", "col2"],
