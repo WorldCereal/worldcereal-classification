@@ -14,8 +14,8 @@ from openeo.rest.auth.oidc import (
 )
 from requests.adapters import HTTPAdapter
 from shapely import wkb
-from shapely.geometry.base import BaseGeometry
 from shapely.geometry import Polygon
+from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
 from .rdm_collection import RdmCollection
