@@ -337,7 +337,7 @@ class RdmInteraction:
         optional_subset = "AND extract > 0" if subset else ""
 
         for i, url in enumerate(urls):
-            collection_id = url.split("/")[-2]
+            collection_id = str(url).split("/")[-2]
             query = f"""
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry, '{collection_id}' AS collection_id
                 FROM read_parquet('{url}')
