@@ -40,9 +40,9 @@ class TestRdmInteraction:
         collections = interaction.get_collections(
             geometry=sample_polygon, temporal_extent=sample_temporal_extent
         )
-        collection_ids = [collection.id for collection in collections]
+        ref_ids = [collection.id for collection in collections]
 
-        assert collection_ids == ["Foo", "Bar"]
+        assert ref_ids == ["Foo", "Bar"]
 
         bbox = sample_polygon.bounds
         geom = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
@@ -106,17 +106,16 @@ class TestRdmInteraction:
         result_gdf = interaction.download_samples(
             geometry=sample_polygon,
             temporal_extent=sample_temporal_extent,
-            columns=["col1", "col2", "collection_id", "geometry"],
+            columns=["col1", "col2", "ref_id", "geometry"],
             ewoc_codes=["1", "2", "3", "4"],
             subset=True,
         )
 
         # Check that col3 and valid_time indeed not included
-        # collection_id is automatically added
         assert result_gdf.columns.tolist() == [
             "col1",
             "col2",
-            "collection_id",
+            "ref_id",
             "geometry",
         ]
 
