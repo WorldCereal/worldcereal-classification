@@ -100,7 +100,7 @@ class TestRdmInteraction:
                 }
             ),
         ]
-        mock_get_download_urls.return_value = [file_path]
+        mock_get_download_urls.return_value = [str(file_path)]
 
         interaction = RdmInteraction()
         result_gdf = interaction.download_samples(
@@ -112,7 +112,13 @@ class TestRdmInteraction:
         )
 
         # Check that col3 and valid_time indeed not included
-        assert result_gdf.columns.tolist() == ["col1", "col2", "geometry"]
+        # collection_id is automatically added
+        assert result_gdf.columns.tolist() == [
+            "col1",
+            "col2",
+            "collection_id",
+            "geometry",
+        ]
 
         # Check that the third up till last geometry are not included
         # third and fourth are outside the spatiotemporal extent

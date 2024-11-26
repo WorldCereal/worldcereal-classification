@@ -398,6 +398,7 @@ class RdmInteraction:
         -------
         gpd.GeoDataFrame
             A GeoDataFrame containing the extracted samples.
+            For each sample, the collection ID is automatically included.
         """
 
         # Determine which collections need to be queried if they are not specified
