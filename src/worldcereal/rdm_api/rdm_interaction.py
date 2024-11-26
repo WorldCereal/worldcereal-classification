@@ -37,7 +37,7 @@ class RdmInteraction:
         "quality_score_ct",
         "extract",
         "h3_l3_cell",
-        "collection_id",
+        "ref_id",
         "geometry",
     ]
 
@@ -118,7 +118,7 @@ class RdmInteraction:
         Parameters
         ----------
         geometry : Optional[BaseGeometry], optional
-            A user-defined geometry for which all intersecting collection IDs need to be found.
+            A user-defined geometry for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried., by default None
         temporal_extent : Optional[List[str]], optional
@@ -189,23 +189,23 @@ class RdmInteraction:
 
     def _get_download_urls(
         self,
-        collection_ids: List[str],
+        ref_ids: List[str],
     ) -> List[str]:
-        """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each collection ID.
+        """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each ref ID.
 
         Parameters
         ----------
-        collection_ids : List[str]
+        ref_ids : List[str]
             A list of collection IDs.
 
         Returns
         -------
         List[str]
-            A List containing the HTTPs URLs of the GeoParquet files for each collection ID.
+            A List containing the HTTPs URLs of the GeoParquet files for each ref ID.
         """
         urls = []
 
-        for id in collection_ids:
+        for id in ref_ids:
             url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
             response = self.session.get(url, headers=self._get_headers(), timeout=10)
             if response.status_code != 200:
@@ -218,7 +218,7 @@ class RdmInteraction:
 
     def get_crop_counts(
         self,
-        collection_ids: List[str],
+        ref_ids: List[str],
         ewoc_codes: Optional[List[int]] = None,
     ) -> pd.DataFrame:
         """Counts the number of items matching a specific crop type or types
@@ -226,8 +226,8 @@ class RdmInteraction:
 
         Parameters
         ----------
-        collection_ids : List[str]
-            List of collection IDs to check.
+        ref_ids : List[str]
+            List of collections to check (identified by their collection IDs).
         ewoc_codes: Optional[List[int]] = None
             A list of EWOC codes for which crop counts need to be fetched.
             If None, all available crop types will be counted.
@@ -242,8 +242,8 @@ class RdmInteraction:
         # Prepare result
         result = []
 
-        for col_id in collection_ids:
-            itemUrl = f"{self.RDM_ENDPOINT}/collections/{col_id}/items/codestats"
+        for ref_id in ref_ids:
+            itemUrl = f"{self.RDM_ENDPOINT}/collections/{ref_id}/items/codestats"
             itemsResponse = requests.get(itemUrl)
             res = itemsResponse.json()
             if "ewocStats" in res:
@@ -253,8 +253,8 @@ class RdmInteraction:
                     for stat in stats:
                         result.append(
                             {
-                                "collectionId": col_id,
-                                "EwocCode": stat["code"],
+                                "ref_id": ref_id,
+                                "ewoc_code": stat["code"],
                                 "count": stat["count"],
                             }
                         )
@@ -268,21 +268,21 @@ class RdmInteraction:
                                 break
                         result.append(
                             {
-                                "collectionId": col_id,
-                                "EwocCode": cropcode,
+                                "ref_id": ref_id,
+                                "ewoc_code": cropcode,
                                 "count": count,
                             }
                         )
             else:
                 # crop counts not available
-                logger.warning(f"No crop counts available for collection {col_id}")
+                logger.warning(f"No crop counts available for collection {ref_id}")
 
         result_df = pd.DataFrame(result)
 
         if len(result) > 0:
             # Pivot the DataFrame to have collections in rows and crop types in columns
             result_df = result_df.pivot(
-                index="collectionId", columns="EwocCode", values="count"
+                index="ref_id", columns="ewoc_code", values="count"
             ).fillna(0)
 
         return result_df
@@ -325,8 +325,8 @@ class RdmInteraction:
         combined_query = ""
 
         # compile list of columns to request
-        # collection_id is not part of the parquet files, so should be ignored here
-        columns_str = ", ".join([c for c in columns if c != "collection_id"])
+        # ref_id is not part of the parquet files, so should be ignored here
+        columns_str = ", ".join([c for c in columns if c != "ref_id"])
 
         optional_temporal = (
             f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
@@ -343,9 +343,9 @@ class RdmInteraction:
         optional_subset = "AND extract > 0" if subset else ""
 
         for i, url in enumerate(urls):
-            collection_id = str(url).split("/")[-2]
+            ref_id = str(url).split("/")[-2]
             query = f"""
-                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry, '{collection_id}' AS collection_id
+                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry, '{ref_id}' AS ref_id
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
                 {optional_temporal}
@@ -362,7 +362,7 @@ class RdmInteraction:
 
     def download_samples(
         self,
-        collection_ids: Optional[List[str]] = None,
+        ref_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
         geometry: Optional[BaseGeometry] = None,
@@ -375,7 +375,7 @@ class RdmInteraction:
 
         Parameters
         ----------
-        collection_ids : Optional(List[str]), optional
+        ref_ids : Optional(List[str]), optional
             List of collection IDs to download samples from.
             If not specified, all collections matching the search criteria defined by
             the other input parameters will be queried.
@@ -407,7 +407,7 @@ class RdmInteraction:
         """
 
         # Determine which collections need to be queried if they are not specified
-        if not collection_ids:
+        if not ref_ids:
             collections = self.get_collections(
                 geometry=geometry,
                 temporal_extent=temporal_extent,
@@ -420,12 +420,12 @@ class RdmInteraction:
                     "No collections found in the RDM for your search criteria."
                 )
                 return gpd.GeoDataFrame()
-            collection_ids = [col.id for col in collections]
+            ref_ids = [col.id for col in collections]
 
-        logger.info(f"Querying {len(collection_ids)} collections...")
+        logger.info(f"Querying {len(ref_ids)} collections...")
 
         # For each collection, get the download URL
-        urls = self._get_download_urls(collection_ids)
+        urls = self._get_download_urls(ref_ids)
 
         # Ensure we have a valid geometry
         if not geometry:
