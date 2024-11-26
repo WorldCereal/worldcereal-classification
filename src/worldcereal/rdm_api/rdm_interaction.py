@@ -37,6 +37,7 @@ class RdmInteraction:
         "quality_score_ct",
         "extract",
         "h3_l3_cell",
+        "collection_id",
     ]
 
     # RDM API Endpoint
@@ -455,6 +456,8 @@ class RdmInteraction:
         # Convert the WKB geometry to a Shapely geometry
         df["geometry"] = df["wkb_geometry"].apply(lambda x: wkb.loads(bytes(x)))
         df.drop(columns=["wkb_geometry"], inplace=True)
+        # Make sure df contains only requested columns
+        df = df[columns]
 
         # Convert the DataFrame to a GeoDataFrame
         gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
