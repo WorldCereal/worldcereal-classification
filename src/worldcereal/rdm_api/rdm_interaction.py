@@ -38,6 +38,7 @@ class RdmInteraction:
         "extract",
         "h3_l3_cell",
         "collection_id",
+        "geometry",
     ]
 
     # RDM API Endpoint
@@ -320,8 +321,14 @@ class RdmInteraction:
             A SQL query for the GeoParquet files.
         """
 
+        # initialize query
         combined_query = ""
-        columns_str = ", ".join(columns)
+
+        # compile list of columns to request and treat collection_id separately
+        if "collection_id" in columns:
+            columns_str = ", ".join([c for c in columns if c != "collection_id"])
+        else:
+            columns_str = ", ".join(columns)
 
         optional_temporal = (
             f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
@@ -339,8 +346,12 @@ class RdmInteraction:
 
         for i, url in enumerate(urls):
             collection_id = str(url).split("/")[-2]
+            if "collection_id" in columns:
+                optional_collection_id = f", '{collection_id}' AS collection_id"
+            else:
+                optional_collection_id = ""
             query = f"""
-                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry, '{collection_id}' AS collection_id
+                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry{optional_collection_id}
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
                 {optional_temporal}
@@ -399,7 +410,6 @@ class RdmInteraction:
         -------
         gpd.GeoDataFrame
             A GeoDataFrame containing the extracted samples.
-            For each sample, the collection ID is automatically included.
         """
 
         # Determine which collections need to be queried if they are not specified

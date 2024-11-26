@@ -106,7 +106,7 @@ class TestRdmInteraction:
         result_gdf = interaction.download_samples(
             geometry=sample_polygon,
             temporal_extent=sample_temporal_extent,
-            columns=["col1", "col2"],
+            columns=["col1", "col2", "collection_id", "geometry"],
             ewoc_codes=["1", "2", "3", "4"],
             subset=True,
         )
