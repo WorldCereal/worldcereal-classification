@@ -55,7 +55,7 @@ def post_job_action_patch(
     spatial_resolution: str,
     s1_orbit_fix: bool = False,  # To rename the samples from the S1 orbit
     write_stac_api: bool = False,
-    sensor: str = "PATCH_SENTINEL1",
+    sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
