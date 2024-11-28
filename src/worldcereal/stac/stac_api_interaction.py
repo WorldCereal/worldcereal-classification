@@ -70,19 +70,12 @@ class StacApiInteraction:
 
         self.auth = auth
 
-        self.client = pystac_client.Client.open(base_url)
-
         self.bulk_size = bulk_size
 
     def exists(self) -> bool:
+        client = pystac_client.Client.open(self.base_url)
         return (
-            len(
-                [
-                    c.id
-                    for c in self.client.get_collections()
-                    if c.id == self.collection_id
-                ]
-            )
+            len([c.id for c in client.get_collections() if c.id == self.collection_id])
             > 0
         )
 
@@ -163,7 +156,9 @@ class StacApiInteraction:
             "method": "upsert",
             "items": {item.id: item.to_dict() for item in items},
         }
-        response = requests.post(self._join_url(url_path), auth=self.auth, json=data)
+        response = requests.post(
+            url=self._join_url(url_path), auth=self.auth, json=data
+        )
 
         expected_status = [
             requests.status_codes.codes.ok,
