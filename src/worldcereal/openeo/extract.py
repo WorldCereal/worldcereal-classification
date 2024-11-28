@@ -146,7 +146,7 @@ def post_job_action_patch(
 
         stac_api_interaction = StacApiInteraction(
             sensor=sensor,
-            base_url="https://stac-openeo-dev.vgt.vito.be",  # To change to real STAC API, once permissions are fixed
+            base_url="https://stac.openeo.vito.be",
             auth=VitoStacApiAuthentication(username=username, password=password),
         )
 

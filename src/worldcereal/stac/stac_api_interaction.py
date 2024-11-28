@@ -34,7 +34,7 @@ class VitoStacApiAuthentication(AuthBase):
             A string containing the bearer access token.
         """
         provider_info = OidcProviderInfo(
-            issuer="https://sso-int.terrascope.be/auth/realms/terrascope"  # To change once prod STAC API permissions are fixed
+            issuer="https://sso.terrascope.be/auth/realms/terrascope"
         )
 
         client_info = OidcClientInfo(
