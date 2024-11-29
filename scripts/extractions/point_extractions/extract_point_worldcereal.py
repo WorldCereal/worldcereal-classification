@@ -154,7 +154,7 @@ def post_job_action_point_worldcereal(
         gdf = gpd.read_parquet(item_asset_path)
 
         # Convert the dates to datetime format
-        gdf["date"] = pd.to_datetime(gdf["date"])
+        gdf["timestamp"] = pd.to_datetime(gdf["date"])
 
         # Convert band dtype to uint16 (temporary fix)
         # TODO: remove this step when the issue is fixed on the OpenEO backend
