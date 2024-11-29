@@ -228,6 +228,8 @@ def setup_extraction_functions(
             title="Sentinel-1 GRD",
             spatial_resolution="20m",
             s1_orbit_fix=True,
+            sensor="Sentinel1",
+            write_stac_api=True,
         ),
         ExtractionCollection.PATCH_SENTINEL2: partial(
             post_job_action_patch,
@@ -235,6 +237,8 @@ def setup_extraction_functions(
             description="Sentinel2 L2A observations, processed.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
+            sensor="Sentinel2",
+            write_stac_api=True,
         ),
         ExtractionCollection.PATCH_METEO: partial(
             post_job_action_patch,

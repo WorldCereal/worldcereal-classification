@@ -18,6 +18,11 @@ import requests
 import xarray as xr
 from shapely import Point
 
+from worldcereal.stac.stac_api_interaction import (
+    StacApiInteraction,
+    VitoStacApiAuthentication,
+)
+
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
 
@@ -49,6 +54,8 @@ def post_job_action_patch(
     title: str,
     spatial_resolution: str,
     s1_orbit_fix: bool = False,  # To rename the samples from the S1 orbit
+    write_stac_api: bool = False,
+    sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
@@ -127,6 +134,20 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+
+    if write_stac_api:
+        username = os.getenv("STAC_API_USERNAME")
+        password = os.getenv("STAC_API_PASSWORD")
+
+        stac_api_interaction = StacApiInteraction(
+            sensor=sensor,
+            base_url="https://stac.openeo.vito.be",
+            auth=VitoStacApiAuthentication(username=username, password=password),
+        )
+
+        pipeline_log.info("Writing the STAC API metadata")
+        stac_api_interaction.upload_items_bulk(job_items)
+        pipeline_log.info("STAC API metadata written")
 
     return job_items
 
