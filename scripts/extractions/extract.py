@@ -103,7 +103,7 @@ def prepare_job_dataframe(
     pipeline_log.info("Preparing the job dataframe.")
 
     # Filter the input dataframe to only keep the locations to extract
-    input_df = input_df[input_df["extract"] == extract_value].copy()
+    input_df = input_df[input_df["extract"] >= extract_value].copy()
 
     # Split the locations into chunks of max_locations
     split_dfs = []
