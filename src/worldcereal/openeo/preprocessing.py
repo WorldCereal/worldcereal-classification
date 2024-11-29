@@ -340,11 +340,18 @@ def worldcereal_preprocessed_inputs(
     validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
+    compositing_window: str = "month",
 ) -> DataCube:
 
     # First validate the temporal context
     if validate_temporal_context:
         _validate_temporal_context(temporal_extent)
+
+    # See if requested compositing method is supported
+    assert compositing_window in [
+        "month",
+        "dekad",
+    ], 'Compositing window must be either "month" or "dekad"'
 
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -371,7 +378,7 @@ def worldcereal_preprocessed_inputs(
         tile_size=tile_size,
     )
 
-    s2_data = median_compositing(s2_data, period="month")
+    s2_data = median_compositing(s2_data, period=compositing_window)
 
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
@@ -394,7 +401,7 @@ def worldcereal_preprocessed_inputs(
         tile_size=tile_size,
     )
 
-    s1_data = mean_compositing(s1_data, period="month")
+    s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
     dem_data = raw_datacube_DEM(
@@ -414,6 +421,10 @@ def worldcereal_preprocessed_inputs(
     data = data.merge_cubes(dem_data)
 
     if not disable_meteo:
+        if compositing_window != "month":
+            raise NotImplementedError(
+                "we dont support dekad compositing for meteo data yet"
+            )
         meteo_data = precomposited_datacube_METEO(
             connection=connection,
             spatial_extent=spatial_extent,

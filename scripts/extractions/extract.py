@@ -24,6 +24,12 @@ from patch_extractions.extract_patch_s2 import (
     create_job_dataframe_patch_s2,
     create_job_patch_s2,
 )
+from point_extractions.extract_point_npa import (
+    create_job_dataframe_point_npa,
+    create_job_point_npa,
+    generate_output_path_point_npa,
+    post_job_action_point_npa,
+)
 from point_extractions.extract_point_worldcereal import (
     create_job_dataframe_point_worldcereal,
     create_job_point_worldcereal,
@@ -126,6 +132,7 @@ def prepare_job_dataframe(
         ExtractionCollection.PATCH_METEO: create_job_dataframe_patch_meteo,
         ExtractionCollection.PATCH_WORLDCEREAL: create_job_dataframe_patch_worldcereal,
         ExtractionCollection.POINT_WORLDCEREAL: create_job_dataframe_point_worldcereal,
+        ExtractionCollection.POINT_NPA: create_job_dataframe_point_npa,
     }
 
     create_job_dataframe_fn = collection_switch.get(
@@ -186,6 +193,12 @@ def setup_extraction_functions(
             python_memory=python_memory,
             max_executors=max_executors,
         ),
+        ExtractionCollection.POINT_NPA: partial(
+            create_job_point_npa,
+            executor_memory=memory,
+            python_memory=python_memory,
+            max_executors=max_executors,
+        ),
     }
 
     datacube_fn = datacube_creation.get(
@@ -211,6 +224,7 @@ def setup_extraction_functions(
         ExtractionCollection.POINT_WORLDCEREAL: partial(
             generate_output_path_point_worldcereal
         ),
+        ExtractionCollection.POINT_NPA: partial(generate_output_path_point_npa),
     }
 
     path_fn = path_fns.get(
@@ -252,6 +266,9 @@ def setup_extraction_functions(
         ),
         ExtractionCollection.POINT_WORLDCEREAL: partial(
             post_job_action_point_worldcereal,
+        ),
+        ExtractionCollection.POINT_NPA: partial(
+            post_job_action_point_npa,
         ),
     }
 

@@ -13,6 +13,7 @@ class ExtractionCollection(Enum):
     PATCH_METEO = "PATCH_METEO"
     PATCH_WORLDCEREAL = "PATCH_WORLDCEREAL"
     POINT_WORLDCEREAL = "POINT_WORLDCEREAL"
+    POINT_NPA = "POINT_NPA"
 
 
 # Define the sentinel 1 asset
