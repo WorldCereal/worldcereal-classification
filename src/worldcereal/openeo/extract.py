@@ -139,11 +139,6 @@ def post_job_action_patch(
         username = os.getenv("STAC_API_USERNAME")
         password = os.getenv("STAC_API_PASSWORD")
 
-        if not username or not password:
-            pipeline_log.warning(
-                "STAC API credentials not found. Resorting to authorization code flow."
-            )
-
         stac_api_interaction = StacApiInteraction(
             sensor=sensor,
             base_url="https://stac.openeo.vito.be",

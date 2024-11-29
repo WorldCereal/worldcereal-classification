@@ -6,7 +6,6 @@ import pystac
 import pystac_client
 import requests
 from openeo.rest.auth.oidc import (
-    OidcAuthCodePkceAuthenticator,
     OidcClientInfo,
     OidcProviderInfo,
     OidcResourceOwnerPasswordAuthenticator,
@@ -47,7 +46,9 @@ class VitoStacApiAuthentication(AuthBase):
                 client_info=client_info, username=self.username, password=self.password
             )
         else:
-            authenticator = OidcAuthCodePkceAuthenticator(client_info=client_info)
+            raise ValueError(
+                "Credentials are required to obtain an access token. Please set STAC_API_USERNAME and STAC_API_PASSWORD environment variables."
+            )
 
         tokens = authenticator.get_tokens()
 
