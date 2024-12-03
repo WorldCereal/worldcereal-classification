@@ -197,3 +197,53 @@ def post_job_action_point_worldcereal(
         gdf.to_parquet(item_asset_path, index=False)
 
     return job_items
+
+
+def load_point_extractions(infolder: Path):
+    """Load the point extractions from the given folder."""
+
+    dfs = []
+    # Get all subfolders
+    ref_ids = [x for x in infolder.iterdir() if x.is_dir()]
+    for ref_id in ref_ids:
+        tiles = [x for x in ref_id.iterdir() if x.is_dir()]
+        for tile in tiles:
+            batches = [x for x in tile.iterdir() if x.is_dir()]
+            for batch in batches:
+                infile = batch / "point_extractions.geoparquet"
+                if infile.exists():
+                    dfs.append(gpd.read_parquet(infile))
+
+    return pd.concat(dfs)
+
+
+def visualize_timeseries(df, outfile, variable="NDVI", sample_ids: List = None):
+
+    if sample_ids is None:
+        sample_ids = df["sample_id"].unique()
+
+    fig, ax = plt.subplots()
+    for sample_id in sample_ids:
+        sample = df[df["sample_id"] == sample_id]
+        sample = sample.sort_values("timestamp")
+
+        if variable == "NDVI":
+            sample[variable] = (sample["S2-L2A-B08"] - sample["S2-L2A-B04"]) / (
+                sample["S2-L2A-B08"] + sample["S2-L2A-B04"]
+            )
+
+        if variable not in sample.columns:
+            print(f"Variable {variable} not found in the dataframe")
+            return
+
+        ax.plot(sample["timestamp"], sample[variable], label=sample_id)
+
+    plt.xlabel("Date")
+    plt.ylabel(variable)
+    plt.xticks(rotation=45)
+    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    plt.tight_layout()
+    plt.show()
+
+    plt.savefig(outfile)
+    return
