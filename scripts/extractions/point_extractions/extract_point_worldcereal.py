@@ -25,11 +25,10 @@ def generate_output_path_point_worldcereal(
     It has to be included in the function signature to be compatible with the GFMapJobManager.
     """
     features = geojson.loads(row.geometry)
-    ref_id = features[geometry_index].properties["ref_id"]
 
     s2_tile_id = row.s2_tile
 
-    subfolder = root_folder / ref_id / s2_tile_id
+    subfolder = root_folder / s2_tile_id
 
     subfolder.mkdir(parents=True, exist_ok=True)
 
@@ -199,32 +198,65 @@ def post_job_action_point_worldcereal(
     return job_items
 
 
-def load_point_extractions(infolder: Path):
-    """Load the point extractions from the given folder."""
+def load_point_extractions(infolder: Path) -> gpd.GeoDataFrame:
+    """Load all point extractions from the given folder.
 
+    Parameters
+    ----------
+    infolder : Path
+        path containing extractions for a given collection
+
+    Returns
+    -------
+    GeoPandas GeoDataFrame
+        GeoDataFrame containing all point extractions,
+        organized in long format
+        (each row represents a single timestep for a single sample)
+    """
+    
     dfs = []
     # Get all subfolders
-    ref_ids = [x for x in infolder.iterdir() if x.is_dir()]
-    for ref_id in ref_ids:
-        tiles = [x for x in ref_id.iterdir() if x.is_dir()]
-        for tile in tiles:
-            batches = [x for x in tile.iterdir() if x.is_dir()]
-            for batch in batches:
-                infile = batch / "point_extractions.geoparquet"
-                if infile.exists():
-                    dfs.append(gpd.read_parquet(infile))
+    tiles = [x for x in infolder.iterdir() if x.is_dir()]
+    for tile in tiles:
+        batches = [x for x in tile.iterdir() if x.is_dir()]
+        for batch in batches:
+            infile = batch / "point_extractions.geoparquet"
+            if infile.exists():
+                dfs.append(gpd.read_parquet(infile))
 
     return pd.concat(dfs)
 
 
-def visualize_timeseries(df, outfile, variable="NDVI", sample_ids: List = None):
+def visualize_timeseries(gdf: gpd.GeoDataFrame,
+                         outfile: Path = None,
+                         variable: str ="NDVI",
+                         sample_ids: List = None,):
+    """Function to visaulize the timeseries for one variable and one or mulitple samples
+    from an extractions GeoDataFrame.
 
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame containing all point extractions,
+        result from load_point_extractions. Should at least contain a 
+        column "timestamp" and the variable to visualize.
+    outfile : Path, optional
+        path to a file to store the visualization, by default None
+    variable : str, optional
+        the variable within the dataframe to visualize.
+        Either the variable should be part of the geodataframe, or should be "NDVI",
+        by default "NDVI"
+    sample_ids : List, optional
+        sample ids for which the time series needs to be visualized,
+        by default None meaning all samples will be visualized
+    """
+    
     if sample_ids is None:
-        sample_ids = df["sample_id"].unique()
+        sample_ids = gdf["sample_id"].unique()
 
     fig, ax = plt.subplots()
     for sample_id in sample_ids:
-        sample = df[df["sample_id"] == sample_id]
+        sample = gdf[gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
 
         if variable == "NDVI":
@@ -245,5 +277,6 @@ def visualize_timeseries(df, outfile, variable="NDVI", sample_ids: List = None):
     plt.tight_layout()
     plt.show()
 
-    plt.savefig(outfile)
+    if outfile is not None:
+        plt.savefig(outfile)
     return
