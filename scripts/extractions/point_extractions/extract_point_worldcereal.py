@@ -10,6 +10,7 @@ import pandas as pd
 import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
+from matplotlib import pyplot as plt
 
 from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
@@ -155,6 +156,23 @@ def post_job_action_point_worldcereal(
 
         # Convert the dates to datetime format
         gdf["timestamp"] = pd.to_datetime(gdf["date"])
+        gdf.drop(columns=["date"], inplace=True)
+
+        # Derive latitude and longitude from the geometry
+        gdf["lat"] = gdf.geometry.y
+        gdf["lon"] = gdf.geometry.x
+
+        # For each sample, add start and end date to the dataframe
+        # is there a better way to do this, as this is already done in the job creation?
+        sample_ids = gdf["sample_id"].unique()
+        for sample_id in sample_ids:
+            sample = gdf[gdf["sample_id"] == sample_id]
+            start_date = sample["timestamp"].min()
+            end_date = sample["timestamp"].max()
+            gdf.loc[gdf["sample_id"] == sample_id, "start_date"] = pd.to_datetime(
+                start_date
+            )
+            gdf.loc[gdf["sample_id"] == sample_id, "end_date"] = end_date
 
         # Convert band dtype to uint16 (temporary fix)
         # TODO: remove this step when the issue is fixed on the OpenEO backend
