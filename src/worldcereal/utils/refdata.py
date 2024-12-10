@@ -1,8 +1,10 @@
 import importlib.resources
 import json
 from typing import Dict
+from pathlib import Path
 
 import duckdb
+import tempfile
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -12,6 +14,7 @@ from openeo_gfmap import TemporalContext
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
+from worldcereal.utils.legend import download_latest_legend_from_artifactory
 
 
 def get_class_mappings() -> Dict:
@@ -349,12 +352,57 @@ def process_parquet(
         public_df["valid_date"] = public_df.index.map(true_valid_date_map)
         public_df["valid_date"] = public_df["valid_date"].astype(str)
 
-    public_df = map_croptypes(public_df)
+    public_df = _get_croptypes(public_df)
     logger.info(
         f"Extracted and processed {public_df.shape[0]} samples from global database."
     )
 
     return public_df
+
+
+def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Get land cover and crop type information at all levels of hierarchy,
+    based on ewoc_code and the latest legend file.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe containing reference data. Required attribute = "ewoc_code",
+        which should contain the EWOC code for each sample in int format.
+
+    Returns
+    -------
+    pd.DataFrame
+        returns the dataframe with addtional columns containing the crop type information at all levels of the hierarchy.
+    """
+    
+    # create temporary folder
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        tmpdir = Path(tmpdirname)
+        # download the latest legend file
+        legend_path = download_latest_legend_from_artifactory(tmpdir)
+        # read the legend file
+        legend = pd.read_csv(legend_path, header=0, sep=";")
+    
+    # Prepare mappings of crop types
+    legend = legend[legend["Code"].notna()]
+    drop_columns = [c for c in legend.columns if "Unnamed:" in c]
+    legend.drop(columns=drop_columns, inplace=True)
+    legend["Code"] = legend["Code"].str.replace("-", "").astype(int)
+    legend["LC_code_worldcereal"] = legend["LC_code_worldcereal"].astype(int)
+    legend = legend.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
+    legend.set_index("Code", inplace=True)
+    
+    # get the labels at different levels of the hierarchy
+    df["label"] = df["CROPTYPE_LABEL"].map(legend["Label_full"])
+    df["LANDCOVER_LABEL"] = df["CROPTYPE_LABEL"].map(legend["LC_worldcereal"])
+    df["label_level1"] = df["CROPTYPE_LABEL"].map(legend["Level_1"])
+    df["label_level2"] = df["CROPTYPE_LABEL"].map(legend["Level_2"])
+    df["label_level3"] = df["CROPTYPE_LABEL"].map(legend["Level_3"])
+    df["label_level4"] = df["CROPTYPE_LABEL"].map(legend["Level_4"])
+    df["label_level5"] = df["CROPTYPE_LABEL"].map(legend["Level_5"])
+    
+    return df
 
 
 def map_croptypes(
