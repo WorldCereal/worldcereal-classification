@@ -30,6 +30,7 @@ from worldcereal.seasons import get_season_dates_for_extent
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
 
+############# DEFINING TEMPORAL EXTENT #############
 class date_slider:
     """Class that provides a slider for selecting a processing period.
     The processing period is fixed in length, amounting to one year.
@@ -102,6 +103,7 @@ class date_slider:
 
         return TemporalContext(start, end)
 
+##########################
 
 def get_input(label):
     while True:
@@ -152,6 +154,200 @@ def select_landcover(df: pd.DataFrame):
 
     return vbox, checkbox_widgets
 
+############# SELECT CROPTYPES #############
+
+class CropTypePicker:
+    def __init__(self, df: pd.DataFrame, samples_threshold: int = 100):
+        self.df = df.copy()  # Work with a copy of the DataFrame
+        self.samples_threshold = samples_threshold
+        self.levels = [f"label_level{i+1}" for i in range(5)]
+        self.widgets_dict = {}
+        self.filtered_hierarchy = None
+        self.widget = None
+
+        # Initialize the hierarchy and widget
+        self._prepare_hierarchy()
+        self._create_widget()
+
+    def _simplify_hierarchy(self):
+        for i in range(len(self.levels) - 1, 0, -1):
+            upper, lower = self.levels[i - 1], self.levels[i]
+            self.df.loc[self.df[upper] == self.df[lower], lower] = None
+
+    def _calculate_counts(self):
+        count_dict = {}
+        for i in range(1, len(self.levels) + 1):
+            subset = self.levels[:i]
+            grouped = self.df.groupby(subset).size().reset_index(name="count")
+            for _, row in grouped.iterrows():
+                current = tuple(row[level] for level in subset)
+                count_dict[current] = row["count"]
+        return count_dict
+    
+    def _build_hierarchy(self, count_dict):
+        """
+        Builds a nested dictionary from the simplified hierarchy, ensuring all levels
+        are represented, even if only one entry is present. Counts are only aggregated
+        at the lowest level to avoid double-counting.
+        """
+        hierarchy = {}
+
+        for keys, count in count_dict.items():
+            node = hierarchy
+            for key in keys:  # Traverse through all keys in the hierarchy
+                if key not in node:
+                    node[key] = {"__count__": 0}
+                if key == keys[-1]:  # Only add counts at the lowest level
+                    node[key]["__count__"] += count
+                node = node[key]
+
+        return hierarchy
+
+    def _filter_low_counts(self, hierarchy):
+        filtered_hierarchy = {}
+        for key, value in hierarchy.items():
+            if key == "__count__":
+                filtered_hierarchy[key] = value
+                continue
+            filtered_value = self._filter_low_counts(value)
+            if filtered_value:
+                filtered_hierarchy[key] = filtered_value
+
+        if not any(k != "__count__" for k in filtered_hierarchy.keys()):
+            if filtered_hierarchy.get("__count__", 0) < self.samples_threshold:
+                return None
+        return filtered_hierarchy
+
+    def _prepare_hierarchy(self):
+        self._simplify_hierarchy()
+        count_dict = self._calculate_counts()
+        hierarchy = self._build_hierarchy(count_dict)
+        self.filtered_hierarchy = self._filter_low_counts(hierarchy)
+        if len(self.filtered_hierarchy) <= 1:
+            logger.warning(
+            f"Less than 2 classes remained after aggregation with threshold {self.samples_threshold}. Consider adding more data or lowering the threshold."
+        )
+
+    def _disable_descendants(self, widget):
+        widget.disabled = True
+        widget.value = False
+        if isinstance(widget, widgets.VBox):
+            for child in widget.children:
+                self._disable_descendants(child)
+
+    def _enable_descendants(self, widget):
+        widget.disabled = False
+        if isinstance(widget, widgets.VBox):
+            for child in widget.children:
+                self._enable_descendants(child)
+
+    def _create_widget(self):
+        def recursive_create_widgets(hierarchy, path=None, level=0):
+            if path is None:
+                path = []
+
+            items = []
+            for key, value in hierarchy.items():
+                if key == "__count__":
+                    continue
+                current_path = tuple(path + [key])
+                count = value.get("__count__", 0)
+                checkbox = widgets.Checkbox(
+                    value=False,
+                    description=f"{key} ({count} samples)",
+                    layout=widgets.Layout(margin=f"0 0 0 {level * 40}px", width="auto")
+                )
+                self.widgets_dict[current_path] = checkbox
+
+                # Process child items recursively
+                child_items = []
+                for child_key, child_value in value.items():
+                    if child_key != "__count__":
+                        child_items.append(recursive_create_widgets({child_key: child_value}, list(current_path), level + 1,))
+                
+                # Append children if they exist
+                if child_items:
+                    # Create a collapsible section with a toggle button
+                    children_vbox = widgets.VBox(child_items)
+                    children_vbox.layout.display = "none"  # Hide by default
+
+                    toggle_button = widgets.ToggleButton(
+                        value=False,
+                        description="Show",
+                        icon="chevron-down",
+                        layout=widgets.Layout(width="auto", margin=f"0 0 0 {level * 40 + 20}px")
+                    )
+
+                    def toggle_visibility(change, target=children_vbox, button=toggle_button):
+                        if change["new"]:
+                            target.layout.display = "flex"
+                            button.description = "Hide"
+                            button.icon = "chevron-up"
+                        else:
+                            target.layout.display = "none"
+                            button.description = "Show"
+                            button.icon = "chevron-down"
+
+                    toggle_button.observe(toggle_visibility, names="value")
+
+                    vbox = widgets.VBox([checkbox, toggle_button, children_vbox])
+
+                    # Define behavior for disabling all descendants when a parent is selected
+                    def on_parent_change(change, target_child_items=child_items):
+                        if change['new']:
+                            for child in target_child_items:
+                                self._disable_descendants(child)
+                        else:
+                            for child in target_child_items:
+                                self._enable_descendants(child)
+
+                    checkbox.observe(on_parent_change, names="value")
+                    items.append(vbox)
+                else:
+                    items.append(checkbox)
+            return widgets.VBox(items)
+
+        self.widget = recursive_create_widgets(self.filtered_hierarchy)
+
+    def display(self):
+        return self.widget
+
+    def apply(self) -> pd.DataFrame:
+        """
+        Processes selected values:
+        1. Identifies selected crop types and determines the appropriate hierarchy level.
+        2. Adds a 'final_class' column to the original DataFrame with selected crop type labels.
+        3. Filters out samples not matching the selected crop types and displays a discard count.
+        """
+        selected_values = [path for path, checkbox in self.widgets_dict.items() if checkbox.value]
+
+        if not selected_values:
+            raise ValueError("No crop types selected.")
+
+        # Create a set of selected paths for filtering
+        selected_paths = {path for path in selected_values}
+
+        # Identify the final crop type for each sample in the DataFrame
+        def get_final_class(row):
+            for path in selected_paths:
+                if all(row[level] == path[i] for i, level in enumerate(self.levels[:len(path)])):
+                    return path[-1]
+            return None
+
+        self.df["final_class"] = self.df.apply(get_final_class, axis=1)
+        discarded_count = self.df["final_class"].isna().sum()
+
+        # Filter the DataFrame to only include selected crop types
+        self.df = self.df.dropna(subset=["final_class"])
+
+        # Display discarded count
+        logger.info(f"Discarded {discarded_count} samples that do not match the selected crop types.")
+        
+        # Display list of selected crop types
+        logger.info(f'Selected types: {self.df["final_class"].unique().tolist()}')
+        
+        return self.df
+    
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
@@ -167,7 +363,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
 
     # CREATING A HIERARCHICAL LAYOUT OF OPTIONS
     # ==========================================
-    _class_map = dict(df[["ewoc_code", "label_level3"]].value_counts().index.to_list())
+    _class_map = dict(df[["CROPTYPE_LABEL", "label_level3"]].value_counts().index.to_list())
     class_counts = pd.DataFrame(
         df[["label_level1", "label_level2", "label_level3"]].value_counts().sort_index()
     ).reset_index()
@@ -343,6 +539,8 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     return vbox, vbox_items, _class_map
 
 
+############# RETRIEVE WORLDCEREAL SEASONS #############
+
 def get_month_decimal(date):
 
     return date.timetuple().tm_mon + (
@@ -450,6 +648,8 @@ def retrieve_worldcereal_seasons(
 
     return results
 
+
+############# PREPARE TRAINING DATAFRAME #############
 
 def prepare_training_dataframe(
     df: pd.DataFrame,
@@ -577,6 +777,8 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
 
     return df
 
+
+############# MODEL TRAINING #############
 
 def train_classifier(
     training_dataframe: pd.DataFrame,
