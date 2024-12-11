@@ -2,7 +2,6 @@ from pathlib import Path
 from loguru import logger
 import configparser
 import subprocess
-from bs4 import BeautifulSoup
 
 
 #TODO: we need a better way to authenticate with Artifactory
@@ -44,24 +43,27 @@ def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
     if not srcpath.is_file():
         raise FileNotFoundError(f"Required file `{srcpath}` not found.")
     
-    target_name = f"WorldCereal_LC_CT_legend_{date}.csv"
-    targetpath = f"{ARTIFACTORY_BASE_URL}legend/{target_name}"
+    # We  upload the file with a specific date tag and also with a "latest" tag
+    target_names = [f"WorldCereal_LC_CT_legend_{date}.csv",
+                    "WorldCereal_LC_CT_legend_latest.csv"]
+    targetpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in target_names]
 
-    logger.info(f"Uploading `{srcpath}` to `{targetpath}`")
+    for targetpath in targetpaths:
+        logger.info(f"Uploading `{srcpath}` to `{targetpath}`")
 
-    cmd = (
-        f"curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -T {srcpath} "
-        f'"{targetpath}"'
-    )
+        cmd = (
+            f"curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -T {srcpath} "
+            f'"{targetpath}"'
+        )
 
-    output, _ = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-    output = eval(output)
-
+        output, _ = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+        output = eval(output)
+    
     return output["downloadUri"]
 
 
 def download_latest_legend_from_artifactory(download_path: Path) -> Path:
-    """Looks for and downloades the latest version of the WorldCereal land cover/crop type legend from Artifactory.
+    """Downloads the latest version of the WorldCereal land cover/crop type legend from Artifactory.
 
     Parameters
     ----------
@@ -78,15 +80,9 @@ def download_latest_legend_from_artifactory(download_path: Path) -> Path:
     FileNotFoundError
         Raises if no legend files are found in Artifactory.
     """
-    
-    available_files = _get_artifactory_legend_list()
-
-    if not available_files:
-        raise FileNotFoundError("No legend files found in Artifactory.")
-
-    dates = [int(file.split("_")[-1].split(".")[0]) for file in available_files]
-    latest_file = available_files[dates.index(max(dates))]
+    latest_file = 'WorldCereal_LC_CT_legend_latest.csv'
     link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
+    
     logger.info(f"Downloading latest legend file: {latest_file}")
     
     download_path.mkdir(parents=True, exist_ok=True)
@@ -94,30 +90,35 @@ def download_latest_legend_from_artifactory(download_path: Path) -> Path:
 
     cmd = f'curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -o {download_file} "{link}"'
 
-    output, _ = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+    subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
     return download_file
 
-def _get_artifactory_legend_list() -> list:
-    """Get list of all WorldCereal legend files available in Artifactory as csv files.
 
-    Returns
-    -------
-    list
-        list of all WorldCereal legend files available in Artifactory
+def delete_legend_file(path: str) -> None:
+    """Deletes a legend file from Artifactory.
+
+    Parameters
+    ----------
+    path : str
+        Path to the legend file in Artifactory.
     """
+    cmd = f"curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -X DELETE {path}"
+    subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
-    cmd = f'curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -X GET -k "{ARTIFACTORY_BASE_URL}legend/"'
-    output, _ = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
-    html_content = output.decode("utf-8")
+# if __name__ == '__main__':
+    
+#     # Example usage
+#     srcpath = Path("/data/users/Private/jeroendegerickx/worldcereal/legend/WorldCereal_LC_CT_legend_20241210.csv")
+#     date = "20241210"
+#     download_path = Path("/data/users/Private/jeroendegerickx/worldcereal/legend")
 
-    soup = BeautifulSoup(html_content, "html.parser")
+#     # Upload the legend to Artifactory
+#     link = upload_legend_csv_artifactory(srcpath, date)
 
-    # Find all <a> tags
-    links = soup.find_all("a", href=True)
-
-    # Filter links that end with .csv
-    csv_links = [link["href"] for link in links if link["href"].endswith(".csv")]
-
-    return csv_links
+#     # Download the latest legend from Artifactory
+#     download_latest_legend_from_artifactory(download_path)
+    
+#     # Delete the uploaded legend from Artifactory
+#     delete_legend_file(link)
