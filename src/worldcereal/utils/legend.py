@@ -5,6 +5,8 @@ import subprocess
 from bs4 import BeautifulSoup
 
 
+#TODO: we need a better way to authenticate with Artifactory
+
 config_filename = (
     "/data/users/Private/jeroendegerickx/worldcereal/worldcerealconfig.ini"
 )
