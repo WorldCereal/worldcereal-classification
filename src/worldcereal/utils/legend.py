@@ -1,23 +1,38 @@
 from pathlib import Path
 from loguru import logger
-import configparser
 import subprocess
+import os
 
-
-#TODO: we need a better way to authenticate with Artifactory
-
-config_filename = (
-    "/data/users/Private/jeroendegerickx/worldcereal/worldcerealconfig.ini"
-)
-config = configparser.ConfigParser()
-config.read(config_filename)
-
-ARTIFACTORY_USERNAME = config["artifactory"]["username"]
-ARTIFACTORY_PASSWORD = config["artifactory"]["password"]
 
 ARTIFACTORY_BASE_URL = (
     "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
 )
+
+
+def _get_artifactory_credentials():
+    """Get credentials for upload and delete operations on Artifactory.
+
+    Returns
+    -------
+    tuple (str, str)
+        Tuple containing the Artifactory username and password.
+
+    Raises
+    ------
+    ValueError
+        if ARTIFACTORY_USERNAME or ARTIFACTORY_PASSWORD are not set as environment variables.
+    """
+    
+    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
+    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
+    
+    if not artifactory_username or not artifactory_password:
+        raise ValueError(
+            "Artifactory credentials not found. "
+            "Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD environment variables."
+        )
+        
+    return artifactory_username, artifactory_password
 
 
 def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
@@ -43,6 +58,9 @@ def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
     if not srcpath.is_file():
         raise FileNotFoundError(f"Required file `{srcpath}` not found.")
     
+    # Get Artifactory credentials
+    artifactory_username, artifactory_password = _get_artifactory_credentials()
+    
     # We  upload the file with a specific date tag and also with a "latest" tag
     target_names = [f"WorldCereal_LC_CT_legend_{date}.csv",
                     "WorldCereal_LC_CT_legend_latest.csv"]
@@ -52,7 +70,7 @@ def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
         logger.info(f"Uploading `{srcpath}` to `{targetpath}`")
 
         cmd = (
-            f"curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -T {srcpath} "
+            f"curl -u{artifactory_username}:{artifactory_password} -T {srcpath} "
             f'"{targetpath}"'
         )
 
@@ -88,7 +106,7 @@ def download_latest_legend_from_artifactory(download_path: Path) -> Path:
     download_path.mkdir(parents=True, exist_ok=True)
     download_file = download_path / latest_file
 
-    cmd = f'curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -o {download_file} "{link}"'
+    cmd = f'curl -o {download_file} "{link}"'
 
     subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
@@ -103,22 +121,8 @@ def delete_legend_file(path: str) -> None:
     path : str
         Path to the legend file in Artifactory.
     """
-    cmd = f"curl -u{ARTIFACTORY_USERNAME}:{ARTIFACTORY_PASSWORD} -X DELETE {path}"
+    # Get Artifactory credentials
+    artifactory_username, artifactory_password = _get_artifactory_credentials()
+    
+    cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {path}"
     subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-
-
-# if __name__ == '__main__':
-    
-#     # Example usage
-#     srcpath = Path("/data/users/Private/jeroendegerickx/worldcereal/legend/WorldCereal_LC_CT_legend_20241210.csv")
-#     date = "20241210"
-#     download_path = Path("/data/users/Private/jeroendegerickx/worldcereal/legend")
-
-#     # Upload the legend to Artifactory
-#     link = upload_legend_csv_artifactory(srcpath, date)
-
-#     # Download the latest legend from Artifactory
-#     download_latest_legend_from_artifactory(download_path)
-    
-#     # Delete the uploaded legend from Artifactory
-#     delete_legend_file(link)
