@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 from datetime import datetime
 from importlib.metadata import version
@@ -153,15 +154,31 @@ def post_job_action_patch(
 
 
 def generate_output_path_patch(
-    root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
+    root_folder: Path,
+    job_index: int,
+    row: pd.Series,
+    asset_id: str,
+    s2_grid: gpd.GeoDataFrame,
 ):
     """Generate the output path for the extracted data, from a base path and
     the row information.
     """
-    features = geojson.loads(row.geometry)
-    sample_id = features[geometry_index].properties.get("sample_id", None)
-    if sample_id is None:
-        sample_id = features[geometry_index].properties["sampleID"]
+    # First extract the sample ID from the asset ID
+    match = re.fullmatch(r"openEO_(.+)\.nc", asset_id)
+    if match:
+        sample_id = match.group(1)
+    else:
+        pipeline_log.error("Asset ID does not match the expected pattern: %s", asset_id)
+        raise ValueError(f"Invalid Asset ID format: {asset_id}")
+
+    # Find which index in the FeatureCollection corresponds to the sample_id
+    features = geojson.loads(row.geometry)["features"]
+    sample_id_to_index = {
+        feature.properties.get("sample_id", None): index
+        for index, feature in enumerate(features)
+    }
+    geometry_index = sample_id_to_index.get(sample_id, None)
+
     ref_id = features[geometry_index].properties["ref_id"]
 
     if "orbit_state" in row:
