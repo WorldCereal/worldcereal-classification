@@ -596,22 +596,22 @@ def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
         legend = pd.read_csv(legend_path, header=0, sep=";")
     
     # Prepare mappings of crop types
-    legend = legend[legend["Code"].notna()]
+    legend = legend[legend["ewoc_code"].notna()]
     drop_columns = [c for c in legend.columns if "Unnamed:" in c]
     legend.drop(columns=drop_columns, inplace=True)
-    legend["Code"] = legend["Code"].str.replace("-", "").astype(int)
-    legend["LC_code_worldcereal"] = legend["LC_code_worldcereal"].astype(int)
+    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
+    legend["LC_code"] = legend["LC_code"].astype(int)
     legend = legend.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
-    legend.set_index("Code", inplace=True)
+    legend.set_index("ewoc_code", inplace=True)
     
     # get the labels at different levels of the hierarchy
-    df["label"] = df["CROPTYPE_LABEL"].map(legend["Label_full"])
-    df["LANDCOVER_LABEL"] = df["CROPTYPE_LABEL"].map(legend["LC_worldcereal"])
-    df["label_level1"] = df["CROPTYPE_LABEL"].map(legend["Level_1"])
-    df["label_level2"] = df["CROPTYPE_LABEL"].map(legend["Level_2"])
-    df["label_level3"] = df["CROPTYPE_LABEL"].map(legend["Level_3"])
-    df["label_level4"] = df["CROPTYPE_LABEL"].map(legend["Level_4"])
-    df["label_level5"] = df["CROPTYPE_LABEL"].map(legend["Level_5"])
+    df["label"] = df["CROPTYPE_LABEL"].map(legend["label_full"])
+    df["LANDCOVER_LABEL"] = df["CROPTYPE_LABEL"].map(legend["LC_label"])
+    df["label_level1"] = df["CROPTYPE_LABEL"].map(legend["level_1"])
+    df["label_level2"] = df["CROPTYPE_LABEL"].map(legend["level_2"])
+    df["label_level3"] = df["CROPTYPE_LABEL"].map(legend["level_3"])
+    df["label_level4"] = df["CROPTYPE_LABEL"].map(legend["level_4"])
+    df["label_level5"] = df["CROPTYPE_LABEL"].map(legend["level_5"])
     
     return df
 
