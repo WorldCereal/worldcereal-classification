@@ -33,7 +33,7 @@ from worldcereal.openeo.preprocessing import (
 )
 from worldcereal.utils.geoloader import load_reproject
 
-from extract_common import (  # isort: skip
+from worldcereal.openeo.extract import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
@@ -43,7 +43,7 @@ from extract_common import (  # isort: skip
 WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 
 
-def create_job_dataframe_worldcereal(
+def create_job_dataframe_patch_worldcereal(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
 ) -> pd.DataFrame:
@@ -119,7 +119,7 @@ def create_job_dataframe_worldcereal(
     return pd.DataFrame(rows)
 
 
-def create_datacube_worldcereal(
+def create_job_patch_worldcereal(
     row: pd.Series,
     connection: openeo.DataCube,
     provider,
@@ -270,7 +270,6 @@ def postprocess_extracted_file(
         "S2-L2A-B12": "B12",
         "S1-SIGMA0-VH": "VH",
         "S1-SIGMA0-VV": "VV",
-        "COP-DEM": "elevation",
         "AGERA5-TMEAN": "temperature_2m",
         "AGERA5-PRECIP": "total_precipitation",
     }
@@ -334,7 +333,7 @@ def postprocess_extracted_file(
     shutil.move(tempfile, item_asset_path)
 
 
-def post_job_action_worldcereal(
+def post_job_action_patch_worldcereal(
     job_items: List[pystac.Item],
     row: pd.Series,
     extract_value: int,
@@ -398,7 +397,7 @@ def post_job_action_worldcereal(
     return job_items
 
 
-def generate_output_path_worldcereal(
+def generate_output_path_patch_worldcereal(
     root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
 ):
     """Generate the output path for the extracted data, from a base path and

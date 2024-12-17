@@ -18,6 +18,11 @@ import requests
 import xarray as xr
 from shapely import Point
 
+from worldcereal.stac.stac_api_interaction import (
+    StacApiInteraction,
+    VitoStacApiAuthentication,
+)
+
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
 
@@ -41,7 +46,7 @@ class ManagerLoggerFilter(logging.Filter):
 stream_handler.addFilter(ManagerLoggerFilter())
 
 
-def post_job_action(
+def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
     extract_value: int,
@@ -49,6 +54,8 @@ def post_job_action(
     title: str,
     spatial_resolution: str,
     s1_orbit_fix: bool = False,  # To rename the samples from the S1 orbit
+    write_stac_api: bool = False,
+    sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
@@ -72,7 +79,7 @@ def post_job_action(
 
         geometry_information = extracted_gpd.loc[
             extracted_gpd[sample_id_column_name] == item_id
-        ].squeeze()
+        ]
 
         if len(geometry_information) == 0:
             pipeline_log.warning(
@@ -80,6 +87,15 @@ def post_job_action(
                 item_id,
             )
             continue
+
+        if len(geometry_information) > 1:
+            pipeline_log.warning(
+                "Duplicate geomtries found for the sample_id %s in the input geometry, selecting the first one at index: %s.",
+                item_id,
+                geometry_information.index[0],
+            )
+
+        geometry_information = geometry_information.iloc[0]
 
         sample_id = geometry_information[sample_id_column_name]
         ref_id = geometry_information.ref_id
@@ -119,10 +135,24 @@ def post_job_action(
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
 
+    if write_stac_api:
+        username = os.getenv("STAC_API_USERNAME")
+        password = os.getenv("STAC_API_PASSWORD")
+
+        stac_api_interaction = StacApiInteraction(
+            sensor=sensor,
+            base_url="https://stac.openeo.vito.be",
+            auth=VitoStacApiAuthentication(username=username, password=password),
+        )
+
+        pipeline_log.info("Writing the STAC API metadata")
+        stac_api_interaction.upload_items_bulk(job_items)
+        pipeline_log.info("STAC API metadata written")
+
     return job_items
 
 
-def generate_output_path(
+def generate_output_path_patch(
     root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
 ):
     """Generate the output path for the extracted data, from a base path and
@@ -217,9 +247,7 @@ def upload_geoparquet_artifactory(
             timeout=180,
         )
 
-    assert (
-        response.status_code == 201
-    ), f"Error uploading the dataframe to artifactory: {response.text}"
+    response.raise_for_status()
 
     return upload_url
 

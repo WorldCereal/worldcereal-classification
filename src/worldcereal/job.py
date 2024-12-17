@@ -1,161 +1,51 @@
 """Executing inference jobs on the OpenEO backend."""
 
-from enum import Enum
+import json
 from pathlib import Path
-from typing import Optional, Type, Union
+from typing import Dict, Optional, Union
 
+import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
-from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
-from openeo_gfmap.inference.model_inference import ModelInference
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CroplandClassifier, CroptypeClassifier
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
-
-
-class WorldCerealProduct(Enum):
-    """Enum to define the different WorldCereal products."""
-
-    CROPLAND = "cropland"
-    CROPTYPE = "croptype"
-
-
-class FeaturesParameters(BaseModel):
-    """Parameters for the feature extraction UDFs. Types are enforced by
-    Pydantic.
-
-    Attributes
-    ----------
-    rescale_s1 : bool (default=False)
-        Whether to rescale Sentinel-1 bands before feature extraction. Should be
-        left to False, as this is done in the Presto UDF itself.
-    presto_model_url : str
-        Public URL to the Presto model used for feature extraction. The file
-        should be a PyTorch serialized model.
-    compile_presto : bool (default=False)
-        Whether to compile the Presto encoder for speeding up large-scale inference.
-    """
-
-    rescale_s1: bool
-    presto_model_url: str
-    compile_presto: bool
-
-
-class ClassifierParameters(BaseModel):
-    """Parameters for the classifier. Types are enforced by Pydantic.
-
-    Attributes
-    ----------
-    classifier_url : str
-        Public URL to the classifier model. Te file should be an ONNX accepting
-        a `features` field for input data and returning either two output
-        probability arrays `true` and `false` in case of cropland mapping, or
-        a probability array per-class in case of croptype mapping.
-    """
-
-    classifier_url: str
-
-
-class CropLandParameters(BaseModel):
-    """Parameters for the cropland product inference pipeline. Types are
-    enforced by Pydantic.
-
-    Attributes
-    ----------
-    feature_extractor : PrestoFeatureExtractor
-        Feature extractor to use for the inference. This class must be a
-        subclass of GFMAP's `PatchFeatureExtractor` and returns float32
-        features.
-    features_parameters : FeaturesParameters
-        Parameters for the feature extraction UDF. Will be serialized into a
-        dictionnary and passed in the process graph.
-    classifier : CroplandClassifier
-        Classifier to use for the inference. This class must be a subclass of
-        GFMAP's `ModelInference` and returns predictions/probabilities for
-        cropland.
-    classifier_parameters : ClassifierParameters
-        Parameters for the classifier UDF. Will be serialized into a dictionnary
-        and passed in the process graph.
-    """
-
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
-    )
-    features_parameters: FeaturesParameters = FeaturesParameters(
-        rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/presto.pt",  # NOQA
-        compile_presto=False,
-    )
-    classifier: Type[ModelInference] = Field(default=CroplandClassifier)
-    classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal-minimal-inference/wc_catboost.onnx"  # NOQA
-    )
-
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
-            )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
-
-
-class CropTypeParameters(BaseModel):
-    """Parameters for the croptype product inference pipeline. Types are
-    enforced by Pydantic.
-
-    Attributes
-    ----------
-    feature_extractor : PrestoFeatureExtractor
-        Feature extractor to use for the inference. This class must be a
-        subclass of GFMAP's `PatchFeatureExtractor` and returns float32
-        features.
-    features_parameters : FeaturesParameters
-        Parameters for the feature extraction UDF. Will be serialized into a
-        dictionnary and passed in the process graph.
-    classifier : CroptypeClassifier
-        Classifier to use for the inference. This class must be a subclass of
-        GFMAP's `ModelInference` and returns predictions/probabilities for
-        cropland classes.
-    classifier_parameters : ClassifierParameters
-        Parameters for the classifier UDF. Will be serialized into a dictionnary
-        and passed in the process graph.
-    """
-
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
-    )
-    feature_parameters: FeaturesParameters = FeaturesParameters(
-        rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test.pt",  # NOQA
-        compile_presto=False,
-    )
-    classifier: Type[ModelInference] = Field(default=CroptypeClassifier)
-    classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct-30D_test_CROPTYPE9.onnx"  # NOQA
-    )
-
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
-            )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
-
+from worldcereal.parameters import (
+    CropLandParameters,
+    CropTypeParameters,
+    PostprocessParameters,
+    WorldCerealProductType,
+)
+from worldcereal.utils.models import load_model_lut
 
 ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
+
+
+class WorldCerealProduct(TypedDict):
+    """Dataclass representing a WorldCereal inference product.
+
+    Attributes
+    ----------
+    url: str
+        URL to the product.
+    type: WorldCerealProductType
+        Type of the product. Either cropland or croptype.
+    temporal_extent: TemporalContext
+        Period of time for which the product has been generated.
+    path: Optional[Path]
+        Path to the downloaded product.
+    lut: Optional[Dict]
+        Look-up table for the product.
+
+    """
+
+    url: str
+    type: WorldCerealProductType
+    temporal_extent: TemporalContext
+    path: Optional[Path]
+    lut: Optional[Dict]
 
 
 class InferenceResults(BaseModel):
@@ -165,27 +55,25 @@ class InferenceResults(BaseModel):
     ----------
     job_id : str
         Job ID of the finished OpenEO job.
-    product_url : str
-        Public URL to the product accessible of the resulting OpenEO job.
-    output_path : Optional[Union[Path, str]]
-        Path to the output file, if it was downloaded locally.
-    product : WorldCerealProduct
-        Product that was generated.
+    products: Dict[str, WorldCerealProduct]
+        Dictionary with the different products.
+    metadata: Optional[Path]
+        Path to metadata file, if it was downloaded locally.
     """
 
     job_id: str
-    product_url: str
-    output_path: Optional[Union[Path, str]]
-    product: WorldCerealProduct
+    products: Dict[str, WorldCerealProduct]
+    metadata: Optional[Path]
 
 
 def generate_map(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
-    output_path: Optional[Union[Path, str]],
-    product_type: WorldCerealProduct = WorldCerealProduct.CROPLAND,
+    output_dir: Optional[Union[Path, str]] = None,
+    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: Optional[CropTypeParameters] = CropTypeParameters(),
+    croptype_parameters: CropTypeParameters = CropTypeParameters(),
+    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
@@ -199,16 +87,18 @@ def generate_map(
         spatial extent of the map
     temporal_extent : TemporalContext
         temporal range to consider
-    output_path : Optional[Union[Path, str]]
-        output path to download the product to
-    product_type : WorldCerealProduct, optional
-        product describer, by default WorldCerealProduct.CROPLAND
+    output_dir : Optional[Union[Path, str]]
+        path to directory where products should be downloaded to
+    product_type : WorldCerealProductType, optional
+        product describer, by default WorldCerealProductType.CROPLAND
     cropland_parameters: CropLandParameters
         Parameters for the cropland product inference pipeline.
     croptype_parameters: Optional[CropTypeParameters]
         Parameters for the croptype product inference pipeline. Only required
-        whenever `product_type` is set to `WorldCerealProduct.CROPTYPE`, will be
-        ignored otherwise.
+        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
+        will be ignored otherwise.
+    postprocess_parameters: PostprocessParameters
+        Parameters for the postprocessing pipeline. By default disabled.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
@@ -231,14 +121,23 @@ def generate_map(
         if the out_format is not supported
     """
 
-    if product_type not in WorldCerealProduct:
+    if product_type not in WorldCerealProductType:
         raise ValueError(f"Product {product_type.value} not supported.")
 
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    # Make a connection to the OpenEO backend
-    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if backend_context.backend == Backend.CDSE:
+        connection = openeo.connect(
+            "https://openeo.creo.vito.be/openeo/"
+        ).authenticate_oidc()
+    else:
+        # Make a connection to the OpenEO backend
+        connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
@@ -247,6 +146,7 @@ def generate_map(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        # disable_meteo=True,
     )
 
     # Explicit filtering again for bbox because of METEO low
@@ -254,32 +154,53 @@ def generate_map(
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     # Construct the feature extraction and model inference pipeline
-    if product_type == WorldCerealProduct.CROPLAND:
-        classes = _cropland_map(inputs, cropland_parameters=cropland_parameters)
-    elif product_type == WorldCerealProduct.CROPTYPE:
-        if not isinstance(croptype_parameters, CropTypeParameters):
-            raise ValueError(
-                f"Please provide a valid `croptype_parameters` parameter. Received: {croptype_parameters}"
-            )
-        # First compute cropland map
-        cropland_mask = (
-            _cropland_map(inputs, cropland_parameters=cropland_parameters)
-            .filter_bands("classification")
-            .reduce_dimension(
-                dimension="t", reducer="mean"
-            )  # Temporary fix to make this work as mask
+    if product_type == WorldCerealProductType.CROPLAND:
+        classes = _cropland_map(
+            inputs,
+            temporal_extent,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
         )
 
+    elif product_type == WorldCerealProductType.CROPTYPE:
+        if not isinstance(croptype_parameters, CropTypeParameters):
+            raise ValueError(
+                f"Please provide a valid `croptype_parameters` parameter."
+                f" Received: {croptype_parameters}"
+            )
+        # First compute cropland map
+        cropland_mask = _cropland_map(
+            inputs,
+            temporal_extent,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
+        )
+
+        # Save final mask if required
+        if croptype_parameters.save_mask:
+            cropland_mask = cropland_mask.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
+                ),
+            )
+
+        # To use it as a mask, we need to filter out the classification band
+        cropland_mask = cropland_mask.filter_bands("classification")
+
+        # Generate crop type map
         classes = _croptype_map(
             inputs,
+            temporal_extent,
             croptype_parameters=croptype_parameters,
             cropland_mask=cropland_mask,
+            postprocess_parameters=postprocess_parameters,
         )
 
     # Submit the job
     JOB_OPTIONS = {
         "driver-memory": "4g",
-        "executor-memory": "1g",
+        "executor-memory": "2g",
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
         "soft-errors": "true",
@@ -288,19 +209,57 @@ def generate_map(
     if job_options is not None:
         JOB_OPTIONS.update(job_options)
 
+    # Execute the job
     job = classes.execute_batch(
-        outputfile=output_path,
         out_format=out_format,
         job_options=JOB_OPTIONS,
+        title=f"WorldCereal [{product_type.value}] job",
+        description="Job that performs end-to-end WorldCereal inference",
+        filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
     )
 
-    asset = job.get_results().get_assets()[0]
+    # Get look-up tables
+    luts = {}
+    luts[WorldCerealProductType.CROPLAND.value] = load_model_lut(
+        cropland_parameters.classifier_parameters.classifier_url
+    )
+    if product_type == WorldCerealProductType.CROPTYPE:
+        luts[WorldCerealProductType.CROPTYPE.value] = load_model_lut(
+            croptype_parameters.classifier_parameters.classifier_url
+        )
 
+    # Get job results
+    job_result = job.get_results()
+
+    # Get the products
+    assets = job_result.get_assets()
+    products = {}
+    for asset in assets:
+        asset_name = asset.name.split(".")[0].split("_")[0]
+        asset_type = asset_name.split("-")[0]
+        asset_type = getattr(WorldCerealProductType, asset_type.upper())
+        if output_dir is not None:
+            filepath = asset.download(target=output_dir)
+        else:
+            filepath = None
+        products[asset_name] = {
+            "url": asset.href,
+            "type": asset_type,
+            "temporal_extent": temporal_extent,
+            "path": filepath,
+            "lut": luts[asset_type.value],
+        }
+
+    # Download job metadata if output path is provided
+    if output_dir is not None:
+        metadata_file = output_dir / "job-results.json"
+        metadata_file.write_text(json.dumps(job_result.get_metadata()))
+    else:
+        metadata_file = None
+
+    # Compile InferenceResults and return
     return InferenceResults(
-        job_id=job.job_id,
-        product_url=asset.href,
-        output_path=output_path,
-        product=product_type,
+        job_id=job.job_id, products=products, metadata=metadata_file
     )
 
 
@@ -310,6 +269,7 @@ def collect_inputs(
     output_path: Union[Path, str],
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
+    job_options: Optional[dict] = None,
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -327,6 +287,8 @@ def collect_inputs(
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128
         so it uses the OpenEO default setting.
+    job_options: dict, optional
+        Additional job options to pass to the OpenEO backend, by default None
     """
 
     # Make a connection to the OpenEO backend
@@ -341,14 +303,20 @@ def collect_inputs(
         tile_size=tile_size,
     )
 
+    JOB_OPTIONS = {
+        "driver-memory": "4g",
+        "executor-memory": "1g",
+        "executor-memoryOverhead": "1g",
+        "python-memory": "2g",
+        "soft-errors": "true",
+    }
+    if job_options is not None:
+        JOB_OPTIONS.update(job_options)
+
     inputs.execute_batch(
         outputfile=output_path,
         out_format="NetCDF",
-        job_options={
-            "driver-memory": "4g",
-            "executor-memory": "1g",
-            "executor-memoryOverhead": "1g",
-            "python-memory": "2g",
-            "soft-errors": "true",
-        },
+        title="WorldCereal [collect_inputs] job",
+        description="Job that collects inputs for WorldCereal inference",
+        job_options=job_options,
     )

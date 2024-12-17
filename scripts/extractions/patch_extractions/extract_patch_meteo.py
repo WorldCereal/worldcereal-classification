@@ -8,20 +8,20 @@ import openeo
 import pandas as pd
 from openeo_gfmap import Backend, TemporalContext
 
-from extract_common import (  # isort: skip
+from worldcereal.openeo.extract import (  # isort: skip
     buffer_geometry,  # isort: skip
     filter_extract_true,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
 )  # isort: skip
 
 
-def create_job_dataframe_meteo(
+def create_job_dataframe_patch_meteo(
     backend: Backend, split_jobs: List[gpd.GeoDataFrame]
 ) -> pd.DataFrame:
     raise NotImplementedError("This function is not implemented yet.")
 
 
-def create_datacube_meteo(
+def create_job_patch_meteo(
     row: pd.Series,
     connection: openeo.DataCube,
     provider=None,

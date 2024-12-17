@@ -87,7 +87,7 @@ def _parse_item(path: Path, collection: ExtractionCollection) -> pystac.Item:
             builder_log.error("Failed to parse the sample_id from %s.", path)
             return None
 
-        if collection == ExtractionCollection.SENTINEL1:
+        if collection == ExtractionCollection.PATCH_SENTINEL1:
             sample_id = match.group(2)
         else:
             sample_id = match.group(1)
@@ -100,7 +100,7 @@ def _parse_item(path: Path, collection: ExtractionCollection) -> pystac.Item:
         CRS.from_epsg(epsg), CRS.from_epsg(4326), always_xy=True
     )
 
-    if collection == ExtractionCollection.SENTINEL1:
+    if collection == ExtractionCollection.PATCH_SENTINEL1:
         if "orbit_state" not in attributes:
             # Attempting to parse the orbit state from the path
             file_name = Path(path).name
@@ -138,7 +138,7 @@ def _parse_item(path: Path, collection: ExtractionCollection) -> pystac.Item:
 
     item.extra_fields["epsg"] = epsg
 
-    if collection == ExtractionCollection.SENTINEL1:
+    if collection == ExtractionCollection.PATCH_SENTINEL1:
         item.properties["orbit_state"] = orbit_state
 
     constellation_name = CONSTELLATION_NAMES[collection]
