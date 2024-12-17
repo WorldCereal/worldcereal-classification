@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import re
 import shutil
 from datetime import datetime
 from importlib.metadata import version
@@ -164,12 +163,7 @@ def generate_output_path_patch(
     the row information.
     """
     # First extract the sample ID from the asset ID
-    match = re.fullmatch(r"openEO_(.+)\.nc", asset_id)
-    if match:
-        sample_id = match.group(1)
-    else:
-        pipeline_log.error("Asset ID does not match the expected pattern: %s", asset_id)
-        raise ValueError(f"Invalid Asset ID format: {asset_id}")
+    sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
     # Find which index in the FeatureCollection corresponds to the sample_id
     features = geojson.loads(row.geometry)["features"]

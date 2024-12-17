@@ -398,13 +398,16 @@ def post_job_action_patch_worldcereal(
 
 
 def generate_output_path_patch_worldcereal(
-    root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
+    root_folder: Path,
+    job_index: int,
+    row: pd.Series,
+    asset_id: str,
+    s2_grid: gpd.GeoDataFrame,
 ):
     """Generate the output path for the extracted data, from a base path and
     the row information.
     """
-    features = geojson.loads(row.geometry)
-    sample_id = features[geometry_index].properties.get("sample_id", None)
+    sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
     s2_tile_id = row.s2_tile
     epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
