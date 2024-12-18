@@ -16,32 +16,52 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 
 def generate_output_path_point_worldcereal(
-    root_folder: Path, geometry_index: int, row: pd.Series
-):
+    root_folder: Path,
+    geometry_index: int,
+    row: pd.Series,
+    asset_id: Optional[str] = None,
+) -> Path:
+    """Method to generate the output path for the point extractions.
+
+    Parameters
+    ----------
+    root_folder : Path
+        root folder where the output parquet file will be saved
+    geometry_index : int
+        For point extractions, only one asset (a geoparquet file) is generated per job.
+        Therefore geometry_index is always 0. It has to be included in the function signature
+        to be compatible with the GFMapJobManager
+    row : pd.Series
+        the current job row from the GFMapJobManager
+    asset_id : str, optional
+        Needed for compatibility with GFMapJobManager but not used.
+
+    Returns
+    -------
+    Path
+        output path for the point extractions parquet file
     """
-    For point extractions, only one asset (a geoparquet file) is generated per job.
-    Therefore geometry_index is always 0.
-    It has to be included in the function signature to be compatible with the GFMapJobManager.
-    """
-    features = geojson.loads(row.geometry)
-    ref_id = features[geometry_index].properties["ref_id"]
 
     s2_tile_id = row.s2_tile
+    utm_zone = str(s2_tile_id[0:2])
 
-    subfolder = root_folder / ref_id / s2_tile_id
-
+    # Create the subfolder to store the output
+    subfolder = root_folder / utm_zone / s2_tile_id
     subfolder.mkdir(parents=True, exist_ok=True)
 
-    # Subfolder is not necessarily unique, so we create numbered folders.
+    # Subfolder is not necessarily unique, so we create subfolders for
+    # the different parts.
     if not any(subfolder.iterdir()):
-        real_subfolder = subfolder / "0"
+        real_subfolder = subfolder / "part_0"
     else:
         i = 0
-        while (subfolder / str(i)).exists():
+        while (subfolder / f"part_{i}").exists():
             i += 1
-        real_subfolder = subfolder / str(i)
+        real_subfolder = subfolder / f"part_{i}"
 
-    return real_subfolder / f"point_extractions{row.out_extension}"
+    output_file = f"WORLDCEREAL_{root_folder.name}_{row.start_date}_{row.end_date}_{s2_tile_id}_part_{i}{row.out_extension}"
+
+    return real_subfolder / output_file
 
 
 def create_job_dataframe_point_worldcereal(
