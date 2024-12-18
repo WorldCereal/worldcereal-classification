@@ -14,7 +14,7 @@ from shapely.geometry import Polygon
 from worldcereal.data import croptype_mappings
 
 
-def get_class_mappings() -> Dict:
+def get_class_mappings_v1() -> Dict:
     """Method to get the WorldCereal class mappings for downstream task.
 
     Returns
@@ -28,7 +28,7 @@ def get_class_mappings() -> Dict:
     return CLASS_MAPPINGS
 
 
-def query_public_extractions(
+def query_public_extractions_v1(
     bbox_poly: Polygon,
     buffer: int = 250000,
     filter_cropland: bool = True,
@@ -168,7 +168,7 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         )
 
     # Process the parquet into the format we need for training
-    processed_public_df = process_parquet(public_df_raw, processing_period)
+    processed_public_df = process_parquet_v1(public_df_raw, processing_period)
 
     return processed_public_df
 
@@ -268,7 +268,7 @@ def get_best_valid_date(row: pd.Series):
             )
 
 
-def process_parquet(
+def process_parquet_v1(
     public_df_raw: pd.DataFrame, processing_period: TemporalContext = None
 ) -> pd.DataFrame:
     """Method to transform the raw parquet data into a format that can be used for
@@ -349,7 +349,7 @@ def process_parquet(
         public_df["valid_date"] = public_df.index.map(true_valid_date_map)
         public_df["valid_date"] = public_df["valid_date"].astype(str)
 
-    public_df = map_croptypes(public_df)
+    public_df = map_croptypes_v1(public_df)
     logger.info(
         f"Extracted and processed {public_df.shape[0]} samples from global database."
     )
@@ -357,7 +357,7 @@ def process_parquet(
     return public_df
 
 
-def map_croptypes(
+def map_croptypes_v1(
     df: pd.DataFrame, downstream_classes: str = "CROPTYPE9"
 ) -> pd.DataFrame:
     """Helper function to map croptypes to a specific legend.
@@ -401,7 +401,7 @@ def map_croptypes(
     df["label_level3"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
 
     df["downstream_class"] = df["ewoc_code"].map(
-        {int(k): v for k, v in get_class_mappings()[downstream_classes].items()}
+        {int(k): v for k, v in get_class_mappings_v1()[downstream_classes].items()}
     )
 
     return df
