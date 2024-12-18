@@ -372,8 +372,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--parallel_jobs",
         type=int,
-        default=10,
-        help="The maximum number of parrallel jobs to run at the same time.",
+        default=2,
+        help="The maximum number of parallel jobs to run at the same time.",
     )
     parser.add_argument(
         "--restart_failed",
