@@ -1,23 +1,22 @@
 import importlib.resources
 import json
-from typing import Dict
+import tempfile
 from pathlib import Path
+from typing import Dict, Optional
 
 import duckdb
-import tempfile
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
+from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
 
-from openeo_gfmap.manager.job_splitters import load_s2_grid
-
 from worldcereal.data import croptype_mappings
-from worldcereal.utils.legend import download_latest_legend_from_artifactory
 from worldcereal.rdm_api import RdmInteraction
+from worldcereal.utils.legend import download_latest_legend_from_artifactory
 
 
 def get_class_mappings() -> Dict:
@@ -38,11 +37,11 @@ def query_extractions(
     bbox_poly: Polygon,
     buffer: int = 250000,
     include_public: bool = True,
-    private_extraction_dir: Path = None,
+    private_extraction_dir: Optional[Path] = None,
 ) -> pd.DataFrame:
     """Method to query the WorldCereal global database of pre-extracted input data for a given area.
     You can query both public and private extractions.
-    
+
     Parameters
     ----------
     bbox_poly : Polygon
@@ -60,7 +59,7 @@ def query_extractions(
     pd.DataFrame
         DataFrame containing the extractions matching the request.
     """
-    
+
     # Prepare the spatial extent
     logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
 
@@ -73,18 +72,16 @@ def query_extractions(
 
     xmin, ymin, xmax, ymax = bbox_poly.bounds
     bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
-    
+
     # Query the public extractions
     if include_public:
         public_df = _query_public_extractions(bbox_poly)
     else:
         public_df = pd.DataFrame()
-    
+
     # Query the private extractions
     if private_extraction_dir:
-        private_df = _query_private_extractions(
-            private_extraction_dir, bbox_poly
-        )
+        private_df = _query_private_extractions(private_extraction_dir, bbox_poly)
     else:
         private_df = pd.DataFrame()
 
@@ -99,7 +96,7 @@ def query_extractions(
             "No extractions found  that intersect with the selected area, cannot continue."
         )
     df_raw = pd.concat(dfs, ignore_index=True)
-    
+
     # Check if the data contains only one class
     if df_raw["ewoc_code"].nunique() == 1:
         logger.error(
@@ -108,15 +105,15 @@ def query_extractions(
         raise ValueError(
             "Queried data contains only one class. Cannot train a model with only one class."
         )
-    
+
     return df_raw
-    
-    
+
+
 def _query_public_extractions(
     bbox_poly: Polygon,
 ) -> pd.DataFrame:
     """Method to query the WorldCereal public database of pre-extracted input data for a given area.
-    
+
     Parameters
     ----------
     bbox_poly : Polygon
@@ -127,18 +124,18 @@ def _query_public_extractions(
     pd.DataFrame
         DataFrame containing the extractions matching the request.
     """
-    
+
     # First we query the RDM to get a list of overlapping datasets
     rdm = RdmInteraction()
     collections = rdm.get_collections(geometry=bbox_poly)
     ref_ids = [collection.id for collection in collections]
-    
+
     if not ref_ids:
         logger.warning(
             "No public datasets found in the WorldCereal Reference Data Module that intersect with the selected area."
         )
         return pd.DataFrame()
-    
+
     logger.info(
         f"Found {len(ref_ids)} public datasets in WorldCereal Reference Data Module that intersect with the selected area."
     )
@@ -146,20 +143,20 @@ def _query_public_extractions(
     logger.info(
         "Querying WorldCereal public extractions database (this can take a while) ..."
     )
-    
-    #TODO: construct the query...
+
+    # TODO: construct the query...
     main_query = ""
-    
+
     # Execute the query
     db = duckdb.connect()
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
-    
+
     public_df_raw = db.sql(main_query).df()
 
     if public_df_raw.empty:
         logger.warning(
-            f"No samples from the WorldCereal public extractions database fall into the selected area."
+            "No samples from the WorldCereal public extractions database fall into the selected area."
         )
 
     return public_df_raw
@@ -168,44 +165,44 @@ def _query_public_extractions(
 def _query_private_extractions(
     private_extraction_dir: Path,
     bbox_poly: Polygon,
- ) -> pd.DataFrame:
+) -> pd.DataFrame:
     """Method to query private pre-extracted input data for a given area.
-    
+
     Parameters
     ----------
     private_extraction_dir: Path
         path to a local directory containing private extractions
     bbox_poly : Polygon
         bounding box of the area to make the query for. Expected to be in WGS84 coordinates.
-        
+
     Returns
     -------
     pd.DataFrame
         DataFrame containing the extractions matching the request.
     """
-    
+
     # First we query the RDM to get a list of overlapping datasets
     rdm = RdmInteraction()
-    collections = rdm.get_collections(geometry=bbox_poly,
-                                      include_private=True,
-                                      include_public=False)
+    collections = rdm.get_collections(
+        geometry=bbox_poly, include_private=True, include_public=False
+    )
     ref_ids = [collection.id for collection in collections]
-    
+
     if not ref_ids:
         logger.warning(
             "No private datasets found in the WorldCereal Reference Data Module that intersect with the selected area."
         )
         return pd.DataFrame()
-    
+
     logger.info(
         f"Found {len(ref_ids)} private datasets in WorldCereal Reference Data Module that intersect with the selected area."
     )
-    
+
     # Check which S2 tiles are intersecting with the selected area
     s2_grid = load_s2_grid()
     s2_tiles = s2_grid[s2_grid.intersects(bbox_poly)]
     s2_tile_ids = s2_tiles["tile"].values
-    
+
     # Now locate the associated parquet files in the private extraction directory
     parquet_files = []
     for ref_id in ref_ids:
@@ -213,32 +210,32 @@ def _query_private_extractions(
         tile_dirs = [search_dir / tile_id for tile_id in s2_tile_ids]
         for tile_dir in tile_dirs:
             if tile_dir.exists():
-                parquet_files.extend(list(tile_dir.glob("**/point_extractions.geoparquet")))
-    
+                parquet_files.extend(
+                    list(tile_dir.glob("**/point_extractions.geoparquet"))
+                )
+
     if not parquet_files:
-        logger.warning(
-            "No private extractions found in the selected area."
-        )
+        logger.warning("No private extractions found in the selected area.")
         return pd.DataFrame()
-        
+
     # Load the DuckDB spatial extension
     conn = duckdb.connect()
     conn.execute("INSTALL spatial; LOAD spatial;")
-    
+
     # Convert the Shapely polygon to WKT
     query_polygon_wkt = bbox_poly.wkt
-    
+
     # Construct the query
     query = f"""
     SELECT *
     FROM read_parquet({parquet_files})
     WHERE ST_Intersects(ST_GeomFromWKT(geometry), ST_GeomFromText('{query_polygon_wkt}'))
     """
-    
+
     # Execute the query and convert results to a GeoDataFrame
     result = conn.execute(query).fetchdf()
-    gdf = gpd.GeoDataFrame(result, geometry=gpd.GeoSeries.from_wkt(result['geometry']))
-    
+    gdf = gpd.GeoDataFrame(result, geometry=gpd.GeoSeries.from_wkt(result["geometry"]))
+
     return gdf
 
 
@@ -586,7 +583,7 @@ def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         returns the dataframe with addtional columns containing the crop type information at all levels of the hierarchy.
     """
-    
+
     # create temporary folder
     with tempfile.TemporaryDirectory() as tmpdirname:
         tmpdir = Path(tmpdirname)
@@ -594,7 +591,7 @@ def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
         legend_path = download_latest_legend_from_artifactory(tmpdir)
         # read the legend file
         legend = pd.read_csv(legend_path, header=0, sep=";")
-    
+
     # Prepare mappings of crop types
     legend = legend[legend["ewoc_code"].notna()]
     drop_columns = [c for c in legend.columns if "Unnamed:" in c]
@@ -603,7 +600,7 @@ def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
     legend["LC_code"] = legend["LC_code"].astype(int)
     legend = legend.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
     legend.set_index("ewoc_code", inplace=True)
-    
+
     # get the labels at different levels of the hierarchy
     df["label"] = df["CROPTYPE_LABEL"].map(legend["label_full"])
     df["LANDCOVER_LABEL"] = df["CROPTYPE_LABEL"].map(legend["LC_label"])
@@ -612,7 +609,7 @@ def _get_croptypes(df: pd.DataFrame) -> pd.DataFrame:
     df["label_level3"] = df["CROPTYPE_LABEL"].map(legend["level_3"])
     df["label_level4"] = df["CROPTYPE_LABEL"].map(legend["level_4"])
     df["label_level5"] = df["CROPTYPE_LABEL"].map(legend["level_5"])
-    
+
     return df
 
 

@@ -8,9 +8,9 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac
+from matplotlib import pyplot as plt
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
-from matplotlib import pyplot as plt
 
 from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
@@ -24,7 +24,6 @@ def generate_output_path_point_worldcereal(
     Therefore geometry_index is always 0.
     It has to be included in the function signature to be compatible with the GFMapJobManager.
     """
-    features = geojson.loads(row.geometry)
 
     s2_tile_id = row.s2_tile
 
@@ -213,7 +212,7 @@ def load_point_extractions(infolder: Path) -> gpd.GeoDataFrame:
         organized in long format
         (each row represents a single timestep for a single sample)
     """
-    
+
     dfs = []
     # Get all subfolders
     tiles = [x for x in infolder.iterdir() if x.is_dir()]
@@ -227,10 +226,12 @@ def load_point_extractions(infolder: Path) -> gpd.GeoDataFrame:
     return pd.concat(dfs)
 
 
-def visualize_timeseries(gdf: gpd.GeoDataFrame,
-                         outfile: Path = None,
-                         variable: str ="NDVI",
-                         sample_ids: List = None,):
+def visualize_timeseries(
+    gdf: gpd.GeoDataFrame,
+    outfile: Optional[Path] = None,
+    variable: str = "NDVI",
+    sample_ids: Optional[List] = None,
+):
     """Function to visaulize the timeseries for one variable and one or mulitple samples
     from an extractions GeoDataFrame.
 
@@ -238,7 +239,7 @@ def visualize_timeseries(gdf: gpd.GeoDataFrame,
     ----------
     gdf : gpd.GeoDataFrame
         GeoDataFrame containing all point extractions,
-        result from load_point_extractions. Should at least contain a 
+        result from load_point_extractions. Should at least contain a
         column "timestamp" and the variable to visualize.
     outfile : Path, optional
         path to a file to store the visualization, by default None
@@ -250,7 +251,7 @@ def visualize_timeseries(gdf: gpd.GeoDataFrame,
         sample ids for which the time series needs to be visualized,
         by default None meaning all samples will be visualized
     """
-    
+
     if sample_ids is None:
         sample_ids = gdf["sample_id"].unique()
 

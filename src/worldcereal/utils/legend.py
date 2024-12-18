@@ -1,8 +1,9 @@
-from pathlib import Path
-from loguru import logger
-import subprocess
+import json
 import os
+import subprocess
+from pathlib import Path
 
+from loguru import logger
 
 ARTIFACTORY_BASE_URL = (
     "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
@@ -22,20 +23,23 @@ def _get_artifactory_credentials():
     ValueError
         if ARTIFACTORY_USERNAME or ARTIFACTORY_PASSWORD are not set as environment variables.
     """
-    
+
     artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
     artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
-    
+
     if not artifactory_username or not artifactory_password:
         raise ValueError(
             "Artifactory credentials not found. "
             "Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD environment variables."
         )
-        
+
     return artifactory_username, artifactory_password
 
 
-def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
+def upload_legend_csv_artifactory(
+    srcpath: Path,
+    date: str,
+) -> str:
     """Uploads a CSV file containing the worldcereal land cover/crop type legend to Artifactory.
 
     Parameters
@@ -57,13 +61,15 @@ def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
     """
     if not srcpath.is_file():
         raise FileNotFoundError(f"Required file `{srcpath}` not found.")
-    
+
     # Get Artifactory credentials
     artifactory_username, artifactory_password = _get_artifactory_credentials()
-    
+
     # We  upload the file with a specific date tag and also with a "latest" tag
-    target_names = [f"WorldCereal_LC_CT_legend_{date}.csv",
-                    "WorldCereal_LC_CT_legend_latest.csv"]
+    target_names = [
+        f"WorldCereal_LC_CT_legend_{date}.csv",
+        "WorldCereal_LC_CT_legend_latest.csv",
+    ]
     targetpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in target_names]
 
     for targetpath in targetpaths:
@@ -74,10 +80,19 @@ def upload_legend_csv_artifactory(srcpath: Path, date:str,) -> str:
             f'"{targetpath}"'
         )
 
-        output, _ = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-        output = eval(output)
-    
-    return output["downloadUri"]
+        output, _ = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, shell=True
+        ).communicate()
+        decoded_output = output.decode("utf-8")
+
+        # Parse as JSON if applicable
+        try:
+            parsed_output = json.loads(decoded_output)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse output as JSON: {decoded_output}") from e
+
+    # Access the desired value
+    return parsed_output.get("downloadUri")
 
 
 def download_latest_legend_from_artifactory(download_path: Path) -> Path:
@@ -98,11 +113,11 @@ def download_latest_legend_from_artifactory(download_path: Path) -> Path:
     FileNotFoundError
         Raises if no legend files are found in Artifactory.
     """
-    latest_file = 'WorldCereal_LC_CT_legend_latest.csv'
+    latest_file = "WorldCereal_LC_CT_legend_latest.csv"
     link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
-    
+
     logger.info(f"Downloading latest legend file: {latest_file}")
-    
+
     download_path.mkdir(parents=True, exist_ok=True)
     download_file = download_path / latest_file
 
@@ -123,6 +138,6 @@ def delete_legend_file(path: str) -> None:
     """
     # Get Artifactory credentials
     artifactory_username, artifactory_password = _get_artifactory_credentials()
-    
+
     cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {path}"
     subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()

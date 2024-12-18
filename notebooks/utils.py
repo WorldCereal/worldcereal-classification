@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Union
 
 import ipywidgets as widgets
-from IPython.core.display import HTML as core_HTML
 import leafmap
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -15,6 +14,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 from catboost import CatBoostClassifier, Pool
+from IPython.core.display import HTML as core_HTML
 from IPython.display import display
 from loguru import logger
 from matplotlib.patches import Rectangle
@@ -53,25 +53,35 @@ class date_slider:
             style={
                 "handle_color": "dodgerblue",
             },
-            layout=widgets.Layout(width="600px",
-                                  margin="0 0 0 10px",),
+            layout=widgets.Layout(
+                width="600px",
+                margin="0 0 0 10px",
+            ),
             readout=False,
         )
-        
+
         # Define the HTML text widget for the selected range and focus time
-        initial_range = [(pd.to_datetime(start_date)).strftime("%d %b %Y"), 
-                         (pd.to_datetime(start_date) + pd.DateOffset(months=12) - timedelta(days=1)).strftime("%d %b %Y")]
-        initial_focus_time = (pd.to_datetime(start_date) + pd.DateOffset(months=6)).strftime("%b %Y")
+        initial_range = [
+            (pd.to_datetime(start_date)).strftime("%d %b %Y"),
+            (
+                pd.to_datetime(start_date)
+                + pd.DateOffset(months=12)
+                - timedelta(days=1)
+            ).strftime("%d %b %Y"),
+        ]
+        initial_focus_time = (
+            pd.to_datetime(start_date) + pd.DateOffset(months=6)
+        ).strftime("%b %Y")
         self.html_text = widgets.HTML(
             value=f"<b>Selected range:</b> {initial_range[0]} - {initial_range[1]}<br><b>Focus time:</b> {initial_focus_time}",
             placeholder="HTML placeholder",
             description="",
             layout=widgets.Layout(justify_content="center", display="flex"),
         )
-        
-        # Attach slider observer      
+
+        # Attach slider observer
         self.interval_slider.observe(self.on_slider_change, names="value")
-        
+
         # Add custom CSS for the ticks
         custom_css = """
         <style>
@@ -109,9 +119,11 @@ class date_slider:
         }
         </style>
         """
-        
+
         # # Generate ticks
-        tick_dates = pd.date_range(start_date, pd.to_datetime(end_date) + pd.DateOffset(months=1), freq="4MS")
+        tick_dates = pd.date_range(
+            start_date, pd.to_datetime(end_date) + pd.DateOffset(months=1), freq="4MS"
+        )
         tick_labels = [date.strftime("%b %Y") for date in tick_dates]
         n_labels = len(tick_labels)
         ticks_html = ""
@@ -121,10 +133,10 @@ class date_slider:
             <div class="tick-mark" style="left: {position}%; ">|</div>
             <div class="tick-label" style="left: {position}%; ">{label.split()[0]}<br>{label.split()[1]}</div>
             """
- 
+
         # HTML container for tick marks and labels
         tick_marks_and_labels = widgets.HTML(
-        value=f"""
+            value=f"""
         <div class="widget-container">
             <div class="slider-container">
                 <div class="tick-wrapper">
@@ -133,12 +145,14 @@ class date_slider:
             </div>
         </div>
         """
-    )
+        )
 
         # Combine slider and ticks using VBox
         slider_with_ticks = widgets.VBox(
             [self.interval_slider, tick_marks_and_labels],
-            layout=widgets.Layout(width='640px', align_items="center", justify_content="center")
+            layout=widgets.Layout(
+                width="640px", align_items="center", justify_content="center"
+            ),
         )
 
         # Add description widget
@@ -158,42 +172,49 @@ class date_slider:
                 descr_widget,
                 slider_with_ticks,
                 self.html_text,
-            ], 
-            layout=widgets.Layout(align_items="center",
-                                  justify_content="center",
-                                  width="650px"))
+            ],
+            layout=widgets.Layout(
+                align_items="center", justify_content="center", width="650px"
+            ),
+        )
 
         display(core_HTML(custom_css))
         display(vbox)
 
     def on_slider_change(self, change):
-        
+
         start, end = change["new"]
-        
+
         # keep the interval fixed
         expected_end = start + pd.DateOffset(months=11)
         if end != expected_end:
             end = start + pd.DateOffset(months=11)
             self.interval_slider.value = (start, end)
-            
+
         # update the HTML text underneath the slider
-        range = [(pd.to_datetime(start)).strftime("%d %b %Y"),
-                 (pd.to_datetime(start) + pd.DateOffset(months=12) - timedelta(days=1)).strftime("%d %b %Y")]
+        range = [
+            (pd.to_datetime(start)).strftime("%d %b %Y"),
+            (
+                pd.to_datetime(start) + pd.DateOffset(months=12) - timedelta(days=1)
+            ).strftime("%d %b %Y"),
+        ]
         focus_time = (start + pd.DateOffset(months=6)).strftime("%b %Y")
         self.html_text.value = f"<b>Selected range:</b> {range[0]} - {range[1]}<br><b>Focus time:</b> {focus_time}"
 
     def get_processing_period(self):
-        
+
         start = pd.to_datetime(self.interval_slider.value[0])
         end = start + pd.DateOffset(months=12) - timedelta(days=1)
-        
+
         start = start.strftime("%Y-%m-%d")
         end = end.strftime("%Y-%m-%d")
         logger.info(f"Selected processing period: {start} to {end}")
 
         return TemporalContext(start, end)
 
+
 ##########################
+
 
 def get_input(label):
     while True:
@@ -244,16 +265,18 @@ def select_landcover(df: pd.DataFrame):
 
     return vbox, checkbox_widgets
 
+
 ############# SELECT CROPTYPES #############
+
 
 class CropTypePicker:
     def __init__(self, df: pd.DataFrame, samples_threshold: int = 100):
         self.df = df.copy()  # Work with a copy of the DataFrame
         self.samples_threshold = samples_threshold
         self.levels = [f"label_level{i+1}" for i in range(5)]
-        self.widgets_dict = {}
         self.filtered_hierarchy = None
         self.widget = None
+        self.widgets_dict: dict[tuple, widgets.Checkbox] = {}
 
         # Initialize the hierarchy and widget
         self._prepare_hierarchy()
@@ -273,7 +296,7 @@ class CropTypePicker:
                 current = tuple(row[level] for level in subset)
                 count_dict[current] = row["count"]
         return count_dict
-    
+
     def _build_hierarchy(self, count_dict):
         """
         Builds a nested dictionary from the simplified hierarchy, ensuring all levels
@@ -315,8 +338,8 @@ class CropTypePicker:
         self.filtered_hierarchy = self._filter_low_counts(hierarchy)
         if len(self.filtered_hierarchy) <= 1:
             logger.warning(
-            f"Less than 2 classes remained after aggregation with threshold {self.samples_threshold}. Consider adding more data or lowering the threshold."
-        )
+                f"Less than 2 classes remained after aggregation with threshold {self.samples_threshold}. Consider adding more data or lowering the threshold."
+            )
 
     def _disable_descendants(self, widget):
         widget.disabled = True
@@ -345,7 +368,7 @@ class CropTypePicker:
                 checkbox = widgets.Checkbox(
                     value=False,
                     description=f"{key} ({count} samples)",
-                    layout=widgets.Layout(margin=f"0 0 0 {level * 40}px", width="auto")
+                    layout=widgets.Layout(margin=f"0 0 0 {level * 40}px", width="auto"),
                 )
                 self.widgets_dict[current_path] = checkbox
 
@@ -353,8 +376,14 @@ class CropTypePicker:
                 child_items = []
                 for child_key, child_value in value.items():
                     if child_key != "__count__":
-                        child_items.append(recursive_create_widgets({child_key: child_value}, list(current_path), level + 1,))
-                
+                        child_items.append(
+                            recursive_create_widgets(
+                                {child_key: child_value},
+                                list(current_path),
+                                level + 1,
+                            )
+                        )
+
                 # Append children if they exist
                 if child_items:
                     # Create a collapsible section with a toggle button
@@ -365,10 +394,14 @@ class CropTypePicker:
                         value=False,
                         description="Show",
                         icon="chevron-down",
-                        layout=widgets.Layout(width="auto", margin=f"0 0 0 {level * 40 + 20}px")
+                        layout=widgets.Layout(
+                            width="auto", margin=f"0 0 0 {level * 40 + 20}px"
+                        ),
                     )
 
-                    def toggle_visibility(change, target=children_vbox, button=toggle_button):
+                    def toggle_visibility(
+                        change, target=children_vbox, button=toggle_button
+                    ):
                         if change["new"]:
                             target.layout.display = "flex"
                             button.description = "Hide"
@@ -384,7 +417,7 @@ class CropTypePicker:
 
                     # Define behavior for disabling all descendants when a parent is selected
                     def on_parent_change(change, target_child_items=child_items):
-                        if change['new']:
+                        if change["new"]:
                             for child in target_child_items:
                                 self._disable_descendants(child)
                         else:
@@ -409,7 +442,9 @@ class CropTypePicker:
         2. Adds a 'final_class' column to the original DataFrame with selected crop type labels.
         3. Filters out samples not matching the selected crop types and displays a discard count.
         """
-        selected_values = [path for path, checkbox in self.widgets_dict.items() if checkbox.value]
+        selected_values = [
+            path for path, checkbox in self.widgets_dict.items() if checkbox.value
+        ]
 
         if not selected_values:
             raise ValueError("No crop types selected.")
@@ -420,7 +455,10 @@ class CropTypePicker:
         # Identify the final crop type for each sample in the DataFrame
         def get_final_class(row):
             for path in selected_paths:
-                if all(row[level] == path[i] for i, level in enumerate(self.levels[:len(path)])):
+                if all(
+                    row[level] == path[i]
+                    for i, level in enumerate(self.levels[: len(path)])
+                ):
                     return path[-1]
             return None
 
@@ -431,13 +469,15 @@ class CropTypePicker:
         self.df = self.df.dropna(subset=["final_class"])
 
         # Display discarded count
-        logger.info(f"Discarded {discarded_count} samples that do not match the selected crop types.")
-        
+        logger.info(
+            f"Discarded {discarded_count} samples that do not match the selected crop types."
+        )
+
         # Display list of selected crop types
         logger.info(f'Selected types: {self.df["final_class"].unique().tolist()}')
-        
+
         return self.df
-    
+
 
 def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
@@ -453,7 +493,9 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
 
     # CREATING A HIERARCHICAL LAYOUT OF OPTIONS
     # ==========================================
-    _class_map = dict(df[["CROPTYPE_LABEL", "label_level3"]].value_counts().index.to_list())
+    _class_map = dict(
+        df[["CROPTYPE_LABEL", "label_level3"]].value_counts().index.to_list()
+    )
     class_counts = pd.DataFrame(
         df[["label_level1", "label_level2", "label_level3"]].value_counts().sort_index()
     ).reset_index()
@@ -631,6 +673,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
 
 ############# RETRIEVE WORLDCEREAL SEASONS #############
 
+
 def get_month_decimal(date):
 
     return date.timetuple().tm_mon + (
@@ -740,6 +783,7 @@ def retrieve_worldcereal_seasons(
 
 
 ############# PREPARE TRAINING DATAFRAME #############
+
 
 def prepare_training_dataframe(
     df: pd.DataFrame,
@@ -869,6 +913,7 @@ def get_custom_cropland_labels(df, checkbox_widgets, new_label="cropland"):
 
 
 ############# MODEL TRAINING #############
+
 
 def train_classifier(
     training_dataframe: pd.DataFrame,
