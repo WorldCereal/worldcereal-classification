@@ -51,10 +51,10 @@ def generate_output_path_point_worldcereal(
 
     # Subfolder is not necessarily unique, so we create subfolders for
     # the different parts.
+    i = 0
     if not any(subfolder.iterdir()):
-        real_subfolder = subfolder / "part_0"
+        real_subfolder = subfolder / f"part_{i}"
     else:
-        i = 0
         while (subfolder / f"part_{i}").exists():
             i += 1
         real_subfolder = subfolder / f"part_{i}"
