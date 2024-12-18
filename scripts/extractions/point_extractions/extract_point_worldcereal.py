@@ -129,6 +129,13 @@ def create_job_point_worldcereal(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
+    # Try to get s2 tile ID to filter the collection
+    if "s2_tile" in row:
+        pipeline_log.debug(f"Extracting data for S2 tile {row.s2_tile}")
+        s2_tile = row.s2_tile
+    else:
+        s2_tile = None
+
     inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
@@ -136,6 +143,7 @@ def create_job_point_worldcereal(
         temporal_extent=temporal_extent,
         fetch_type=FetchType.POINT,
         validate_temporal_context=False,
+        s2_tile=s2_tile,
     )
 
     # Finally, create a vector cube based on the Point geometries

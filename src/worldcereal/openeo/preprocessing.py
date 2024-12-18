@@ -340,6 +340,7 @@ def worldcereal_preprocessed_inputs(
     validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
+    s2_tile: Optional[str] = None,
 ) -> DataCube:
 
     # First validate the temporal context
@@ -364,7 +365,7 @@ def worldcereal_preprocessed_inputs(
             "S2-L2A-B12",
         ],
         fetch_type=fetch_type,
-        filter_tile=None,
+        filter_tile=s2_tile,
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
         additional_masks_flag=False,
         apply_mask_flag=True,
