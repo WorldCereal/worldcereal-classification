@@ -72,7 +72,7 @@ def create_job_dataframe_point_worldcereal(
     for job in tqdm(split_jobs):
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
-       
+
         # 9 months before and after the valid time
         start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
         end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
@@ -175,7 +175,24 @@ def post_job_action_point_worldcereal(
         gdf = gpd.read_parquet(item_asset_path)
 
         # Convert the dates to datetime format
-        gdf["date"] = pd.to_datetime(gdf["date"])
+        gdf["timestamp"] = pd.to_datetime(gdf["date"])
+        gdf.drop(columns=["date"], inplace=True)
+
+        # Derive latitude and longitude from the geometry
+        gdf["lat"] = gdf.geometry.y
+        gdf["lon"] = gdf.geometry.x
+
+        # For each sample, add start and end date to the dataframe
+        # is there a better way to do this, as this is already done in the job creation?
+        sample_ids = gdf["sample_id"].unique()
+        for sample_id in sample_ids:
+            sample = gdf[gdf["sample_id"] == sample_id]
+            start_date = sample["timestamp"].min()
+            end_date = sample["timestamp"].max()
+            gdf.loc[gdf["sample_id"] == sample_id, "start_date"] = pd.to_datetime(
+                start_date
+            )
+            gdf.loc[gdf["sample_id"] == sample_id, "end_date"] = end_date
 
         # Convert band dtype to uint16 (temporary fix)
         # TODO: remove this step when the issue is fixed on the OpenEO backend
