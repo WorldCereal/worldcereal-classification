@@ -72,9 +72,14 @@ def create_job_dataframe_point_worldcereal(
     for job in tqdm(split_jobs):
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
+       
         # 9 months before and after the valid time
         start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
         end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
+
+        # ensure start date is 1st day of month, end date is last day of month
+        start_date = start_date.replace(day=1)
+        end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
 
         s2_tile = job.tile.iloc[0]
         h3_l3_cell = job.h3_l3_cell.iloc[0]
