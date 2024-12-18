@@ -334,6 +334,102 @@ def manager_main_loop(
             raise e
 
 
+def run_extractions(
+    collection: ExtractionCollection,
+    output_folder: Path,
+    input_df: Path,
+    max_locations_per_job: int = 500,
+    memory: str = "1800m",
+    python_memory: str = "1900m",
+    max_executors: int = 22,
+    parallel_jobs: int = 10,
+    restart_failed: bool = False,
+    extract_value: int = 1,
+    backend=Backend.CDSE,
+) -> None:
+    """Main function responsible for launching point and patch extractions.
+
+    Parameters
+    ----------
+    collection : ExtractionCollection
+        The collection to extract. Most popular: PATCH_WORLDCEREAL, POINT_WORLDCEREAL
+    output_folder : Path
+        The folder where to store the extracted data
+    input_df : Path
+        Path to the input dataframe containing the geometries
+        for which extractions need to be done
+    max_locations_per_job : int, optional
+        The maximum number of locations to extract per job, by default 500
+    memory : str, optional
+        Memory to allocate for the executor, by default "1800m"
+    python_memory : str, optional
+        Memory to allocate for the python processes as well as OrfeoToolbox in the executors,
+        by default "1900m"
+    max_executors : int, optional
+        Number of executors to run, by default 22
+    parallel_jobs : int, optional
+        The maximum number of parallel jobs to run at the same time, by default 10
+    restart_failed : bool, optional
+        Restart the jobs that previously failed, by default False
+    extract_value : int, optional
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+    backend : openeo_gfmap.Backend, optional
+        cloud backend where to run the extractions, by default Backend.CDSE
+
+    Raises
+    ------
+    ValueError
+        _description_
+    """
+
+    if not output_folder.is_dir():
+        output_folder.mkdir(parents=True)
+
+    tracking_df_path = output_folder / "job_tracking.csv"
+
+    # Load the input dataframe and build the job dataframe
+    input_df = load_dataframe(input_df)
+
+    job_df = None
+    if not tracking_df_path.exists():
+        job_df = prepare_job_dataframe(
+            input_df, collection, max_locations_per_job, extract_value, backend
+        )
+
+    # Setup the extraction functions
+    pipeline_log.info("Setting up the extraction functions.")
+    datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
+        collection, extract_value, memory, python_memory, max_executors
+    )
+
+    # Initialize and setups the job manager
+    pipeline_log.info("Initializing the job manager.")
+
+    job_manager = GFMAPJobManager(
+        output_dir=output_folder,
+        output_path_generator=path_fn,
+        post_job_action=post_job_fn,
+        poll_sleep=60,
+        n_threads=4,
+        restart_failed=restart_failed,
+        stac_enabled=False,
+    )
+
+    job_manager.add_backend(
+        backend.value,
+        cdse_connection,
+        parallel_jobs=parallel_jobs,
+    )
+
+    manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
+
+    pipeline_log.info("Extraction completed successfully.")
+    send_notification(
+        title=f"WorldCereal Extraction {collection.value} - Completed",
+        message="Extractions have been completed successfully.",
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract data from a collection")
     parser.add_argument(
@@ -389,55 +485,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Fetches values and setups hardocded values
-    collection = args.collection
-    extract_value = args.extract_value
-    max_locations_per_job = args.max_locations
-    backend = Backend.CDSE
-
-    if not args.output_folder.is_dir():
-        raise ValueError(f"Output folder {args.output_folder} does not exist.")
-
-    tracking_df_path = Path(args.output_folder) / "job_tracking.csv"
-
-    # Load the input dataframe and build the job dataframe
-    input_df = load_dataframe(args.input_df)
-
-    job_df = None
-    if not tracking_df_path.exists():
-        job_df = prepare_job_dataframe(
-            input_df, collection, max_locations_per_job, extract_value, backend
-        )
-
-    # Setup the extraction functions
-    pipeline_log.info("Setting up the extraction functions.")
-    datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, extract_value, args.memory, args.python_memory, args.max_executors
-    )
-
-    # Initialize and setups the job manager
-    pipeline_log.info("Initializing the job manager.")
-
-    job_manager = GFMAPJobManager(
-        output_dir=args.output_folder,
-        output_path_generator=path_fn,
-        post_job_action=post_job_fn,
-        poll_sleep=60,
-        n_threads=4,
-        restart_failed=args.restart_failed,
-        stac_enabled=False,
-    )
-
-    job_manager.add_backend(
-        Backend.CDSE.value,
-        cdse_connection,
+    run_extractions(
+        collection=args.collection,
+        output_folder=args.output_folder,
+        input_df=args.input_df,
+        max_locations_per_job=args.max_locations,
+        memory=args.memory,
+        python_memory=args.python_memory,
+        max_executors=args.max_executors,
         parallel_jobs=args.parallel_jobs,
-    )
-
-    manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
-
-    pipeline_log.info("Extraction completed successfully.")
-    send_notification(
-        title=f"WorldCereal Extraction {collection.value} - Completed",
-        message="Extractions have been completed successfully.",
+        restart_failed=args.restart_failed,
+        extract_value=args.extract_value,
+        backend=Backend.CDSE,
     )
