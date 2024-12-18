@@ -153,7 +153,7 @@ def select_landcover(df: pd.DataFrame):
     return vbox, checkbox_widgets
 
 
-def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
+def pick_croptypes_v1(df: pd.DataFrame, samples_threshold: int = 100):
     import ipywidgets as widgets
     from IPython.display import Markdown
 
