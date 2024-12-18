@@ -82,7 +82,6 @@ def create_job_dataframe_point_worldcereal(
         end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
 
         s2_tile = job.tile.iloc[0]
-        h3_l3_cell = job.h3_l3_cell.iloc[0]
 
         # Convert dates to string format
         start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
@@ -99,7 +98,6 @@ def create_job_dataframe_point_worldcereal(
             "start_date": start_date,
             "end_date": end_date,
             "s2_tile": s2_tile,
-            "h3_l3_cell": h3_l3_cell,
             "geometry": job.to_json(),
         }
 
