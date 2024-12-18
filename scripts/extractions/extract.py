@@ -342,7 +342,7 @@ def run_extractions(
     memory: str = "1800m",
     python_memory: str = "1900m",
     max_executors: int = 22,
-    parallel_jobs: int = 10,
+    parallel_jobs: int = 2,
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
