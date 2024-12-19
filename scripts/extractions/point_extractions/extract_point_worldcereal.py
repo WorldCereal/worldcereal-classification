@@ -49,19 +49,11 @@ def generate_output_path_point_worldcereal(
     subfolder = root_folder / utm_zone / s2_tile_id
     subfolder.mkdir(parents=True, exist_ok=True)
 
-    # Subfolder is not necessarily unique, so we create subfolders for
-    # the different parts.
-    i = 0
-    if not any(subfolder.iterdir()):
-        real_subfolder = subfolder / f"part_{i}"
-    else:
-        while (subfolder / f"part_{i}").exists():
-            i += 1
-        real_subfolder = subfolder / f"part_{i}"
+    # we may have multiple output files per s2_tile_id and need
+    # a unique name so we use the job ID
+    output_file = f"WORLDCEREAL_{root_folder.name}_{row.start_date}_{row.end_date}_{s2_tile_id}_{row.id}{row.out_extension}"
 
-    output_file = f"WORLDCEREAL_{root_folder.name}_{row.start_date}_{row.end_date}_{s2_tile_id}_part_{i}{row.out_extension}"
-
-    return real_subfolder / output_file
+    return subfolder / output_file
 
 
 def create_job_dataframe_point_worldcereal(
