@@ -705,6 +705,85 @@
             }
         }
     },
+    "loadstac1": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "Slope"
+            ],
+            "spatial_extent": {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [
+                                    [
+                                        44.433631,
+                                        51.317362
+                                    ],
+                                    [
+                                        44.432274,
+                                        51.427238
+                                    ],
+                                    [
+                                        44.69808,
+                                        51.428224
+                                    ],
+                                    [
+                                        44.698802,
+                                        51.318344
+                                    ],
+                                    [
+                                        44.433631,
+                                        51.317362
+                                    ]
+                                ]
+                            ]
+                        },
+                        "properties": {}
+                    }
+                ]
+            },
+            "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
+        }
+    },
+    "renamelabels4": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "loadstac1"
+            },
+            "dimension": "bands",
+            "target": [
+                "slope"
+            ]
+        }
+    },
+    "reducedimension1": {
+        "process_id": "reduce_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "renamelabels4"
+            },
+            "dimension": "t",
+            "reducer": {
+                "process_graph": {
+                    "min1": {
+                        "process_id": "min",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
     "loadcollection4": {
         "process_id": "load_collection",
         "arguments": {
@@ -760,7 +839,7 @@
             }
         }
     },
-    "reducedimension1": {
+    "reducedimension2": {
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
@@ -769,7 +848,7 @@
             "dimension": "t",
             "reducer": {
                 "process_graph": {
-                    "min1": {
+                    "min2": {
                         "process_id": "min",
                         "arguments": {
                             "data": {
@@ -782,11 +861,11 @@
             }
         }
     },
-    "renamelabels4": {
+    "renamelabels5": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "reducedimension1"
+                "from_node": "reducedimension2"
             },
             "dimension": "bands",
             "source": [
@@ -797,11 +876,11 @@
             ]
         }
     },
-    "renamelabels5": {
+    "renamelabels6": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "renamelabels4"
+                "from_node": "renamelabels5"
             },
             "dimension": "bands",
             "target": [
@@ -809,11 +888,22 @@
             ]
         }
     },
+    "mergecubes2": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "reducedimension1"
+            },
+            "cube2": {
+                "from_node": "renamelabels6"
+            }
+        }
+    },
     "resamplecubespatial1": {
         "process_id": "resample_cube_spatial",
         "arguments": {
             "data": {
-                "from_node": "renamelabels5"
+                "from_node": "mergecubes2"
             },
             "method": "bilinear",
             "target": {
@@ -846,7 +936,7 @@
             }
         }
     },
-    "mergecubes2": {
+    "mergecubes3": {
         "process_id": "merge_cubes",
         "arguments": {
             "cube1": {
@@ -857,7 +947,7 @@
             }
         }
     },
-    "loadstac1": {
+    "loadstac2": {
         "process_id": "load_stac",
         "arguments": {
             "bands": [
@@ -907,11 +997,11 @@
             "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
         }
     },
-    "renamelabels6": {
+    "renamelabels7": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "loadstac1"
+                "from_node": "loadstac2"
             },
             "dimension": "bands",
             "target": [
@@ -924,7 +1014,7 @@
         "process_id": "resample_cube_spatial",
         "arguments": {
             "data": {
-                "from_node": "renamelabels6"
+                "from_node": "renamelabels7"
             },
             "method": "bilinear",
             "target": {
@@ -932,11 +1022,11 @@
             }
         }
     },
-    "mergecubes3": {
+    "mergecubes4": {
         "process_id": "merge_cubes",
         "arguments": {
             "cube1": {
-                "from_node": "mergecubes2"
+                "from_node": "mergecubes3"
             },
             "cube2": {
                 "from_node": "resamplecubespatial2"
