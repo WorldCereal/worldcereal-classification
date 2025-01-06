@@ -1,8 +1,10 @@
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
+import pandas as pd
 from loguru import logger
 
 ARTIFACTORY_BASE_URL = (
@@ -90,8 +92,34 @@ def upload_legend_csv_artifactory(
     return parsed_output.get("downloadUri")
 
 
-def download_latest_legend_from_artifactory(download_path: Path) -> Path:
-    """Downloads the latest version of the WorldCereal land cover/crop type legend from Artifactory.
+def get_latest_legend_from_artifactory() -> pd.DataFrame:
+    """Get the latest version of the WorldCereal land cover/crop type legend from Artifactory
+    as a Pandas Dataframe.
+
+    Returns
+    -------
+    pd.DataFrame
+        The WorldCereal land cover/crop type legend.
+    """
+    # create temporary folder
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        tmpdir = Path(tmpdirname)
+        # download the latest legend file
+        legend_path = _download_latest_legend_from_artifactory(tmpdir)
+        # read the legend file
+        legend = pd.read_csv(legend_path, header=0, sep=";")
+
+    # clean up the legend file
+    legend = legend[legend["ewoc_code"].notna()]
+    drop_columns = [c for c in legend.columns if "Unnamed:" in c]
+    legend.drop(columns=drop_columns, inplace=True)
+
+    return legend
+
+
+def _download_latest_legend_from_artifactory(download_path: Path) -> Path:
+    """Downloads the latest version of the WorldCereal land cover/crop type legend from Artifactory
+    to a specified file path.
     Parameters
     ----------
     download_path : Path
