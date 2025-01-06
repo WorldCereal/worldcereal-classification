@@ -185,11 +185,11 @@ def post_job_action_point_worldcereal(
         sample_ids = gdf["sample_id"].unique()
         for sample_id in sample_ids:
             sample = gdf[gdf["sample_id"] == sample_id]
-            start_date = sample["timestamp"].min().replace(day=1)
-            end_date = sample["timestamp"].max().replace(day=1) + pd.offsets.MonthEnd(0)
-            gdf.loc[gdf["sample_id"] == sample_id, "start_date"] = pd.to_datetime(
-                start_date
-            )
+            start_date = pd.to_datetime(sample["timestamp"].min()).replace(day=1)
+            end_date = pd.to_datetime(sample["timestamp"].max()).replace(
+                day=1
+            ) + pd.offsets.MonthEnd(0)
+            gdf.loc[gdf["sample_id"] == sample_id, "start_date"] = start_date
             gdf.loc[gdf["sample_id"] == sample_id, "end_date"] = end_date
 
         # Convert band dtype to uint16 (temporary fix)
