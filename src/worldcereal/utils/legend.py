@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -34,6 +35,66 @@ def _get_artifactory_credentials():
         )
 
     return artifactory_username, artifactory_password
+
+
+def _upload_with_retries(
+    srcpath,
+    targetpath,
+    username,
+    password,
+    retries=3,
+    wait=2,
+) -> str:
+    """_summary_
+
+    Parameters
+    ----------
+    srcpath : Path
+        Path to csv file that needs to be uploaded to Artifactory.
+    targetpath : str
+        Full link to the target location in Artifactory.
+    username : str
+        Artifactory username.
+    password : str
+        Artifactory password.
+    retries : int, optional
+        Number of retries, by default 3
+    wait : int, optional
+        Seconds to wait in between retries, by default 2
+
+    Returns
+    -------
+    str
+        Full link to the target location in Artifactory.
+    """
+    # construct the curl command
+    cmd = f"curl -u{username}:{password} -T {srcpath} " f'"{targetpath}"'
+
+    # execute the command with retries
+    for attempt in range(retries):
+        try:
+            logger.info(
+                f"Uploading `{srcpath}` to `{targetpath}` (Attempt {attempt + 1})"
+            )
+
+            output, _ = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, shell=True
+            ).communicate()
+            decoded_output = output.decode("utf-8")
+
+            # Parse as JSON if applicable
+            parsed_output = json.loads(decoded_output)
+            logger.info("Upload successful")
+            return parsed_output.get("downloadUri")
+
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(wait)
+            else:
+                raise
+
+    raise RuntimeError("Failed to upload file")
 
 
 def upload_legend_csv_artifactory(
@@ -70,26 +131,12 @@ def upload_legend_csv_artifactory(
     targetpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in target_names]
 
     for targetpath in targetpaths:
-        logger.info(f"Uploading `{srcpath}` to `{targetpath}`")
-
-        cmd = (
-            f"curl -u{artifactory_username}:{artifactory_password} -T {srcpath} "
-            f'"{targetpath}"'
+        artifactory_link = _upload_with_retries(
+            srcpath, targetpath, artifactory_username, artifactory_password
         )
 
-        output, _ = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, shell=True
-        ).communicate()
-        decoded_output = output.decode("utf-8")
-
-        # Parse as JSON if applicable
-        try:
-            parsed_output = json.loads(decoded_output)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse output as JSON: {decoded_output}") from e
-
-    # Access the desired value
-    return parsed_output.get("downloadUri")
+    # Return the download link of latest uploaded file
+    return artifactory_link
 
 
 def get_latest_legend_from_artifactory() -> pd.DataFrame:
@@ -117,13 +164,21 @@ def get_latest_legend_from_artifactory() -> pd.DataFrame:
     return legend
 
 
-def _download_latest_legend_from_artifactory(download_path: Path) -> Path:
+def _download_latest_legend_from_artifactory(
+    download_path: Path,
+    retries=3,
+    wait=2,
+) -> Path:
     """Downloads the latest version of the WorldCereal land cover/crop type legend from Artifactory
     to a specified file path.
     Parameters
     ----------
     download_path : Path
         Folder where the legend needs to be downloaded to.
+    retries : int, optional
+        Number of retries, by default 3
+    wait : int, optional
+        Seconds to wait in between retries, by default 2
     Returns
     -------
     Path
@@ -133,30 +188,68 @@ def _download_latest_legend_from_artifactory(download_path: Path) -> Path:
     FileNotFoundError
         Raises if no legend files are found in Artifactory.
     """
+    # Construct the download link and curl command
     latest_file = "WorldCereal_LC_CT_legend_latest.csv"
     link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
-
-    logger.info(f"Downloading latest legend file: {latest_file}")
-
     download_path.mkdir(parents=True, exist_ok=True)
     download_file = download_path / latest_file
-
     cmd = f'curl -o {download_file} "{link}"'
 
-    subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+    for attempt in range(retries):
+        try:
+            logger.info(
+                f"Downloading latest legend file: {latest_file} (Attempt {attempt + 1})"
+            )
+            subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+            logger.info("Download successful!")
 
-    return download_file
+            return download_file
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(wait)
+            else:
+                raise
+
+    raise RuntimeError("Failed to download file")
 
 
-def delete_legend_file(path: str) -> None:
+def delete_legend_file(
+    path: str,
+    retries=3,
+    wait=2,
+) -> None:
     """Deletes a legend file from Artifactory.
     Parameters
     ----------
     path : str
         Path to the legend file in Artifactory.
+    retries : int, optional
+        Number of retries, by default 3
+    wait : int, optional
+        Seconds to wait in between retries, by default 2
     """
     # Get Artifactory credentials
     artifactory_username, artifactory_password = _get_artifactory_credentials()
 
+    # construct the curl command
     cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {path}"
-    subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+
+    # execute the command with retries
+    for attempt in range(retries):
+        try:
+            logger.info(f"Deleting legend file: {path} (Attempt {attempt + 1})")
+            subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
+
+            logger.info("Deletion successful")
+            return
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(wait)
+            else:
+                raise
+
+    raise RuntimeError("Failed to delete file")
