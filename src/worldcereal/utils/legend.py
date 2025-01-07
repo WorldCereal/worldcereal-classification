@@ -1,11 +1,10 @@
-import json
 import os
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 import pandas as pd
+import requests
 from loguru import logger
 
 ARTIFACTORY_BASE_URL = (
@@ -37,66 +36,48 @@ def _get_artifactory_credentials():
     return artifactory_username, artifactory_password
 
 
-def _run_curl_cmd(cmd: str, logging_msg: str, retries=3, wait=2) -> dict:
-    """Run a curl command with retries and return the output.
-
+def _run_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Run an HTTP request with retries and return the response.
     Parameters
     ----------
-    cmd : str
-        The curl command to be executed
-    logging_msg : str
-        Message to be logged
-    retries : int, optional
-        Number of retries, by default 3
-    wait : int, optional
-        Seconds to wait in between retries, by default 2
+    method : str
+        HTTP method to be used
+    url : str
+        URL to send the request to
+    kwargs : dict
+        Additional keyword arguments, may include `retries`, `wait` and `logging_msg`
     Raises
     ------
     RuntimeError
         if the command fails after all retries
     Returns
     -------
-    dict
-        The parsed output of the curl command
+    requests.Response
+        The response of the http request
     """
+    retries = kwargs.pop("retries", 3)
+    wait = kwargs.pop("wait", 2)
+    logging_msg = kwargs.pop("logging_msg", "Request")
 
     for attempt in range(retries):
         try:
             logger.debug(f"{logging_msg} (Attempt {attempt + 1})")
-            output, _ = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, shell=True
-            ).communicate()
-            decoded_output = output.decode("utf-8")
-
-            # Parse as JSON if applicable
-            if decoded_output != "":
-                parsed_output = json.loads(decoded_output)
-            else:
-                parsed_output = {}
+            response = requests.request(method, url, **kwargs)
+            response.raise_for_status()
             logger.debug("Execution successful")
-            return parsed_output
-
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            return response
+        except requests.RequestException as e:
             logger.warning(f"Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(wait)
             else:
-                logger.error(f"Failed to execute command: {cmd}")
+                logger.error(f"Failed to execute request: {url}")
                 raise
+    raise RuntimeError(f"Failed to execute request: {url}")
 
-    raise RuntimeError(f"Failed to execute command: {cmd}")
 
-
-def _upload_file(
-    srcpath,
-    dstpath,
-    username,
-    password,
-    retries=3,
-    wait=2,
-) -> str:
-    """Function taking care of file upload to Artifactory with retries.
-
+def _upload_file(srcpath, dstpath, username, password, retries=3, wait=2):
+    """Upload a file to Artifactory.
     Parameters
     ----------
     srcpath : Path
@@ -111,30 +92,33 @@ def _upload_file(
         Number of retries, by default 3
     wait : int, optional
         Seconds to wait in between retries, by default 2
-
     Returns
     -------
     str
         Full link to the target location in Artifactory.
+
     """
-    # construct the curl command
-    cmd = f"curl -u{username}:{password} -T {srcpath} " f'"{dstpath}"'
+    url = dstpath
+    with open(srcpath, "rb") as f:
+        file_content = f.read()  # Read the file content as binary
+        headers = {
+            "Content-Type": "application/octet-stream",  # Set the appropriate content type
+        }
+        response = _run_request(
+            "PUT",
+            url,
+            data=file_content,  # Send raw file content in the request body
+            headers=headers,
+            auth=(username, password),
+            logging_msg=f"Uploading `{srcpath}` to `{dstpath}`",
+            retries=retries,
+            wait=wait,
+        )
+    return response.json()["downloadUri"]
 
-    # construct logging message
-    logging_msg = f"Uploading `{srcpath}` to `{dstpath}`"
 
-    # execute the command with retries
-    output = _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
-
-    # return the download link
-    return output["downloadUri"]
-
-
-def upload_legend(
-    srcpath: Path,
-    date: str,
-) -> str:
-    """Uploads a CSV file containing the worldcereal land cover/crop type legend to Artifactory.
+def upload_legend(srcpath: Path, date: str) -> str:
+    """Upload a CSV file containing the WorldCereal land cover/crop type legend to Artifactory.
     Parameters
     ----------
     srcpath : Path
@@ -173,23 +157,16 @@ def upload_legend(
 
 
 def get_legend() -> pd.DataFrame:
-    """Get the latest version of the WorldCereal land cover/crop type legend from Artifactory
-    as a Pandas Dataframe.
+    """Get the latest version of the WorldCereal land cover/crop type legend as a Pandas DataFrame."""
 
-    Returns
-    -------
-    pd.DataFrame
-        The WorldCereal land cover/crop type legend.
-    """
     # create temporary folder
     with tempfile.TemporaryDirectory() as tmpdirname:
         dstpath = Path(tmpdirname)
-        # download the latest legend file
         legend_path = _download_legend(dstpath)
         # read the legend file
         legend = pd.read_csv(legend_path, header=0, sep=";")
 
-    # clean up the legend file
+    # clean up the legend for use
     legend = legend[legend["ewoc_code"].notna()]
     drop_columns = [c for c in legend.columns if "Unnamed:" in c]
     legend.drop(columns=drop_columns, inplace=True)
@@ -197,13 +174,8 @@ def get_legend() -> pd.DataFrame:
     return legend
 
 
-def _download_legend(
-    dstpath: Path,
-    retries=3,
-    wait=2,
-) -> Path:
-    """Downloads the latest version of the WorldCereal land cover/crop type legend from Artifactory
-    to a specified file path.
+def _download_legend(dstpath: Path, retries=3, wait=2) -> Path:
+    """Download the latest version of the WorldCereal legend from Artifactory.
     Parameters
     ----------
     dstpath : Path
@@ -221,29 +193,28 @@ def _download_legend(
     FileNotFoundError
         Raises if no legend files are found in Artifactory.
     """
-    # Construct the download link and curl command
+    # Construct the download link
     latest_file = "WorldCereal_LC_CT_legend_latest.csv"
     link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
     dstpath.mkdir(parents=True, exist_ok=True)
     download_file = dstpath / latest_file
-    cmd = f'curl -o {download_file} "{link}"'
 
-    # construct logging message
-    logging_msg = f"Downloading latest legend file: {latest_file}"
+    response = _run_request(
+        "GET",
+        link,
+        logging_msg=f"Downloading latest legend file: {latest_file}",
+        retries=retries,
+        wait=wait,
+    )
 
-    # execute the command with retries
-    _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
+    with open(download_file, "wb") as f:
+        f.write(response.content)
 
-    # return the path to the downloaded file
     return download_file
 
 
-def delete_legend_file(
-    srcpath: str,
-    retries=3,
-    wait=2,
-) -> None:
-    """Deletes a legend file from Artifactory.
+def delete_legend_file(srcpath: str, retries=3, wait=2):
+    """Delete a legend file from Artifactory.
     Parameters
     ----------
     srcpath : str
@@ -256,11 +227,11 @@ def delete_legend_file(
     # Get Artifactory credentials
     artifactory_username, artifactory_password = _get_artifactory_credentials()
 
-    # construct the curl command
-    cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {srcpath}"
-
-    # construct logging message
-    logging_msg = f"Deleting legend file: {srcpath}"
-
-    # execute the command with retries
-    _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
+    _run_request(
+        "DELETE",
+        srcpath,
+        auth=(artifactory_username, artifactory_password),
+        logging_msg=f"Deleting legend file: {srcpath}",
+        retries=retries,
+        wait=wait,
+    )
