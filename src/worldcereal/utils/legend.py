@@ -37,6 +37,56 @@ def _get_artifactory_credentials():
     return artifactory_username, artifactory_password
 
 
+def _run_curl_cmd(cmd: str, logging_msg: str, retries=3, wait=2) -> dict:
+    """Run a curl command with retries and return the output.
+
+    Parameters
+    ----------
+    cmd : str
+        The curl command to be executed
+    logging_msg : str
+        Message to be logged
+    retries : int, optional
+        Number of retries, by default 3
+    wait : int, optional
+        Seconds to wait in between retries, by default 2
+    Raises
+    ------
+    RuntimeError
+        if the command fails after all retries
+    Returns
+    -------
+    dict
+        The parsed output of the curl command
+    """
+
+    for attempt in range(retries):
+        try:
+            logger.debug(f"{logging_msg} (Attempt {attempt + 1})")
+            output, _ = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, shell=True
+            ).communicate()
+            decoded_output = output.decode("utf-8")
+
+            # Parse as JSON if applicable
+            if decoded_output != "":
+                parsed_output = json.loads(decoded_output)
+            else:
+                parsed_output = {}
+            logger.debug("Execution successful")
+            return parsed_output
+
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(wait)
+            else:
+                logger.error(f"Failed to execute command: {cmd}")
+                raise
+
+    raise RuntimeError(f"Failed to execute command: {cmd}")
+
+
 def _upload_file(
     srcpath,
     dstpath,
@@ -70,32 +120,14 @@ def _upload_file(
     # construct the curl command
     cmd = f"curl -u{username}:{password} -T {srcpath} " f'"{dstpath}"'
 
+    # construct logging message
+    logging_msg = f"Uploading `{srcpath}` to `{dstpath}`"
+
     # execute the command with retries
-    for attempt in range(retries):
-        try:
-            logger.debug(
-                f"Uploading `{srcpath}` to `{dstpath}` (Attempt {attempt + 1})"
-            )
+    output = _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
 
-            output, _ = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, shell=True
-            ).communicate()
-            decoded_output = output.decode("utf-8")
-
-            # Parse as JSON if applicable
-            parsed_output = json.loads(decoded_output)
-            logger.debug("Upload successful")
-            return parsed_output.get("downloadUri")
-
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            logger.warning(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(wait)
-            else:
-                logger.error(f"Failed to upload file to: {dstpath}")
-                raise
-
-    raise RuntimeError("Failed to upload file")
+    # return the download link
+    return output["downloadUri"]
 
 
 def upload_legend(
@@ -196,25 +228,14 @@ def _download_legend(
     download_file = dstpath / latest_file
     cmd = f'curl -o {download_file} "{link}"'
 
-    for attempt in range(retries):
-        try:
-            logger.debug(
-                f"Downloading latest legend file: {latest_file} (Attempt {attempt + 1})"
-            )
-            subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-            logger.debug("Download successful!")
+    # construct logging message
+    logging_msg = f"Downloading latest legend file: {latest_file}"
 
-            return download_file
+    # execute the command with retries
+    _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
 
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(wait)
-            else:
-                logger.error("Failed to download latest legend from Artifactory")
-                raise
-
-    raise RuntimeError("Failed to download file")
+    # return the path to the downloaded file
+    return download_file
 
 
 def delete_legend_file(
@@ -238,21 +259,8 @@ def delete_legend_file(
     # construct the curl command
     cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {srcpath}"
 
+    # construct logging message
+    logging_msg = f"Deleting legend file: {srcpath}"
+
     # execute the command with retries
-    for attempt in range(retries):
-        try:
-            logger.debug(f"Deleting legend file: {srcpath} (Attempt {attempt + 1})")
-            subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-
-            logger.debug("Deletion successful")
-            return
-
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(wait)
-            else:
-                logger.error(f"Failed to delete legend from Artifactory: {srcpath}")
-                raise
-
-    raise RuntimeError("Failed to delete file")
+    _run_curl_cmd(cmd, logging_msg, retries=retries, wait=wait)
