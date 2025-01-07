@@ -103,9 +103,9 @@ def create_job_point_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str = "5G",
-    python_memory: str = "2G",
-    max_executors: int = 22,
+    executor_memory: str,
+    python_memory: str,
+    max_executors: int,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 

@@ -144,9 +144,9 @@ def prepare_job_dataframe(
 def setup_extraction_functions(
     collection: ExtractionCollection,
     extract_value: int,
-    memory: str,
-    python_memory: str,
-    max_executors: int,
+    memory: typing.Union[str, None],
+    python_memory: typing.Union[str, None],
+    max_executors: typing.Union[int, None],
 ) -> tuple[typing.Callable, typing.Callable, typing.Callable]:
     """Setup the datacube creation, path generation and post-job action
     functions for the given collection. Returns a tuple of three functions:
@@ -158,33 +158,33 @@ def setup_extraction_functions(
     datacube_creation = {
         ExtractionCollection.PATCH_SENTINEL1: partial(
             create_job_patch_s1,
-            executor_memory=memory,
-            python_memory=python_memory,
-            max_executors=max_executors,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1900m",
+            max_executors=max_executors if max_executors is not None else 22,
         ),
         ExtractionCollection.PATCH_SENTINEL2: partial(
             create_job_patch_s2,
-            executor_memory=memory,
-            python_memory=python_memory,
-            max_executors=max_executors,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1900m",
+            max_executors=max_executors if max_executors is not None else 22,
         ),
         ExtractionCollection.PATCH_METEO: partial(
             create_job_patch_meteo,
-            executor_memory=memory,
-            python_memory=python_memory,
-            max_executors=max_executors,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1000m",
+            max_executors=max_executors if max_executors is not None else 22,
         ),
         ExtractionCollection.PATCH_WORLDCEREAL: partial(
             create_job_patch_worldcereal,
-            executor_memory=memory,
-            python_memory=python_memory,
-            max_executors=max_executors,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "3000m",
+            max_executors=max_executors if max_executors is not None else 22,
         ),
         ExtractionCollection.POINT_WORLDCEREAL: partial(
             create_job_point_worldcereal,
-            executor_memory=memory,
-            python_memory=python_memory,
-            max_executors=max_executors,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "3000m",
+            max_executors=max_executors if max_executors is not None else 22,
         ),
     }
 

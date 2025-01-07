@@ -122,9 +122,9 @@ def create_job_patch_s1(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str = "5G",
-    python_memory: str = "2G",
-    max_executors: int = 22,
+    executor_memory: str,
+    python_memory: str,
+    max_executors: int,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information. This job is a
     S1 patch of 32x32 pixels at 20m spatial resolution."""
