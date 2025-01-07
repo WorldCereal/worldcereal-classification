@@ -73,7 +73,9 @@ def _upload_file(
     # execute the command with retries
     for attempt in range(retries):
         try:
-            logger.info(f"Uploading `{srcpath}` to `{dstpath}` (Attempt {attempt + 1})")
+            logger.debug(
+                f"Uploading `{srcpath}` to `{dstpath}` (Attempt {attempt + 1})"
+            )
 
             output, _ = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, shell=True
@@ -82,14 +84,15 @@ def _upload_file(
 
             # Parse as JSON if applicable
             parsed_output = json.loads(decoded_output)
-            logger.info("Upload successful")
+            logger.debug("Upload successful")
             return parsed_output.get("downloadUri")
 
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(wait)
             else:
+                logger.error(f"Failed to upload file to: {dstpath}")
                 raise
 
     raise RuntimeError("Failed to upload file")
@@ -195,19 +198,20 @@ def _download_legend(
 
     for attempt in range(retries):
         try:
-            logger.info(
+            logger.debug(
                 f"Downloading latest legend file: {latest_file} (Attempt {attempt + 1})"
             )
             subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
-            logger.info("Download successful!")
+            logger.debug("Download successful!")
 
             return download_file
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(wait)
             else:
+                logger.error("Failed to download latest legend from Artifactory")
                 raise
 
     raise RuntimeError("Failed to download file")
@@ -237,17 +241,18 @@ def delete_legend_file(
     # execute the command with retries
     for attempt in range(retries):
         try:
-            logger.info(f"Deleting legend file: {srcpath} (Attempt {attempt + 1})")
+            logger.debug(f"Deleting legend file: {srcpath} (Attempt {attempt + 1})")
             subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
-            logger.info("Deletion successful")
+            logger.debug("Deletion successful")
             return
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
             if attempt < retries - 1:
                 time.sleep(wait)
             else:
+                logger.error(f"Failed to delete legend from Artifactory: {srcpath}")
                 raise
 
     raise RuntimeError("Failed to delete file")
