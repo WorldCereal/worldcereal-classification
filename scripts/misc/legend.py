@@ -4,11 +4,7 @@ Example script showing how to upload, download and delete the WorldCereal crop t
 
 from pathlib import Path
 
-from worldcereal.utils.legend import (
-    delete_legend_file,
-    get_latest_legend_from_artifactory,
-    upload_legend_csv_artifactory,
-)
+from worldcereal.utils.legend import delete_legend_file, get_legend, upload_legend
 
 if __name__ == "__main__":
 
@@ -19,10 +15,10 @@ if __name__ == "__main__":
     date = "20241231"
 
     # Upload the legend to Artifactory
-    link = upload_legend_csv_artifactory(srcpath, date)
+    link = upload_legend(srcpath, date)
 
     # Download the latest legend from Artifactory
-    legend = get_latest_legend_from_artifactory()
+    legend = get_legend()
 
     # Delete the uploaded legend from Artifactory
     delete_legend_file(link)

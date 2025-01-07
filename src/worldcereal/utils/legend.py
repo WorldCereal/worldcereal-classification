@@ -37,21 +37,21 @@ def _get_artifactory_credentials():
     return artifactory_username, artifactory_password
 
 
-def _upload_with_retries(
+def _upload_file(
     srcpath,
-    targetpath,
+    dstpath,
     username,
     password,
     retries=3,
     wait=2,
 ) -> str:
-    """_summary_
+    """Function taking care of file upload to Artifactory with retries.
 
     Parameters
     ----------
     srcpath : Path
         Path to csv file that needs to be uploaded to Artifactory.
-    targetpath : str
+    dstpath : str
         Full link to the target location in Artifactory.
     username : str
         Artifactory username.
@@ -68,14 +68,12 @@ def _upload_with_retries(
         Full link to the target location in Artifactory.
     """
     # construct the curl command
-    cmd = f"curl -u{username}:{password} -T {srcpath} " f'"{targetpath}"'
+    cmd = f"curl -u{username}:{password} -T {srcpath} " f'"{dstpath}"'
 
     # execute the command with retries
     for attempt in range(retries):
         try:
-            logger.info(
-                f"Uploading `{srcpath}` to `{targetpath}` (Attempt {attempt + 1})"
-            )
+            logger.info(f"Uploading `{srcpath}` to `{dstpath}` (Attempt {attempt + 1})")
 
             output, _ = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, shell=True
@@ -97,7 +95,7 @@ def _upload_with_retries(
     raise RuntimeError("Failed to upload file")
 
 
-def upload_legend_csv_artifactory(
+def upload_legend(
     srcpath: Path,
     date: str,
 ) -> str:
@@ -124,22 +122,22 @@ def upload_legend_csv_artifactory(
     artifactory_username, artifactory_password = _get_artifactory_credentials()
 
     # We  upload the file with a specific date tag and also with a "latest" tag
-    target_names = [
+    dst_names = [
         f"WorldCereal_LC_CT_legend_{date}.csv",
         "WorldCereal_LC_CT_legend_latest.csv",
     ]
-    targetpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in target_names]
+    dstpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in dst_names]
 
-    for targetpath in targetpaths:
-        artifactory_link = _upload_with_retries(
-            srcpath, targetpath, artifactory_username, artifactory_password
+    for dstpath in dstpaths:
+        artifactory_link = _upload_file(
+            srcpath, dstpath, artifactory_username, artifactory_password
         )
 
     # Return the download link of latest uploaded file
     return artifactory_link
 
 
-def get_latest_legend_from_artifactory() -> pd.DataFrame:
+def get_legend() -> pd.DataFrame:
     """Get the latest version of the WorldCereal land cover/crop type legend from Artifactory
     as a Pandas Dataframe.
 
@@ -150,9 +148,9 @@ def get_latest_legend_from_artifactory() -> pd.DataFrame:
     """
     # create temporary folder
     with tempfile.TemporaryDirectory() as tmpdirname:
-        tmpdir = Path(tmpdirname)
+        dstpath = Path(tmpdirname)
         # download the latest legend file
-        legend_path = _download_latest_legend_from_artifactory(tmpdir)
+        legend_path = _download_legend(dstpath)
         # read the legend file
         legend = pd.read_csv(legend_path, header=0, sep=";")
 
@@ -164,8 +162,8 @@ def get_latest_legend_from_artifactory() -> pd.DataFrame:
     return legend
 
 
-def _download_latest_legend_from_artifactory(
-    download_path: Path,
+def _download_legend(
+    dstpath: Path,
     retries=3,
     wait=2,
 ) -> Path:
@@ -173,7 +171,7 @@ def _download_latest_legend_from_artifactory(
     to a specified file path.
     Parameters
     ----------
-    download_path : Path
+    dstpath : Path
         Folder where the legend needs to be downloaded to.
     retries : int, optional
         Number of retries, by default 3
@@ -191,8 +189,8 @@ def _download_latest_legend_from_artifactory(
     # Construct the download link and curl command
     latest_file = "WorldCereal_LC_CT_legend_latest.csv"
     link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
-    download_path.mkdir(parents=True, exist_ok=True)
-    download_file = download_path / latest_file
+    dstpath.mkdir(parents=True, exist_ok=True)
+    download_file = dstpath / latest_file
     cmd = f'curl -o {download_file} "{link}"'
 
     for attempt in range(retries):
@@ -216,14 +214,14 @@ def _download_latest_legend_from_artifactory(
 
 
 def delete_legend_file(
-    path: str,
+    srcpath: str,
     retries=3,
     wait=2,
 ) -> None:
     """Deletes a legend file from Artifactory.
     Parameters
     ----------
-    path : str
+    srcpath : str
         Path to the legend file in Artifactory.
     retries : int, optional
         Number of retries, by default 3
@@ -234,12 +232,12 @@ def delete_legend_file(
     artifactory_username, artifactory_password = _get_artifactory_credentials()
 
     # construct the curl command
-    cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {path}"
+    cmd = f"curl -u{artifactory_username}:{artifactory_password} -X DELETE {srcpath}"
 
     # execute the command with retries
     for attempt in range(retries):
         try:
-            logger.info(f"Deleting legend file: {path} (Attempt {attempt + 1})")
+            logger.info(f"Deleting legend file: {srcpath} (Attempt {attempt + 1})")
             subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()
 
             logger.info("Deletion successful")
