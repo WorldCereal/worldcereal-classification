@@ -545,35 +545,6 @@
                             "data": {
                                 "from_parameter": "data"
                             },
-                            "index": 0
-                        }
-                    },
-                    "isnodata1": {
-                        "process_id": "is_nodata",
-                        "arguments": {
-                            "x": {
-                                "from_node": "arrayelement2"
-                            }
-                        }
-                    },
-                    "if1": {
-                        "process_id": "if",
-                        "arguments": {
-                            "accept": 1,
-                            "reject": {
-                                "from_node": "power1"
-                            },
-                            "value": {
-                                "from_node": "isnodata1"
-                            }
-                        }
-                    },
-                    "arrayelement3": {
-                        "process_id": "array_element",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            },
                             "index": 1
                         }
                     },
@@ -582,7 +553,7 @@
                         "arguments": {
                             "base": 10,
                             "x": {
-                                "from_node": "arrayelement3"
+                                "from_node": "arrayelement2"
                             }
                         }
                     },
@@ -622,44 +593,15 @@
                             }
                         }
                     },
-                    "arrayelement4": {
-                        "process_id": "array_element",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            },
-                            "index": 1
-                        }
-                    },
-                    "isnodata2": {
-                        "process_id": "is_nodata",
-                        "arguments": {
-                            "x": {
-                                "from_node": "arrayelement4"
-                            }
-                        }
-                    },
-                    "if2": {
-                        "process_id": "if",
-                        "arguments": {
-                            "accept": 1,
-                            "reject": {
-                                "from_node": "power2"
-                            },
-                            "value": {
-                                "from_node": "isnodata2"
-                            }
-                        }
-                    },
                     "arraycreate1": {
                         "process_id": "array_create",
                         "arguments": {
                             "data": [
                                 {
-                                    "from_node": "if1"
+                                    "from_node": "power1"
                                 },
                                 {
-                                    "from_node": "if2"
+                                    "from_node": "power2"
                                 }
                             ]
                         },
