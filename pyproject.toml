@@ -37,7 +37,7 @@ dependencies = [
     "cftime",  
     "geojson",  
     "geopandas",  
-    "h3==3.7.7",  
+    "h3==4.1.0",  
     "h5netcdf>=1.1.0",  
     "loguru>=0.7.2",  
     "netcdf4<=1.6.4",  
