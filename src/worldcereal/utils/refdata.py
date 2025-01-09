@@ -10,7 +10,6 @@ import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely.geometry import Polygon
-
 from worldcereal.data import croptype_mappings
 
 
@@ -219,53 +218,53 @@ def get_best_valid_date(row: pd.Series):
 
     from presto.dataops import MIN_EDGE_BUFFER, NUM_TIMESTEPS
 
-    # check if shift forward will fit into existing extractions
-    # allow buffer of MIN_EDGE_BUFFER months at the start and end of the extraction period
-    temp_end_date = row["valid_date"] + pd.DateOffset(
-        months=row["valid_month_shift_forward"] + NUM_TIMESTEPS // 2 - MIN_EDGE_BUFFER
-    )
-    temp_start_date = temp_end_date - pd.DateOffset(months=NUM_TIMESTEPS)
-    if (temp_end_date <= row["end_date"]) & (temp_start_date >= row["start_date"]):
-        shift_forward_ok = True
-    else:
-        shift_forward_ok = False
+    def is_within_period(proposed_date, start_date, end_date):
+        return (proposed_date - pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date) & (
+            proposed_date + pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
+        )
 
-    # check if shift backward will fit into existing extractions
-    # allow buffer of MIN_EDGE_BUFFER months at the start and end of the extraction period
-    temp_start_date = row["valid_date"] - pd.DateOffset(
-        months=row["valid_month_shift_backward"] + NUM_TIMESTEPS // 2 - MIN_EDGE_BUFFER
-    )
-    temp_end_date = temp_start_date + pd.DateOffset(months=NUM_TIMESTEPS)
-    if (temp_end_date <= row["end_date"]) & (temp_start_date >= row["start_date"]):
-        shift_backward_ok = True
-    else:
-        shift_backward_ok = False
+    def check_shift(proposed_date, valid_date, start_date, end_date):
+        proposed_start_date = proposed_date - pd.DateOffset(
+            months=(NUM_TIMESTEPS // 2 - 1)
+        )
+        proposed_end_date = proposed_date + pd.DateOffset(months=(NUM_TIMESTEPS // 2))
+        return (
+            is_within_period(proposed_date, start_date, end_date)
+            & (valid_date >= proposed_start_date)
+            & (valid_date <= proposed_end_date)
+        )
 
-    if (not shift_forward_ok) & (not shift_backward_ok):
+    valid_date = row["valid_date"]
+    start_date = row["start_date"]
+    end_date = row["end_date"]
+
+    proposed_valid_date_fwd = valid_date + pd.DateOffset(
+        months=row["valid_month_shift_forward"]
+    )
+    proposed_valid_date_bwd = valid_date - pd.DateOffset(
+        months=row["valid_month_shift_backward"]
+    )
+
+    shift_forward_ok = check_shift(
+        proposed_valid_date_fwd, valid_date, start_date, end_date
+    )
+    shift_backward_ok = check_shift(
+        proposed_valid_date_bwd, valid_date, start_date, end_date
+    )
+
+    if not shift_forward_ok and not shift_backward_ok:
         return np.nan
-
-    if shift_forward_ok & (not shift_backward_ok):
-        return row["valid_date"] + pd.DateOffset(
-            months=row["valid_month_shift_forward"]
+    if shift_forward_ok and not shift_backward_ok:
+        return proposed_valid_date_fwd
+    if not shift_forward_ok and shift_backward_ok:
+        return proposed_valid_date_bwd
+    if shift_forward_ok and shift_backward_ok:
+        return (
+            proposed_valid_date_bwd
+            if (row["valid_month_shift_backward"] - row["valid_month_shift_forward"])
+            <= MIN_EDGE_BUFFER
+            else proposed_valid_date_fwd
         )
-
-    if (not shift_forward_ok) & shift_backward_ok:
-        return row["valid_date"] - pd.DateOffset(
-            months=row["valid_month_shift_backward"]
-        )
-
-    if shift_forward_ok & shift_backward_ok:
-        # if shift backward is not too much bigger than shift forward, choose backward
-        if (
-            row["valid_month_shift_backward"] - row["valid_month_shift_forward"]
-        ) <= MIN_EDGE_BUFFER:
-            return row["valid_date"] - pd.DateOffset(
-                months=row["valid_month_shift_backward"]
-            )
-        else:
-            return row["valid_date"] + pd.DateOffset(
-                months=row["valid_month_shift_forward"]
-            )
 
 
 def process_parquet(
