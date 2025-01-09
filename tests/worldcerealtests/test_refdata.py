@@ -1,7 +1,11 @@
 import pandas as pd
 from shapely.geometry import Polygon
-from worldcereal.utils.refdata import (get_best_valid_date, month_diff,
-                                       query_public_extractions)
+
+from worldcereal.utils.refdata import (
+    get_best_valid_date,
+    month_diff,
+    query_public_extractions,
+)
 
 
 def test_query_public_extractions():
@@ -24,10 +28,12 @@ def test_get_best_valid_date():
             test_case["true_valid_date_month"] = test_case["valid_date"].month
             test_case["proposed_valid_date_month"] = processing_period_middle_month
             test_case["valid_month_shift_backward"] = month_diff(
-                test_case["proposed_valid_date_month"], test_case["true_valid_date_month"]
+                test_case["proposed_valid_date_month"],
+                test_case["true_valid_date_month"],
             )
             test_case["valid_month_shift_forward"] = month_diff(
-                test_case["true_valid_date_month"], test_case["proposed_valid_date_month"]
+                test_case["true_valid_date_month"],
+                test_case["proposed_valid_date_month"],
             )
             proposed_valid_date = get_best_valid_date(test_case)
             test_case_res.append([processing_period_middle_month, proposed_valid_date])
@@ -97,9 +103,9 @@ def test_get_best_valid_date():
 
     # Assertions for test case 3
     assert (
-        test_case3_res[test_case3_res["proposed_valid_month"].isin([1, 2, 9, 10, 11, 12])][
-            "resulting_valid_date"
-        ]
+        test_case3_res[
+            test_case3_res["proposed_valid_month"].isin([1, 2, 9, 10, 11, 12])
+        ]["resulting_valid_date"]
         .isna()
         .all()
     )

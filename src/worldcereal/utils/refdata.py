@@ -10,6 +10,7 @@ import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely.geometry import Polygon
+
 from worldcereal.data import croptype_mappings
 
 
