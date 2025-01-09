@@ -83,6 +83,12 @@ def create_job_dataframe_point_worldcereal(
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
 
+        # Add other attributes we want to keep in the result
+        job["start_date"] = start_date
+        job["end_date"] = end_date
+        job["lat"] = job.geometry.y
+        job["lon"] = job.geometry.x
+
         variables = {
             "backend_name": backend.value,
             "out_prefix": "point-extraction",
@@ -175,22 +181,6 @@ def post_job_action_point_worldcereal(
         # Convert the dates to datetime format
         gdf["timestamp"] = pd.to_datetime(gdf["date"])
         gdf.drop(columns=["date"], inplace=True)
-
-        # Derive latitude and longitude from the geometry
-        gdf["lat"] = gdf.geometry.y
-        gdf["lon"] = gdf.geometry.x
-
-        # For each sample, add start and end date to the dataframe
-        # is there a better way to do this, as this is already done in the job creation?
-        sample_ids = gdf["sample_id"].unique()
-        for sample_id in sample_ids:
-            sample = gdf[gdf["sample_id"] == sample_id]
-            start_date = pd.to_datetime(sample["timestamp"].min()).replace(day=1)
-            end_date = pd.to_datetime(sample["timestamp"].max()).replace(
-                day=1
-            ) + pd.offsets.MonthEnd(0)
-            gdf.loc[gdf["sample_id"] == sample_id, "start_date"] = start_date
-            gdf.loc[gdf["sample_id"] == sample_id, "end_date"] = end_date
 
         # Convert band dtype to uint16 (temporary fix)
         # TODO: remove this step when the issue is fixed on the OpenEO backend
