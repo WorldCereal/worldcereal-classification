@@ -190,7 +190,7 @@ def month_diff(month1: int, month2: int) -> int:
         The difference between `month1` and `month2`.
     """
 
-    return month2 - month1 if month2 >= month1 else 12 - month1 + month2
+    return (month2 - month1) % 12
 
 
 def get_best_valid_date(row: pd.Series):
