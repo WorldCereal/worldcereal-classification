@@ -24,11 +24,11 @@ def create_job_dataframe_patch_meteo(
 def create_job_patch_meteo(
     row: pd.Series,
     connection: openeo.DataCube,
-    provider=None,
-    connection_provider=None,
-    executor_memory: str = "2G",
-    python_memory: str = "1G",
-    max_executors: int = 22,
+    provider,
+    connection_provider,
+    executor_memory: str,
+    python_memory: str,
+    max_executors: int,
 ) -> gpd.GeoDataFrame:
     start_date = row.start_date
     end_date = row.end_date

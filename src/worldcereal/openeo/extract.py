@@ -153,15 +153,26 @@ def post_job_action_patch(
 
 
 def generate_output_path_patch(
-    root_folder: Path, geometry_index: int, row: pd.Series, s2_grid: gpd.GeoDataFrame
+    root_folder: Path,
+    job_index: int,
+    row: pd.Series,
+    asset_id: str,
+    s2_grid: gpd.GeoDataFrame,
 ):
     """Generate the output path for the extracted data, from a base path and
     the row information.
     """
-    features = geojson.loads(row.geometry)
-    sample_id = features[geometry_index].properties.get("sample_id", None)
-    if sample_id is None:
-        sample_id = features[geometry_index].properties["sampleID"]
+    # First extract the sample ID from the asset ID
+    sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
+
+    # Find which index in the FeatureCollection corresponds to the sample_id
+    features = geojson.loads(row.geometry)["features"]
+    sample_id_to_index = {
+        feature.properties.get("sample_id", None): index
+        for index, feature in enumerate(features)
+    }
+    geometry_index = sample_id_to_index.get(sample_id, None)
+
     ref_id = features[geometry_index].properties["ref_id"]
 
     if "orbit_state" in row:
@@ -170,10 +181,11 @@ def generate_output_path_patch(
         orbit_state = ""
 
     s2_tile_id = row.s2_tile
-    h3_l3_cell = row.h3_l3_cell
+    utm_zone = str(s2_tile_id[0:2])
     epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
-    subfolder = root_folder / ref_id / h3_l3_cell / sample_id
+    subfolder = root_folder / ref_id / utm_zone / s2_tile_id / sample_id
+
     return (
         subfolder
         / f"{row.out_prefix}{orbit_state}_{sample_id}_{epsg}_{row.start_date}_{row.end_date}{row.out_extension}"
