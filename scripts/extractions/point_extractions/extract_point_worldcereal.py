@@ -16,32 +16,44 @@ from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 
 def generate_output_path_point_worldcereal(
-    root_folder: Path, geometry_index: int, row: pd.Series
-):
+    root_folder: Path,
+    geometry_index: int,
+    row: pd.Series,
+    asset_id: Optional[str] = None,
+) -> Path:
+    """Method to generate the output path for the point extractions.
+
+    Parameters
+    ----------
+    root_folder : Path
+        root folder where the output parquet file will be saved
+    geometry_index : int
+        For point extractions, only one asset (a geoparquet file) is generated per job.
+        Therefore geometry_index is always 0. It has to be included in the function signature
+        to be compatible with the GFMapJobManager
+    row : pd.Series
+        the current job row from the GFMapJobManager
+    asset_id : str, optional
+        Needed for compatibility with GFMapJobManager but not used.
+
+    Returns
+    -------
+    Path
+        output path for the point extractions parquet file
     """
-    For point extractions, only one asset (a geoparquet file) is generated per job.
-    Therefore geometry_index is always 0.
-    It has to be included in the function signature to be compatible with the GFMapJobManager.
-    """
-    features = geojson.loads(row.geometry)
-    ref_id = features[geometry_index].properties["ref_id"]
 
     s2_tile_id = row.s2_tile
+    utm_zone = str(s2_tile_id[0:2])
 
-    subfolder = root_folder / ref_id / s2_tile_id
-
+    # Create the subfolder to store the output
+    subfolder = root_folder / utm_zone / s2_tile_id
     subfolder.mkdir(parents=True, exist_ok=True)
 
-    # Subfolder is not necessarily unique, so we create numbered folders.
-    if not any(subfolder.iterdir()):
-        real_subfolder = subfolder / "0"
-    else:
-        i = 0
-        while (subfolder / str(i)).exists():
-            i += 1
-        real_subfolder = subfolder / str(i)
+    # we may have multiple output files per s2_tile_id and need
+    # a unique name so we use the job ID
+    output_file = f"WORLDCEREAL_{root_folder.name}_{row.start_date}_{row.end_date}_{s2_tile_id}_{row.id}{row.out_extension}"
 
-    return real_subfolder / f"point_extractions{row.out_extension}"
+    return subfolder / output_file
 
 
 def create_job_dataframe_point_worldcereal(
@@ -52,12 +64,16 @@ def create_job_dataframe_point_worldcereal(
     for job in tqdm(split_jobs):
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
+
         # 9 months before and after the valid time
         start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
         end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
 
+        # ensure start date is 1st day of month, end date is last day of month
+        start_date = start_date.replace(day=1)
+        end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
+
         s2_tile = job.tile.iloc[0]
-        h3_l3_cell = job.h3_l3_cell.iloc[0]
 
         # Convert dates to string format
         start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
@@ -67,6 +83,12 @@ def create_job_dataframe_point_worldcereal(
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
 
+        # Add other attributes we want to keep in the result
+        job["start_date"] = start_date
+        job["end_date"] = end_date
+        job["lat"] = job.geometry.y
+        job["lon"] = job.geometry.x
+
         variables = {
             "backend_name": backend.value,
             "out_prefix": "point-extraction",
@@ -74,7 +96,6 @@ def create_job_dataframe_point_worldcereal(
             "start_date": start_date,
             "end_date": end_date,
             "s2_tile": s2_tile,
-            "h3_l3_cell": h3_l3_cell,
             "geometry": job.to_json(),
         }
 
@@ -88,9 +109,9 @@ def create_job_point_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str = "5G",
-    python_memory: str = "2G",
-    max_executors: int = 22,
+    executor_memory: str,
+    python_memory: str,
+    max_executors: int,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -106,6 +127,13 @@ def create_job_point_worldcereal(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
+    # Try to get s2 tile ID to filter the collection
+    if "s2_tile" in row:
+        pipeline_log.debug(f"Extracting data for S2 tile {row.s2_tile}")
+        s2_tile = row.s2_tile
+    else:
+        s2_tile = None
+
     inputs = worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
@@ -113,6 +141,7 @@ def create_job_point_worldcereal(
         temporal_extent=temporal_extent,
         fetch_type=FetchType.POINT,
         validate_temporal_context=False,
+        s2_tile=s2_tile,
     )
 
     # Finally, create a vector cube based on the Point geometries
@@ -150,7 +179,8 @@ def post_job_action_point_worldcereal(
         gdf = gpd.read_parquet(item_asset_path)
 
         # Convert the dates to datetime format
-        gdf["date"] = pd.to_datetime(gdf["date"])
+        gdf["timestamp"] = pd.to_datetime(gdf["date"])
+        gdf.drop(columns=["date"], inplace=True)
 
         # Convert band dtype to uint16 (temporary fix)
         # TODO: remove this step when the issue is fixed on the OpenEO backend
