@@ -168,7 +168,9 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         )
 
     # Process the parquet into the format we need for training
-    processed_public_df = process_parquet(public_df_raw, processing_period)
+    processed_public_df = process_public_extractions_df(
+        public_df_raw, processing_period
+    )
 
     return processed_public_df
 
@@ -268,7 +270,7 @@ def get_best_valid_date(row: pd.Series):
         )
 
 
-def process_parquet(
+def process_public_extractions_df(
     public_df_raw: pd.DataFrame, processing_period: TemporalContext = None
 ) -> pd.DataFrame:
     """Method to transform the raw parquet data into a format that can be used for
@@ -284,7 +286,7 @@ def process_parquet(
     pd.DataFrame
         processed dataframe with the necessary columns for training.
     """
-    from presto.utils import process_parquet as process_parquet_for_presto
+    from presto.utils import process_parquet
 
     logger.info("Processing selected samples ...")
 
@@ -342,7 +344,7 @@ def process_parquet(
                 f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
             )
 
-    public_df = process_parquet_for_presto(public_df_raw)
+    public_df = process_parquet(public_df_raw)
 
     if processing_period is not None:
         # put back the true valid_date
