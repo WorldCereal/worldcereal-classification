@@ -328,13 +328,13 @@ def process_public_extractions_df(
         # calculate the shifts and assign new valid date
         sample_dates["true_valid_date_month"] = public_df_raw["valid_date"].dt.month
         sample_dates["proposed_valid_date_month"] = processing_period_middle_month
-        sample_dates["valid_month_shift_forward"] = sample_dates.apply(
+        sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
                 xx["proposed_valid_date_month"], xx["true_valid_date_month"]
             ),
             axis=1,
         )
-        sample_dates["valid_month_shift_backward"] = sample_dates.apply(
+        sample_dates["valid_month_shift_forward"] = sample_dates.apply(
             lambda xx: month_diff(
                 xx["true_valid_date_month"], xx["proposed_valid_date_month"]
             ),
