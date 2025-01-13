@@ -271,7 +271,9 @@ def get_best_valid_date(row: pd.Series):
 
 
 def process_public_extractions_df(
-    public_df_raw: pd.DataFrame, processing_period: TemporalContext = None
+    public_df_raw: pd.DataFrame,
+    processing_period: TemporalContext = None,
+    freq: str = "MS",
 ) -> pd.DataFrame:
     """Method to transform the raw parquet data into a format that can be used for
     training. Includes pivoting of the dataframe and mapping of the crop types.
@@ -280,11 +282,17 @@ def process_public_extractions_df(
     ----------
     public_df_raw : pd.DataFrame
         Input raw flattened dataframe from the global database.
-
-    Returns
-    -------
-    pd.DataFrame
-        processed dataframe with the necessary columns for training.
+    processing_period: TemporalContext, optional
+        User-defined temporal extent to align the samples with, by default None,
+        which means that 12-month processing window will be aligned around each sample's original valid_date.
+        If provided, the processing window will be aligned with the middle of the user-defined temporal extent, according to the
+        following principles:
+        - the original valid_date of the sample should remain within the processing window
+        - the center of the user-defined temporal extent should be not closer than MIN_EDGE_BUFFER (by default 2 months)
+          to the start or end of the extraction period
+    freq : str, optional
+        Frequency of the time series, by default "MS". Provided frequency alias should be compatible with pandas.
+        https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
     """
     from presto.utils import process_parquet
 
@@ -295,7 +303,16 @@ def process_public_extractions_df(
 
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
-        processing_period_middle_ts = start_date + pd.DateOffset(months=6)
+
+        # sanity check to make sure freq is not something we still don't support in Presto
+        if freq not in ["MS", "10D"]:
+            raise ValueError(
+                f"Unsupported frequency alias: {freq}. Please use 'MS' or '10D'."
+            )
+
+        date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
+        middle_index = len(date_range) // 2 - 1
+        processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month
 
         # get a lighter subset with only the necessary columns
