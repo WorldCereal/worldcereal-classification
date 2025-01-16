@@ -197,6 +197,7 @@ def post_job_action_point_worldcereal(
             "S1-SIGMA0-VH",
             "S1-SIGMA0-VV",
             "elevation",
+            "slope",
             "AGERA5-PRECIP",
             "AGERA5-TMEAN",
         ]
