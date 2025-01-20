@@ -1,5 +1,4 @@
 import os
-import tempfile
 import time
 from pathlib import Path
 
@@ -10,6 +9,9 @@ from loguru import logger
 ARTIFACTORY_BASE_URL = (
     "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
 )
+
+CROP_LEGEND_URL = ARTIFACTORY_BASE_URL + "legend/WorldCereal_LC_CT_legend_latest.csv"
+IRR_LEGEND_URL = ARTIFACTORY_BASE_URL + "legend/WorldCereal_IRR_legend_latest.csv"
 
 
 def _get_artifactory_credentials():
@@ -141,11 +143,8 @@ def upload_legend(srcpath: Path, date: str) -> str:
     artifactory_username, artifactory_password = _get_artifactory_credentials()
 
     # We  upload the file with a specific date tag and also with a "latest" tag
-    dst_names = [
-        f"WorldCereal_LC_CT_legend_{date}.csv",
-        "WorldCereal_LC_CT_legend_latest.csv",
-    ]
-    dstpaths = [f"{ARTIFACTORY_BASE_URL}legend/{n}" for n in dst_names]
+    dstpaths = [f"{ARTIFACTORY_BASE_URL}legend/WorldCereal_LC_CT_legend_{date}.csv"]
+    dstpaths.append(CROP_LEGEND_URL)
 
     for dstpath in dstpaths:
         artifactory_link = _upload_file(
@@ -156,30 +155,48 @@ def upload_legend(srcpath: Path, date: str) -> str:
     return artifactory_link
 
 
-def get_legend() -> pd.DataFrame:
-    """Get the latest version of the WorldCereal land cover/crop type legend as a Pandas DataFrame."""
+def get_legend(topic: str = "crop") -> pd.DataFrame:
+    """Get the latest version of the WorldCereal land cover/crop type or irrigation legend
+    from artifactory.
 
-    # create temporary folder
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        dstpath = Path(tmpdirname)
-        legend_path = _download_legend(dstpath)
-        # read the legend file
-        legend = pd.read_csv(legend_path, header=0, sep=";")
+    Parameters
+    ----------
+    topic : str
+        Specifier for the legend file to be downloaded.
+        Options are 'crop' for land cover/crop type legend and 'irr' for irrigation legend.
 
-    # clean up the legend for use
-    legend = legend[legend["ewoc_code"].notna()]
-    drop_columns = [c for c in legend.columns if "Unnamed:" in c]
-    legend.drop(columns=drop_columns, inplace=True)
+    Returns
+    -------
+    pd.DataFrame
+        requested legend as a Pandas DataFrame
+
+    Raises
+    ------
+    ValueError
+        if topic got an invalid value
+    """
+
+    if topic == "crop":
+        url = CROP_LEGEND_URL
+    elif topic == "irr":
+        url = IRR_LEGEND_URL
+    else:
+        raise ValueError("Invalid topic. Please use 'crop' or 'irr'.")
+
+    legend = pd.read_csv(url, header=0, sep=";")
 
     return legend
 
 
-def _download_legend(dstpath: Path, retries=3, wait=2) -> Path:
+def download_legend(dstpath: Path, topic: str = "crop", retries=3, wait=2) -> Path:
     """Download the latest version of the WorldCereal legend from Artifactory.
     Parameters
     ----------
     dstpath : Path
         Folder where the legend needs to be downloaded to.
+    topic : str
+        Specifier for the legend file to be downloaded.
+        Options are 'crop' for land cover/crop type legend and 'irr' for irrigation legend.
     retries : int, optional
         Number of retries, by default 3
     wait : int, optional
@@ -192,17 +209,26 @@ def _download_legend(dstpath: Path, retries=3, wait=2) -> Path:
     ------
     FileNotFoundError
         Raises if no legend files are found in Artifactory.
+    ValueError
+        if topic got an invalid value
     """
     # Construct the download link
-    latest_file = "WorldCereal_LC_CT_legend_latest.csv"
-    link = f"{ARTIFACTORY_BASE_URL}legend/{latest_file}"
+    if topic == "crop":
+        url = CROP_LEGEND_URL
+    elif topic == "irr":
+        url = IRR_LEGEND_URL
+    else:
+        raise ValueError("Invalid topic. Please use 'crop' or 'irr'.")
+
+    # Construct target path
     dstpath.mkdir(parents=True, exist_ok=True)
-    download_file = dstpath / latest_file
+    filename = url.split("/")[-1]
+    download_file = dstpath / filename
 
     response = _run_request(
         "GET",
-        link,
-        logging_msg=f"Downloading latest legend file: {latest_file}",
+        url,
+        logging_msg=f"Downloading latest legend file: {filename}",
         retries=retries,
         wait=wait,
     )
