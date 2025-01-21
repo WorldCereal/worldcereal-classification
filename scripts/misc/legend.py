@@ -25,12 +25,12 @@ if __name__ == "__main__":
     # Get the latest legend from Artifactory (as pandas DataFrame)
     legend = get_legend()
 
-    legend_irr = get_legend(topic="irr")
+    legend_irr = get_legend(topic="irrigation")
 
     # Download the latest legend from Artifactory
     legend_path = download_legend(Path("."))
 
-    irr_legend_path = download_legend(Path("."), topic="irr")
+    irr_legend_path = download_legend(Path("."), topic="irrigation")
 
     # Delete the uploaded legend from Artifactory
     delete_legend_file(link)

@@ -1,6 +1,7 @@
 import os
 import time
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 import requests
@@ -155,15 +156,15 @@ def upload_legend(srcpath: Path, date: str) -> str:
     return artifactory_link
 
 
-def get_legend(topic: str = "crop") -> pd.DataFrame:
+def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.DataFrame:
     """Get the latest version of the WorldCereal land cover/crop type or irrigation legend
     from artifactory.
 
     Parameters
     ----------
-    topic : str
+    topic : Literal['landcover', 'irrigation'], optional
         Specifier for the legend file to be downloaded.
-        Options are 'crop' for land cover/crop type legend and 'irr' for irrigation legend.
+        Options are 'landcover' for land cover/crop type legend and 'irrigation' for irrigation legend.
 
     Returns
     -------
@@ -176,27 +177,32 @@ def get_legend(topic: str = "crop") -> pd.DataFrame:
         if topic got an invalid value
     """
 
-    if topic == "crop":
+    if topic == "landcover":
         url = CROP_LEGEND_URL
-    elif topic == "irr":
+    elif topic == "irrigation":
         url = IRR_LEGEND_URL
     else:
-        raise ValueError("Invalid topic. Please use 'crop' or 'irr'.")
+        raise ValueError("Invalid topic. Please use 'landcover' or 'irrigation'.")
 
     legend = pd.read_csv(url, header=0, sep=";")
 
     return legend
 
 
-def download_legend(dstpath: Path, topic: str = "crop", retries=3, wait=2) -> Path:
+def download_legend(
+    dstpath: Path,
+    topic: Literal["landcover", "irrigation"] = "landcover",
+    retries=3,
+    wait=2,
+) -> Path:
     """Download the latest version of the WorldCereal legend from Artifactory.
     Parameters
     ----------
     dstpath : Path
         Folder where the legend needs to be downloaded to.
-    topic : str
+    topic : Literal['landcover', 'irrigation'], optional
         Specifier for the legend file to be downloaded.
-        Options are 'crop' for land cover/crop type legend and 'irr' for irrigation legend.
+        Options are 'landcover' for land cover/crop type legend and 'irrigation' for irrigation legend.
     retries : int, optional
         Number of retries, by default 3
     wait : int, optional
@@ -213,12 +219,12 @@ def download_legend(dstpath: Path, topic: str = "crop", retries=3, wait=2) -> Pa
         if topic got an invalid value
     """
     # Construct the download link
-    if topic == "crop":
+    if topic == "landcover":
         url = CROP_LEGEND_URL
-    elif topic == "irr":
+    elif topic == "irrigation":
         url = IRR_LEGEND_URL
     else:
-        raise ValueError("Invalid topic. Please use 'crop' or 'irr'.")
+        raise ValueError("Invalid topic. Please use 'landcover' or 'irrigation'.")
 
     # Construct target path
     dstpath.mkdir(parents=True, exist_ok=True)
