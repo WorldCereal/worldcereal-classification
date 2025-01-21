@@ -14,9 +14,7 @@ from worldcereal.utils.legend import (
 if __name__ == "__main__":
 
     # Example usage
-    srcpath = Path(
-        "/vitodata/worldcereal/data/legend/WorldCereal_LC_CT_legend_20241231.csv"
-    )
+    srcpath = Path("./WorldCereal_LC_CT_legend_20241231.csv")
     date = "20241231"
 
     # Upload the legend to Artifactory
