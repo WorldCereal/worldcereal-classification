@@ -28,11 +28,9 @@ if __name__ == "__main__":
     legend_irr = get_legend(topic="irr")
 
     # Download the latest legend from Artifactory
-    legend_path = download_legend(Path("/vitodata/worldcereal/tmp/jeroen/"))
+    legend_path = download_legend(Path("."))
 
-    irr_legend_path = download_legend(
-        Path("/vitodata/worldcereal/tmp/jeroen/"), topic="irr"
-    )
+    irr_legend_path = download_legend(Path("."), topic="irr")
 
     # Delete the uploaded legend from Artifactory
     delete_legend_file(link)
