@@ -1,7 +1,7 @@
 # https://pre-commit.com
 default_language_version:
   python: python3
-default_stages: [commit, manual]
+default_stages: [pre-commit, manual]
 fail_fast: true
 exclude: "(received/|.*_depr)"
 repos:
