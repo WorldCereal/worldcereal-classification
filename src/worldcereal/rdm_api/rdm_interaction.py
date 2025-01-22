@@ -1,5 +1,6 @@
 """Interaction with the WorldCereal RDM API. Used to generate the reference data in geoparquet format for the point extractions."""
 
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import duckdb
@@ -491,3 +492,143 @@ class RdmInteraction:
         gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
         return gdf
+
+    def get_collection_metadata(self, ref_id: str) -> dict:
+        """Get metadata for a collection.
+
+        Parameters
+        ----------
+        ref_id : str
+            The collection ID.
+
+        Raises
+        ------
+        Exception
+            If the request fails.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the metadata for the collection.
+        """
+        url = f"{self.RDM_ENDPOINT}/collections/{ref_id}/metadata/items"
+        response = self.session.get(url, headers=self._get_headers(), timeout=10)
+        if response.status_code != 200:
+            raise Exception(f"Error fetching collection metadata: {response.text}")
+
+        # convert to nice dictionary
+        metadata_dict = {}
+        for item in response.json():
+            metadata_dict[item["name"]] = item["value"]
+
+        return metadata_dict
+
+    def download_collection_metadata(self, ref_id: str, dst_path: str) -> None:
+        """Download metadata for a specific collection as xlsx file.
+
+        Parameters
+        ----------
+        ref_id : str
+            The collection ID.
+        dst_path : str
+            The folder name where the metadata file should be saved.
+        """
+
+        url = f"{self.RDM_ENDPOINT}/collections/{ref_id}/metadata/download"
+        response = self.session.get(url, headers=self._get_headers(), timeout=10)
+
+        if response.status_code != 200:
+            raise Exception(f"Error downloading collection metadata: {response.text}")
+
+        outfile = Path(dst_path) / f"{ref_id}_metadata.xlsx"
+        Path(dst_path).mkdir(parents=True, exist_ok=True)
+        with open(outfile, "wb") as f:
+            f.write(response.content)
+
+        logger.info(f"Metadata for collection {ref_id} downloaded to {dst_path}")
+
+    def download_collection_samples(
+        self, ref_id: str, dst_path: str, subset: bool = False
+    ) -> None:
+        """Download the features (samples) from a specific collection
+            as geoparquet file.
+
+        Parameters
+        ----------
+        ref_id : str
+            The collection ID.
+        dst_path : str
+            The folder name where the GeoParquet file should be saved.
+        subset : bool
+            If True, only download a subset of the full collection.
+            Defaults to False.
+
+        Raises
+        ------
+        Exception
+            If the request fails.
+        """
+
+        # Get the metadata
+        metadata = self.get_collection_metadata(ref_id)
+
+        # Get the correct link from the metadata
+        if subset:
+            download_link = metadata["SampleDownloadUrl"]
+        else:
+            download_link = metadata["GeoParquetDownloadUrl"]
+
+        # Download the file directly
+        filename = download_link.split("/")[-1]
+        outfile = Path(dst_path) / filename
+        Path(dst_path).mkdir(parents=True, exist_ok=True)
+        response = requests.get(download_link)
+        if response.status_code != 200:
+            raise Exception(
+                f"Error downloading samples for collection {ref_id}: {response.text}"
+            )
+        with open(outfile, "wb") as f:
+            f.write(response.content)
+
+        logger.info(f"Samples for collection {ref_id} downloaded to {outfile}")
+
+    def download_collection_harmonization_info(
+        self, ref_id: str, dst_path: str
+    ) -> None:
+        """Download the harmonization information for a specific collection
+            as a PDF file.
+
+        Parameters
+        ----------
+        ref_id : str
+            The collection ID.
+        dst_path : str
+            The folder name where the PDF file should be saved.
+
+        Raises
+        ------
+        Exception
+            If the request fails.
+        """
+
+        # Get the metadata
+        metadata = self.get_collection_metadata(ref_id)
+
+        # Get the correct link from the metadata
+        download_link = metadata["CuratedDataSet:Harmonization:Pdf"]
+
+        # Download the file directly
+        filename = download_link.split("/")[-1]
+        outfile = Path(dst_path) / filename
+        Path(dst_path).mkdir(parents=True, exist_ok=True)
+        response = requests.get(download_link)
+        if response.status_code != 200:
+            raise Exception(
+                f"Error downloading harmonization PDF for collection {ref_id}: {response.text}"
+            )
+        with open(outfile, "wb") as f:
+            f.write(response.content)
+
+        logger.info(
+            f"Harmonization PDF for collection {ref_id} downloaded to {outfile}"
+        )
