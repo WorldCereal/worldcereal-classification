@@ -523,7 +523,7 @@ class RdmInteraction:
 
         return metadata_dict
 
-    def download_collection_metadata(self, ref_id: str, dst_path: str) -> None:
+    def download_collection_metadata(self, ref_id: str, dst_path: str) -> str:
         """Download metadata for a specific collection as xlsx file.
 
         Parameters
@@ -532,6 +532,11 @@ class RdmInteraction:
             The collection ID.
         dst_path : str
             The folder name where the metadata file should be saved.
+
+        Returns
+        -------
+        str
+            The path to the downloaded metadata file.
         """
 
         url = f"{self.RDM_ENDPOINT}/collections/{ref_id}/metadata/download"
@@ -547,9 +552,11 @@ class RdmInteraction:
 
         logger.info(f"Metadata for collection {ref_id} downloaded to {dst_path}")
 
+        return str(outfile)
+
     def download_collection_samples(
         self, ref_id: str, dst_path: str, subset: bool = False
-    ) -> None:
+    ) -> str:
         """Download the features (samples) from a specific collection
             as geoparquet file.
 
@@ -562,6 +569,11 @@ class RdmInteraction:
         subset : bool
             If True, only download a subset of the full collection.
             Defaults to False.
+
+        Returns
+        -------
+        str
+            The path to the downloaded GeoParquet file.
 
         Raises
         ------
@@ -592,9 +604,9 @@ class RdmInteraction:
 
         logger.info(f"Samples for collection {ref_id} downloaded to {outfile}")
 
-    def download_collection_harmonization_info(
-        self, ref_id: str, dst_path: str
-    ) -> None:
+        return str(outfile)
+
+    def download_collection_harmonization_info(self, ref_id: str, dst_path: str) -> str:
         """Download the harmonization information for a specific collection
             as a PDF file.
 
@@ -604,6 +616,11 @@ class RdmInteraction:
             The collection ID.
         dst_path : str
             The folder name where the PDF file should be saved.
+
+        Returns
+        -------
+        str
+            The path to the downloaded PDF file.
 
         Raises
         ------
@@ -632,3 +649,5 @@ class RdmInteraction:
         logger.info(
             f"Harmonization PDF for collection {ref_id} downloaded to {outfile}"
         )
+
+        return str(outfile)
