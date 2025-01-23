@@ -1,6 +1,3 @@
-from ipyleaflet import Map, Rectangle, basemaps
-
-
 class RdmCollection:
     """Data class to host collections queried from the RDM API."""
 
@@ -51,6 +48,8 @@ class RdmCollection:
 
     def visualize_extent(self):
         """Visualizes the spatial extent of the collection on a map."""
+
+        from ipyleaflet import Map, Rectangle, basemaps
 
         # Get the extent of the collection
         colbbox = self.spatial_extent.get("bbox", None)
