@@ -1,12 +1,26 @@
+import warnings
+
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
-from ipyleaflet import DrawControl, LayersControl, Map, SearchControl, basemaps
+from ipyleaflet import (
+    DrawControl,
+    GeoJSON,
+    LayersControl,
+    Map,
+    SearchControl,
+    WidgetControl,
+    basemaps,
+)
 from IPython.display import display
-from ipywidgets import widgets
+from ipywidgets import HTML, VBox, widgets
 from loguru import logger
+from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
 from shapely.geometry import Polygon, shape
+
+from worldcereal.utils.legend import translate_ewoc_codes
 
 
 def handle_draw(instance, action, geo_json, output, area_limit):
@@ -147,3 +161,90 @@ def _latlon_to_utm(bbox):
     bbox_utm = bbox_gdf.to_crs(crs).total_bounds
 
     return bbox_utm, epsg
+
+
+def visualize_rdm_geoparquet(src_path: str):
+    """Visualize an RDM collection geoparquet file on a map.
+    Parameters
+    ----------
+    src_path : str
+        Path to the geoparquet file.
+    """
+
+    gdf = gpd.read_parquet(src_path)
+
+    # Compute centroid, ignoring warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        center = (gdf.centroid.y.mean(), gdf.centroid.x.mean())
+
+    # Extract unique ewoc_code values and assign colors
+    unique_codes = sorted(gdf["ewoc_code"].unique())
+    cmap = plt.get_cmap("tab20")  # Use a colormap with distinct colors
+    colors = {
+        code: to_hex(cmap(i / len(unique_codes))) for i, code in enumerate(unique_codes)
+    }
+
+    # Add a new column for the color associated with each ewoc_code
+    gdf["color"] = gdf["ewoc_code"].map(colors)
+
+    m = Map(
+        basemap=basemaps.Esri.WorldImagery,
+        center=center,
+        zoom=10,
+        scroll_wheel_zoom=True,
+    )
+
+    # convert dataframe to geojson
+    data = gdf.__geo_interface__
+
+    def style_callback(feature):
+        """Apply color based on the ewoc_code attribute."""
+        properties = feature["properties"]
+        return {
+            "color": "black",
+            "fillColor": properties["color"],
+            "opacity": 1,
+            "fillOpacity": 0.7,
+            "weight": 2,
+        }
+
+    # construct layer compatible with ipyleaflet
+    layer = GeoJSON(
+        data=data,
+        style_callback=style_callback,
+        hover_style={"color": "white", "dashArray": "0", "fillOpacity": 0.7},
+        name="Reference data",
+    )
+
+    # Add to the map
+    m.add_layer(layer)
+
+    # Translate ewoc_codes
+    crop_types = translate_ewoc_codes(unique_codes)
+
+    # Create a legend
+    legend_items = []
+    for code, color in colors.items():
+        if code not in crop_types.index:
+            legend_items.append(
+                HTML(
+                    f"<span style='color:{color};'>⬤</span> EWOC code {code} (unknown)"
+                )
+            )
+        else:
+            legend_items.append(
+                HTML(
+                    f"<span style='color:{color};'>⬤</span> {crop_types.loc[code]['label_full']}"
+                )
+            )
+    legend = VBox(legend_items)
+    legend_control = WidgetControl(widget=legend, position="topright")
+
+    # Add the legend to the map
+    m.add_control(legend_control)
+
+    layer_control = LayersControl(position="topleft")
+    m.add_control(layer_control)
+
+    return m
