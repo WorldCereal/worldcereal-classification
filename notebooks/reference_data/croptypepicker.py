@@ -21,10 +21,10 @@ DEMO_CROPS = [
     1101080000,  # rice
     1101120000,  # millet
     1103000000,  # vegetables
-    110306004 - 0,  # cauliflower
-    110308008 - 0,  # spinach
-    110309004 - 0,  # carrots
-    110311004 - 0,  # oinions
+    1103060040,  # cauliflower
+    1103080080,  # spinach
+    1103090040,  # carrots
+    1103110040,  # oinions
     1105000000,  # dry pulses
     1105000030,  # lentils
     1105010000,  # beans_peas
