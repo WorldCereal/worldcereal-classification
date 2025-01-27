@@ -11,7 +11,7 @@ import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
-from worldcereal.extract.extract_common import get_job_nb_polygons, pipeline_log
+from worldcereal.extract.common import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 
 
