@@ -1,4 +1,5 @@
 import warnings
+from typing import Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ from ipyleaflet import (
     basemaps,
 )
 from IPython.display import display
-from ipywidgets import HTML, VBox, widgets
+from ipywidgets import HTML, Layout, VBox, widgets
 from loguru import logger
 from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
@@ -36,12 +37,13 @@ def handle_draw(instance, action, geo_json, output, area_limit):
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
             logger.info(f"Area of processing extent: {area:.2f} km²")
 
-            if (area > area_limit) or (area > 2500):
-                logger.error(
-                    f"Area of processing extent is too large. "
-                    f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
-                )
-                instance.last_draw = {"type": "Feature", "geometry": None}
+            if area_limit is not None:
+                if (area > area_limit) or (area > 2500):
+                    logger.error(
+                        f"Area of processing extent is too large. "
+                        f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
+                    )
+                    instance.last_draw = {"type": "Feature", "geometry": None}
 
         elif action == "deleted":
             instance.clear()
@@ -52,7 +54,16 @@ def handle_draw(instance, action, geo_json, output, area_limit):
 
 
 class ui_map:
-    def __init__(self, area_limit=2500):
+    def __init__(self, area_limit: Optional[int] = None):
+        """
+        Initializes an ipyleaflet map with a draw control to select a processing extent.
+
+        Parameters
+        ----------
+        area_limit : int, optional
+            The maximum area in km² that can be selected on the map.
+            By default no restrictions are imposed.
+        """
         from ipyleaflet import basemap_to_tiles
 
         self.output = widgets.Output()
@@ -116,7 +127,26 @@ class ui_map:
         )
         return display(vbox)
 
-    def get_processing_extent(self):
+    def get_processing_extent(self, projection="utm") -> BoundingBoxExtent:
+        """Get WorldCereal processing extent from last drawn rectangle on the map.
+
+        Parameters
+        ----------
+        projection : str, optional
+            The projection to use for the processing extent.
+            You can either request "latlon" or "utm". In case of the latter, the
+            local utm projection is automatically derived.
+
+        Returns
+        -------
+        BoundingBoxExtent
+            The processing extent as a bounding box in the requested projection.
+
+        Raises
+        ------
+        ValueError
+            If no rectangle has been drawn on the map.
+        """
 
         obj = self.draw_control.last_draw
 
@@ -126,13 +156,16 @@ class ui_map:
             )
 
         self.poly = Polygon(shape(obj.get("geometry")))
+        if self.poly is None:
+            return None
+
         bbox = self.poly.bounds
 
-        # We convert our bounding box to local UTM projection
-        # for further processing
-        bbox_utm, epsg = _latlon_to_utm(bbox)
-
-        self.spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
+        if projection == "utm":
+            bbox_utm, epsg = _latlon_to_utm(bbox)
+            self.spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
+        else:
+            self.spatial_extent = BoundingBoxExtent(*bbox)
 
         logger.info(f"Your processing extent: {bbox}")
 
@@ -239,8 +272,15 @@ def visualize_rdm_geoparquet(src_path: str):
                     f"<span style='color:{color};'>⬤</span> {crop_types.loc[code]['label_full']}"
                 )
             )
-    legend = VBox(legend_items)
-    legend_control = WidgetControl(widget=legend, position="topright")
+    # Adjust legend size dynamically with a scrollable container
+    legend_box = VBox(
+        legend_items,
+        layout=Layout(
+            max_height="300px",  # Set a maximum height
+            overflow="auto",  # Add scrolling if content exceeds max height
+        ),
+    )
+    legend_control = WidgetControl(widget=legend_box, position="topright")
 
     # Add the legend to the map
     m.add_control(legend_control)
