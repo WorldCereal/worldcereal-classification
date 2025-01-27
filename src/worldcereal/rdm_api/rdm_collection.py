@@ -1,3 +1,8 @@
+import json
+
+import pandas as pd
+
+
 class RdmCollection:
     """Data class to host collections queried from the RDM API."""
 
@@ -76,3 +81,54 @@ class RdmCollection:
         m.add_layer(rectangle)
 
         return m
+
+
+def crop_stats_from_metadata(
+    metadata: dict, stats_type: str = "crop_type"
+) -> pd.DataFrame:
+    """Extract crop statistics from the metadata of a collection.
+
+    Parameters:
+    ----------
+        metadata (dict): Metadata of a collection.
+        stats_type (str): Type of statistics to extract. Default is "crop_type".
+            Possible values are: "crop_type", "irrigation" and "land_cover".
+
+    Returns:
+    -------
+        pd.DataFrame: DataFrame containing crop statistics.
+
+    Raises:
+    -------
+        ValueError: If no statistics are found for the collection or for the specified type.
+    """
+    # Get the crop statistics from the metadata
+    stats = metadata.get("codeStats", None)
+
+    if stats is None:
+        raise ValueError("No statistics found for this collection.")
+    else:
+        stats = json.loads(stats)
+
+    # Extract the desired statistics
+    if stats_type == "crop_type":
+        field = "EwocStats"
+    elif stats_type == "irrigation":
+        field = "IrrStats"
+    elif stats_type == "land_cover":
+        field = "LcStats"
+    else:
+        raise ValueError(
+            "Invalid statistics type, please select one of the following: land_cover, crop_type or irrigation."
+        )
+
+    stats = stats.get(field, None)
+
+    if stats is None:
+        raise ValueError(f"No {stats_type} statistics found for this collection.")
+
+    # Create a DataFrame from the crop statistics
+    df = pd.DataFrame(stats)
+    df = df.set_index("Code")
+
+    return df
