@@ -270,7 +270,9 @@ def delete_legend_file(srcpath: str, retries=3, wait=2):
 
 
 def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
-    """Translate EWOC codes to their corresponding labels in the WorldCereal legend.
+    """Translate EWOC codes to their corresponding labels in the WorldCereal legend,
+        keeping all levels of the hierarchy.
+
     Parameters
     ----------
     ewoc_codes : list[int]
@@ -309,3 +311,29 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
         )
 
     return legend
+
+
+def ewoc_code_to_label(ewoc_codes: list[int]) -> list[str]:
+    """Translate EWOC codes to their corresponding full label in the WorldCereal legend.
+
+    Parameters
+    ----------
+    ewoc_codes : list[int]
+        List of EWOC codes to be translated.
+
+    Returns
+    -------
+    list[str]
+        List of full labels corresponding to the EWOC codes.
+    """
+
+    df = translate_ewoc_codes(ewoc_codes)
+
+    result = []
+    for code in ewoc_codes:
+        if code not in df.index:
+            result.append("Unknown")
+        else:
+            result.append(df.loc[code, "label_full"])
+
+    return result
