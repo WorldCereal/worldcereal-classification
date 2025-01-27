@@ -334,10 +334,17 @@ class CropTypePicker:
         submit_button = widgets.Button(description="Apply", button_style="success")
         submit_button.on_click(self.apply_selection)
 
+        clear_button = widgets.Button(
+            description="Clear selection", button_style="danger"
+        )
+        clear_button.on_click(self.clear_selection)
+
+        buttons = widgets.HBox([submit_button, clear_button])
+
         title = widgets.HTML("""<h2>Select your crop types of interest:</h2>""")
 
         self.widget = widgets.VBox(
-            [title, recursive_create_widgets(self.hierarchy), submit_button]
+            [title, recursive_create_widgets(self.hierarchy), buttons]
         )
 
     def apply_selection(self, change=None):
@@ -351,6 +358,14 @@ class CropTypePicker:
             raise ValueError("No crop types selected.")
 
         self._apply_hierarchy_on_selection(selected_paths)
+
+    def clear_selection(self, change=None):
+        """Clear the selection of crop types"""
+
+        for path, checkbox in self.widgets_dict.items():
+            checkbox.value = False
+        self.croptypes = pd.DataFrame()
+        print("Selection cleared.")
 
     def _apply_hierarchy_on_selection(self, paths_to_search):
         """Apply the selected crop types on the hierarchy and return the extensive list of crop types
