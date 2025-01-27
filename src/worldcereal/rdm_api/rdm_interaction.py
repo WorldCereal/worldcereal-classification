@@ -19,7 +19,7 @@ from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
-from .rdm_collection import RdmCollection
+from worldcereal.rdm_api.rdm_collection import RdmCollection
 
 
 class NoIntersectingCollections(Exception):
@@ -651,3 +651,18 @@ class RdmInteraction:
         )
 
         return str(outfile)
+
+
+if __name__ == "__main__":
+    rdm = RdmInteraction()
+
+    # Access public collections for geometry (located near Kenya)
+    coords = [
+        (34.45619011, -0.91010781),
+        (34.79638823, -0.91010781),
+        (34.79638823, -0.34539808),
+        (34.45619011, -0.34539808),
+        (34.45619011, -0.91010781),
+    ]
+    polygon = Polygon(coords)
+    collections = rdm.get_collections(geometry=polygon)
