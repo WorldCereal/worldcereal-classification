@@ -191,7 +191,7 @@ def visualize_rdm_geoparquet(src_path: str):
     m = Map(
         basemap=basemaps.Esri.WorldImagery,
         center=center,
-        zoom=10,
+        zoom=7,
         scroll_wheel_zoom=True,
     )
 
@@ -214,6 +214,9 @@ def visualize_rdm_geoparquet(src_path: str):
         data=data,
         style_callback=style_callback,
         hover_style={"color": "white", "dashArray": "0", "fillOpacity": 0.7},
+        point_style={
+            "radius": 5,
+        },
         name="Reference data",
     )
 
@@ -228,9 +231,7 @@ def visualize_rdm_geoparquet(src_path: str):
     for code, color in colors.items():
         if code not in crop_types.index:
             legend_items.append(
-                HTML(
-                    f"<span style='color:{color};'>⬤</span> EWOC code {code} (unknown)"
-                )
+                HTML(f"<span style='color:{color};'>⬤</span> {code} (unknown)")
             )
         else:
             legend_items.append(
