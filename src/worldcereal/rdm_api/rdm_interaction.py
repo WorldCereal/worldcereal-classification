@@ -295,6 +295,8 @@ class RdmInteraction:
         temporal_extent: Optional[List[str]] = None,
         ewoc_codes: Optional[List[int]] = None,
         subset: Optional[bool] = False,
+        min_quality_lc: int = 0,
+        min_quality_ct: int = 0,
     ) -> str:
         """Sets up the SQL query for the GeoParquet files.
 
@@ -314,6 +316,10 @@ class RdmInteraction:
             If True, only download a subset of the samples (for which extract attribute ==1)
             If False, extract all samples.
             Default is False.
+        min_quality_lc: int = 0
+            Minimum quality score for land cover [0-100].
+        min_quality_ct: int = 0
+            Minimum quality score for crop type [0-100].
 
         Returns
         -------
@@ -342,6 +348,14 @@ class RdmInteraction:
 
         optional_subset = "AND extract > 0" if subset else ""
 
+        optional_quality_lc = (
+            f"AND quality_score_lc >= {min_quality_lc}" if min_quality_lc > 0 else ""
+        )
+
+        optional_quality_ct = (
+            f"AND quality_score_ct >= {min_quality_ct}" if min_quality_ct > 0 else ""
+        )
+
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""
@@ -351,7 +365,8 @@ class RdmInteraction:
                 {optional_temporal}
                 {optional_ewoc_codes}
                 {optional_subset}
-
+                {optional_quality_lc}
+                {optional_quality_ct}
             """
             if i == 0:
                 combined_query = query
@@ -370,6 +385,8 @@ class RdmInteraction:
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
+        min_quality_lc: int = 0,
+        min_quality_ct: int = 0,
     ) -> gpd.GeoDataFrame:
         """Queries the RDM API and generates a GeoPandas GeoDataframe of all samples meeting the search criteria.
 
@@ -399,6 +416,10 @@ class RdmInteraction:
             Whether or not to include public collections.
         include_private: Optional[bool] = False
             Whether or not to include private collections.
+        min_quality_lc: int = 0
+            Minimum quality score for land cover [0-100].
+        min_quality_ct: int = 0
+            Minimum quality score for crop type [0-100].
 
         Returns
         -------
@@ -449,6 +470,8 @@ class RdmInteraction:
             temporal_extent=temporal_extent,
             ewoc_codes=ewoc_codes,
             subset=subset,
+            min_quality_lc=min_quality_lc,
+            min_quality_ct=min_quality_ct,
         )
 
         # Execute the query
