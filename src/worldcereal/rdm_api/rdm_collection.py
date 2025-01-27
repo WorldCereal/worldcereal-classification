@@ -2,6 +2,8 @@ import json
 
 import pandas as pd
 
+from worldcereal.utils.legend import ewoc_code_to_label
+
 
 class RdmCollection:
     """Data class to host collections queried from the RDM API."""
@@ -130,5 +132,9 @@ def crop_stats_from_metadata(
     # Create a DataFrame from the crop statistics
     df = pd.DataFrame(stats)
     df = df.set_index("Code")
+
+    # add labels column
+    labels = ewoc_code_to_label(df.index.values)
+    df["Label"] = labels
 
     return df
