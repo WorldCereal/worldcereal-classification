@@ -217,7 +217,6 @@ if __name__ == "__main__":
     )
 
     # Construct the finetuning model based on the pretrained model
-    pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96_corrected-mask.pt"
     model = PretrainedPrestoWrapper(
         num_outputs=1,
         regression=False,
