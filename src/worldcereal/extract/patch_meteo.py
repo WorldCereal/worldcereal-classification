@@ -8,7 +8,7 @@ import openeo
 import pandas as pd
 from openeo_gfmap import Backend, TemporalContext
 
-from worldcereal.openeo.extract import (  # isort: skip
+from worldcereal.extract.common import (  # isort: skip
     buffer_geometry,  # isort: skip
     filter_extract_true,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
