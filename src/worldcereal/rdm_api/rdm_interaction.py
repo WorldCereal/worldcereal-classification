@@ -13,10 +13,10 @@ from openeo.rest.auth.oidc import (
     OidcDeviceAuthenticator,
     OidcProviderInfo,
 )
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from requests.adapters import HTTPAdapter
 from shapely import wkb
 from shapely.geometry import Polygon
-from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
 from worldcereal.rdm_api.rdm_collection import RdmCollection
@@ -107,8 +107,8 @@ class RdmInteraction:
 
     def get_collections(
         self,
-        geometry: Optional[BaseGeometry] = None,
-        temporal_extent: Optional[List[str]] = None,
+        bbox: Optional[BoundingBoxExtent] = None,
+        temporal_extent: Optional[TemporalContext] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
         ewoc_codes: Optional[List[int]] = None,
@@ -118,12 +118,13 @@ class RdmInteraction:
 
         Parameters
         ----------
-        geometry : Optional[BaseGeometry], optional
-            A user-defined geometry for which all intersecting collections need to be found.
+        bbox : Optional[BoundingBoxExtent], optional
+            A user-defined bounding box for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
-            If None, all available data will be queried., by default None
-        temporal_extent : Optional[List[str]], optional
-            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+            If None, all available data will be queried, by default None
+        temporal_extent : Optional[TemporalContext], optional
+            Temporal extent, defined by start and end date, by default None.
+            If None, all available data will be queried.
         include_public: Optional[bool] = True
             Whether or not to include public collections.
         include_private: Optional[bool] = False
@@ -145,15 +146,20 @@ class RdmInteraction:
                 self.authenticate()
 
         # Handle geometry
-        bbox = geometry.bounds if geometry is not None else [-180, -90, 180, 90]
+        if bbox is None:
+            bbox = BoundingBoxExtent(
+                west=-180, south=-90, east=180, north=90, epsg=4326
+            )
         # check if the geometry is valid
-        if bbox[0] < -180 or bbox[1] < -90 or bbox[2] > 180 or bbox[3] > 90:
+        if bbox.west < -180 or bbox.south < -90 or bbox.east > 180 or bbox.north > 90:
             raise ValueError("Invalid geometry. CRS should be EPSG:4326.")
-        bbox_str = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
+        bbox_str = (
+            f"Bbox={bbox.west}&Bbox={bbox.south}&Bbox={bbox.east}&Bbox={bbox.north}"
+        )
 
         # Handle temporal extent
         val_time = (
-            f"&ValidityTime.Start={temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={temporal_extent[1]}T00%3A00%3A00Z"
+            f"&ValidityTime.Start={temporal_extent.start_date}T00%3A00%3A00Z&ValidityTime.End={temporal_extent.end_date}T00%3A00%3A00Z"
             if temporal_extent is not None
             else ""
         )
@@ -286,14 +292,17 @@ class RdmInteraction:
                 index="ref_id", columns="ewoc_code", values="count"
             ).fillna(0)
 
+        # Ensure all columns are integers
+        result_df = result_df.astype(int)
+
         return result_df
 
     def _setup_sql_query(
         self,
         urls: List[str],
-        geometry: BaseGeometry,
+        bbox: BoundingBoxExtent,
         columns: List[str],
-        temporal_extent: Optional[List[str]] = None,
+        temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
         subset: Optional[bool] = False,
         min_quality_lc: int = 0,
@@ -305,12 +314,13 @@ class RdmInteraction:
         ----------
         urls : List[str]
             A list of URLs of the GeoParquet files.
-        geometry : BaseGeometry
-            A user-defined geometry.
+        bbox : BoundingBoxExtent
+            A user-defined bounding box.
         columns :
             A list of column names to extract.
-        temporal_extent : Optional[List[str]], optional
-            A list of two strings representing the temporal extent, by default None. If None, all available data will be queried.
+        temporal_extent : Optional[TemporalContext], optional
+            Temporal extent, defined by start and end date, by default None.
+            If None, all available data will be queried.
         ewoc_codes: Optional[List[int]] = None
             A list of EWOC codes to filter the samples by.
         subset : Optional[bool], optional
@@ -336,7 +346,7 @@ class RdmInteraction:
         columns_str = ", ".join([c for c in columns if c != "ref_id"])
 
         optional_temporal = (
-            f"AND valid_time BETWEEN '{temporal_extent[0]}' AND '{temporal_extent[1]}'"
+            f"AND valid_time BETWEEN '{temporal_extent.start_date}' AND '{temporal_extent.end_date}'"
             if temporal_extent is not None
             else ""
         )
@@ -355,6 +365,17 @@ class RdmInteraction:
 
         optional_quality_ct = (
             f"AND quality_score_ct >= {min_quality_ct}" if min_quality_ct > 0 else ""
+        )
+
+        # Create a shapely polygon from the bounding box
+        geometry = Polygon(
+            [
+                (bbox.west, bbox.south),
+                (bbox.east, bbox.south),
+                (bbox.east, bbox.north),
+                (bbox.west, bbox.north),
+                (bbox.west, bbox.south),
+            ]
         )
 
         for i, url in enumerate(urls):
@@ -381,8 +402,8 @@ class RdmInteraction:
         ref_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
-        geometry: Optional[BaseGeometry] = None,
-        temporal_extent: Optional[List[str]] = None,
+        bbox: Optional[BoundingBoxExtent] = None,
+        temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
@@ -403,14 +424,13 @@ class RdmInteraction:
             If True, only download a subset of the samples (for which extract attribute ==1)
             If False, extract all samples.
             Default is False.
-        geometry : Optional[BaseGeometry], optional
-            A user-defined geometry for which all intersecting collections need to be found.
+        bbox : Optional[BoundingBoxExtent], optional
+            A user-defined bounding box for which all intersecting samples need to be found.
             CRS should be EPSG:4326.
-            If None, all available data will be queried., by default None
-        temporal_extent : List[str], optional
-            A list of two strings representing the temporal extent, by default None.
+            If None, all available data will be queried, by default None
+        temporal_extent : TemporalContext, optional
+            Temporal extent, defined by start and end date, by default None.
             If None, all available data will be queried.
-            Dates should be in the format "YYYY-MM-DD".
         ewoc_codes: Optional[List[int]] = None
             If specified, only samples with the specified EWOC codes will be extracted.
         include_public: Optional[bool] = True
@@ -431,7 +451,7 @@ class RdmInteraction:
         # Determine which collections need to be queried if they are not specified
         if not ref_ids:
             collections = self.get_collections(
-                geometry=geometry,
+                bbox=bbox,
                 temporal_extent=temporal_extent,
                 ewoc_codes=ewoc_codes,
                 include_public=include_public,
@@ -449,24 +469,16 @@ class RdmInteraction:
         # For each collection, get the download URL
         urls = self._get_download_urls(ref_ids)
 
-        # Ensure we have a valid geometry
-        if not geometry:
-            bbox = [-180, -90, 180, 90]
-            # convert bbox to shapely geometry
-            geometry = Polygon(
-                [
-                    (bbox[0], bbox[1]),  # Bottom-left corner
-                    (bbox[0], bbox[3]),  # Top-left corner
-                    (bbox[2], bbox[3]),  # Top-right corner
-                    (bbox[2], bbox[1]),  # Bottom-right corner
-                    (bbox[0], bbox[1]),
-                ]
+        # Ensure we have a valid bbox
+        if bbox is None:
+            bbox = BoundingBoxExtent(
+                west=-180, south=-90, east=180, north=90, epsg=4326
             )
 
         # Set up the SQL query
         query = self._setup_sql_query(
             urls=urls,
-            geometry=geometry,
+            bbox=bbox,
             columns=columns,
             temporal_extent=temporal_extent,
             ewoc_codes=ewoc_codes,
