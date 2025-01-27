@@ -16,35 +16,35 @@ from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
-from patch_extractions.extract_patch_meteo import (
+
+from worldcereal.extract.common import (
+    generate_output_path_patch,
+    pipeline_log,
+    post_job_action_patch,
+)
+from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
     create_job_patch_meteo,
 )
-from patch_extractions.extract_patch_s2 import (
+from worldcereal.extract.patch_s2 import (
     create_job_dataframe_patch_s2,
     create_job_patch_s2,
 )
-from point_extractions.extract_point_worldcereal import (
+from worldcereal.extract.point_worldcereal import (
     create_job_dataframe_point_worldcereal,
     create_job_point_worldcereal,
     generate_output_path_point_worldcereal,
     post_job_action_point_worldcereal,
 )
-
-from worldcereal.openeo.extract import (
-    generate_output_path_patch,
-    pipeline_log,
-    post_job_action_patch,
-)
 from worldcereal.stac.constants import ExtractionCollection
 
-from patch_extractions.extract_patch_s1 import (  # isort: skip
+from worldcereal.extract.patch_s1 import (  # isort: skip
     create_job_patch_s1,
     create_job_dataframe_patch_s1,
 )
 
 
-from patch_extractions.extract_patch_worldcereal import (  # isort: skip
+from worldcereal.extract.patch_worldcereal import (  # isort: skip
     create_job_patch_worldcereal,
     create_job_dataframe_patch_worldcereal,
     post_job_action_patch_worldcereal,
