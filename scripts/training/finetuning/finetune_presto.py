@@ -121,7 +121,7 @@ def evaluate_finetuned_model(
 
     for batch in val_dl:
         with torch.no_grad():
-            preds = model(batch)
+            preds = finetuned_model(batch)
 
             # Presto head does not contain an activation. Need to apply it here.
             if task_type == "cropland":
@@ -140,14 +140,14 @@ def evaluate_finetuned_model(
     all_targets = np.concatenate(all_targets)
 
     if task_type == "cropland":
-        metrics_agg = "binary"
+        # metrics_agg = "binary"
         croptype_list = ["not_crop", "crop"]
         all_targets = np.array(
             ["crop" if xx > 0.5 else "not_crop" for xx in all_targets]
         )
         all_preds = np.array(["crop" if xx > 0.5 else "not_crop" for xx in all_preds])
     else:
-        metrics_agg = "macro"
+        # metrics_agg = "macro"
         raise NotImplementedError("Croptype evaluation not implemented yet")
 
     results = classification_report(
