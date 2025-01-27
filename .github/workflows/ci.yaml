@@ -30,6 +30,12 @@ jobs:
         cd presto-worldcereal
         pip install .
         cd ..
+    - name: Install Prometheo from source
+      run: |
+        git clone -b croptype https://github.com/WorldCereal/prometheo.git
+        cd prometheo
+        pip install .
+        cd ..
     - name: Install WorldCereal dependencies
       run: pip install ".[dev,train]"
     - name: Run WorldCereal tests
