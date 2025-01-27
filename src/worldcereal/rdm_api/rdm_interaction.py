@@ -651,18 +651,3 @@ class RdmInteraction:
         )
 
         return str(outfile)
-
-
-if __name__ == "__main__":
-    rdm = RdmInteraction()
-
-    # Access public collections for geometry (located near Kenya)
-    coords = [
-        (34.45619011, -0.91010781),
-        (34.79638823, -0.91010781),
-        (34.79638823, -0.34539808),
-        (34.45619011, -0.34539808),
-        (34.45619011, -0.91010781),
-    ]
-    polygon = Polygon(coords)
-    collections = rdm.get_collections(geometry=polygon)
