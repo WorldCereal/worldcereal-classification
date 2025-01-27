@@ -4,7 +4,11 @@ import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 
-from worldcereal.utils.legend import get_legend, translate_ewoc_codes
+from worldcereal.utils.legend import (
+    ewoc_code_to_label,
+    get_legend,
+    translate_ewoc_codes,
+)
 
 DEMO_CROPS = [
     1100000000,  # temporary_crops
@@ -382,7 +386,7 @@ class CropTypePicker:
                             pd.DataFrame.from_dict(
                                 {value["ewoc_code"]: key},
                                 orient="index",
-                                columns=["new_code"],
+                                columns=["new_label"],
                             )
                         )
                         for child in value.get("children", []):
@@ -390,7 +394,7 @@ class CropTypePicker:
                                 pd.DataFrame.from_dict(
                                     {child: key},
                                     orient="index",
-                                    columns=["new_code"],
+                                    columns=["new_label"],
                                 )
                             )
                     else:
@@ -410,9 +414,15 @@ class CropTypePicker:
         if self.ewoc_codes is not None:
             croptype_df = croptype_df[croptype_df.index.isin(self.ewoc_codes)]
 
-        self.croptypes = croptype_df[~croptype_df.index.duplicated(keep="first")]
+        croptype_df = croptype_df[~croptype_df.index.duplicated(keep="first")]
 
-        final_types = np.unique(self.croptypes["new_code"].values)
+        # add original labels for readability
+        labels = ewoc_code_to_label(croptype_df.index.values)
+        croptype_df["original_label"] = labels
+
+        self.croptypes = croptype_df
+
+        final_types = np.unique(self.croptypes["new_label"].values)
 
         print(
             f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes: {final_types}."
