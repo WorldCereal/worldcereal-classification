@@ -32,7 +32,7 @@ jobs:
         cd ..
     - name: Install Prometheo from source
       run: |
-        git clone -b update-dependencies https://github.com/WorldCereal/prometheo.git
+        git clone https://github.com/WorldCereal/prometheo.git
         cd prometheo
         pip install .
         cd ..
