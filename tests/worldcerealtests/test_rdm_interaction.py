@@ -105,7 +105,7 @@ class TestRdmInteraction:
         mock_get_download_urls.return_value = [str(file_path)]
 
         interaction = RdmInteraction()
-        result_gdf = interaction.download_samples(
+        result_gdf = interaction.get_samples(
             bbox=sample_bbox,
             temporal_extent=sample_temporal_extent,
             columns=["col1", "col2", "ref_id", "geometry"],

@@ -1,5 +1,6 @@
 """Interaction with the WorldCereal RDM API. Used to generate the reference data in geoparquet format for the point extractions."""
 
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -406,7 +407,7 @@ class RdmInteraction:
 
         return combined_query
 
-    def download_samples(
+    def get_samples(
         self,
         ref_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
@@ -544,6 +545,65 @@ class RdmInteraction:
 
         return metadata_dict
 
+    def get_collection_stats(
+        self, ref_id: str, stats_type: str = "crop_type"
+    ) -> pd.DataFrame:
+        """Extract crop statistics from the metadata of a collection.
+
+        Parameters:
+        ----------
+            ref_id : str
+                The collection ID.
+            stats_type (str): Type of statistics to extract. Default is "crop_type".
+                Possible values are: "crop_type", "irrigation" and "land_cover".
+
+        Returns:
+        -------
+            pd.DataFrame: DataFrame containing crop statistics.
+
+        Raises:
+        -------
+            ValueError: If no statistics are found for the collection or for the specified type.
+        """
+
+        # Get the metadata
+        metadata = self.get_collection_metadata(ref_id)
+
+        # Get the crop statistics from the metadata
+        stats = metadata.get("codeStats", None)
+
+        if stats is None:
+            raise ValueError("No statistics found for this collection.")
+        else:
+            stats = json.loads(stats)
+
+        # Extract the desired statistics
+        if stats_type == "crop_type":
+            field = "EwocStats"
+        elif stats_type == "irrigation":
+            field = "IrrStats"
+        elif stats_type == "land_cover":
+            field = "LcStats"
+        else:
+            raise ValueError(
+                "Invalid statistics type, please select one of the following: land_cover, crop_type or irrigation."
+            )
+
+        stats = stats.get(field, None)
+
+        if stats is None:
+            raise ValueError(f"No {stats_type} statistics found for this collection.")
+
+        # Create a DataFrame from the crop statistics
+        df = pd.DataFrame(stats)
+        df = df.set_index("Code")
+
+        # add labels column
+        labels = ewoc_code_to_label(df.index.values)
+        df["Label"] = labels
+
+        return df
+
     def download_collection_metadata(self, ref_id: str, dst_path: str) -> str:
         """Download metadata for a specific collection as xlsx file.
 
@@ -575,7 +635,7 @@ class RdmInteraction:
 
         return str(outfile)
 
-    def download_collection_samples(
+    def download_collection_geoparquet(
         self, ref_id: str, dst_path: str, subset: bool = False
     ) -> str:
         """Download the features (samples) from a specific collection
