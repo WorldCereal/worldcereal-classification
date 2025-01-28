@@ -38,4 +38,5 @@ dependencies:
     - openeo-gfmap==0.3.0
     - git+https://github.com/worldcereal/worldcereal-classification
     - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
+    - git+https://github.com/WorldCereal/prometheo
 
