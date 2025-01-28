@@ -32,7 +32,7 @@ from worldcereal.openeo.preprocessing import (
 )
 from worldcereal.utils.geoloader import load_reproject
 
-from worldcereal.openeo.extract import (  # isort: skip
+from worldcereal.extract.common import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
