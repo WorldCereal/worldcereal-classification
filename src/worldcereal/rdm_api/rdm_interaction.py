@@ -732,16 +732,3 @@ class RdmInteraction:
         )
 
         return str(outfile)
-
-
-if __name__ == "__main__":
-
-    collection_ids = [
-        "2021_can_aafccropinventory_point_110",
-        "2018_can_aafccropinventory_point_110",
-    ]
-    crop_codes = [1106000020, 1101010002]  # soybean + spring wheat
-
-    rdm = RdmInteraction()
-    counts = rdm.get_crop_counts(ref_ids=collection_ids, ewoc_codes=crop_codes)
-    counts
