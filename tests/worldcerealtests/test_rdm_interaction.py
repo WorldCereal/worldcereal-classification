@@ -2,25 +2,26 @@ from unittest.mock import patch
 
 import geopandas as gpd
 import pytest
-from shapely import Point, Polygon
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from shapely import Point
 
 from worldcereal.rdm_api.rdm_interaction import RdmCollection, RdmInteraction
 
 
 @pytest.fixture
-def sample_polygon():
-    return Polygon([(0, 0), (0, 1), (1, 1), (1, 0), (0, 0)])
+def sample_bbox():
+    return BoundingBoxExtent(west=0, east=1, north=1, south=0)
 
 
 @pytest.fixture
 def sample_temporal_extent():
-    return ["2021-01-01", "2021-12-31"]
+    return TemporalContext(start_date="2021-01-01", end_date="2021-12-31")
 
 
 class TestRdmInteraction:
     @patch("requests.Session.get")
     def test_collections_from_rdm(
-        self, mock_requests_get, sample_polygon, sample_temporal_extent
+        self, mock_requests_get, sample_bbox, sample_temporal_extent
     ):
 
         mock_requests_get.return_value.status_code = 200
@@ -38,16 +39,17 @@ class TestRdmInteraction:
         ]
         interaction = RdmInteraction()
         collections = interaction.get_collections(
-            geometry=sample_polygon, temporal_extent=sample_temporal_extent
+            bbox=sample_bbox, temporal_extent=sample_temporal_extent
         )
         ref_ids = [collection.id for collection in collections]
 
         assert ref_ids == ["Foo", "Bar"]
 
-        bbox = sample_polygon.bounds
-        geom = f"Bbox={bbox[0]}&Bbox={bbox[1]}&Bbox={bbox[2]}&Bbox={bbox[3]}"
-        temporal = f"&ValidityTime.Start={sample_temporal_extent[0]}T00%3A00%3A00Z&ValidityTime.End={sample_temporal_extent[1]}T00%3A00%3A00Z"
-        expected_url = f"{interaction.RDM_ENDPOINT}/collections/search?{geom}{temporal}"
+        bbox_str = f"Bbox={sample_bbox.west}&Bbox={sample_bbox.south}&Bbox={sample_bbox.east}&Bbox={sample_bbox.north}"
+        temporal = f"&ValidityTime.Start={sample_temporal_extent.start_date}T00%3A00%3A00Z&ValidityTime.End={sample_temporal_extent.end_date}T00%3A00%3A00Z"
+        expected_url = (
+            f"{interaction.RDM_ENDPOINT}/collections/search?{bbox_str}{temporal}"
+        )
         mock_requests_get.assert_called_with(
             url=expected_url, headers={"accept": "*/*"}, timeout=10
         )
@@ -58,7 +60,7 @@ class TestRdmInteraction:
         self,
         mock_get_download_urls,
         mock_collections_from_rdm,
-        sample_polygon,
+        sample_bbox,
         sample_temporal_extent,
         tmp_path,
     ):
@@ -103,8 +105,8 @@ class TestRdmInteraction:
         mock_get_download_urls.return_value = [str(file_path)]
 
         interaction = RdmInteraction()
-        result_gdf = interaction.download_samples(
-            geometry=sample_polygon,
+        result_gdf = interaction.get_samples(
+            bbox=sample_bbox,
             temporal_extent=sample_temporal_extent,
             columns=["col1", "col2", "ref_id", "geometry"],
             ewoc_codes=["1", "2", "3", "4"],

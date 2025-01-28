@@ -1,12 +1,27 @@
+import warnings
+from typing import Optional
+
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
-from ipyleaflet import DrawControl, LayersControl, Map, SearchControl, basemaps
+from ipyleaflet import (
+    DrawControl,
+    GeoJSON,
+    LayersControl,
+    Map,
+    SearchControl,
+    WidgetControl,
+    basemaps,
+)
 from IPython.display import display
-from ipywidgets import widgets
+from ipywidgets import HTML, Layout, VBox, widgets
 from loguru import logger
+from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
 from shapely.geometry import Polygon, shape
+
+from worldcereal.utils.legend import translate_ewoc_codes
 
 
 def handle_draw(instance, action, geo_json, output, area_limit):
@@ -14,20 +29,21 @@ def handle_draw(instance, action, geo_json, output, area_limit):
         if action == "created":
             poly = Polygon(shape(geo_json.get("geometry")))
             bbox = poly.bounds
-            logger.info(f"Your processing extent: {bbox}")
+            logger.info(f"Your extent: {bbox}")
 
             # We convert our bounding box to local UTM projection
             # for further processing
             bbox_utm, epsg = _latlon_to_utm(bbox)
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
-            logger.info(f"Area of processing extent: {area:.2f} km²")
+            logger.info(f"Area of extent: {area:.2f} km²")
 
-            if (area > area_limit) or (area > 2500):
-                logger.error(
-                    f"Area of processing extent is too large. "
-                    f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
-                )
-                instance.last_draw = {"type": "Feature", "geometry": None}
+            if area_limit is not None:
+                if (area > area_limit) or (area > 2500):
+                    logger.error(
+                        f"Area of extent is too large. "
+                        f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
+                    )
+                    instance.last_draw = {"type": "Feature", "geometry": None}
 
         elif action == "deleted":
             instance.clear()
@@ -38,7 +54,16 @@ def handle_draw(instance, action, geo_json, output, area_limit):
 
 
 class ui_map:
-    def __init__(self, area_limit=2500):
+    def __init__(self, area_limit: Optional[int] = None):
+        """
+        Initializes an ipyleaflet map with a draw control to select an extent.
+
+        Parameters
+        ----------
+        area_limit : int, optional
+            The maximum area in km² that can be selected on the map.
+            By default no restrictions are imposed.
+        """
         from ipyleaflet import basemap_to_tiles
 
         self.output = widgets.Output()
@@ -102,7 +127,26 @@ class ui_map:
         )
         return display(vbox)
 
-    def get_processing_extent(self):
+    def get_extent(self, projection="utm") -> BoundingBoxExtent:
+        """Get extent from last drawn rectangle on the map.
+
+        Parameters
+        ----------
+        projection : str, optional
+            The projection to use for the extent.
+            You can either request "latlon" or "utm". In case of the latter, the
+            local utm projection is automatically derived.
+
+        Returns
+        -------
+        BoundingBoxExtent
+            The extent as a bounding box in the requested projection.
+
+        Raises
+        ------
+        ValueError
+            If no rectangle has been drawn on the map.
+        """
 
         obj = self.draw_control.last_draw
 
@@ -112,20 +156,23 @@ class ui_map:
             )
 
         self.poly = Polygon(shape(obj.get("geometry")))
+        if self.poly is None:
+            return None
+
         bbox = self.poly.bounds
 
-        # We convert our bounding box to local UTM projection
-        # for further processing
-        bbox_utm, epsg = _latlon_to_utm(bbox)
+        if projection == "utm":
+            bbox_utm, epsg = _latlon_to_utm(bbox)
+            self.spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
+        else:
+            self.spatial_extent = BoundingBoxExtent(*bbox)
 
-        self.spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
-
-        logger.info(f"Your processing extent: {bbox}")
+        logger.info(f"Your extent: {bbox}")
 
         return self.spatial_extent
 
     def get_polygon_latlon(self):
-        self.get_processing_extent()
+        self.get_extent()
         return self.poly
 
 
@@ -147,3 +194,97 @@ def _latlon_to_utm(bbox):
     bbox_utm = bbox_gdf.to_crs(crs).total_bounds
 
     return bbox_utm, epsg
+
+
+def visualize_rdm_geoparquet(src_path: str):
+    """Visualize an RDM collection geoparquet file on a map.
+    Parameters
+    ----------
+    src_path : str
+        Path to the geoparquet file.
+    """
+
+    gdf = gpd.read_parquet(src_path)
+
+    # Compute centroid, ignoring warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        center = (gdf.centroid.y.mean(), gdf.centroid.x.mean())
+
+    # Extract unique ewoc_code values and assign colors
+    unique_codes = sorted(gdf["ewoc_code"].unique())
+    cmap = plt.get_cmap("tab20")  # Use a colormap with distinct colors
+    colors = {
+        code: to_hex(cmap(i / len(unique_codes))) for i, code in enumerate(unique_codes)
+    }
+
+    # Add a new column for the color associated with each ewoc_code
+    gdf["color"] = gdf["ewoc_code"].map(colors)
+
+    m = Map(
+        basemap=basemaps.Esri.WorldImagery,
+        center=center,
+        zoom=7,
+        scroll_wheel_zoom=True,
+    )
+
+    # convert dataframe to geojson
+    data = gdf.__geo_interface__
+
+    def style_callback(feature):
+        """Apply color based on the ewoc_code attribute."""
+        properties = feature["properties"]
+        return {
+            "color": "black",
+            "fillColor": properties["color"],
+            "opacity": 1,
+            "fillOpacity": 0.7,
+            "weight": 2,
+        }
+
+    # construct layer compatible with ipyleaflet
+    layer = GeoJSON(
+        data=data,
+        style_callback=style_callback,
+        point_style={
+            "radius": 5,
+        },
+        name="Reference data",
+    )
+
+    # Add to the map
+    m.add_layer(layer)
+
+    # Translate ewoc_codes
+    crop_types = translate_ewoc_codes(unique_codes)
+
+    # Create a legend
+    legend_items = []
+    for code, color in colors.items():
+        if code not in crop_types.index:
+            legend_items.append(
+                HTML(f"<span style='color:{color};'>⬤</span> {code} (unknown)")
+            )
+        else:
+            legend_items.append(
+                HTML(
+                    f"<span style='color:{color};'>⬤</span> {crop_types.loc[code]['label_full']}"
+                )
+            )
+    # Adjust legend size dynamically with a scrollable container
+    legend_box = VBox(
+        legend_items,
+        layout=Layout(
+            max_height="300px",  # Set a maximum height
+            overflow="auto",  # Add scrolling if content exceeds max height
+        ),
+    )
+    legend_control = WidgetControl(widget=legend_box, position="topright")
+
+    # Add the legend to the map
+    m.add_control(legend_control)
+
+    layer_control = LayersControl(position="topleft")
+    m.add_control(layer_control)
+
+    return m

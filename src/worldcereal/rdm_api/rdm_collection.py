@@ -45,3 +45,34 @@ class RdmCollection:
         self.creation_time = metadata.get("creationTime")
         self.created_by = metadata.get("creatorId")
         self.fid = metadata.get("id")
+
+    def visualize_extent(self):
+        """Visualizes the spatial extent of the collection on a map."""
+
+        from ipyleaflet import Map, Rectangle, basemaps
+
+        # Get the extent of the collection
+        colbbox = self.spatial_extent.get("bbox", None)
+        if colbbox is None:
+            raise ValueError("No bounding box found for this collection.")
+        colbbox = colbbox[0]
+        bbox = [[colbbox[1], colbbox[0]], [colbbox[3], colbbox[2]]]
+
+        # compute the center of the bounding box
+        center = [(colbbox[1] + colbbox[3]) / 2, (colbbox[0] + colbbox[2]) / 2]
+
+        # create a rectangle from the bounding box
+        rectangle = Rectangle(bounds=bbox, color="green", weight=2, fill_opacity=0.1)
+
+        # Create the basemap
+        m = Map(
+            basemap=basemaps.CartoDB.Positron,
+            center=center,
+            zoom=6,
+            scroll_wheel_zoom=True,
+        )
+
+        # Add the rectangle to the map
+        m.add_layer(rectangle)
+
+        return m
