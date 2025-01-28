@@ -20,6 +20,7 @@ from shapely.geometry import Polygon
 from urllib3.util.retry import Retry
 
 from worldcereal.rdm_api.rdm_collection import RdmCollection
+from worldcereal.utils.legend import ewoc_code_to_label
 
 
 class NoIntersectingCollections(Exception):
@@ -287,13 +288,21 @@ class RdmInteraction:
         result_df = pd.DataFrame(result)
 
         if len(result) > 0:
-            # Pivot the DataFrame to have collections in rows and crop types in columns
+            # Correctly format the dataframe
             result_df = result_df.pivot(
                 index="ref_id", columns="ewoc_code", values="count"
             ).fillna(0)
+            # Ensure all columns are integers
+            result_df = result_df.astype(int)
+            # add crop labels from legend and pivot again
+            result_df = result_df.T
+            result_df.reset_index(inplace=True)
+            result_df["Label"] = ewoc_code_to_label(result_df["ewoc_code"].values)
+            result_df.sort_values(by="ewoc_code", inplace=True)
+            result_df.set_index(["ewoc_code", "Label"], inplace=True)
 
-        # Ensure all columns are integers
-        result_df = result_df.astype(int)
+        else:
+            result_df = pd.DataFrame(columns=ref_ids)
 
         return result_df
 
@@ -663,3 +672,16 @@ class RdmInteraction:
         )
 
         return str(outfile)
+
+
+if __name__ == "__main__":
+
+    collection_ids = [
+        "2021_can_aafccropinventory_point_110",
+        "2018_can_aafccropinventory_point_110",
+    ]
+    crop_codes = [1106000020, 1101010002]  # soybean + spring wheat
+
+    rdm = RdmInteraction()
+    counts = rdm.get_crop_counts(ref_ids=collection_ids, ewoc_codes=crop_codes)
+    counts
