@@ -29,18 +29,18 @@ def handle_draw(instance, action, geo_json, output, area_limit):
         if action == "created":
             poly = Polygon(shape(geo_json.get("geometry")))
             bbox = poly.bounds
-            logger.info(f"Your processing extent: {bbox}")
+            logger.info(f"Your extent: {bbox}")
 
             # We convert our bounding box to local UTM projection
             # for further processing
             bbox_utm, epsg = _latlon_to_utm(bbox)
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
-            logger.info(f"Area of processing extent: {area:.2f} km²")
+            logger.info(f"Area of extent: {area:.2f} km²")
 
             if area_limit is not None:
                 if (area > area_limit) or (area > 2500):
                     logger.error(
-                        f"Area of processing extent is too large. "
+                        f"Area of extent is too large. "
                         f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
                     )
                     instance.last_draw = {"type": "Feature", "geometry": None}
@@ -56,7 +56,7 @@ def handle_draw(instance, action, geo_json, output, area_limit):
 class ui_map:
     def __init__(self, area_limit: Optional[int] = None):
         """
-        Initializes an ipyleaflet map with a draw control to select a processing extent.
+        Initializes an ipyleaflet map with a draw control to select an extent.
 
         Parameters
         ----------
@@ -127,20 +127,20 @@ class ui_map:
         )
         return display(vbox)
 
-    def get_processing_extent(self, projection="utm") -> BoundingBoxExtent:
-        """Get WorldCereal processing extent from last drawn rectangle on the map.
+    def get_extent(self, projection="utm") -> BoundingBoxExtent:
+        """Get extent from last drawn rectangle on the map.
 
         Parameters
         ----------
         projection : str, optional
-            The projection to use for the processing extent.
+            The projection to use for the extent.
             You can either request "latlon" or "utm". In case of the latter, the
             local utm projection is automatically derived.
 
         Returns
         -------
         BoundingBoxExtent
-            The processing extent as a bounding box in the requested projection.
+            The extent as a bounding box in the requested projection.
 
         Raises
         ------
@@ -167,12 +167,12 @@ class ui_map:
         else:
             self.spatial_extent = BoundingBoxExtent(*bbox)
 
-        logger.info(f"Your processing extent: {bbox}")
+        logger.info(f"Your extent: {bbox}")
 
         return self.spatial_extent
 
     def get_polygon_latlon(self):
-        self.get_processing_extent()
+        self.get_extent()
         return self.poly
 
 
