@@ -305,6 +305,9 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
     # sort by index
     legend = legend.sort_index()
 
+    # replace NaN's with empty strings
+    legend = legend.fillna("")
+
     if codes_not_in_legend:
         logger.warning(
             f"The following crop type codes are not present in the legend: {codes_not_in_legend}"

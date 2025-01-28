@@ -246,7 +246,6 @@ def visualize_rdm_geoparquet(src_path: str):
     layer = GeoJSON(
         data=data,
         style_callback=style_callback,
-        hover_style={"color": "white", "dashArray": "0", "fillOpacity": 0.7},
         point_style={
             "radius": 5,
         },
