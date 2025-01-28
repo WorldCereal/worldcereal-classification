@@ -68,10 +68,14 @@ train = [
   "presto-worldcereal==0.1.6",
   "scikit-learn==1.5.0",
   "torch==2.3.1",
-  "ipywidgets==8.1.3",
   "duckdb==1.1.0",
   "pystac==1.10.1",
   "pystac-client==0.8.3"
+]
+notebooks = [
+  "ipywidgets==8.1.3",
+  "leafmap=0.35.1",
+  "localtileserver=0.10.4"
 ]
 
 [tool.pytest.ini_options]
