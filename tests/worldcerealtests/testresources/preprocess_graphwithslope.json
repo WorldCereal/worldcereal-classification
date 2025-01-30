@@ -542,14 +542,6 @@
             "bands": [
                 "Slope"
             ],
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
             "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
         }
     },
@@ -720,14 +712,6 @@
                 "precipitation-flux",
                 "temperature-mean"
             ],
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"

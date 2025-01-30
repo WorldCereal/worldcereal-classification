@@ -21,7 +21,6 @@ from openeo_gfmap import (
     FetchType,
     TemporalContext,
 )
-from openeo_gfmap.manager.job_splitters import load_s2_grid
 from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
 from pyproj import CRS
 from tqdm import tqdm
@@ -68,8 +67,9 @@ def create_job_dataframe_patch_worldcereal(
         end_date = end_date + pd.offsets.MonthEnd(0)
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
@@ -159,15 +159,6 @@ def create_job_patch_worldcereal(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Get S2 tile extent
-    s2_grid = load_s2_grid()
-    geojson_features = (
-        s2_grid.set_index("tile").loc[[row.s2_tile]].geometry.__geo_interface__
-    )
-    s2_tile_extent = geojson.GeoJSON(
-        {"type": "FeatureCollection", "features": geojson_features["features"]}
-    )
-
     # Create the job to extract preprocessed worldcereal inputs
     # Disable default meteo fetching
     cube = worldcereal_preprocessed_inputs(
@@ -185,7 +176,6 @@ def create_job_patch_worldcereal(
     meteo_cube = precomposited_datacube_METEO(
         connection=connection,
         temporal_extent=temporal_context,
-        spatial_extent=s2_tile_extent,
     )
 
     # Join the meteo cube with the other inputs

@@ -388,12 +388,12 @@ def run_extractions(
     tracking_df_path = output_folder / "job_tracking.csv"
 
     # Load the input dataframe and build the job dataframe
-    input_df = load_dataframe(input_df)
+    input_gdf = load_dataframe(input_df)
 
     job_df = None
     if not tracking_df_path.exists():
         job_df = prepare_job_dataframe(
-            input_df, collection, max_locations_per_job, extract_value, backend
+            input_gdf, collection, max_locations_per_job, extract_value, backend
         )
 
     # Setup the extraction functions
