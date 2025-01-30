@@ -69,7 +69,7 @@ def pick_croptypes(df: pd.DataFrame, samples_threshold: int = 100):
     nodata_helper_message = """
     ### What to do?
     1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
-    2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://ewoc-rdm-ui.iiasa.ac.at/map).
+    2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://rdm.esa-worldcereal.org/map).
     3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
     4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
     """
