@@ -345,7 +345,6 @@ def run_extractions(
     parallel_jobs: int = 2,
     restart_failed: bool = False,
     extract_value: int = 1,
-    skip_existing: bool = True,
     backend=Backend.CDSE,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
@@ -374,9 +373,6 @@ def run_extractions(
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
         All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
-    skip_existing: bool, optional
-        Remove all samples from the input dataframe that are already extracted in the
-        given output folder, by default True.
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
 
@@ -393,24 +389,6 @@ def run_extractions(
 
     # Load the input dataframe and build the job dataframe
     input_gdf = load_dataframe(input_df)
-
-    # Load the already extracted data and remove sample_ids that have already been extracted
-    if skip_existing:
-        existing_files = list(output_folder.glob("**/*.geoparquet"))
-        if len(existing_files) > 0:
-            already_extracted = gpd.read_parquet(existing_files)
-            if not already_extracted.empty:
-                pipeline_log.info(
-                    f"Extraction sample size before filtering out already extracted: {input_gdf.shape[0]}"
-                )
-                input_gdf = input_gdf[
-                    ~input_gdf.sample_id.isin(
-                        list(already_extracted.sample_id.unique())
-                    )
-                ]
-                pipeline_log.info(
-                    f"Extraction sample size after filtering out already extracted: {input_gdf.shape[0]}"
-                )
 
     job_df = None
     if not tracking_df_path.exists():
