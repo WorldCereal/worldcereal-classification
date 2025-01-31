@@ -147,6 +147,7 @@ def setup_extraction_functions(
     memory: typing.Union[str, None],
     python_memory: typing.Union[str, None],
     max_executors: typing.Union[int, None],
+    write_stac_api: bool,
 ) -> tuple[typing.Callable, typing.Callable, typing.Callable]:
     """Setup the datacube creation, path generation and post-job action
     functions for the given collection. Returns a tuple of three functions:
@@ -229,7 +230,7 @@ def setup_extraction_functions(
             spatial_resolution="20m",
             s1_orbit_fix=True,
             sensor="Sentinel1",
-            write_stac_api=True,
+            write_stac_api=write_stac_api,
         ),
         ExtractionCollection.PATCH_SENTINEL2: partial(
             post_job_action_patch,
@@ -238,7 +239,7 @@ def setup_extraction_functions(
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
             sensor="Sentinel2",
-            write_stac_api=True,
+            write_stac_api=write_stac_api,
         ),
         ExtractionCollection.PATCH_METEO: partial(
             post_job_action_patch,
@@ -346,6 +347,7 @@ def run_extractions(
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
+    write_stac_api: bool = True,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
 
@@ -399,7 +401,7 @@ def run_extractions(
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, extract_value, memory, python_memory, max_executors
+        collection, extract_value, memory, python_memory, max_executors, write_stac_api
     )
 
     # Initialize and setups the job manager
@@ -482,6 +484,12 @@ if __name__ == "__main__":
         default=1,
         help="The value of the `extract` flag to use in the dataframe.",
     )
+    parser.add_argument(
+        "--write_stac_api",
+        type=bool,
+        default=True,
+        help="Flag to write S1 and S2 patch extraction results to STAC API or not.",
+    )
 
     args = parser.parse_args()
 
@@ -497,4 +505,5 @@ if __name__ == "__main__":
         restart_failed=args.restart_failed,
         extract_value=args.extract_value,
         backend=Backend.CDSE,
+        write_stac_api=args.write_stac_api,
     )
