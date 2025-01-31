@@ -225,7 +225,7 @@ def setup_extraction_functions(
         ExtractionCollection.PATCH_SENTINEL1: partial(
             post_job_action_patch,
             extract_value=extract_value,
-            description="Sentinel1 GRD raw observations, unprocessed.",
+            description="Sentinel-1 GRD backscatter observations, processed with Orfeo toolbox.",
             title="Sentinel-1 GRD",
             spatial_resolution="20m",
             s1_orbit_fix=True,

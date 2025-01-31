@@ -110,7 +110,7 @@ def post_job_action_patch(
             "start_date": row.start_date,
             "end_date": row.end_date,
             "valid_time": valid_time,
-            "GFMAP_version": version("openeo_gfmap"),
+            "processing:version": version("openeo_gfmap"),
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "description": description,
             "title": title,
@@ -123,7 +123,7 @@ def post_job_action_patch(
         }
 
         if s1_orbit_fix:
-            new_attributes["orbit_state"] = row.orbit_state
+            new_attributes["sat:orbit_state"] = row.orbit_state
             item.id = item.id.replace(".nc", f"_{row.orbit_state}.nc")
 
         # Saves the new attributes in the netcdf file
