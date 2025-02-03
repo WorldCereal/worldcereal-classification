@@ -111,6 +111,7 @@ def post_job_action_patch(
             "end_date": row.end_date,
             "valid_time": valid_time,
             "processing:version": version("openeo_gfmap"),
+            "institution": "VITO - ESA WorldCereal",
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "description": description,
             "title": title,
@@ -134,6 +135,18 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+
+        # Update the metadata of the item
+        if write_stac_api:
+            item.properties.update(new_attributes)
+
+            providers = [{"name": "openEO platform"}]
+            item.properties["providers"] = providers
+
+            extension = (
+                "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
+            )
+            item.stac_extensions.extend([extension])
 
     if write_stac_api:
         username = os.getenv("STAC_API_USERNAME")
