@@ -195,13 +195,12 @@ def generate_output_path_patch(
 
     s2_tile_id = row.s2_tile
     utm_zone = str(s2_tile_id[0:2])
-    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
     subfolder = root_folder / ref_id / utm_zone / s2_tile_id / sample_id
 
     return (
         subfolder
-        / f"{row.out_prefix}{orbit_state}_{sample_id}_{epsg}_{row.start_date}_{row.end_date}{row.out_extension}"
+        / f"{row.out_prefix}{orbit_state}_{sample_id}_{row.start_date}_{row.end_date}{row.out_extension}"
     )
 
 
