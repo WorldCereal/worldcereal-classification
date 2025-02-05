@@ -253,7 +253,7 @@ def raw_datacube_DEM(
     cube = extractor.get_cube(connection, spatial_extent, None)
     cube = cube.rename_labels(dimension="bands", target=["elevation"])
 
-    if backend_context.backend == Backend.CDSE:
+    if backend_context.backend in [Backend.CDSE, Backend.CDSE_STAGING]:
         # On CDSE we can load the slope from a global slope collection
 
         if isinstance(spatial_extent, BoundingBoxExtent):
