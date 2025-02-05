@@ -67,7 +67,9 @@ class StacApiInteraction:
             )
         self.sensor = sensor
         self.base_url = base_url
-        self.collection_id = f"worldcereal_{sensor[:-1].lower()}_{sensor[-1]}_patch_extractions"
+        self.collection_id = (
+            f"worldcereal_{sensor[:-1].lower()}_{sensor[-1]}_patch_extractions"
+        )
 
         self.auth = auth
 
