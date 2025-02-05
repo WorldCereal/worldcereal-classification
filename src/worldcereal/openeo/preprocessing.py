@@ -309,7 +309,7 @@ def precomposited_datacube_METEO(
 
     # Monthly composited METEO data
     cube = connection.load_stac(
-        "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json",
+        "https://stac.openeo.vito.be/collections/agera5_monthly",
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )

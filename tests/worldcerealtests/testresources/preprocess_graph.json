@@ -864,7 +864,7 @@
                 "2020-06-01",
                 "2021-05-31"
             ],
-            "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
         }
     },
     "renamelabels7": {
