@@ -110,7 +110,8 @@ def post_job_action_patch(
             "start_date": row.start_date,
             "end_date": row.end_date,
             "valid_time": valid_time,
-            "GFMAP_version": version("openeo_gfmap"),
+            "processing:version": version("openeo_gfmap"),
+            "institution": "VITO - ESA WorldCereal",
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "description": description,
             "title": title,
@@ -123,7 +124,7 @@ def post_job_action_patch(
         }
 
         if s1_orbit_fix:
-            new_attributes["orbit_state"] = row.orbit_state
+            new_attributes["sat:orbit_state"] = row.orbit_state
             item.id = item.id.replace(".nc", f"_{row.orbit_state}.nc")
 
         # Saves the new attributes in the netcdf file
@@ -134,6 +135,18 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+
+        # Update the metadata of the item
+        if write_stac_api:
+            item.properties.update(new_attributes)
+
+            providers = [{"name": "openEO platform"}]
+            item.properties["providers"] = providers
+
+            extension = (
+                "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
+            )
+            item.stac_extensions.extend([extension])
 
     if write_stac_api:
         username = os.getenv("STAC_API_USERNAME")
@@ -182,13 +195,12 @@ def generate_output_path_patch(
 
     s2_tile_id = row.s2_tile
     utm_zone = str(s2_tile_id[0:2])
-    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
     subfolder = root_folder / ref_id / utm_zone / s2_tile_id / sample_id
 
     return (
         subfolder
-        / f"{row.out_prefix}{orbit_state}_{sample_id}_{epsg}_{row.start_date}_{row.end_date}{row.out_extension}"
+        / f"{row.out_prefix}{orbit_state}_{sample_id}_{row.start_date}_{row.end_date}{row.out_extension}"
     )
 
 

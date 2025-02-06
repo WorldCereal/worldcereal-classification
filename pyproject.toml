@@ -43,7 +43,7 @@ dependencies = [
     "netcdf4<=1.6.4",  
     "numpy<2.0.0",  
     "openeo==0.31.0",  
-    "openeo-gfmap==0.3.0",  
+    "openeo-gfmap==0.4.0",  
     "pyarrow",  
     "pydantic==2.8.0",  
     "rioxarray>=0.13.0",  
