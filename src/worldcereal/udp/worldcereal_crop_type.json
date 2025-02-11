@@ -1,0 +1,1880 @@
+{
+  "process_graph": {
+    "aggregatetemporalperiod1": {
+      "arguments": {
+        "data": {
+          "from_node": "apply1"
+        },
+        "dimension": "t",
+        "period": "month",
+        "reducer": {
+          "process_graph": {
+            "median1": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "median",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "aggregate_temporal_period"
+    },
+    "aggregatetemporalperiod2": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels3"
+        },
+        "dimension": "t",
+        "period": "month",
+        "reducer": {
+          "process_graph": {
+            "mean1": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "mean",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "aggregate_temporal_period"
+    },
+    "apply1": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels2"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange1": {
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply2": {
+      "arguments": {
+        "data": {
+          "from_node": "aggregatetemporalperiod1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange2": {
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply3": {
+      "arguments": {
+        "data": {
+          "from_node": "applydimension1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange3": {
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 1,
+                "outputMax": 65534,
+                "outputMin": 1,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply4": {
+      "arguments": {
+        "data": {
+          "from_node": "resamplecubespatial1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange4": {
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply5": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels12"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange5": {
+              "arguments": {
+                "inputMax": 253,
+                "inputMin": 0,
+                "outputMax": 253,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply6": {
+      "arguments": {
+        "data": {
+          "from_node": "filterbands1"
+        },
+        "process": {
+          "process_graph": {
+            "eq3": {
+              "arguments": {
+                "x": {
+                  "from_parameter": "x"
+                },
+                "y": 0
+              },
+              "process_id": "eq",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "apply7": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels13"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange6": {
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "process_id": "linear_scale_range",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "apply"
+    },
+    "applydimension1": {
+      "arguments": {
+        "data": {
+          "from_node": "aggregatetemporalperiod2"
+        },
+        "dimension": "bands",
+        "process": {
+          "process_graph": {
+            "add1": {
+              "arguments": {
+                "x": {
+                  "from_node": "multiply1"
+                },
+                "y": 83
+              },
+              "process_id": "add"
+            },
+            "add2": {
+              "arguments": {
+                "x": {
+                  "from_node": "multiply2"
+                },
+                "y": 83
+              },
+              "process_id": "add"
+            },
+            "arraycreate1": {
+              "arguments": {
+                "data": [
+                  {
+                    "from_node": "if1"
+                  },
+                  {
+                    "from_node": "if2"
+                  }
+                ]
+              },
+              "process_id": "array_create",
+              "result": true
+            },
+            "arrayelement1": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 0
+              },
+              "process_id": "array_element"
+            },
+            "arrayelement2": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 0
+              },
+              "process_id": "array_element"
+            },
+            "arrayelement3": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 1
+              },
+              "process_id": "array_element"
+            },
+            "arrayelement4": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 1
+              },
+              "process_id": "array_element"
+            },
+            "divide1": {
+              "arguments": {
+                "x": {
+                  "from_node": "add1"
+                },
+                "y": 20
+              },
+              "process_id": "divide"
+            },
+            "divide2": {
+              "arguments": {
+                "x": {
+                  "from_node": "add2"
+                },
+                "y": 20
+              },
+              "process_id": "divide"
+            },
+            "if1": {
+              "arguments": {
+                "accept": 1,
+                "reject": {
+                  "from_node": "power1"
+                },
+                "value": {
+                  "from_node": "isnodata1"
+                }
+              },
+              "process_id": "if"
+            },
+            "if2": {
+              "arguments": {
+                "accept": 1,
+                "reject": {
+                  "from_node": "power2"
+                },
+                "value": {
+                  "from_node": "isnodata2"
+                }
+              },
+              "process_id": "if"
+            },
+            "isnodata1": {
+              "arguments": {
+                "x": {
+                  "from_node": "arrayelement2"
+                }
+              },
+              "process_id": "is_nodata"
+            },
+            "isnodata2": {
+              "arguments": {
+                "x": {
+                  "from_node": "arrayelement4"
+                }
+              },
+              "process_id": "is_nodata"
+            },
+            "log1": {
+              "arguments": {
+                "base": 10,
+                "x": {
+                  "from_node": "arrayelement1"
+                }
+              },
+              "process_id": "log"
+            },
+            "log2": {
+              "arguments": {
+                "base": 10,
+                "x": {
+                  "from_node": "arrayelement3"
+                }
+              },
+              "process_id": "log"
+            },
+            "multiply1": {
+              "arguments": {
+                "x": 10,
+                "y": {
+                  "from_node": "log1"
+                }
+              },
+              "process_id": "multiply"
+            },
+            "multiply2": {
+              "arguments": {
+                "x": 10,
+                "y": {
+                  "from_node": "log2"
+                }
+              },
+              "process_id": "multiply"
+            },
+            "power1": {
+              "arguments": {
+                "base": 10,
+                "p": {
+                  "from_node": "divide1"
+                }
+              },
+              "process_id": "power"
+            },
+            "power2": {
+              "arguments": {
+                "base": 10,
+                "p": {
+                  "from_node": "divide2"
+                }
+              },
+              "process_id": "power"
+            }
+          }
+        }
+      },
+      "process_id": "apply_dimension"
+    },
+    "applyneighborhood1": {
+      "arguments": {
+        "data": {
+          "from_node": "filterbbox1"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf1": {
+              "arguments": {
+                "context": {
+                  "compile_presto": false,
+                  "presto_model_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True.pt",
+                  "rescale_s1": false,
+                  "use_valid_date_token": true
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = [\n# ]\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf.udf_data import UdfData\nfrom pyproj import Transformer\nfrom pyproj.crs import CRS\n\nLAT_HARMONIZED_NAME = \"GEO-LAT\"\nLON_HARMONIZED_NAME = \"GEO-LON\"\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass FeatureExtractor(ABC):\n    \"\"\"Base class for all feature extractor UDFs. It provides some common\n    methods and attributes to be used by other feature extractor.\n\n    The inherited classes are supposed to take care of VectorDataCubes for\n    point based extraction or dense Cubes for tile/polygon based extraction.\n    \"\"\"\n\n    def __init__(self) -> None:\n        self._epsg = None\n\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations to be executed before the feature extractor is\n        executed. This method should be called by the `_execute` method of the\n        feature extractor.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"Returns the EPSG code of the datacube.\"\"\"\n        return self._epsg\n\n    @epsg.setter\n    def epsg(self, value: int):\n        self._epsg = value\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"No additional dependencies are defined. If you wish to add \"\n            \"dependencies to your feature extractor, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return []\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns a list of output labels to be assigned on the output bands,\n        needs to be overriden by the user.\"\"\"\n        raise NotImplementedError(\n            \"FeatureExtractor is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        raise NotImplementedError(\n            \"FeatureExtractor is a base abstract class, please implement the \"\n            \"_execute method.\"\n        )\n\n\nclass PatchFeatureExtractor(FeatureExtractor):\n    \"\"\"Base class for all the tile/polygon based feature extractors. An user\n    implementing a feature extractor should take care of\n    \"\"\"\n\n    def get_latlons(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Returns the latitude and longitude coordinates of the given array in\n        a dataarray. Returns a dataarray with the same width/height of the input\n        array, but with two bands, one for latitude and one for longitude. The\n        metadata coordinates of the output array are the same as the input\n        array, as the array wasn't reprojected but instead new features were\n        computed.\n\n        The latitude and longitude band names are standardized to the names\n        `LAT_HARMONIZED_NAME` and `LON_HARMONIZED_NAME` respectively.\n        \"\"\"\n\n        lon = inarr.coords[\"x\"]\n        lat = inarr.coords[\"y\"]\n        lon, lat = np.meshgrid(lon, lat)\n\n        if self.epsg is None:\n            raise Exception(\n                \"EPSG code was not defined, cannot extract lat/lon array \"\n                \"as the CRS is unknown.\"\n            )\n\n        # If the coordiantes are not in EPSG:4326, we need to reproject them\n        if self.epsg != 4326:\n            # Initializes a pyproj reprojection object\n            transformer = Transformer.from_crs(\n                crs_from=CRS.from_epsg(self.epsg),\n                crs_to=CRS.from_epsg(4326),\n                always_xy=True,\n            )\n            lon, lat = transformer.transform(xx=lon, yy=lat)\n\n        # Create a two channel numpy array of the lat and lons together by stacking\n        latlon = np.stack([lat, lon])\n\n        # Repack in a dataarray\n        return xr.DataArray(\n            latlon,\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [LAT_HARMONIZED_NAME, LON_HARMONIZED_NAME],\n                \"y\": inarr.coords[\"y\"],\n                \"x\": inarr.coords[\"x\"],\n            },\n        )\n\n    def _rescale_s1_backscatter(self, arr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Rescales the input array from uint16 to float32 decibel values.\n        The input array should be in uint16 format, as this optimizes memory usage in Open-EO\n        processes. This function is called automatically on the bands of the input array, except\n        if the parameter `rescale_s1` is set to False.\n        \"\"\"\n        s1_bands = [\"S1-SIGMA0-VV\", \"S1-SIGMA0-VH\", \"S1-SIGMA0-HV\", \"S1-SIGMA0-HH\"]\n        s1_bands_to_select = list(set(arr.bands.values) & set(s1_bands))\n\n        if len(s1_bands_to_select) == 0:\n            return arr\n\n        data_to_rescale = arr.sel(bands=s1_bands_to_select).astype(np.float32).data\n\n        # Assert that the values are set between 1 and 65535\n        if data_to_rescale.min().item() < 1 or data_to_rescale.max().item() > 65535:\n            raise ValueError(\n                \"The input array should be in uint16 format, with values between 1 and 65535. \"\n                \"This restriction assures that the data was processed according to the S1 fetcher \"\n                \"preprocessor. The user can disable this scaling manually by setting the \"\n                \"`rescale_s1` parameter to False in the feature extractor.\"\n            )\n\n        # Converting back to power values\n        data_to_rescale = 20.0 * np.log10(data_to_rescale) - 83.0\n        data_to_rescale = np.power(10, data_to_rescale / 10.0)\n        data_to_rescale[~np.isfinite(data_to_rescale)] = np.nan\n\n        # Converting power values to decibels\n        data_to_rescale = 10.0 * np.log10(data_to_rescale)\n\n        # Change the bands within the array\n        arr.loc[dict(bands=s1_bands_to_select)] = data_to_rescale\n        return arr\n\n    # TODO to remove the fixed transpose as it contributes to unclear code.\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"t\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        if self._parameters.get(\"rescale_s1\", True):\n            arr = self._rescale_s1_backscatter(arr)\n\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        pass\n\n\nclass PointFeatureExtractor(FeatureExtractor):\n    def __init__(self):\n        raise NotImplementedError(\n            \"Point based feature extraction on Vector Cubes is not supported yet.\"\n        )\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"t\")\n\n        arr = self._common_preparations(arr, parameters)\n\n        outarr = self.execute(cube.to_array()).transpose(\"bands\", \"t\")\n        return XarrayDataCube(outarr)\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        pass\n\n\nclass PrestoFeatureExtractor(PatchFeatureExtractor):\n    \"\"\"Feature extractor to use Presto model to compute per-pixel embeddings.\n    This will generate a datacube with 128 bands, each band representing a\n    feature from the Presto model.\n\n    Interesting UDF parameters:\n    - presto_url: A public URL to the Presto model file. A default Presto\n      version is provided if the parameter is left undefined.\n    - rescale_s1: Is specifically disabled by default, as the presto\n      dependencies already take care of the backscatter decompression. If\n      specified, should be set as `False`.\n    \"\"\"\n\n    import functools\n\n    PRESTO_WHL_URL = \"https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl\"\n    BASE_URL = \"https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies\"  # NOQA\n    DEPENDENCY_NAME = \"worldcereal_deps.zip\"\n\n    GFMAP_BAND_MAPPING = {\n        \"S2-L2A-B02\": \"B2\",\n        \"S2-L2A-B03\": \"B3\",\n        \"S2-L2A-B04\": \"B4\",\n        \"S2-L2A-B05\": \"B5\",\n        \"S2-L2A-B06\": \"B6\",\n        \"S2-L2A-B07\": \"B7\",\n        \"S2-L2A-B08\": \"B8\",\n        \"S2-L2A-B8A\": \"B8A\",\n        \"S2-L2A-B11\": \"B11\",\n        \"S2-L2A-B12\": \"B12\",\n        \"S1-SIGMA0-VH\": \"VH\",\n        \"S1-SIGMA0-VV\": \"VV\",\n        \"AGERA5-TMEAN\": \"temperature_2m\",\n        \"AGERA5-PRECIP\": \"total_precipitation\",\n    }\n\n    @functools.lru_cache(maxsize=6)\n    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> str:\n        import urllib.request\n        import zipfile\n        from pathlib import Path\n\n        # Downloads the wheel file\n        modelfile, _ = urllib.request.urlretrieve(\n            wheel_url, filename=Path.cwd() / Path(wheel_url).name\n        )\n        with zipfile.ZipFile(modelfile, \"r\") as zip_ref:\n            zip_ref.extractall(destination_dir)\n        return destination_dir\n\n    def output_labels(self) -> list:\n        \"\"\"Returns the output labels from this UDF, which is the output labels\n        of the presto embeddings\"\"\"\n        return [f\"presto_ft_{i}\" for i in range(128)]\n\n    def evaluate_resolution(self, inarr: xr.DataArray) -> int:\n        \"\"\"Helper function to get the resolution in meters for\n        the input array.\n\n        Parameters\n        ----------\n        inarr : xr.DataArray\n            input array to determine resolution for.\n\n        Returns\n        -------\n        int\n            resolution in meters.\n        \"\"\"\n\n        if self.epsg == 4326:\n            from pyproj import Transformer\n            from shapely.geometry import Point\n            from shapely.ops import transform\n\n            self.logger.info(\n                \"Converting WGS84 coordinates to EPSG:3857 to determine resolution.\"\n            )\n\n            transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)\n            points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]\n            points = [transform(transformer.transform, point) for point in points]\n\n            resolution = abs(points[1].x - points[0].x)\n\n        else:\n            resolution = abs(inarr.x[1].values - inarr.x[0].values)\n\n        self.logger.info(f\"Resolution for computing slope: {resolution}\")\n\n        return resolution\n\n    def compute_slope(self, inarr: xr.DataArray, resolution: int) -> xr.DataArray:\n        \"\"\"Computes the slope using the scipy library. The input array should\n        have the following bands: 'elevation' And no time dimension. Returns a\n        new DataArray containing the new `slope` band.\n\n        Parameters\n        ----------\n        inarr : xr.DataArray\n            input array containing a band 'elevation'.\n        resolution : int\n            resolution of the input array in meters.\n\n        Returns\n        -------\n        xr.DataArray\n            output array containing 'slope' band in degrees.\n        \"\"\"\n\n        import random  # pylint: disable=import-outside-toplevel\n\n        import numpy as np  # pylint: disable=import-outside-toplevel\n        from scipy.ndimage import (  # pylint: disable=import-outside-toplevel\n            convolve,\n            zoom,\n        )\n\n        def _rolling_fill(darr, max_iter=2):\n            \"\"\"Helper function that also reflects values inside\n            a patch with NaNs.\"\"\"\n            if max_iter == 0:\n                return darr\n            else:\n                max_iter -= 1\n            # arr of shape (rows, cols)\n            mask = np.isnan(darr)\n\n            if ~np.any(mask):\n                return darr\n\n            roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]\n            random.shuffle(roll_params)\n\n            for roll_param in roll_params:\n                rolled = np.roll(darr, roll_param, axis=(0, 1))\n                darr[mask] = rolled[mask]\n\n            return _rolling_fill(darr, max_iter=max_iter)\n\n        def _downsample(arr: np.ndarray, factor: int) -> np.ndarray:\n            \"\"\"Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.\n\n            Parameters\n            ----------\n            arr : np.ndarray\n                The 2D input array.\n            factor : int\n                The factor by which to downsample. For example, factor=2 downsamples by 2x.\n\n            Returns\n            -------\n            np.ndarray\n                Downsampled array.\n            \"\"\"\n\n            # Get the original shape of the array\n            X, Y = arr.shape\n\n            # Calculate how much padding is needed for each dimension\n            pad_X = (\n                factor - (X % factor)\n            ) % factor  # Ensures padding is only applied if needed\n            pad_Y = (\n                factor - (Y % factor)\n            ) % factor  # Ensures padding is only applied if needed\n\n            # Pad the array using 'reflect' mode\n            padded = np.pad(arr, ((0, pad_X), (0, pad_Y)), mode=\"reflect\")\n\n            # Reshape the array to form blocks of size 'factor' x 'factor'\n            reshaped = padded.reshape(\n                (X + pad_X) // factor, factor, (Y + pad_Y) // factor, factor\n            )\n\n            # Take the mean over the factor-sized blocks\n            downsampled = np.nanmean(reshaped, axis=(1, 3))\n\n            return downsampled\n\n        dem = inarr.sel(bands=\"elevation\").values\n        dem_arr = dem.astype(np.float32)\n\n        # Invalid to NaN and keep track of these pixels\n        dem_arr[dem_arr == 65535] = np.nan\n        idx_invalid = np.isnan(dem_arr)\n\n        # Fill NaNs with rolling fill\n        dem_arr = _rolling_fill(dem_arr)\n\n        # We make sure DEM is at 20m for slope computation\n        # compatible with global slope collection\n        factor = int(20 / resolution)\n        if factor < 1 or factor % 2 != 0:\n            raise NotImplementedError(\n                f\"Unsupported resolution for slope computation: {resolution}\"\n            )\n        dem_arr_downsampled = _downsample(dem_arr, factor)\n        x_odd, y_odd = dem_arr.shape[0] % 2 != 0, dem_arr.shape[1] % 2 != 0\n\n        # Mask NaN values in the DEM data\n        dem_masked = np.ma.masked_invalid(dem_arr_downsampled)\n\n        # Define convolution kernels for x and y gradients (simple finite difference approximation)\n        kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (\n            8.0 * 20  # array is now at 20m resolution\n        )  # x-derivative kernel\n\n        kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (\n            8.0 * 20  # array is now at 20m resolution\n        )  # y-derivative kernel\n\n        # Apply convolution to compute gradients\n        dx = convolve(dem_masked, kernel_x)  # Gradient in the x-direction\n        dy = convolve(dem_masked, kernel_y)  # Gradient in the y-direction\n\n        # Reapply the mask to the gradients\n        dx = np.ma.masked_where(dem_masked.mask, dx)\n        dy = np.ma.masked_where(dem_masked.mask, dy)\n\n        # Calculate the magnitude of the gradient (rise/run)\n        gradient_magnitude = np.ma.sqrt(dx**2 + dy**2)\n\n        # Convert gradient magnitude to slope (in degrees)\n        slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)\n\n        # Upsample to original resolution with bilinear interpolation\n        mask = slope.mask\n        mask = zoom(mask, zoom=factor, order=0)\n        slope = zoom(slope, zoom=factor, order=1)\n        slope[mask] = 65535\n\n        # Strip one row or column if original array was odd in that dimension\n        if x_odd:\n            slope = slope[:-1, :]\n        if y_odd:\n            slope = slope[:, :-1]\n\n        # Fill slope values where the original DEM had NaNs\n        slope[idx_invalid] = 65535\n        slope[np.isnan(slope)] = 65535\n        slope = slope.astype(np.uint16)\n\n        return xr.DataArray(\n            slope[None, :, :],\n            dims=(\"bands\", \"y\", \"x\"),\n            coords={\n                \"bands\": [\"slope\"],\n                \"y\": inarr.y,\n                \"x\": inarr.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        import sys\n\n        if self.epsg is None:\n            raise ValueError(\n                \"EPSG code is required for Presto feature extraction, but was \"\n                \"not correctly initialized.\"\n            )\n        if \"presto_model_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"presto_model_url\"')\n        presto_model_url = self._parameters.get(\"presto_model_url\")\n        self.logger.info(f'Loading Presto model from \"{presto_model_url}\"')\n        presto_wheel_url = self._parameters.get(\"presto_wheel_url\", self.PRESTO_WHL_URL)\n        self.logger.info(f'Loading Presto wheel from \"{presto_wheel_url}\"')\n\n        ignore_dependencies = self._parameters.get(\"ignore_dependencies\", False)\n        if ignore_dependencies:\n            self.logger.info(\n                \"`ignore_dependencies` flag is set to True. Make sure that \"\n                \"Presto and its dependencies are available on the runtime \"\n                \"environment\"\n            )\n\n        # The below is required to avoid flipping of the result\n        # when running on OpenEO backend!\n        inarr = inarr.transpose(\"bands\", \"t\", \"x\", \"y\")\n\n        # Change the band names\n        new_band_names = [\n            self.GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands\n        ]\n        inarr = inarr.assign_coords(bands=new_band_names)\n\n        # Handle NaN values in Presto compatible way\n        inarr = inarr.fillna(65535)\n\n        # Add valid_date attribute to the input array if we need it and\n        # it's not there. For now we take center timestamp in this case.\n        use_valid_date_token = self._parameters.get(\"use_valid_date_token\", False)\n        if \"valid_date\" not in inarr.attrs:\n            if use_valid_date_token:\n                # Only log warning if we will use the valid_date token\n                self.logger.warning(\n                    \"No `valid_date` attribute found in input array. Taking center timestamp.\"\n                )\n            inarr.attrs[\"valid_date\"] = inarr.t.values[6]\n\n        # Unzip de dependencies on the backend\n        if not ignore_dependencies:\n            self.logger.info(\"Unzipping dependencies\")\n            deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)\n            self.logger.info(\"Unpacking presto wheel\")\n            deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)\n\n            self.logger.info(\"Appending dependencies\")\n            sys.path.append(str(deps_dir))\n\n        from presto.inference import (  # pylint: disable=import-outside-toplevel\n            get_presto_features,\n        )\n\n        if \"slope\" not in inarr.bands:\n            # If 'slope' is not present we need to compute it here\n            self.logger.warning(\"`slope` not found in input array. Computing ...\")\n            resolution = self.evaluate_resolution(inarr.isel(t=0))\n            slope = self.compute_slope(inarr.isel(t=0), resolution)\n            slope = slope.expand_dims({\"t\": inarr.t}, axis=0).astype(\"float32\")\n\n            inarr = xr.concat([inarr.astype(\"float32\"), slope], dim=\"bands\")\n\n        batch_size = self._parameters.get(\"batch_size\", 256)\n        compile_presto = self._parameters.get(\"compile_presto\", False)\n        self.logger.info(f\"Compile presto: {compile_presto}\")\n\n        self.logger.info(\"Extracting presto features\")\n        features = get_presto_features(\n            inarr,\n            presto_model_url,\n            self.epsg,\n            use_valid_date_token=use_valid_date_token,\n            batch_size=batch_size,\n            compile=compile_presto,\n        )\n        return features\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        # Disable S1 rescaling (decompression) by default\n        if parameters.get(\"rescale_s1\", None) is None:\n            parameters.update({\"rescale_s1\": False})\n        return super()._execute(cube, parameters)\n\n    def dependencies(self) -> list:\n        # We are just overriding the parent method to suppress the warning\n        return []\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    feature_extractor_class = PrestoFeatureExtractor\n\n    # User-defined, feature extractor class initialized here\n    feature_extractor = feature_extractor_class()\n\n    is_pixel_based = issubclass(feature_extractor_class, PointFeatureExtractor)\n\n    if not is_pixel_based:\n        assert (\n            len(udf_data.datacube_list) == 1\n        ), \"OpenEO GFMAP Feature extractor pipeline only supports single input cubes for the tile.\"\n\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj[\"EPSG\"]\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = feature_extractor._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "applyneighborhood2": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels8"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf2": {
+              "arguments": {
+                "context": {
+                  "classifier_url": {
+                    "from_parameter": "model_url"
+                  },
+                  "lookup_table": {
+                    "alliums": 0,
+                    "beans": 1,
+                    "beet": 2,
+                    "brassica_oleracea_cabbage": 3,
+                    "carrots_daucus": 4,
+                    "cauliflower_broccoli": 5,
+                    "chicory_chicories": 6,
+                    "fibre_crops": 7,
+                    "leafy_stem_vegetables": 8,
+                    "maize": 9,
+                    "oilseed_crops": 10,
+                    "onion_shallot": 11,
+                    "other_temporary_crops": 12,
+                    "peas": 13,
+                    "potatoes": 14,
+                    "root_vegetables": 15,
+                    "spinach": 16,
+                    "unspecified_barley": 17,
+                    "unspecified_wheat": 18
+                  }
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []  # Disable the dependencies from PIP install\n\n    def output_labels(self) -> list:\n        class_names = self._parameters[\"lookup_table\"].keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        lookup_table = self._parameters.get(\"lookup_table\", None)\n\n        if lookup_table is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the UDFs parameters.\"\n            )\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lookup_table[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in self._parameters[\"lookup_table\"].keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session = self.load_ort_session(classifier_url)\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "t",
+            "value": "P1D"
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "applyneighborhood3": {
+      "arguments": {
+        "data": {
+          "from_node": "filterbbox1"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf3": {
+              "arguments": {
+                "context": {
+                  "compile_presto": false,
+                  "presto_model_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt",
+                  "rescale_s1": false,
+                  "use_valid_date_token": false
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = [\n# ]\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf.udf_data import UdfData\nfrom pyproj import Transformer\nfrom pyproj.crs import CRS\n\nLAT_HARMONIZED_NAME = \"GEO-LAT\"\nLON_HARMONIZED_NAME = \"GEO-LON\"\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass FeatureExtractor(ABC):\n    \"\"\"Base class for all feature extractor UDFs. It provides some common\n    methods and attributes to be used by other feature extractor.\n\n    The inherited classes are supposed to take care of VectorDataCubes for\n    point based extraction or dense Cubes for tile/polygon based extraction.\n    \"\"\"\n\n    def __init__(self) -> None:\n        self._epsg = None\n\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations to be executed before the feature extractor is\n        executed. This method should be called by the `_execute` method of the\n        feature extractor.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"Returns the EPSG code of the datacube.\"\"\"\n        return self._epsg\n\n    @epsg.setter\n    def epsg(self, value: int):\n        self._epsg = value\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"No additional dependencies are defined. If you wish to add \"\n            \"dependencies to your feature extractor, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return []\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns a list of output labels to be assigned on the output bands,\n        needs to be overriden by the user.\"\"\"\n        raise NotImplementedError(\n            \"FeatureExtractor is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        raise NotImplementedError(\n            \"FeatureExtractor is a base abstract class, please implement the \"\n            \"_execute method.\"\n        )\n\n\nclass PatchFeatureExtractor(FeatureExtractor):\n    \"\"\"Base class for all the tile/polygon based feature extractors. An user\n    implementing a feature extractor should take care of\n    \"\"\"\n\n    def get_latlons(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Returns the latitude and longitude coordinates of the given array in\n        a dataarray. Returns a dataarray with the same width/height of the input\n        array, but with two bands, one for latitude and one for longitude. The\n        metadata coordinates of the output array are the same as the input\n        array, as the array wasn't reprojected but instead new features were\n        computed.\n\n        The latitude and longitude band names are standardized to the names\n        `LAT_HARMONIZED_NAME` and `LON_HARMONIZED_NAME` respectively.\n        \"\"\"\n\n        lon = inarr.coords[\"x\"]\n        lat = inarr.coords[\"y\"]\n        lon, lat = np.meshgrid(lon, lat)\n\n        if self.epsg is None:\n            raise Exception(\n                \"EPSG code was not defined, cannot extract lat/lon array \"\n                \"as the CRS is unknown.\"\n            )\n\n        # If the coordiantes are not in EPSG:4326, we need to reproject them\n        if self.epsg != 4326:\n            # Initializes a pyproj reprojection object\n            transformer = Transformer.from_crs(\n                crs_from=CRS.from_epsg(self.epsg),\n                crs_to=CRS.from_epsg(4326),\n                always_xy=True,\n            )\n            lon, lat = transformer.transform(xx=lon, yy=lat)\n\n        # Create a two channel numpy array of the lat and lons together by stacking\n        latlon = np.stack([lat, lon])\n\n        # Repack in a dataarray\n        return xr.DataArray(\n            latlon,\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [LAT_HARMONIZED_NAME, LON_HARMONIZED_NAME],\n                \"y\": inarr.coords[\"y\"],\n                \"x\": inarr.coords[\"x\"],\n            },\n        )\n\n    def _rescale_s1_backscatter(self, arr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Rescales the input array from uint16 to float32 decibel values.\n        The input array should be in uint16 format, as this optimizes memory usage in Open-EO\n        processes. This function is called automatically on the bands of the input array, except\n        if the parameter `rescale_s1` is set to False.\n        \"\"\"\n        s1_bands = [\"S1-SIGMA0-VV\", \"S1-SIGMA0-VH\", \"S1-SIGMA0-HV\", \"S1-SIGMA0-HH\"]\n        s1_bands_to_select = list(set(arr.bands.values) & set(s1_bands))\n\n        if len(s1_bands_to_select) == 0:\n            return arr\n\n        data_to_rescale = arr.sel(bands=s1_bands_to_select).astype(np.float32).data\n\n        # Assert that the values are set between 1 and 65535\n        if data_to_rescale.min().item() < 1 or data_to_rescale.max().item() > 65535:\n            raise ValueError(\n                \"The input array should be in uint16 format, with values between 1 and 65535. \"\n                \"This restriction assures that the data was processed according to the S1 fetcher \"\n                \"preprocessor. The user can disable this scaling manually by setting the \"\n                \"`rescale_s1` parameter to False in the feature extractor.\"\n            )\n\n        # Converting back to power values\n        data_to_rescale = 20.0 * np.log10(data_to_rescale) - 83.0\n        data_to_rescale = np.power(10, data_to_rescale / 10.0)\n        data_to_rescale[~np.isfinite(data_to_rescale)] = np.nan\n\n        # Converting power values to decibels\n        data_to_rescale = 10.0 * np.log10(data_to_rescale)\n\n        # Change the bands within the array\n        arr.loc[dict(bands=s1_bands_to_select)] = data_to_rescale\n        return arr\n\n    # TODO to remove the fixed transpose as it contributes to unclear code.\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"t\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        if self._parameters.get(\"rescale_s1\", True):\n            arr = self._rescale_s1_backscatter(arr)\n\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        pass\n\n\nclass PointFeatureExtractor(FeatureExtractor):\n    def __init__(self):\n        raise NotImplementedError(\n            \"Point based feature extraction on Vector Cubes is not supported yet.\"\n        )\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"t\")\n\n        arr = self._common_preparations(arr, parameters)\n\n        outarr = self.execute(cube.to_array()).transpose(\"bands\", \"t\")\n        return XarrayDataCube(outarr)\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        pass\n\n\nclass PrestoFeatureExtractor(PatchFeatureExtractor):\n    \"\"\"Feature extractor to use Presto model to compute per-pixel embeddings.\n    This will generate a datacube with 128 bands, each band representing a\n    feature from the Presto model.\n\n    Interesting UDF parameters:\n    - presto_url: A public URL to the Presto model file. A default Presto\n      version is provided if the parameter is left undefined.\n    - rescale_s1: Is specifically disabled by default, as the presto\n      dependencies already take care of the backscatter decompression. If\n      specified, should be set as `False`.\n    \"\"\"\n\n    import functools\n\n    PRESTO_WHL_URL = \"https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl\"\n    BASE_URL = \"https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies\"  # NOQA\n    DEPENDENCY_NAME = \"worldcereal_deps.zip\"\n\n    GFMAP_BAND_MAPPING = {\n        \"S2-L2A-B02\": \"B2\",\n        \"S2-L2A-B03\": \"B3\",\n        \"S2-L2A-B04\": \"B4\",\n        \"S2-L2A-B05\": \"B5\",\n        \"S2-L2A-B06\": \"B6\",\n        \"S2-L2A-B07\": \"B7\",\n        \"S2-L2A-B08\": \"B8\",\n        \"S2-L2A-B8A\": \"B8A\",\n        \"S2-L2A-B11\": \"B11\",\n        \"S2-L2A-B12\": \"B12\",\n        \"S1-SIGMA0-VH\": \"VH\",\n        \"S1-SIGMA0-VV\": \"VV\",\n        \"AGERA5-TMEAN\": \"temperature_2m\",\n        \"AGERA5-PRECIP\": \"total_precipitation\",\n    }\n\n    @functools.lru_cache(maxsize=6)\n    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> str:\n        import urllib.request\n        import zipfile\n        from pathlib import Path\n\n        # Downloads the wheel file\n        modelfile, _ = urllib.request.urlretrieve(\n            wheel_url, filename=Path.cwd() / Path(wheel_url).name\n        )\n        with zipfile.ZipFile(modelfile, \"r\") as zip_ref:\n            zip_ref.extractall(destination_dir)\n        return destination_dir\n\n    def output_labels(self) -> list:\n        \"\"\"Returns the output labels from this UDF, which is the output labels\n        of the presto embeddings\"\"\"\n        return [f\"presto_ft_{i}\" for i in range(128)]\n\n    def evaluate_resolution(self, inarr: xr.DataArray) -> int:\n        \"\"\"Helper function to get the resolution in meters for\n        the input array.\n\n        Parameters\n        ----------\n        inarr : xr.DataArray\n            input array to determine resolution for.\n\n        Returns\n        -------\n        int\n            resolution in meters.\n        \"\"\"\n\n        if self.epsg == 4326:\n            from pyproj import Transformer\n            from shapely.geometry import Point\n            from shapely.ops import transform\n\n            self.logger.info(\n                \"Converting WGS84 coordinates to EPSG:3857 to determine resolution.\"\n            )\n\n            transformer = Transformer.from_crs(self.epsg, 3857, always_xy=True)\n            points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]\n            points = [transform(transformer.transform, point) for point in points]\n\n            resolution = abs(points[1].x - points[0].x)\n\n        else:\n            resolution = abs(inarr.x[1].values - inarr.x[0].values)\n\n        self.logger.info(f\"Resolution for computing slope: {resolution}\")\n\n        return resolution\n\n    def compute_slope(self, inarr: xr.DataArray, resolution: int) -> xr.DataArray:\n        \"\"\"Computes the slope using the scipy library. The input array should\n        have the following bands: 'elevation' And no time dimension. Returns a\n        new DataArray containing the new `slope` band.\n\n        Parameters\n        ----------\n        inarr : xr.DataArray\n            input array containing a band 'elevation'.\n        resolution : int\n            resolution of the input array in meters.\n\n        Returns\n        -------\n        xr.DataArray\n            output array containing 'slope' band in degrees.\n        \"\"\"\n\n        import random  # pylint: disable=import-outside-toplevel\n\n        import numpy as np  # pylint: disable=import-outside-toplevel\n        from scipy.ndimage import (  # pylint: disable=import-outside-toplevel\n            convolve,\n            zoom,\n        )\n\n        def _rolling_fill(darr, max_iter=2):\n            \"\"\"Helper function that also reflects values inside\n            a patch with NaNs.\"\"\"\n            if max_iter == 0:\n                return darr\n            else:\n                max_iter -= 1\n            # arr of shape (rows, cols)\n            mask = np.isnan(darr)\n\n            if ~np.any(mask):\n                return darr\n\n            roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]\n            random.shuffle(roll_params)\n\n            for roll_param in roll_params:\n                rolled = np.roll(darr, roll_param, axis=(0, 1))\n                darr[mask] = rolled[mask]\n\n            return _rolling_fill(darr, max_iter=max_iter)\n\n        def _downsample(arr: np.ndarray, factor: int) -> np.ndarray:\n            \"\"\"Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.\n\n            Parameters\n            ----------\n            arr : np.ndarray\n                The 2D input array.\n            factor : int\n                The factor by which to downsample. For example, factor=2 downsamples by 2x.\n\n            Returns\n            -------\n            np.ndarray\n                Downsampled array.\n            \"\"\"\n\n            # Get the original shape of the array\n            X, Y = arr.shape\n\n            # Calculate how much padding is needed for each dimension\n            pad_X = (\n                factor - (X % factor)\n            ) % factor  # Ensures padding is only applied if needed\n            pad_Y = (\n                factor - (Y % factor)\n            ) % factor  # Ensures padding is only applied if needed\n\n            # Pad the array using 'reflect' mode\n            padded = np.pad(arr, ((0, pad_X), (0, pad_Y)), mode=\"reflect\")\n\n            # Reshape the array to form blocks of size 'factor' x 'factor'\n            reshaped = padded.reshape(\n                (X + pad_X) // factor, factor, (Y + pad_Y) // factor, factor\n            )\n\n            # Take the mean over the factor-sized blocks\n            downsampled = np.nanmean(reshaped, axis=(1, 3))\n\n            return downsampled\n\n        dem = inarr.sel(bands=\"elevation\").values\n        dem_arr = dem.astype(np.float32)\n\n        # Invalid to NaN and keep track of these pixels\n        dem_arr[dem_arr == 65535] = np.nan\n        idx_invalid = np.isnan(dem_arr)\n\n        # Fill NaNs with rolling fill\n        dem_arr = _rolling_fill(dem_arr)\n\n        # We make sure DEM is at 20m for slope computation\n        # compatible with global slope collection\n        factor = int(20 / resolution)\n        if factor < 1 or factor % 2 != 0:\n            raise NotImplementedError(\n                f\"Unsupported resolution for slope computation: {resolution}\"\n            )\n        dem_arr_downsampled = _downsample(dem_arr, factor)\n        x_odd, y_odd = dem_arr.shape[0] % 2 != 0, dem_arr.shape[1] % 2 != 0\n\n        # Mask NaN values in the DEM data\n        dem_masked = np.ma.masked_invalid(dem_arr_downsampled)\n\n        # Define convolution kernels for x and y gradients (simple finite difference approximation)\n        kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (\n            8.0 * 20  # array is now at 20m resolution\n        )  # x-derivative kernel\n\n        kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (\n            8.0 * 20  # array is now at 20m resolution\n        )  # y-derivative kernel\n\n        # Apply convolution to compute gradients\n        dx = convolve(dem_masked, kernel_x)  # Gradient in the x-direction\n        dy = convolve(dem_masked, kernel_y)  # Gradient in the y-direction\n\n        # Reapply the mask to the gradients\n        dx = np.ma.masked_where(dem_masked.mask, dx)\n        dy = np.ma.masked_where(dem_masked.mask, dy)\n\n        # Calculate the magnitude of the gradient (rise/run)\n        gradient_magnitude = np.ma.sqrt(dx**2 + dy**2)\n\n        # Convert gradient magnitude to slope (in degrees)\n        slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)\n\n        # Upsample to original resolution with bilinear interpolation\n        mask = slope.mask\n        mask = zoom(mask, zoom=factor, order=0)\n        slope = zoom(slope, zoom=factor, order=1)\n        slope[mask] = 65535\n\n        # Strip one row or column if original array was odd in that dimension\n        if x_odd:\n            slope = slope[:-1, :]\n        if y_odd:\n            slope = slope[:, :-1]\n\n        # Fill slope values where the original DEM had NaNs\n        slope[idx_invalid] = 65535\n        slope[np.isnan(slope)] = 65535\n        slope = slope.astype(np.uint16)\n\n        return xr.DataArray(\n            slope[None, :, :],\n            dims=(\"bands\", \"y\", \"x\"),\n            coords={\n                \"bands\": [\"slope\"],\n                \"y\": inarr.y,\n                \"x\": inarr.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        import sys\n\n        if self.epsg is None:\n            raise ValueError(\n                \"EPSG code is required for Presto feature extraction, but was \"\n                \"not correctly initialized.\"\n            )\n        if \"presto_model_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"presto_model_url\"')\n        presto_model_url = self._parameters.get(\"presto_model_url\")\n        self.logger.info(f'Loading Presto model from \"{presto_model_url}\"')\n        presto_wheel_url = self._parameters.get(\"presto_wheel_url\", self.PRESTO_WHL_URL)\n        self.logger.info(f'Loading Presto wheel from \"{presto_wheel_url}\"')\n\n        ignore_dependencies = self._parameters.get(\"ignore_dependencies\", False)\n        if ignore_dependencies:\n            self.logger.info(\n                \"`ignore_dependencies` flag is set to True. Make sure that \"\n                \"Presto and its dependencies are available on the runtime \"\n                \"environment\"\n            )\n\n        # The below is required to avoid flipping of the result\n        # when running on OpenEO backend!\n        inarr = inarr.transpose(\"bands\", \"t\", \"x\", \"y\")\n\n        # Change the band names\n        new_band_names = [\n            self.GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands\n        ]\n        inarr = inarr.assign_coords(bands=new_band_names)\n\n        # Handle NaN values in Presto compatible way\n        inarr = inarr.fillna(65535)\n\n        # Add valid_date attribute to the input array if we need it and\n        # it's not there. For now we take center timestamp in this case.\n        use_valid_date_token = self._parameters.get(\"use_valid_date_token\", False)\n        if \"valid_date\" not in inarr.attrs:\n            if use_valid_date_token:\n                # Only log warning if we will use the valid_date token\n                self.logger.warning(\n                    \"No `valid_date` attribute found in input array. Taking center timestamp.\"\n                )\n            inarr.attrs[\"valid_date\"] = inarr.t.values[6]\n\n        # Unzip de dependencies on the backend\n        if not ignore_dependencies:\n            self.logger.info(\"Unzipping dependencies\")\n            deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)\n            self.logger.info(\"Unpacking presto wheel\")\n            deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)\n\n            self.logger.info(\"Appending dependencies\")\n            sys.path.append(str(deps_dir))\n\n        from presto.inference import (  # pylint: disable=import-outside-toplevel\n            get_presto_features,\n        )\n\n        if \"slope\" not in inarr.bands:\n            # If 'slope' is not present we need to compute it here\n            self.logger.warning(\"`slope` not found in input array. Computing ...\")\n            resolution = self.evaluate_resolution(inarr.isel(t=0))\n            slope = self.compute_slope(inarr.isel(t=0), resolution)\n            slope = slope.expand_dims({\"t\": inarr.t}, axis=0).astype(\"float32\")\n\n            inarr = xr.concat([inarr.astype(\"float32\"), slope], dim=\"bands\")\n\n        batch_size = self._parameters.get(\"batch_size\", 256)\n        compile_presto = self._parameters.get(\"compile_presto\", False)\n        self.logger.info(f\"Compile presto: {compile_presto}\")\n\n        self.logger.info(\"Extracting presto features\")\n        features = get_presto_features(\n            inarr,\n            presto_model_url,\n            self.epsg,\n            use_valid_date_token=use_valid_date_token,\n            batch_size=batch_size,\n            compile=compile_presto,\n        )\n        return features\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        # Disable S1 rescaling (decompression) by default\n        if parameters.get(\"rescale_s1\", None) is None:\n            parameters.update({\"rescale_s1\": False})\n        return super()._execute(cube, parameters)\n\n    def dependencies(self) -> list:\n        # We are just overriding the parent method to suppress the warning\n        return []\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    feature_extractor_class = PrestoFeatureExtractor\n\n    # User-defined, feature extractor class initialized here\n    feature_extractor = feature_extractor_class()\n\n    is_pixel_based = issubclass(feature_extractor_class, PointFeatureExtractor)\n\n    if not is_pixel_based:\n        assert (\n            len(udf_data.datacube_list) == 1\n        ), \"OpenEO GFMAP Feature extractor pipeline only supports single input cubes for the tile.\"\n\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj[\"EPSG\"]\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = feature_extractor._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "applyneighborhood4": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels10"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf4": {
+              "arguments": {
+                "context": {
+                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx",
+                  "lookup_table": {
+                    "cropland": 1,
+                    "other": 0
+                  }
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []  # Disable the dependencies from PIP install\n\n    def output_labels(self) -> list:\n        class_names = self._parameters[\"lookup_table\"].keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        lookup_table = self._parameters.get(\"lookup_table\", None)\n\n        if lookup_table is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the UDFs parameters.\"\n            )\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lookup_table[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in self._parameters[\"lookup_table\"].keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session = self.load_ort_session(classifier_url)\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "t",
+            "value": "P1D"
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "applyneighborhood5": {
+      "arguments": {
+        "data": {
+          "from_node": "reducedimension4"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf5": {
+              "arguments": {
+                "context": {
+                  "enable": true,
+                  "keep_class_probs": false,
+                  "kernel_size": 5,
+                  "lookup_table": {
+                    "cropland": 1,
+                    "other": 0
+                  },
+                  "method": "smooth_probabilities",
+                  "save_intermediate": false
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\"\n                for name in self._parameters[\"lookup_table\"].keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "applyneighborhood6": {
+      "arguments": {
+        "data": {
+          "from_node": "mask2"
+        },
+        "overlap": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 0
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 0
+          }
+        ],
+        "process": {
+          "process_graph": {
+            "runudf6": {
+              "arguments": {
+                "context": {
+                  "enable": true,
+                  "keep_class_probs": false,
+                  "kernel_size": 5,
+                  "lookup_table": {
+                    "alliums": 0,
+                    "beans": 1,
+                    "beet": 2,
+                    "brassica_oleracea_cabbage": 3,
+                    "carrots_daucus": 4,
+                    "cauliflower_broccoli": 5,
+                    "chicory_chicories": 6,
+                    "fibre_crops": 7,
+                    "leafy_stem_vegetables": 8,
+                    "maize": 9,
+                    "oilseed_crops": 10,
+                    "onion_shallot": 11,
+                    "other_temporary_crops": 12,
+                    "peas": 13,
+                    "potatoes": 14,
+                    "root_vegetables": 15,
+                    "spinach": 16,
+                    "unspecified_barley": 17,
+                    "unspecified_wheat": 18
+                  },
+                  "method": "smooth_probabilities",
+                  "save_intermediate": false
+                },
+                "data": {
+                  "from_parameter": "data"
+                },
+                "runtime": "Python",
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\"\n                for name in self._parameters[\"lookup_table\"].keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+              },
+              "process_id": "run_udf",
+              "result": true
+            }
+          }
+        },
+        "size": [
+          {
+            "dimension": "x",
+            "unit": "px",
+            "value": 128
+          },
+          {
+            "dimension": "y",
+            "unit": "px",
+            "value": 128
+          }
+        ]
+      },
+      "process_id": "apply_neighborhood"
+    },
+    "filterbands1": {
+      "arguments": {
+        "bands": [
+          "classification"
+        ],
+        "data": {
+          "from_node": "saveresult1"
+        }
+      },
+      "process_id": "filter_bands"
+    },
+    "filterbbox1": {
+      "arguments": {
+        "data": {
+          "from_node": "mergecubes4"
+        },
+        "extent": {
+          "from_parameter": "spatial_extent"
+        }
+      },
+      "process_id": "filter_bbox"
+    },
+    "loadcollection1": {
+      "arguments": {
+        "bands": [
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B11",
+          "B12"
+        ],
+        "featureflags": {
+          "tilesize": 128
+        },
+        "id": "SENTINEL2_L2A",
+        "properties": {
+          "eo:cloud_cover": {
+            "process_graph": {
+              "lte1": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": 95
+                },
+                "process_id": "lte",
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      },
+      "process_id": "load_collection"
+    },
+    "loadcollection2": {
+      "arguments": {
+        "bands": [
+          "SCL"
+        ],
+        "id": "SENTINEL2_L2A",
+        "properties": {
+          "eo:cloud_cover": {
+            "process_graph": {
+              "lte2": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": 95
+                },
+                "process_id": "lte",
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      },
+      "process_id": "load_collection"
+    },
+    "loadcollection3": {
+      "arguments": {
+        "bands": [
+          "VH",
+          "VV"
+        ],
+        "featureflags": {
+          "tilesize": 128
+        },
+        "id": "SENTINEL1_GRD",
+        "properties": {
+          "polarisation": {
+            "process_graph": {
+              "eq2": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": "VV&VH"
+                },
+                "process_id": "eq",
+                "result": true
+              }
+            }
+          },
+          "sat:orbit_state": {
+            "process_graph": {
+              "eq1": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": "ASCENDING"
+                },
+                "process_id": "eq",
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      },
+      "process_id": "load_collection"
+    },
+    "loadcollection4": {
+      "arguments": {
+        "bands": [
+          "DEM"
+        ],
+        "id": "COPERNICUS_30",
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "temporal_extent": null
+      },
+      "process_id": "load_collection"
+    },
+    "loadstac1": {
+      "arguments": {
+        "bands": [
+          "Slope"
+        ],
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
+      },
+      "process_id": "load_stac"
+    },
+    "loadstac2": {
+      "arguments": {
+        "bands": [
+          "precipitation-flux",
+          "temperature-mean"
+        ],
+        "spatial_extent": {
+          "from_parameter": "spatial_extent"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        },
+        "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
+      },
+      "process_id": "load_stac"
+    },
+    "mask1": {
+      "arguments": {
+        "data": {
+          "from_node": "loadcollection1"
+        },
+        "mask": {
+          "from_node": "renamelabels1"
+        }
+      },
+      "process_id": "mask"
+    },
+    "mask2": {
+      "arguments": {
+        "data": {
+          "from_node": "reducedimension3"
+        },
+        "mask": {
+          "from_node": "apply6"
+        },
+        "replacement": 254
+      },
+      "process_id": "mask"
+    },
+    "mergecubes1": {
+      "arguments": {
+        "cube1": {
+          "from_node": "apply2"
+        },
+        "cube2": {
+          "from_node": "apply3"
+        }
+      },
+      "process_id": "merge_cubes"
+    },
+    "mergecubes2": {
+      "arguments": {
+        "cube1": {
+          "from_node": "reducedimension1"
+        },
+        "cube2": {
+          "from_node": "renamelabels6"
+        }
+      },
+      "process_id": "merge_cubes"
+    },
+    "mergecubes3": {
+      "arguments": {
+        "cube1": {
+          "from_node": "mergecubes1"
+        },
+        "cube2": {
+          "from_node": "apply4"
+        }
+      },
+      "process_id": "merge_cubes"
+    },
+    "mergecubes4": {
+      "arguments": {
+        "cube1": {
+          "from_node": "mergecubes3"
+        },
+        "cube2": {
+          "from_node": "resamplecubespatial2"
+        }
+      },
+      "process_id": "merge_cubes"
+    },
+    "reducedimension1": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels4"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "min1": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "min",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "reduce_dimension"
+    },
+    "reducedimension2": {
+      "arguments": {
+        "data": {
+          "from_node": "loadcollection4"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "min2": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "min",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "reduce_dimension"
+    },
+    "reducedimension3": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels9"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "mean2": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "mean",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "reduce_dimension"
+    },
+    "reducedimension4": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels11"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "mean3": {
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "process_id": "mean",
+              "result": true
+            }
+          }
+        }
+      },
+      "process_id": "reduce_dimension"
+    },
+    "renamelabels1": {
+      "arguments": {
+        "data": {
+          "from_node": "toscldilationmask1"
+        },
+        "dimension": "bands",
+        "target": [
+          "S2-L2A-SCL_DILATED_MASK"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels10": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood3"
+        },
+        "dimension": "bands",
+        "target": [
+          "presto_ft_0",
+          "presto_ft_1",
+          "presto_ft_2",
+          "presto_ft_3",
+          "presto_ft_4",
+          "presto_ft_5",
+          "presto_ft_6",
+          "presto_ft_7",
+          "presto_ft_8",
+          "presto_ft_9",
+          "presto_ft_10",
+          "presto_ft_11",
+          "presto_ft_12",
+          "presto_ft_13",
+          "presto_ft_14",
+          "presto_ft_15",
+          "presto_ft_16",
+          "presto_ft_17",
+          "presto_ft_18",
+          "presto_ft_19",
+          "presto_ft_20",
+          "presto_ft_21",
+          "presto_ft_22",
+          "presto_ft_23",
+          "presto_ft_24",
+          "presto_ft_25",
+          "presto_ft_26",
+          "presto_ft_27",
+          "presto_ft_28",
+          "presto_ft_29",
+          "presto_ft_30",
+          "presto_ft_31",
+          "presto_ft_32",
+          "presto_ft_33",
+          "presto_ft_34",
+          "presto_ft_35",
+          "presto_ft_36",
+          "presto_ft_37",
+          "presto_ft_38",
+          "presto_ft_39",
+          "presto_ft_40",
+          "presto_ft_41",
+          "presto_ft_42",
+          "presto_ft_43",
+          "presto_ft_44",
+          "presto_ft_45",
+          "presto_ft_46",
+          "presto_ft_47",
+          "presto_ft_48",
+          "presto_ft_49",
+          "presto_ft_50",
+          "presto_ft_51",
+          "presto_ft_52",
+          "presto_ft_53",
+          "presto_ft_54",
+          "presto_ft_55",
+          "presto_ft_56",
+          "presto_ft_57",
+          "presto_ft_58",
+          "presto_ft_59",
+          "presto_ft_60",
+          "presto_ft_61",
+          "presto_ft_62",
+          "presto_ft_63",
+          "presto_ft_64",
+          "presto_ft_65",
+          "presto_ft_66",
+          "presto_ft_67",
+          "presto_ft_68",
+          "presto_ft_69",
+          "presto_ft_70",
+          "presto_ft_71",
+          "presto_ft_72",
+          "presto_ft_73",
+          "presto_ft_74",
+          "presto_ft_75",
+          "presto_ft_76",
+          "presto_ft_77",
+          "presto_ft_78",
+          "presto_ft_79",
+          "presto_ft_80",
+          "presto_ft_81",
+          "presto_ft_82",
+          "presto_ft_83",
+          "presto_ft_84",
+          "presto_ft_85",
+          "presto_ft_86",
+          "presto_ft_87",
+          "presto_ft_88",
+          "presto_ft_89",
+          "presto_ft_90",
+          "presto_ft_91",
+          "presto_ft_92",
+          "presto_ft_93",
+          "presto_ft_94",
+          "presto_ft_95",
+          "presto_ft_96",
+          "presto_ft_97",
+          "presto_ft_98",
+          "presto_ft_99",
+          "presto_ft_100",
+          "presto_ft_101",
+          "presto_ft_102",
+          "presto_ft_103",
+          "presto_ft_104",
+          "presto_ft_105",
+          "presto_ft_106",
+          "presto_ft_107",
+          "presto_ft_108",
+          "presto_ft_109",
+          "presto_ft_110",
+          "presto_ft_111",
+          "presto_ft_112",
+          "presto_ft_113",
+          "presto_ft_114",
+          "presto_ft_115",
+          "presto_ft_116",
+          "presto_ft_117",
+          "presto_ft_118",
+          "presto_ft_119",
+          "presto_ft_120",
+          "presto_ft_121",
+          "presto_ft_122",
+          "presto_ft_123",
+          "presto_ft_124",
+          "presto_ft_125",
+          "presto_ft_126",
+          "presto_ft_127"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels11": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood4"
+        },
+        "dimension": "bands",
+        "target": [
+          "classification",
+          "probability",
+          "probability_other",
+          "probability_cropland"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels12": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood5"
+        },
+        "dimension": "bands",
+        "target": [
+          "classification",
+          "probability"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels13": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood6"
+        },
+        "dimension": "bands",
+        "target": [
+          "classification",
+          "probability"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels2": {
+      "arguments": {
+        "data": {
+          "from_node": "mask1"
+        },
+        "dimension": "bands",
+        "source": [
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B11",
+          "B12"
+        ],
+        "target": [
+          "S2-L2A-B02",
+          "S2-L2A-B03",
+          "S2-L2A-B04",
+          "S2-L2A-B05",
+          "S2-L2A-B06",
+          "S2-L2A-B07",
+          "S2-L2A-B08",
+          "S2-L2A-B11",
+          "S2-L2A-B12"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels3": {
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial2"
+        },
+        "dimension": "bands",
+        "source": [
+          "VH",
+          "VV"
+        ],
+        "target": [
+          "S1-SIGMA0-VH",
+          "S1-SIGMA0-VV"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels4": {
+      "arguments": {
+        "data": {
+          "from_node": "loadstac1"
+        },
+        "dimension": "bands",
+        "target": [
+          "slope"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels5": {
+      "arguments": {
+        "data": {
+          "from_node": "reducedimension2"
+        },
+        "dimension": "bands",
+        "source": [
+          "DEM"
+        ],
+        "target": [
+          "COP-DEM"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels6": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels5"
+        },
+        "dimension": "bands",
+        "target": [
+          "elevation"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels7": {
+      "arguments": {
+        "data": {
+          "from_node": "loadstac2"
+        },
+        "dimension": "bands",
+        "target": [
+          "AGERA5-PRECIP",
+          "AGERA5-TMEAN"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels8": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood1"
+        },
+        "dimension": "bands",
+        "target": [
+          "presto_ft_0",
+          "presto_ft_1",
+          "presto_ft_2",
+          "presto_ft_3",
+          "presto_ft_4",
+          "presto_ft_5",
+          "presto_ft_6",
+          "presto_ft_7",
+          "presto_ft_8",
+          "presto_ft_9",
+          "presto_ft_10",
+          "presto_ft_11",
+          "presto_ft_12",
+          "presto_ft_13",
+          "presto_ft_14",
+          "presto_ft_15",
+          "presto_ft_16",
+          "presto_ft_17",
+          "presto_ft_18",
+          "presto_ft_19",
+          "presto_ft_20",
+          "presto_ft_21",
+          "presto_ft_22",
+          "presto_ft_23",
+          "presto_ft_24",
+          "presto_ft_25",
+          "presto_ft_26",
+          "presto_ft_27",
+          "presto_ft_28",
+          "presto_ft_29",
+          "presto_ft_30",
+          "presto_ft_31",
+          "presto_ft_32",
+          "presto_ft_33",
+          "presto_ft_34",
+          "presto_ft_35",
+          "presto_ft_36",
+          "presto_ft_37",
+          "presto_ft_38",
+          "presto_ft_39",
+          "presto_ft_40",
+          "presto_ft_41",
+          "presto_ft_42",
+          "presto_ft_43",
+          "presto_ft_44",
+          "presto_ft_45",
+          "presto_ft_46",
+          "presto_ft_47",
+          "presto_ft_48",
+          "presto_ft_49",
+          "presto_ft_50",
+          "presto_ft_51",
+          "presto_ft_52",
+          "presto_ft_53",
+          "presto_ft_54",
+          "presto_ft_55",
+          "presto_ft_56",
+          "presto_ft_57",
+          "presto_ft_58",
+          "presto_ft_59",
+          "presto_ft_60",
+          "presto_ft_61",
+          "presto_ft_62",
+          "presto_ft_63",
+          "presto_ft_64",
+          "presto_ft_65",
+          "presto_ft_66",
+          "presto_ft_67",
+          "presto_ft_68",
+          "presto_ft_69",
+          "presto_ft_70",
+          "presto_ft_71",
+          "presto_ft_72",
+          "presto_ft_73",
+          "presto_ft_74",
+          "presto_ft_75",
+          "presto_ft_76",
+          "presto_ft_77",
+          "presto_ft_78",
+          "presto_ft_79",
+          "presto_ft_80",
+          "presto_ft_81",
+          "presto_ft_82",
+          "presto_ft_83",
+          "presto_ft_84",
+          "presto_ft_85",
+          "presto_ft_86",
+          "presto_ft_87",
+          "presto_ft_88",
+          "presto_ft_89",
+          "presto_ft_90",
+          "presto_ft_91",
+          "presto_ft_92",
+          "presto_ft_93",
+          "presto_ft_94",
+          "presto_ft_95",
+          "presto_ft_96",
+          "presto_ft_97",
+          "presto_ft_98",
+          "presto_ft_99",
+          "presto_ft_100",
+          "presto_ft_101",
+          "presto_ft_102",
+          "presto_ft_103",
+          "presto_ft_104",
+          "presto_ft_105",
+          "presto_ft_106",
+          "presto_ft_107",
+          "presto_ft_108",
+          "presto_ft_109",
+          "presto_ft_110",
+          "presto_ft_111",
+          "presto_ft_112",
+          "presto_ft_113",
+          "presto_ft_114",
+          "presto_ft_115",
+          "presto_ft_116",
+          "presto_ft_117",
+          "presto_ft_118",
+          "presto_ft_119",
+          "presto_ft_120",
+          "presto_ft_121",
+          "presto_ft_122",
+          "presto_ft_123",
+          "presto_ft_124",
+          "presto_ft_125",
+          "presto_ft_126",
+          "presto_ft_127"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "renamelabels9": {
+      "arguments": {
+        "data": {
+          "from_node": "applyneighborhood2"
+        },
+        "dimension": "bands",
+        "target": [
+          "classification",
+          "probability",
+          "probability_alliums",
+          "probability_beans",
+          "probability_beet",
+          "probability_brassica_oleracea_cabbage",
+          "probability_carrots_daucus",
+          "probability_cauliflower_broccoli",
+          "probability_chicory_chicories",
+          "probability_fibre_crops",
+          "probability_leafy_stem_vegetables",
+          "probability_maize",
+          "probability_oilseed_crops",
+          "probability_onion_shallot",
+          "probability_other_temporary_crops",
+          "probability_peas",
+          "probability_potatoes",
+          "probability_root_vegetables",
+          "probability_spinach",
+          "probability_unspecified_barley",
+          "probability_unspecified_wheat"
+        ]
+      },
+      "process_id": "rename_labels"
+    },
+    "resamplecubespatial1": {
+      "arguments": {
+        "data": {
+          "from_node": "mergecubes2"
+        },
+        "method": "bilinear",
+        "target": {
+          "from_node": "apply2"
+        }
+      },
+      "process_id": "resample_cube_spatial"
+    },
+    "resamplecubespatial2": {
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels7"
+        },
+        "method": "bilinear",
+        "target": {
+          "from_node": "apply2"
+        }
+      },
+      "process_id": "resample_cube_spatial"
+    },
+    "resamplespatial1": {
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "loadcollection2"
+        },
+        "method": "near",
+        "projection": null,
+        "resolution": 10
+      },
+      "process_id": "resample_spatial"
+    },
+    "resamplespatial2": {
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "sarbackscatter1"
+        },
+        "method": "near",
+        "projection": null,
+        "resolution": 20
+      },
+      "process_id": "resample_spatial"
+    },
+    "sarbackscatter1": {
+      "arguments": {
+        "coefficient": "sigma0-ellipsoid",
+        "contributing_area": false,
+        "data": {
+          "from_node": "loadcollection3"
+        },
+        "elevation_model": "COPERNICUS_30",
+        "ellipsoid_incidence_angle": false,
+        "local_incidence_angle": false,
+        "mask": false,
+        "noise_removal": true
+      },
+      "process_id": "sar_backscatter"
+    },
+    "resamplespatial3": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "apply5"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "projection"
+        },
+        "resolution": 0
+      }
+    },
+    "saveresult1": {
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial3"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "worldcereal-cropland-type"
+        }
+      },
+      "process_id": "save_result"
+    },
+    "resamplespatial4": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "apply7"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "projection"
+        },
+        "resolution": 0
+      }
+    },
+    "saveresult2": {
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial4"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "worldcereal-cropland-type-postprocessed"
+        }
+      },
+      "process_id": "save_result",
+      "result": true
+    },
+    "toscldilationmask1": {
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial1"
+        },
+        "erosion_kernel_size": 3,
+        "kernel1_size": 17,
+        "kernel2_size": 77,
+        "mask1_values": [
+          2,
+          4,
+          5,
+          6,
+          7
+        ],
+        "mask2_values": [
+          3,
+          8,
+          9,
+          10,
+          11
+        ],
+        "scl_band_name": "SCL"
+      },
+      "process_id": "to_scl_dilation_mask"
+    }
+  },
+  "id": "worldcereal_crop_type",
+  "summary": "Crop type mapping using Sentinel-1, Sentinel-2, METEO and Copernicus-30 data",
+  "description": "Load in Sentinel-1, Sentinel-2, METEO and Copernicus-30 data and apply a CatBoost model to map the type of crops.",
+  "parameters": [
+    {
+      "name": "spatial_extent",
+      "description": "Limits the data to process to the specified bounding box or polygons.\n\nFor raster data, the process loads the pixel into the data cube if the point\nat the pixel center intersects with the bounding box or any of the polygons\n(as defined in the Simple Features standard by the OGC).\n\nFor vector data, the process loads the geometry into the data cube if the geometry\nis fully within the bounding box or any of the polygons (as defined in the\nSimple Features standard by the OGC). Empty geometries may only be in the\ndata cube if no spatial extent has been provided.\n\nEmpty geometries are ignored.\n\nSet this parameter to null to set no limit for the spatial extent.",
+      "schema": [
+        {
+          "title": "Bounding Box",
+          "type": "object",
+          "subtype": "bounding-box",
+          "required": [
+            "west",
+            "south",
+            "east",
+            "north"
+          ],
+          "properties": {
+            "west": {
+              "description": "West (lower left corner, coordinate axis 1).",
+              "type": "number"
+            },
+            "south": {
+              "description": "South (lower left corner, coordinate axis 2).",
+              "type": "number"
+            },
+            "east": {
+              "description": "East (upper right corner, coordinate axis 1).",
+              "type": "number"
+            },
+            "north": {
+              "description": "North (upper right corner, coordinate axis 2).",
+              "type": "number"
+            },
+            "base": {
+              "description": "Base (optional, lower left corner, coordinate axis 3).",
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null
+            },
+            "height": {
+              "description": "Height (optional, upper right corner, coordinate axis 3).",
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null
+            },
+            "crs": {
+              "description": "Coordinate reference system of the extent, specified as as [EPSG code](http://www.epsg-registry.org/) or [WKT2 CRS string](http://docs.opengeospatial.org/is/18-010r7/18-010r7.html). Defaults to `4326` (EPSG code 4326) unless the client explicitly requests a different coordinate reference system.",
+              "anyOf": [
+                {
+                  "title": "EPSG Code",
+                  "type": "integer",
+                  "subtype": "epsg-code",
+                  "minimum": 1000,
+                  "examples": [
+                    3857
+                  ]
+                },
+                {
+                  "title": "WKT2",
+                  "type": "string",
+                  "subtype": "wkt2-definition"
+                }
+              ],
+              "default": 4326
+            }
+          }
+        },
+        {
+          "title": "Vector data cube",
+          "description": "Limits the data cube to the bounding box of the given geometries in the vector data cube. For raster data, all pixels inside the bounding box that do not intersect with any of the polygons will be set to no data (`null`). Empty geometries are ignored.",
+          "type": "object",
+          "subtype": "datacube",
+          "dimensions": [
+            {
+              "type": "geometry"
+            }
+          ]
+        },
+        {
+          "title": "No filter",
+          "description": "Don't filter spatially. All data is included in the data cube.",
+          "type": "null"
+        }
+      ]
+    },
+    {
+      "name": "temporal_extent",
+      "description": "Temporal extent specified as two-element array with start and end date/date-time.",
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval",
+        "uniqueItems": true,
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {
+          "anyOf": [
+            {
+              "type": "string",
+              "subtype": "date-time",
+              "format": "date-time"
+            },
+            {
+              "type": "string",
+              "subtype": "date",
+              "format": "date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "model_url",
+      "description": "The URL of the trained ONNX model",
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "projection",
+      "description": "The EPSG code of the output projection. If not set, the default UTM projection is used.",
+      "schema": {
+        "type": "string"
+      },
+      "default": null,
+      "optional": true
+    }
+  ],
+  "minimal_job_options": {
+    "driver-memory": "4g",
+    "executor-memory": "2g",
+    "executor-memoryOverhead": "1g",
+    "python-memory": "3g",
+    "soft-errors": "true",
+    "udf-dependency-archives": [
+      "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip#onnx_deps"
+    ]
+  }
+}
