@@ -247,20 +247,6 @@
         },
         "id": "SENTINEL1_GRD",
         "properties": {
-          "sat:orbit_state": {
-            "process_graph": {
-              "eq1": {
-                "process_id": "eq",
-                "arguments": {
-                  "x": {
-                    "from_parameter": "value"
-                  },
-                  "y": "DESCENDING"
-                },
-                "result": true
-              }
-            }
-          },
           "polarisation": {
             "process_graph": {
               "eq2": {
