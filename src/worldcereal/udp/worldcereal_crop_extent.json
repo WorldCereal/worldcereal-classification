@@ -1290,7 +1290,7 @@
       "optional": true
     }
   ],
-  "minimal_job_options": {
+  "default_job_options": {
     "driver-memory": "4g",
     "executor-memory": "2g",
     "executor-memoryOverhead": "1g",
