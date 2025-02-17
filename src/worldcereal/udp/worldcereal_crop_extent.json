@@ -1193,6 +1193,18 @@
         }
       },
       "result": true
+    },
+    "saveresult2": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply5"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "worldcereal-cropland-extent-postprocessed"
+        }
+      }
     }
   },
   "id": "worldcereal_crop_extent",
