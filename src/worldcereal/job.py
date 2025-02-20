@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
@@ -131,13 +130,8 @@ def generate_map(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    if backend_context.backend == Backend.CDSE:
-        connection = openeo.connect(
-            "https://openeo.creo.vito.be/openeo/"
-        ).authenticate_oidc()
-    else:
-        # Make a connection to the OpenEO backend
-        connection = BACKEND_CONNECTIONS[backend_context.backend]()
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
