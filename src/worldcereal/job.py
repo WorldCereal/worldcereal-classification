@@ -409,14 +409,14 @@ def download_official_product(
     # In case season is specified, reduce temporal dimension
     if season is not None:
         products = products.reduce_dimension(dimension="t", reducer="mean")
-        filename_prefix = f"{product_type}_{season}"
+        filename_prefix = f"{product_collection}_{season}_{product_type.lower()}"
     elif product_type.lower() == WorldCereal2021ProductType.TEMPORARYCROPS.value:
         # in case of temporarycrops product, reduce temporal dimension
         products = products.reduce_dimension(dimension="t", reducer="mean")
-        filename_prefix = product_type
+        filename_prefix = f"{product_collection}_{product_type.lower()}"
     else:
         # possibly multiple seasons, no need to reduce temporal dimension
-        filename_prefix = product_type
+        filename_prefix = f"{product_collection}_{product_type.lower()}"
 
     # Execute the job
     job = products.execute_batch(
