@@ -35,31 +35,37 @@ LUTS = {
     "temporarycrops": {
         0: "no_cropland",
         100: "cropland",
+        255: "no_data",
     },
     "activecropland": {
         0: "inactive",
         100: "active",
         254: "no_cropland",
+        255: "no_data",
     },
     "wintercereals": {
         0: "other",
         100: "winter cereal",
         254: "no_cropland",
+        255: "no_data",
     },
     "springcereals": {
         0: "other",
         100: "spring cereal",
         254: "no_cropland",
+        255: "no_data",
     },
     "maize": {
         0: "other",
         100: "maize",
         254: "no_cropland",
+        255: "no_data",
     },
     "irrigation": {
         0: "rainfed",
         100: "irrigated",
         254: "no_cropland",
+        255: "no_data",
     },
 }
 
@@ -72,31 +78,37 @@ COLORMAP = {
     "temporarycrops": {
         0: (186, 186, 186, 0),  # no cropland
         100: (224, 24, 28, 200),  # cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "activecropland": {
         0: (232, 55, 39, 255),  # inactive
         100: (77, 216, 39, 255),  # active
-        254: (0, 0, 0, 0),  # no cropland
+        254: (255, 255, 255, 0),  # no cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "wintercereals": {
         0: (186, 186, 186, 255),  # other
         100: (186, 113, 53, 255),  # wheat
-        254: (0, 0, 0, 0),  # no cropland
+        254: (255, 255, 255, 0),  # no cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "springcereals": {
         0: (186, 186, 186, 255),  # other
         100: (186, 113, 53, 255),  # wheat
-        254: (0, 0, 0, 0),  # no cropland
+        254: (255, 255, 255, 0),  # no cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "maize": {
         0: (186, 186, 186, 255),  # other
         100: (252, 207, 5, 255),  # maize
-        254: (0, 0, 0, 0),  # no cropland
+        254: (255, 255, 255, 0),  # no cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "irrigation": {
         0: (255, 132, 132, 255),  # rainfed
         100: (104, 149, 197, 255),  # irrigated
-        254: (0, 0, 0, 0),  # no cropland
+        254: (255, 255, 255, 0),  # no cropland
+        255: (0, 0, 0, 0),  # no data
     },
     "probability": get_probability_cmap(),
 }
