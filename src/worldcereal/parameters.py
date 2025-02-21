@@ -17,6 +17,17 @@ class WorldCerealProductType(Enum):
     CROPTYPE = "croptype"
 
 
+class WorldCereal2021ProductType(Enum):
+    """Enum to define the different WorldCereal 2021 products."""
+
+    TEMPORARYCROPS = "temporarycrops"
+    WINTERCEREALS = "wintercereals"
+    SPRINGCEREALS = "springcereals"
+    MAIZE = "maize"
+    ACTIVECROPLAND = "activecropland"
+    IRRIGATION = "irrigation"
+
+
 class FeaturesParameters(BaseModel):
     """Parameters for the feature extraction UDFs. Types are enforced by
     Pydantic.
