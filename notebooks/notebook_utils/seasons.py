@@ -204,6 +204,11 @@ def retrieve_phaseI_seasons(extent: BoundingBoxExtent, plot: bool = True):
     if len(aez) > 1:
         logger.warning("Multiple AEZ's found for extent!")
 
+    # Log error if no AEZ's found
+    if len(aez) == 0:
+        logger.error("No AEZ's found for extent!")
+        return {}
+
     # Season definitions in Phase I
     seasons_phaseI = {
         "tc-wintercereals": "ww",
