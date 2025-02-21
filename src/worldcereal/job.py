@@ -2,12 +2,13 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
+from pyproj import Transformer
 from typing_extensions import TypedDict
 
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map
@@ -16,6 +17,7 @@ from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
     PostprocessParameters,
+    WorldCereal2021ProductType,
     WorldCerealProductType,
 )
 from worldcereal.utils.models import load_model_lut
@@ -320,3 +322,109 @@ def collect_inputs(
         description="Job that collects inputs for WorldCereal inference",
         job_options=job_options,
     )
+
+
+def download_official_product(
+    spatial_extent: BoundingBoxExtent,
+    product_type: str,
+    output_dir: Path,
+    season: Optional[str] = None,
+    product_collection: str = "2021",
+    out_format: str = "GTiff",
+    backend_context: BackendContext = BackendContext(Backend.FED),
+    job_options: Optional[dict] = None,
+) -> List[Path]:
+    """Download an official WorldCereal product.
+
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        desired spatial extent of the product
+    product_type : str
+        type of the product to download
+    output_dir : Path
+        directory to save the downloaded product
+    season : Optional[str], optional
+        season of the product, by default None (meaning all seasons)
+    product_collection : str, optional
+        collection of the product, by default "2021"
+    out_format : str, optional
+        output format, by default "GTiff"
+    backend_context : BackendContext
+        backend to run the job on, by default FED
+    job_options: dict, optional
+        Additional job options to pass to the OpenEO backend, by default None
+
+    Returns
+    -------
+    List[Path]
+        Paths to downloaded products
+
+    Raises
+    ------
+    ValueError
+        if the product collection or type is not supported
+    """
+
+    # Check product collection and product type are valid
+    if product_collection == "2021":
+        if product_type not in WorldCereal2021ProductType.__members__:
+            raise ValueError(f"Product {product_type} not supported.")
+    else:
+        raise ValueError(f"Product collection {product_collection} not supported.")
+
+    # Establish connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+
+    # Create output directory if it does not exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # get lat, lon centroid of extent
+    transformer = Transformer.from_crs(
+        f"EPSG:{spatial_extent.epsg}", "EPSG:4326", always_xy=True
+    )
+    minx, miny = transformer.transform(spatial_extent.west, spatial_extent.south)
+    maxx, maxy = transformer.transform(spatial_extent.east, spatial_extent.north)
+    lat = (maxy + miny) / 2
+    lon = (maxx + minx) / 2
+    location = f"lat={lat:.2f}, lon={lon:.2f}"
+
+    # Set properties and define job title
+    if season is not None:
+        properties = [openeo.collection_property("productGroupId") == season]
+        job_title = f"WorldCereal_Download_{product_collection}_{product_type}_{season}_{location}"
+    else:
+        properties = []
+        job_title = (
+            f"WorldCereal_Download_{product_collection}_{product_type}_{location}"
+        )
+
+    # Load the collection
+    products = connection.load_collection(
+        f"ESA_WORLDCEREAL_{product_type}",
+        spatial_extent=dict(spatial_extent),
+        properties=properties,
+    )
+
+    # In case season is specified, reduce temporal dimension
+    if season is not None:
+        products = products.reduce_dimension(dimension="t", reducer="mean")
+        filename_prefix = f"{product_type}_{season}"
+    elif product_type.lower() == WorldCereal2021ProductType.TEMPORARYCROPS.value:
+        # in case of temporarycrops product, reduce temporal dimension
+        products = products.reduce_dimension(dimension="t", reducer="mean")
+        filename_prefix = product_type
+    else:
+        # possibly multiple seasons, no need to reduce temporal dimension
+        filename_prefix = product_type
+
+    # Execute the job
+    job = products.execute_batch(
+        title=job_title,
+        out_format=out_format,
+        job_options=job_options,
+        filename_prefix=filename_prefix,
+    )
+
+    # Download the results and return paths
+    return job.get_results().download_files(target=output_dir)
