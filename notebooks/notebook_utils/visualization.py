@@ -2,6 +2,8 @@ import ast
 import copy
 import logging
 import random
+from pathlib import Path
+from typing import List
 
 import leafmap
 import matplotlib as mpl
@@ -9,6 +11,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 from loguru import logger
+
+from worldcereal.parameters import WorldCereal2021ProductType
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -27,11 +31,72 @@ NODATAVALUE = {
     "probability": 255,
 }
 
+LUTS = {
+    "temporarycrops": {
+        0: "no_cropland",
+        100: "cropland",
+    },
+    "activecropland": {
+        0: "inactive",
+        100: "active",
+        254: "no_cropland",
+    },
+    "wintercereals": {
+        0: "other",
+        100: "winter cereal",
+        254: "no_cropland",
+    },
+    "springcereals": {
+        0: "other",
+        100: "spring cereal",
+        254: "no_cropland",
+    },
+    "maize": {
+        0: "other",
+        100: "maize",
+        254: "no_cropland",
+    },
+    "irrigation": {
+        0: "rainfed",
+        100: "irrigated",
+        254: "no_cropland",
+    },
+}
+
 
 COLORMAP = {
     "cropland": {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
+    },
+    "temporarycrops": {
+        0: (186, 186, 186, 0),  # no cropland
+        100: (224, 24, 28, 200),  # cropland
+    },
+    "activecropland": {
+        0: (232, 55, 39, 255),  # inactive
+        100: (77, 216, 39, 255),  # active
+        254: (0, 0, 0, 0),  # no cropland
+    },
+    "wintercereals": {
+        0: (186, 186, 186, 255),  # other
+        100: (186, 113, 53, 255),  # wheat
+        254: (0, 0, 0, 0),  # no cropland
+    },
+    "springcereals": {
+        0: (186, 186, 186, 255),  # other
+        100: (186, 113, 53, 255),  # wheat
+        254: (0, 0, 0, 0),  # no cropland
+    },
+    "maize": {
+        0: (186, 186, 186, 255),  # other
+        100: (252, 207, 5, 255),  # maize
+        254: (0, 0, 0, 0),  # no cropland
+    },
+    "irrigation": {
+        0: (255, 132, 132, 255),  # rainfed
+        100: (104, 149, 197, 255),  # irrigated
+        254: (0, 0, 0, 0),  # no cropland
     },
     "probability": get_probability_cmap(),
 }
@@ -165,11 +230,6 @@ def visualize_classification(rasters, product):
     """
 
     filepath = rasters[product]["classification"]
-
-    # Helper function to scale RGB values
-    def scale_rgb(color):
-        # Scaling only RGB, ignoring alpha
-        return tuple(c / 255 for c in color[:3])
 
     with rasterio.open(filepath, "r") as src:
         arr_classif = src.read().squeeze()
@@ -348,3 +408,79 @@ def show_color_legend(rasters, product):
                 edgecolor="0.7",
             )
         )
+
+
+# Helper function to scale RGB values
+def scale_rgb(color):
+    return tuple(c / 255 for c in color[:3])  # Scale RGB only, ignore alpha
+
+
+def visualize_2021_products(
+    product_paths: List[Path],
+    product_type: str,
+):
+
+    # Ensure product is a 2021 product type
+    if product_type not in WorldCereal2021ProductType.__members__:
+        raise ValueError(
+            f"Product type {product_type} is not a valid 2021 product type."
+        )
+
+    # Get correct LUT and colormap
+    colormap = _get_colormap(product_type.lower())
+    lut = LUTS[product_type.lower()]
+
+    # Apply RGB scaling
+    colormap = {key: scale_rgb(value) for key, value in colormap.items()}
+
+    # Eliminate the metadata file from list of paths
+    product_paths = [path for path in product_paths if not path.name.endswith(".json")]
+
+    # Dynamically extract unique values across all rasters
+    unique_values = []
+    for path in product_paths:
+        with rasterio.open(path) as src:
+            unique_values.extend(np.unique(src.read(1)))
+
+    unique_values = sorted(list(set(unique_values)))  # Remove duplicates
+
+    # Ensure all unique values exist in colormap
+    missing_keys = [val for val in unique_values if val not in colormap]
+    if missing_keys:
+        raise ValueError(f"Missing colormap entries for values: {missing_keys}")
+
+    # Create colormap dynamically
+    cmap = mpl.colors.ListedColormap([colormap[val] for val in unique_values])
+
+    # Define flexible boundaries
+    bounds = unique_values + [unique_values[-1] + 1]  # Extend to cover last value
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+
+    # Prepare figure
+    nproducts = len(product_paths)
+    fig, axes = plt.subplots(nproducts, 1, figsize=(7, 5 * nproducts))
+
+    # Ensure axes is always a list, even when nproducts == 1
+    if nproducts == 1:
+        axes = [axes]
+
+    # Plot all figures
+    for i, path in enumerate(product_paths):
+        with rasterio.open(path) as src:
+            data = src.read(1).astype(np.uint8)
+
+        # Plot the raster
+        im = axes[i].imshow(data, cmap=cmap, norm=norm)
+        axes[i].set_title(path.name.split(".")[0])
+        axes[i].axis("off")
+
+    # Create a single colorbar
+    cbar_ax = fig.add_axes([0.91, 0.3, 0.03, 0.4])
+    cb = plt.colorbar(im, cax=cbar_ax, ticks=unique_values)
+
+    # Set dynamic colorbar labels
+    cb.set_ticklabels([lut[val] for val in unique_values])
+
+    # Display the plot
+    plt.subplots_adjust(right=0.85)
+    plt.show()
