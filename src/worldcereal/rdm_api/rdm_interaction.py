@@ -673,6 +673,8 @@ class RdmInteraction:
 
         # Download the file directly
         filename = download_link.split("/")[-1]
+        if "?sv=" in filename:
+            filename = filename.split("?sv=")[0]
         outfile = Path(dst_path) / filename
         Path(dst_path).mkdir(parents=True, exist_ok=True)
         response = requests.get(download_link)
