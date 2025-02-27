@@ -1,5 +1,6 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
+import os
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -7,7 +8,6 @@ import duckdb
 import geojson
 import geopandas as gpd
 import openeo
-import os
 import pandas as pd
 import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
