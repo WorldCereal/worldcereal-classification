@@ -7,6 +7,7 @@ import duckdb
 import geojson
 import geopandas as gpd
 import openeo
+import os
 import pandas as pd
 import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
@@ -210,7 +211,7 @@ def post_job_action_point_worldcereal(
 
 
 def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id: str):
-    """Merge the output files of the point extractions.
+    """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
 
     Parameters
     ----------
@@ -219,7 +220,11 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id
     """
     output_folder = Path(output_folder)
     files_to_merge = str(output_folder / "**" / "*.geoparquet")
-    merged_file_name = str(output_folder / f"ref_id={ref_id}" / "merged.geoparquet")
+    merged_path = str(output_folder / "merged" / f"ref_id={ref_id}")
+
+    # DuckDB requires the parent directory to exist
+    output_dir = os.path.dirname(merged_path)
+    os.makedirs(output_dir, exist_ok=True)
 
     con = duckdb.connect()
     con.execute("INSTALL spatial;")
@@ -229,6 +234,6 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id
         f"""
     COPY (
         SELECT * FROM read_parquet('{files_to_merge}', filename=true)
-    ) TO '{merged_file_name}' (FORMAT 'parquet')
+    ) TO '{merged_path}' (FORMAT 'parquet')
 """
     )
