@@ -220,7 +220,7 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id
     """
     output_folder = Path(output_folder)
     files_to_merge = str(output_folder / "**" / "*.geoparquet")
-    merged_path = str(output_folder / "merged" / f"ref_id={ref_id}")
+    merged_path = str(output_folder / "merged.geoparquet")
 
     # DuckDB requires the parent directory to exist
     output_dir = os.path.dirname(merged_path)
@@ -234,6 +234,6 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id
         f"""
     COPY (
         SELECT * FROM read_parquet('{files_to_merge}', filename=true)
-    ) TO '{merged_path}' (FORMAT 'parquet')
+    ) TO '{merged_path}' (FORMAT 'parquet', PARTITION_BY ref_id)
 """
     )
