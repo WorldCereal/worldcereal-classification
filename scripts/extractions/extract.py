@@ -34,6 +34,7 @@ from worldcereal.extract.point_worldcereal import (
     create_job_dataframe_point_worldcereal,
     create_job_point_worldcereal,
     generate_output_path_point_worldcereal,
+    merge_output_files_point_worldcereal,
     post_job_action_point_worldcereal,
 )
 from worldcereal.stac.constants import ExtractionCollection
@@ -426,6 +427,13 @@ def run_extractions(
     manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
 
     pipeline_log.info("Extraction completed successfully.")
+
+    if collection == ExtractionCollection.POINT_WORLDCEREAL:
+        pipeline_log.info("Merging Geoparquet results...")
+        ref_id = Path(input_df).stem
+        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        pipeline_log.info("Geoparquet results merged successfully.")
+
     send_notification(
         title=f"WorldCereal Extraction {collection.value} - Completed",
         message="Extractions have been completed successfully.",
