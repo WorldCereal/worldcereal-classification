@@ -1,49 +1,58 @@
 """Common functions used by extraction scripts."""
 
 import json
-import logging
 import os
 import shutil
 from datetime import datetime
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List
+from typing import Callable, Dict, List, Optional, Union
 
 import geojson
 import geopandas as gpd
 import pandas as pd
 import pystac
-import requests
 import xarray as xr
-from shapely import Point
+from openeo_gfmap import Backend
+from openeo_gfmap.backend import BACKEND_CONNECTIONS
+from openeo_gfmap.manager.job_manager import GFMAPJobManager
+from openeo_gfmap.manager.job_splitters import split_job_s2grid
 
+from worldcereal.extract.patch_meteo import (
+    create_job_dataframe_patch_meteo,
+    create_job_patch_meteo,
+)
+from worldcereal.extract.patch_s2 import (
+    create_job_dataframe_patch_s2,
+    create_job_patch_s2,
+)
+from worldcereal.extract.point_worldcereal import (
+    create_job_dataframe_point_worldcereal,
+    create_job_point_worldcereal,
+    generate_output_path_point_worldcereal,
+    merge_output_files_point_worldcereal,
+    post_job_action_point_worldcereal,
+)
+from worldcereal.extract.utils import pipeline_log
+from worldcereal.stac.constants import ExtractionCollection
 from worldcereal.stac.stac_api_interaction import (
     StacApiInteraction,
     VitoStacApiAuthentication,
 )
 
-# Logger used for the pipeline
-pipeline_log = logging.getLogger("extraction_pipeline")
+from worldcereal.extract.patch_s1 import (  # isort: skip
+    create_job_patch_s1,
+    create_job_dataframe_patch_s1,
+)
 
-pipeline_log.setLevel(level=logging.INFO)
-
-stream_handler = logging.StreamHandler()
-pipeline_log.addHandler(stream_handler)
-
-formatter = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s:  %(message)s")
-stream_handler.setFormatter(formatter)
-
-
-# Exclude the other loggers from other libraries
-class ManagerLoggerFilter(logging.Filter):
-    """Filter to only accept the OpenEO-GFMAP manager logs."""
-
-    def filter(self, record):
-        return record.name in [pipeline_log.name]
-
-
-stream_handler.addFilter(ManagerLoggerFilter())
+from worldcereal.extract.patch_worldcereal import (  # isort: skip
+    create_job_patch_worldcereal,
+    create_job_dataframe_patch_worldcereal,
+    post_job_action_patch_worldcereal,
+    generate_output_path_patch_worldcereal,
+)
 
 
 def post_job_action_patch(
@@ -170,7 +179,6 @@ def generate_output_path_patch(
     job_index: int,
     row: pd.Series,
     asset_id: str,
-    s2_grid: gpd.GeoDataFrame,
 ):
     """Generate the output path for the extracted data, from a base path and
     the row information.
@@ -204,85 +212,327 @@ def generate_output_path_patch(
     )
 
 
-def buffer_geometry(
-    geometries: geojson.FeatureCollection, distance_m: int = 320
+def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
+    """Load the input dataframe from the given path."""
+    pipeline_log.info("Loading input dataframe from %s.", df_path)
+
+    if df_path.name.endswith(".geoparquet"):
+        return gpd.read_parquet(df_path)
+    else:
+        return gpd.read_file(df_path)
+
+
+def prepare_job_dataframe(
+    samples_gdf: gpd.GeoDataFrame,
+    collection: ExtractionCollection,
+    max_locations: int,
+    extract_value: int,
+    backend: Backend,
 ) -> gpd.GeoDataFrame:
-    """For each geometry of the colleciton, perform a square buffer of 320
-    meters on the centroid and return the GeoDataFrame. Before buffering,
-    the centroid is clipped to the closest 20m multiplier in order to stay
-    aligned with the Sentinel-1 pixel grid.
-    """
-    gdf = gpd.GeoDataFrame.from_features(geometries).set_crs(epsg=4326)
-    utm = gdf.estimate_utm_crs()
-    gdf = gdf.to_crs(utm)
+    """Prepare the job dataframe to extract the data from the given input
+    dataframe."""
+    pipeline_log.info("Preparing the job dataframe.")
 
-    # Perform the buffering operation
-    gdf["geometry"] = gdf.centroid.apply(
-        lambda point: Point(round(point.x / 20.0) * 20.0, round(point.y / 20.0) * 20.0)
-    ).buffer(
-        distance=distance_m, cap_style=3
-    )  # Square buffer
+    # Filter the input dataframe to only keep the locations to extract
+    samples_gdf = samples_gdf[samples_gdf["extract"] >= extract_value].copy()
 
-    return gdf
+    # Split the locations into chunks of max_locations
+    split_dfs = []
+    pipeline_log.info(
+        "Performing splitting by the year...",
+    )
+    samples_gdf["valid_time"] = pd.to_datetime(samples_gdf.valid_time)
+    samples_gdf["year"] = samples_gdf.valid_time.dt.year
 
+    split_dfs_time = [group.reset_index() for _, group in samples_gdf.groupby("year")]
+    pipeline_log.info("Performing splitting by s2 grid...")
+    for df in split_dfs_time:
+        s2_split_df = split_job_s2grid(df, max_points=max_locations)
+        split_dfs.extend(s2_split_df)
 
-def filter_extract_true(
-    geometries: geojson.FeatureCollection, extract_value: int = 1
-) -> gpd.GeoDataFrame:
-    """Remove all the geometries from the Feature Collection that have the property field `extract` set to `False`"""
-    return geojson.FeatureCollection(
-        [
-            f
-            for f in geometries.features
-            if f.properties.get("extract", 0) == extract_value
-        ]
+    pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
+    collection_switch: dict[ExtractionCollection, Callable] = {
+        ExtractionCollection.PATCH_SENTINEL1: create_job_dataframe_patch_s1,
+        ExtractionCollection.PATCH_SENTINEL2: create_job_dataframe_patch_s2,
+        ExtractionCollection.PATCH_METEO: create_job_dataframe_patch_meteo,
+        ExtractionCollection.PATCH_WORLDCEREAL: create_job_dataframe_patch_worldcereal,
+        ExtractionCollection.POINT_WORLDCEREAL: create_job_dataframe_point_worldcereal,
+    }
+
+    create_job_dataframe_fn = collection_switch.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
     )
 
+    job_df = create_job_dataframe_fn(backend, split_dfs)
+    pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
 
-def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
-) -> str:
-    """Upload the given GeoDataFrame to artifactory and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
+    return job_df
+
+
+def setup_extraction_functions(
+    collection: ExtractionCollection,
+    extract_value: int,
+    write_stac_api: bool,
+    custom_job_options: Optional[dict] = None,
+) -> tuple[Callable, Callable, Callable]:
+    """Setup the datacube creation, path generation and post-job action
+    functions for the given collection. Returns a tuple of three functions:
+    1. The datacube creation function
+    2. The output path generation function
+    3. The post-job action function
     """
-    # Save the dataframe as geoparquet to upload it to artifactory
-    temporary_file = NamedTemporaryFile()
-    gdf.to_parquet(temporary_file.name)
 
-    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
-    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
+    # Setup the datacube creation function
+    datacube_creation = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            create_job_patch_s1, custom_job_options=custom_job_options
+        ),
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            create_job_patch_s2, custom_job_options=custom_job_options
+        ),
+        ExtractionCollection.PATCH_METEO: partial(
+            create_job_patch_meteo, custom_job_options=custom_job_options
+        ),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            create_job_patch_worldcereal, custom_job_options=custom_job_options
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            create_job_point_worldcereal, custom_job_options=custom_job_options
+        ),
+    }
 
-    if not artifactory_username or not artifactory_password:
-        raise ValueError(
-            "Artifactory credentials not found. Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD."
-        )
-
-    headers = {"Content-Type": "application/octet-stream"}
-
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}{name}.parquet"
-
-    with open(temporary_file.name, "rb") as f:
-        response = requests.put(
-            upload_url,
-            headers=headers,
-            data=f,
-            auth=(artifactory_username, artifactory_password),
-            timeout=180,
-        )
-
-    response.raise_for_status()
-
-    return upload_url
-
-
-def get_job_nb_polygons(row: pd.Series) -> int:
-    """Get the number of polygons in the geometry."""
-    return len(
-        list(
-            filter(
-                lambda feat: feat.properties.get("extract"),
-                geojson.loads(row.geometry)["features"],
-            )
-        )
+    datacube_fn = datacube_creation.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
     )
+
+    # Setup the output path generation function
+    path_fns = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(generate_output_path_patch),
+        ExtractionCollection.PATCH_SENTINEL2: partial(generate_output_path_patch),
+        ExtractionCollection.PATCH_METEO: partial(generate_output_path_patch),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            generate_output_path_patch_worldcereal
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            generate_output_path_point_worldcereal
+        ),
+    }
+
+    path_fn = path_fns.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    # Setup the post-job action function
+    post_job_actions = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Sentinel-1 GRD backscatter observations, processed with Orfeo toolbox.",
+            title="Sentinel-1 GRD",
+            spatial_resolution="20m",
+            s1_orbit_fix=True,
+            sensor="Sentinel1",
+            write_stac_api=write_stac_api,
+        ),
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Sentinel2 L2A observations, processed.",
+            title="Sentinel-2 L2A",
+            spatial_resolution="10m",
+            sensor="Sentinel2",
+            write_stac_api=write_stac_api,
+        ),
+        ExtractionCollection.PATCH_METEO: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Meteo observations",
+            title="Meteo observations",
+            spatial_resolution="1deg",
+        ),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            post_job_action_patch_worldcereal,
+            extract_value=extract_value,
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            post_job_action_point_worldcereal,
+        ),
+    }
+
+    post_job_fn = post_job_actions.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    return datacube_fn, path_fn, post_job_fn
+
+
+def prepare_extraction_jobs(
+    collection: ExtractionCollection,
+    output_folder: Path,
+    samples_df_path: Path,
+    max_locations_per_job: int = 500,
+    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    parallel_jobs: int = 2,
+    restart_failed: bool = False,
+    extract_value: int = 1,
+    backend=Backend.CDSE,
+    write_stac_api: bool = True,
+) -> tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]:
+
+    # Make sure output folder exists
+    if not output_folder.is_dir():
+        output_folder.mkdir(parents=True)
+
+    # Create path to tracking dataframe
+    tracking_df_path = output_folder / "job_tracking.csv"
+
+    # Load the input dataframe and build the job dataframe
+    samples_gdf = load_dataframe(samples_df_path)
+
+    job_df = None
+    if not tracking_df_path.exists():
+        job_df = prepare_job_dataframe(
+            samples_gdf, collection, max_locations_per_job, extract_value, backend
+        )
+
+    # Setup the extraction functions
+    pipeline_log.info("Setting up the extraction functions.")
+    datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
+        collection, extract_value, write_stac_api, custom_job_options
+    )
+
+    # Initialize and setups the job manager
+    pipeline_log.info("Initializing the job manager.")
+
+    job_manager = GFMAPJobManager(
+        output_dir=output_folder,
+        output_path_generator=path_fn,
+        post_job_action=post_job_fn,
+        poll_sleep=60,
+        n_threads=4,
+        restart_failed=restart_failed,
+        stac_enabled=False,
+    )
+
+    job_manager.add_backend(
+        backend.value,
+        BACKEND_CONNECTIONS[backend],
+        parallel_jobs=parallel_jobs,
+    )
+
+    return job_manager, job_df, datacube_fn, tracking_df_path
+
+
+def run_extraction_jobs(
+    job_manager: GFMAPJobManager,
+    job_df: pd.DataFrame,
+    datacube_fn: Callable,
+    tracking_df_path: Path,
+) -> None:
+
+    # Run the extraction jobs
+    pipeline_log.info("Running the extraction jobs.")
+    job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
+    return
+
+
+def merge_extraction_jobs(
+    collection: ExtractionCollection,
+    output_folder: Path,
+    samples_df_path: Path,
+) -> None:
+
+    # Merge the extraction jobs
+    pipeline_log.info("Merging the extraction jobs.")
+
+    if collection == ExtractionCollection.POINT_WORLDCEREAL:
+        pipeline_log.info("Merging Geoparquet results...")
+        ref_id = Path(samples_df_path).stem
+        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        pipeline_log.info("Geoparquet results merged successfully.")
+
+    return
+
+
+def run_extractions(
+    collection: ExtractionCollection,
+    output_folder: Path,
+    samples_df_path: Path,
+    max_locations_per_job: int = 500,
+    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    parallel_jobs: int = 2,
+    restart_failed: bool = False,
+    extract_value: int = 1,
+    backend=Backend.CDSE,
+    write_stac_api: bool = True,
+) -> Path:
+    """Main function responsible for launching point and patch extractions.
+
+    Parameters
+    ----------
+    collection : ExtractionCollection
+        The collection to extract. Most popular: PATCH_WORLDCEREAL, POINT_WORLDCEREAL
+    output_folder : Path
+        The folder where to store the extracted data
+    samples_df_path : Path
+        Path to the input dataframe containing the geometries
+        for which extractions need to be done
+    max_locations_per_job : int, optional
+        The maximum number of locations to extract per job, by default 500
+    custom_job_options : dict, optional
+        Custom job options to set for the extraction, by default None (default options)
+        Options that can be set explicitly include:
+            - memory : str
+                Memory to allocate for the executor, e.g. "1800m"
+            - python_memory : str
+                Memory to allocate for the python processes as well as OrfeoToolbox in the executors, e.g. "1900m"
+            - max_executors : int
+                Number of executors to run, e.g. 22
+    parallel_jobs : int, optional
+        The maximum number of parallel jobs to run at the same time, by default 10
+    restart_failed : bool, optional
+        Restart the jobs that previously failed, by default False
+    extract_value : int, optional
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+    backend : openeo_gfmap.Backend, optional
+        cloud backend where to run the extractions, by default Backend.CDSE
+
+    Returns
+    -------
+    Path
+        Path to the job tracking dataframe
+    """
+
+    # Prepare the extraction jobs
+    job_manager, job_df, datacube_fn, tracking_df_path = prepare_extraction_jobs(
+        collection,
+        output_folder,
+        samples_df_path,
+        max_locations_per_job=max_locations_per_job,
+        custom_job_options=custom_job_options,
+        parallel_jobs=parallel_jobs,
+        restart_failed=restart_failed,
+        extract_value=extract_value,
+        backend=backend,
+        write_stac_api=write_stac_api,
+    )
+
+    # Run the extraction jobs
+    run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
+
+    # Merge the extraction jobs (for point extractions)
+    merge_extraction_jobs(collection, output_folder, samples_df_path)
+
+    return tracking_df_path
