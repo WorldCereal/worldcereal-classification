@@ -47,6 +47,10 @@ MANIFEST
 .noseids
 experimental/**
 
+# Don't track parquet and geoparquer files
+*.parquet
+*.geoparquet
+
 # don't track catboost training info
 src/worldcereal/train/catboost_info
 
