@@ -5,10 +5,11 @@ import logging
 import os
 import shutil
 from datetime import datetime
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List
+from typing import Callable, List, Union
 
 import geojson
 import geopandas as gpd
@@ -16,12 +17,46 @@ import pandas as pd
 import pystac
 import requests
 import xarray as xr
+from openeo_gfmap import Backend
+from openeo_gfmap.backend import cdse_connection
+from openeo_gfmap.manager.job_manager import GFMAPJobManager
+from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
 from shapely import Point
 
+from worldcereal.extract.patch_meteo import (
+    create_job_dataframe_patch_meteo,
+    create_job_patch_meteo,
+)
+from worldcereal.extract.patch_s1 import (
+    create_job_dataframe_patch_s1,
+    create_job_patch_s1,
+)
+from worldcereal.extract.patch_s2 import (
+    create_job_dataframe_patch_s2,
+    create_job_patch_s2,
+)
+from worldcereal.extract.point_worldcereal import (
+    create_job_dataframe_point_worldcereal,
+    create_job_point_worldcereal,
+    generate_output_path_point_worldcereal,
+    merge_output_files_point_worldcereal,
+    post_job_action_point_worldcereal,
+)
+from worldcereal.stac.constants import ExtractionCollection
 from worldcereal.stac.stac_api_interaction import (
     StacApiInteraction,
     VitoStacApiAuthentication,
 )
+
+from worldcereal.extract.patch_worldcereal import (  # isort: skip
+    create_job_dataframe_patch_worldcereal,
+    create_job_patch_worldcereal,
+    post_job_action_patch_worldcereal,
+    generate_output_path_patch_worldcereal,
+)
+
+
+S2GRID = ...
 
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
@@ -286,3 +321,285 @@ def get_job_nb_polygons(row: pd.Series) -> int:
             )
         )
     )
+
+
+def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
+    """Load the input dataframe from the given path."""
+    pipeline_log.info("Loading input dataframe from %s.", df_path)
+
+    if df_path.name.endswith(".geoparquet"):
+        return gpd.read_parquet(df_path)
+    else:
+        return gpd.read_file(df_path)
+
+
+def prepare_job_dataframe(
+    input_df: gpd.GeoDataFrame,
+    collection: ExtractionCollection,
+    max_locations: int,
+    extract_value: int,
+    backend: Backend,
+) -> gpd.GeoDataFrame:
+    """Prepare the job dataframe to extract the data from the given input
+    dataframe."""
+    pipeline_log.info("Preparing the job dataframe.")
+
+    # Filter the input dataframe to only keep the locations to extract
+    input_df = input_df[input_df["extract"] >= extract_value].copy()
+
+    # Split the locations into chunks of max_locations
+    split_dfs = []
+    pipeline_log.info(
+        "Performing splitting by the year...",
+    )
+    input_df["valid_time"] = pd.to_datetime(input_df.valid_time)
+    input_df["year"] = input_df.valid_time.dt.year
+
+    split_dfs_time = [group.reset_index() for _, group in input_df.groupby("year")]
+    pipeline_log.info("Performing splitting by s2 grid...")
+    for df in split_dfs_time:
+        s2_split_df = split_job_s2grid(df, max_points=max_locations)
+        split_dfs.extend(s2_split_df)
+
+    pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
+    collection_switch: dict[ExtractionCollection, Callable] = {
+        ExtractionCollection.PATCH_SENTINEL1: create_job_dataframe_patch_s1,
+        ExtractionCollection.PATCH_SENTINEL2: create_job_dataframe_patch_s2,
+        ExtractionCollection.PATCH_METEO: create_job_dataframe_patch_meteo,
+        ExtractionCollection.PATCH_WORLDCEREAL: create_job_dataframe_patch_worldcereal,
+        ExtractionCollection.POINT_WORLDCEREAL: create_job_dataframe_point_worldcereal,
+    }
+
+    create_job_dataframe_fn = collection_switch.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    job_df = create_job_dataframe_fn(backend, split_dfs)
+    pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
+
+    return job_df
+
+
+def setup_extraction_functions(
+    collection: ExtractionCollection,
+    extract_value: int,
+    memory: Union[str, None],
+    python_memory: Union[str, None],
+    max_executors: Union[int, None],
+    write_stac_api: bool,
+) -> tuple[Callable, Callable, Callable]:
+    """Setup the datacube creation, path generation and post-job action
+    functions for the given collection. Returns a tuple of three functions:
+    1. The datacube creation function
+    2. The output path generation function
+    3. The post-job action function
+    """
+
+    datacube_creation = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            create_job_patch_s1,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1900m",
+            max_executors=max_executors if max_executors is not None else 22,
+        ),
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            create_job_patch_s2,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1900m",
+            max_executors=max_executors if max_executors is not None else 22,
+        ),
+        ExtractionCollection.PATCH_METEO: partial(
+            create_job_patch_meteo,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "1000m",
+            max_executors=max_executors if max_executors is not None else 22,
+        ),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            create_job_patch_worldcereal,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "3000m",
+            max_executors=max_executors if max_executors is not None else 22,
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            create_job_point_worldcereal,
+            executor_memory=memory if memory is not None else "1800m",
+            python_memory=python_memory if python_memory is not None else "3000m",
+            max_executors=max_executors if max_executors is not None else 22,
+        ),
+    }
+
+    datacube_fn = datacube_creation.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    path_fns = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.PATCH_METEO: partial(
+            generate_output_path_patch, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            generate_output_path_patch_worldcereal, s2_grid=load_s2_grid()
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            generate_output_path_point_worldcereal
+        ),
+    }
+
+    path_fn = path_fns.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    post_job_actions = {
+        ExtractionCollection.PATCH_SENTINEL1: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Sentinel-1 GRD backscatter observations, processed with Orfeo toolbox.",
+            title="Sentinel-1 GRD",
+            spatial_resolution="20m",
+            s1_orbit_fix=True,
+            sensor="Sentinel1",
+            write_stac_api=write_stac_api,
+        ),
+        ExtractionCollection.PATCH_SENTINEL2: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Sentinel2 L2A observations, processed.",
+            title="Sentinel-2 L2A",
+            spatial_resolution="10m",
+            sensor="Sentinel2",
+            write_stac_api=write_stac_api,
+        ),
+        ExtractionCollection.PATCH_METEO: partial(
+            post_job_action_patch,
+            extract_value=extract_value,
+            description="Meteo observations",
+            title="Meteo observations",
+            spatial_resolution="1deg",
+        ),
+        ExtractionCollection.PATCH_WORLDCEREAL: partial(
+            post_job_action_patch_worldcereal,
+            extract_value=extract_value,
+            description="WorldCereal preprocessed inputs",
+            title="WorldCereal inputs",
+            spatial_resolution="10m",
+        ),
+        ExtractionCollection.POINT_WORLDCEREAL: partial(
+            post_job_action_point_worldcereal,
+        ),
+    }
+
+    post_job_fn = post_job_actions.get(
+        collection,
+        lambda: (_ for _ in ()).throw(
+            ValueError(f"Collection {collection} not supported.")
+        ),
+    )
+
+    return datacube_fn, path_fn, post_job_fn
+
+
+def prepare_extraction_jobs(
+    collection: ExtractionCollection,
+    output_folder: Path,
+    input_df: Path,
+    max_locations_per_job: int = 500,
+    memory: str = "1800m",
+    python_memory: str = "1900m",
+    max_executors: int = 22,
+    parallel_jobs: int = 2,
+    restart_failed: bool = False,
+    extract_value: int = 1,
+    backend=Backend.CDSE,
+    write_stac_api: bool = True,
+):
+
+    if not output_folder.is_dir():
+        output_folder.mkdir(parents=True)
+
+    tracking_df_path = output_folder / "job_tracking.csv"
+
+    # Load the input dataframe and build the job dataframe
+    input_gdf = load_dataframe(input_df)
+
+    job_df = None
+    if not tracking_df_path.exists():
+        job_df = prepare_job_dataframe(
+            input_gdf, collection, max_locations_per_job, extract_value, backend
+        )
+
+    # Setup the extraction functions
+    pipeline_log.info("Setting up the extraction functions.")
+    datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
+        collection, extract_value, memory, python_memory, max_executors, write_stac_api
+    )
+
+    # Initialize and setups the job manager
+    pipeline_log.info("Initializing the job manager.")
+
+    job_manager = GFMAPJobManager(
+        output_dir=output_folder,
+        output_path_generator=path_fn,
+        post_job_action=post_job_fn,
+        poll_sleep=60,
+        n_threads=4,
+        restart_failed=restart_failed,
+        stac_enabled=False,
+    )
+
+    job_manager.add_backend(
+        backend.value,
+        cdse_connection,
+        parallel_jobs=parallel_jobs,
+    )
+
+    return job_manager, job_df, datacube_fn, tracking_df_path
+
+
+def run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path):
+
+    # Run the extraction jobs
+    pipeline_log.info("Running the extraction jobs.")
+    job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
+    return
+
+
+def merge_extraction_jobs(
+    collection: ExtractionCollection,
+    output_folder,
+    input_df,
+):
+
+    # Merge the extraction jobs
+    pipeline_log.info("Merging the extraction jobs.")
+
+    if collection == ExtractionCollection.POINT_WORLDCEREAL:
+        pipeline_log.info("Merging Geoparquet results...")
+        ref_id = Path(input_df).stem
+        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        pipeline_log.info("Geoparquet results merged successfully.")
+
+
+def run_extractions(collection, output_folder, input_df):
+    """This will be the main extraction function, chaining all the steps together"""
+
+    job_manager, job_df, datacube_fn, tracking_df_path = prepare_extraction_jobs()
+
+    run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
+
+    merge_extraction_jobs(collection, output_folder, input_df)
+
+    return tracking_df_path

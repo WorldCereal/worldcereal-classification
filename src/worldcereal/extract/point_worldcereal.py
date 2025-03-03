@@ -1,8 +1,10 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
+import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
+import duckdb
 import geojson
 import geopandas as gpd
 import openeo
@@ -206,3 +208,32 @@ def post_job_action_point_worldcereal(
         gdf.to_parquet(item_asset_path, index=False)
 
     return job_items
+
+
+def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id: str):
+    """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
+
+    Parameters
+    ----------
+    output_files : str
+        glob pattern to the output files to merge
+    """
+    output_folder = Path(output_folder)
+    files_to_merge = str(output_folder / "**" / "*.geoparquet")
+    merged_path = str(output_folder / "merged.geoparquet")
+
+    # DuckDB requires the parent directory to exist
+    output_dir = os.path.dirname(merged_path)
+    os.makedirs(output_dir, exist_ok=True)
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial;")
+    con.execute("LOAD spatial;")
+
+    con.execute(
+        f"""
+    COPY (
+        SELECT * FROM read_parquet('{files_to_merge}', filename=true)
+    ) TO '{merged_path}' (FORMAT 'parquet', PARTITION_BY ref_id)
+"""
+    )

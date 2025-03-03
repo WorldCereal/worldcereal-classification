@@ -15,38 +15,28 @@ from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo_gfmap.manager.job_splitters import load_s2_grid, split_job_s2grid
+from openeo_gfmap.manager.job_splitters import load_s2_grid
 
 from worldcereal.extract.common import (
     generate_output_path_patch,
+    load_dataframe,
     pipeline_log,
     post_job_action_patch,
+    prepare_job_dataframe,
 )
-from worldcereal.extract.patch_meteo import (
-    create_job_dataframe_patch_meteo,
-    create_job_patch_meteo,
-)
-from worldcereal.extract.patch_s2 import (
-    create_job_dataframe_patch_s2,
-    create_job_patch_s2,
-)
+from worldcereal.extract.patch_meteo import create_job_patch_meteo
+from worldcereal.extract.patch_s1 import create_job_patch_s1
+from worldcereal.extract.patch_s2 import create_job_patch_s2
 from worldcereal.extract.point_worldcereal import (
-    create_job_dataframe_point_worldcereal,
     create_job_point_worldcereal,
     generate_output_path_point_worldcereal,
+    merge_output_files_point_worldcereal,
     post_job_action_point_worldcereal,
 )
 from worldcereal.stac.constants import ExtractionCollection
 
-from worldcereal.extract.patch_s1 import (  # isort: skip
-    create_job_patch_s1,
-    create_job_dataframe_patch_s1,
-)
-
-
 from worldcereal.extract.patch_worldcereal import (  # isort: skip
     create_job_patch_worldcereal,
-    create_job_dataframe_patch_worldcereal,
     post_job_action_patch_worldcereal,
     generate_output_path_patch_worldcereal,
 )
@@ -79,66 +69,6 @@ def send_notification(message: str, title: str = "OpenEO-GFMAP") -> None:
 
     if response.status_code != 200:
         pipeline_log.error("Error sending the notification: %s", response.text)
-
-
-def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
-    """Load the input dataframe from the given path."""
-    pipeline_log.info("Loading input dataframe from %s.", df_path)
-
-    if df_path.name.endswith(".geoparquet"):
-        return gpd.read_parquet(df_path)
-    else:
-        return gpd.read_file(df_path)
-
-
-def prepare_job_dataframe(
-    input_df: gpd.GeoDataFrame,
-    collection: ExtractionCollection,
-    max_locations: int,
-    extract_value: int,
-    backend: Backend,
-) -> gpd.GeoDataFrame:
-    """Prepare the job dataframe to extract the data from the given input
-    dataframe."""
-    pipeline_log.info("Preparing the job dataframe.")
-
-    # Filter the input dataframe to only keep the locations to extract
-    input_df = input_df[input_df["extract"] >= extract_value].copy()
-
-    # Split the locations into chunks of max_locations
-    split_dfs = []
-    pipeline_log.info(
-        "Performing splitting by the year...",
-    )
-    input_df["valid_time"] = pd.to_datetime(input_df.valid_time)
-    input_df["year"] = input_df.valid_time.dt.year
-
-    split_dfs_time = [group.reset_index() for _, group in input_df.groupby("year")]
-    pipeline_log.info("Performing splitting by s2 grid...")
-    for df in split_dfs_time:
-        s2_split_df = split_job_s2grid(df, max_points=max_locations)
-        split_dfs.extend(s2_split_df)
-
-    pipeline_log.info("Dataframes split to jobs, creating the job dataframe...")
-    collection_switch: dict[ExtractionCollection, typing.Callable] = {
-        ExtractionCollection.PATCH_SENTINEL1: create_job_dataframe_patch_s1,
-        ExtractionCollection.PATCH_SENTINEL2: create_job_dataframe_patch_s2,
-        ExtractionCollection.PATCH_METEO: create_job_dataframe_patch_meteo,
-        ExtractionCollection.PATCH_WORLDCEREAL: create_job_dataframe_patch_worldcereal,
-        ExtractionCollection.POINT_WORLDCEREAL: create_job_dataframe_point_worldcereal,
-    }
-
-    create_job_dataframe_fn = collection_switch.get(
-        collection,
-        lambda: (_ for _ in ()).throw(
-            ValueError(f"Collection {collection} not supported.")
-        ),
-    )
-
-    job_df = create_job_dataframe_fn(backend, split_dfs)
-    pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
-
-    return job_df
 
 
 def setup_extraction_functions(
@@ -426,6 +356,13 @@ def run_extractions(
     manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
 
     pipeline_log.info("Extraction completed successfully.")
+
+    if collection == ExtractionCollection.POINT_WORLDCEREAL:
+        pipeline_log.info("Merging Geoparquet results...")
+        ref_id = Path(input_df).stem
+        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        pipeline_log.info("Geoparquet results merged successfully.")
+
     send_notification(
         title=f"WorldCereal Extraction {collection.value} - Completed",
         message="Extractions have been completed successfully.",
