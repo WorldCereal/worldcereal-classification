@@ -434,18 +434,24 @@ def _check_geom(row):
     return result
 
 
-def _to_points(df):
+def gdf_to_points(gdf):
     """Convert reference dataset to points."""
 
     # if geometry type is point, return df
-    if df["geometry"].geom_type[0] == "Point":
-        return df
+    if gdf.iloc[0]["geometry"].geom_type == "Point":
+        return gdf
     else:
+        # reproject to projected system
+        epsg_ori = gdf.crs.to_epsg()
+        gdf = gdf.to_crs(epsg=3857)
         # convert polygons to points
-        df["centroid"] = df["geometry"].centroid
+        gdf["centroid"] = gdf["geometry"].centroid
         # check whether centroid is in the original geometry
-        df["centroid_in"] = df.apply(lambda x: _check_geom(x), axis=1)
-        df = df[df["centroid_in"]]
-        df.drop(columns=["geometry", "centroid_in"], inplace=True)
-        df.rename(columns={"centroid": "geometry"}, inplace=True)
-        return df
+        gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
+        gdf = gdf[gdf["centroid_in"]]
+        gdf.drop(columns=["geometry", "centroid_in"], inplace=True)
+        gdf.rename(columns={"centroid": "geometry"}, inplace=True)
+        # reproject to original system
+        gdf = gdf.to_crs(epsg=epsg_ori)
+
+        return gdf
