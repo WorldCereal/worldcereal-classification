@@ -388,7 +388,7 @@ def prepare_extraction_jobs(
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
-    write_stac_api: bool = True,
+    write_stac_api: bool = False,
 ) -> tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]:
 
     # Make sure output folder exists
@@ -476,7 +476,7 @@ def run_extractions(
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
-    write_stac_api: bool = True,
+    write_stac_api: bool = False,
 ) -> Path:
     """Main function responsible for launching point and patch extractions.
 

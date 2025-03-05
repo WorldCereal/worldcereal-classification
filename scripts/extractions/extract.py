@@ -127,7 +127,7 @@ def run_extractions(
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
-    write_stac_api: bool = True,
+    write_stac_api: bool = False,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
 
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--write_stac_api",
         type=bool,
-        default=True,
+        default=False,
         help="Flag to write S1 and S2 patch extraction results to STAC API or not.",
     )
 
