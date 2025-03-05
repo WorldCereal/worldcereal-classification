@@ -1,6 +1,7 @@
 """Extract AGERA5 (Meteo) data using OpenEO-GFMAP package."""
 
-from typing import List
+import copy
+from typing import Dict, List, Optional, Union
 
 import geojson
 import geopandas as gpd
@@ -8,11 +9,18 @@ import openeo
 import pandas as pd
 from openeo_gfmap import Backend, TemporalContext
 
-from worldcereal.extract.common import (  # isort: skip
+from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     filter_extract_true,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
 )  # isort: skip
+
+
+DEFAULT_JOB_OPTIONS_PATCH_METEO = {
+    "executor-memory": "1800m",
+    "python-memory": "1000m",
+    "max-executors": 22,
+}
 
 
 def create_job_dataframe_patch_meteo(
@@ -26,10 +34,9 @@ def create_job_patch_meteo(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
+
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -68,11 +75,11 @@ def create_job_patch_meteo(
     h3index = geometry.features[0].properties["h3index"]
     valid_time = geometry.features[0].properties["valid_time"]
 
-    job_options = {
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "max-executors": max_executors,
-    }
+    # Set job options
+    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_METEO)
+    if custom_job_options:
+        job_options.update(custom_job_options)
+
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_time}",
