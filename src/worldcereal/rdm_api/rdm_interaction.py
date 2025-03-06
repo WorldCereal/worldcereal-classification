@@ -222,7 +222,7 @@ class RdmInteraction:
 
         for id in ref_ids:
             url = f"{self.RDM_ENDPOINT}/collections/{id}{additional_part}/download"
-            response = self.session.get(url, headers=self._get_headers(), timeout=10)
+            response = self.session.get(url, headers=self._get_headers(), timeout=30)
             if response.status_code != 200:
                 raise Exception(
                     f"Failed to get download URL for collection {id}: {response.text}"
@@ -675,7 +675,7 @@ class RdmInteraction:
         filename = f"{ref_id}{part2}.parquet"
         outfile = Path(dst_path) / filename
         Path(dst_path).mkdir(parents=True, exist_ok=True)
-        response = requests.get(url)
+        response = requests.get(url, timeout=(5, 120))
         if response.status_code != 200:
             raise Exception(
                 f"Error downloading samples for collection {ref_id}: {response.text}"
