@@ -167,13 +167,13 @@ def run_extractions(
     """
 
     # Compile custom job options
-    custom_job_options: Dict[str, Union[str, int]] = {}
+    job_options: Dict[str, Union[str, int]] = {}
     if memory:
-        custom_job_options["memory"] = memory
+        job_options["memory"] = memory
     if python_memory:
-        custom_job_options["python_memory"] = python_memory
+        job_options["python_memory"] = python_memory
     if max_executors:
-        custom_job_options["max_executors"] = max_executors
+        job_options["max_executors"] = max_executors
 
     # Prepare extraction jobs
     job_manager, job_df, datacube_fn, tracking_df_path = prepare_extraction_jobs(
@@ -181,7 +181,7 @@ def run_extractions(
         output_folder,
         samples_df_path,
         max_locations_per_job=max_locations_per_job,
-        custom_job_options=custom_job_options,
+        job_options=job_options,
         parallel_jobs=parallel_jobs,
         restart_failed=restart_failed,
         extract_value=extract_value,
