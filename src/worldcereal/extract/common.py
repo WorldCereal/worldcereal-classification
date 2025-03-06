@@ -276,7 +276,7 @@ def setup_extraction_functions(
     collection: ExtractionCollection,
     extract_value: int,
     write_stac_api: bool,
-    custom_job_options: Optional[dict] = None,
+    job_options: Optional[dict] = None,
 ) -> tuple[Callable, Callable, Callable]:
     """Setup the datacube creation, path generation and post-job action
     functions for the given collection. Returns a tuple of three functions:
@@ -288,19 +288,19 @@ def setup_extraction_functions(
     # Setup the datacube creation function
     datacube_creation = {
         ExtractionCollection.PATCH_SENTINEL1: partial(
-            create_job_patch_s1, custom_job_options=custom_job_options
+            create_job_patch_s1, job_options=job_options
         ),
         ExtractionCollection.PATCH_SENTINEL2: partial(
-            create_job_patch_s2, custom_job_options=custom_job_options
+            create_job_patch_s2, job_options=job_options
         ),
         ExtractionCollection.PATCH_METEO: partial(
-            create_job_patch_meteo, custom_job_options=custom_job_options
+            create_job_patch_meteo, job_options=job_options
         ),
         ExtractionCollection.PATCH_WORLDCEREAL: partial(
-            create_job_patch_worldcereal, custom_job_options=custom_job_options
+            create_job_patch_worldcereal, job_options=job_options
         ),
         ExtractionCollection.POINT_WORLDCEREAL: partial(
-            create_job_point_worldcereal, custom_job_options=custom_job_options
+            create_job_point_worldcereal, job_options=job_options
         ),
     }
 
@@ -383,7 +383,7 @@ def prepare_extraction_jobs(
     output_folder: Path,
     samples_df_path: Path,
     max_locations_per_job: int = 500,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
     extract_value: int = 1,
@@ -410,7 +410,7 @@ def prepare_extraction_jobs(
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
-        collection, extract_value, write_stac_api, custom_job_options
+        collection, extract_value, write_stac_api, job_options
     )
 
     # Initialize and setups the job manager
@@ -471,7 +471,7 @@ def run_extractions(
     output_folder: Path,
     samples_df_path: Path,
     max_locations_per_job: int = 500,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
     extract_value: int = 1,
@@ -491,7 +491,7 @@ def run_extractions(
         for which extractions need to be done
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
-    custom_job_options : dict, optional
+    job_options : dict, optional
         Custom job options to set for the extraction, by default None (default options)
         Options that can be set explicitly include:
             - memory : str
@@ -521,7 +521,7 @@ def run_extractions(
         output_folder,
         samples_df_path,
         max_locations_per_job=max_locations_per_job,
-        custom_job_options=custom_job_options,
+        job_options=job_options,
         parallel_jobs=parallel_jobs,
         restart_failed=restart_failed,
         extract_value=extract_value,

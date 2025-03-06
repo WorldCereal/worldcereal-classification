@@ -134,7 +134,7 @@ def create_job_patch_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -198,15 +198,15 @@ def create_job_patch_worldcereal(
     pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
     # Set job options
-    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL)
-    if custom_job_options:
-        job_options.update(custom_job_options)
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_WORLDCEREAL_{s2_tile}_{valid_time}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )
 

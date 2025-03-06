@@ -34,7 +34,7 @@ def create_job_patch_meteo(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
 
     start_date = row.start_date
@@ -76,13 +76,13 @@ def create_job_patch_meteo(
     valid_time = geometry.features[0].properties["valid_time"]
 
     # Set job options
-    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_METEO)
-    if custom_job_options:
-        job_options.update(custom_job_options)
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_METEO)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_time}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
     )

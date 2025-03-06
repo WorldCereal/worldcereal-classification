@@ -88,7 +88,7 @@ def create_job_patch_s2(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
 
     start_date = row.start_date
@@ -148,14 +148,14 @@ def create_job_patch_s2(
     _log.debug("Number of polygons to extract %s", number_polygons)
 
     # Set job options
-    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S2)
-    if custom_job_options:
-        job_options.update(custom_job_options)
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S2)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )

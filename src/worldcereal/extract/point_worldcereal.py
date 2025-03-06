@@ -123,7 +123,7 @@ def create_job_point_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -165,14 +165,14 @@ def create_job_point_worldcereal(
         pipeline_log.debug("Number of polygons to extract %s", number_points)
 
     # Set job options
-    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL)
-    if custom_job_options:
-        job_options.update(custom_job_options)
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="Parquet",
         title=f"Worldcereal_Point_Extraction_{row.s2_tile}",
-        job_options=job_options,
+        job_options=final_job_options,
     )
 
 

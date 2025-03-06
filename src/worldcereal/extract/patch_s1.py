@@ -130,7 +130,7 @@ def create_job_patch_s1(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    custom_job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information. This job is a
     S1 patch of 32x32 pixels at 20m spatial resolution."""
@@ -177,14 +177,14 @@ def create_job_patch_s1(
     pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
     # Set job options
-    job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S1)
-    if custom_job_options:
-        job_options.update(custom_job_options)
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S1)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_time}_{orbit_state}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )
