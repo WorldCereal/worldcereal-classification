@@ -15,9 +15,9 @@ from openeo_gfmap import Backend
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 
 from worldcereal.extract.common import (
-    merge_extraction_jobs,
+    _merge_extraction_jobs,
+    _prepare_extraction_jobs,
     pipeline_log,
-    prepare_extraction_jobs,
 )
 from worldcereal.stac.constants import ExtractionCollection
 
@@ -176,7 +176,7 @@ def run_extractions(
         job_options["max_executors"] = max_executors
 
     # Prepare extraction jobs
-    job_manager, job_df, datacube_fn, tracking_df_path = prepare_extraction_jobs(
+    job_manager, job_df, datacube_fn, tracking_df_path = _prepare_extraction_jobs(
         collection,
         output_folder,
         samples_df_path,
@@ -195,7 +195,7 @@ def run_extractions(
     pipeline_log.info("Extraction completed successfully.")
 
     # Merge the extractions (for point jobs only)
-    merge_extraction_jobs(collection, output_folder, samples_df_path)
+    _merge_extraction_jobs(collection, output_folder, samples_df_path)
 
     send_notification(
         title=f"WorldCereal Extraction {collection.value} - Completed",

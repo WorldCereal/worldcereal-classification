@@ -378,7 +378,7 @@ def setup_extraction_functions(
     return datacube_fn, path_fn, post_job_fn
 
 
-def prepare_extraction_jobs(
+def _prepare_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
@@ -390,6 +390,45 @@ def prepare_extraction_jobs(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
 ) -> tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]:
+    """Function responsible for preparing the extraction jobs:
+    splitting jobs, preparing the job manager, setting up the extraction functions.
+
+    Parameters
+    ----------
+    collection : ExtractionCollection
+        The collection to extract
+    output_folder : Path
+        The folder where to store the extracted data
+    samples_df_path : Path
+        Path to the input dataframe containing the geometries
+        for which extractions need to be done
+    max_locations_per_job : int, optional
+        The maximum number of locations to extract per job, by default 500
+    job_options : Optional[Dict[str, Union[str, int]]], optional
+        Custom job options to set for the extraction, by default None (default options)
+        Options that can be set explicitly include:
+            - memory : str
+                Memory to allocate for the executor, e.g. "1800m"
+            - python_memory : str
+                Memory to allocate for the python processes as well as OrfeoToolbox in the executors, e.g. "1900m"
+            - max_executors : int
+                Number of executors to run, e.g. 22
+    parallel_jobs : int, optional
+        The maximum number of parallel jobs to run at the same time, by default 10
+    restart_failed : bool, optional
+        Restart the jobs that previously failed, by default False
+    extract_value : int, optional
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+    backend : _type_, optional
+        cloud backend where to run the extractions, by default Backend.CDSE
+    write_stac_api : bool, optional
+        Save metadata of extractions to STAC API (requires authentication), by default False
+
+    Returns
+    -------
+    tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]
+        JobManager, job dataframe, datacube function, job tracking dataframe path
+    """
 
     # Make sure output folder exists
     if not output_folder.is_dir():
@@ -398,11 +437,14 @@ def prepare_extraction_jobs(
     # Create path to tracking dataframe
     tracking_df_path = output_folder / "job_tracking.csv"
 
-    # Load the input dataframe and build the job dataframe
-    samples_gdf = load_dataframe(samples_df_path)
-
-    job_df = None
-    if not tracking_df_path.exists():
+    # If the tracking dataframe already exists, load it
+    if tracking_df_path.exists():
+        pipeline_log.info("Loading existing job tracking dataframe.")
+        job_df = pd.read_csv(tracking_df_path)
+    else:
+        # Load the input dataframe and build the job dataframe
+        samples_gdf = load_dataframe(samples_df_path)
+        pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
             samples_gdf, collection, max_locations_per_job, extract_value, backend
         )
@@ -413,7 +455,7 @@ def prepare_extraction_jobs(
         collection, extract_value, write_stac_api, job_options
     )
 
-    # Initialize and setups the job manager
+    # Initialize and setup the job manager
     pipeline_log.info("Initializing the job manager.")
 
     job_manager = GFMAPJobManager(
@@ -435,7 +477,7 @@ def prepare_extraction_jobs(
     return job_manager, job_df, datacube_fn, tracking_df_path
 
 
-def run_extraction_jobs(
+def _run_extraction_jobs(
     job_manager: GFMAPJobManager,
     job_df: pd.DataFrame,
     datacube_fn: Callable,
@@ -448,7 +490,7 @@ def run_extraction_jobs(
     return
 
 
-def merge_extraction_jobs(
+def _merge_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
@@ -491,7 +533,7 @@ def run_extractions(
         for which extractions need to be done
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
-    job_options : dict, optional
+    job_options : Optional[Dict[str, Union[str, int]]], optional
         Custom job options to set for the extraction, by default None (default options)
         Options that can be set explicitly include:
             - memory : str
@@ -508,6 +550,8 @@ def run_extractions(
         All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
+    write_stac_api : bool, optional
+        Save metadata of extractions to STAC API (requires authentication), by default False
 
     Returns
     -------
@@ -516,7 +560,7 @@ def run_extractions(
     """
 
     # Prepare the extraction jobs
-    job_manager, job_df, datacube_fn, tracking_df_path = prepare_extraction_jobs(
+    job_manager, job_df, datacube_fn, tracking_df_path = _prepare_extraction_jobs(
         collection,
         output_folder,
         samples_df_path,
@@ -530,9 +574,9 @@ def run_extractions(
     )
 
     # Run the extraction jobs
-    run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
+    _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
 
     # Merge the extraction jobs (for point extractions)
-    merge_extraction_jobs(collection, output_folder, samples_df_path)
+    _merge_extraction_jobs(collection, output_folder, samples_df_path)
 
     return tracking_df_path
