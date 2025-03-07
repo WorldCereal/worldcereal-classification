@@ -1,3 +1,6 @@
+from typing import List
+
+
 class RdmCollection:
     """Data class to host collections queried from the RDM API."""
 
@@ -46,33 +49,46 @@ class RdmCollection:
         self.created_by = metadata.get("creatorId")
         self.fid = metadata.get("id")
 
-    def visualize_extent(self):
-        """Visualizes the spatial extent of the collection on a map."""
 
-        from ipyleaflet import Map, Rectangle, basemaps
+def visualize_spatial_extents(collections: List[RdmCollection]):
+    """Visualizes the spatial extent of multiple collections on a map."""
 
-        # Get the extent of the collection
-        colbbox = self.spatial_extent.get("bbox", None)
+    from ipyleaflet import Map, Rectangle, basemaps
+
+    if len(collections) == 1:
+        zoom = 5
+        colbbox = collections[0].spatial_extent.get("bbox", None)
         if colbbox is None:
-            raise ValueError("No bounding box found for this collection.")
+            raise ValueError(
+                f"No bounding box found for collection {collections[0].id}."
+            )
         colbbox = colbbox[0]
-        bbox = [[colbbox[1], colbbox[0]], [colbbox[3], colbbox[2]]]
-
         # compute the center of the bounding box
         center = [(colbbox[1] + colbbox[3]) / 2, (colbbox[0] + colbbox[2]) / 2]
+    else:
+        zoom = 1
+        center = [0, 0]
+
+    # Create the basemap
+    m = Map(
+        basemap=basemaps.CartoDB.Positron,
+        zoom=zoom,
+        center=center,
+        scroll_wheel_zoom=True,
+    )
+
+    # Get the extent of each collection
+    for col in collections:
+        colbbox = col.spatial_extent.get("bbox", None)
+        if colbbox is None:
+            raise ValueError(f"No bounding box found for collection {col.id}.")
+        colbbox = colbbox[0]
+        bbox = [[colbbox[1], colbbox[0]], [colbbox[3], colbbox[2]]]
 
         # create a rectangle from the bounding box
         rectangle = Rectangle(bounds=bbox, color="green", weight=2, fill_opacity=0.1)
 
-        # Create the basemap
-        m = Map(
-            basemap=basemaps.CartoDB.Positron,
-            center=center,
-            zoom=6,
-            scroll_wheel_zoom=True,
-        )
-
         # Add the rectangle to the map
         m.add_layer(rectangle)
 
-        return m
+    return m
