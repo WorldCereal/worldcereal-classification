@@ -17,7 +17,7 @@ from openeo.rest.auth.oidc import (
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from requests.adapters import HTTPAdapter
 from shapely import wkb
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
@@ -765,6 +765,11 @@ class RdmInteraction:
         """
 
         if isinstance(spatial_extent, BaseGeometry):
+            if not isinstance(spatial_extent, Point):
+                raise ValueError(
+                    "Spatial extent cannot be a shapely.geometry.Point object"
+                )
+
             spatial_extent = spatial_extent.bounds
             spatial_extent = BoundingBoxExtent(
                 west=spatial_extent[0],
