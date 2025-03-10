@@ -41,6 +41,7 @@ from worldcereal.stac.stac_api_interaction import (
     StacApiInteraction,
     VitoStacApiAuthentication,
 )
+from worldcereal.utils.retry import retry
 
 from worldcereal.extract.patch_s1 import (  # isort: skip
     create_job_patch_s1,
@@ -53,6 +54,11 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
     post_job_action_patch_worldcereal,
     generate_output_path_patch_worldcereal,
 )
+
+
+RETRIES = int(os.environ.get("WORLDCEREAL_RETRIES", 3))
+DELAY = int(os.environ.get("WORLDCEREAL_DELAY", 5))
+BACKOFF = int(os.environ.get("WORLDCEREAL_BACKOFF", 1))
 
 
 def post_job_action_patch(
@@ -477,6 +483,13 @@ def _prepare_extraction_jobs(
     return job_manager, job_df, datacube_fn, tracking_df_path
 
 
+@retry(
+    exceptions=Exception,
+    tries=RETRIES,
+    delay=DELAY,
+    backoff=BACKOFF,
+    logger=pipeline_log,
+)
 def _run_extraction_jobs(
     job_manager: GFMAPJobManager,
     job_df: pd.DataFrame,
