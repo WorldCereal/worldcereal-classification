@@ -500,6 +500,7 @@ def _run_extraction_jobs(
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
     job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
+    pipeline_log.info("Extraction jobs completed.")
     return
 
 
@@ -571,6 +572,7 @@ def run_extractions(
     Path
         Path to the job tracking dataframe
     """
+    pipeline_log.info("Starting the extractions workflow...")
 
     # Prepare the extraction jobs
     job_manager, job_df, datacube_fn, tracking_df_path = _prepare_extraction_jobs(
@@ -591,5 +593,7 @@ def run_extractions(
 
     # Merge the extraction jobs (for point extractions)
     _merge_extraction_jobs(collection, output_folder, samples_df_path)
+
+    pipeline_log.info("Extractions workflow completed.")
 
     return tracking_df_path

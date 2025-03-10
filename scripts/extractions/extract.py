@@ -2,120 +2,16 @@
 own functions, but the setup and main thread execution is done here."""
 
 import argparse
-import os
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
-import geopandas as gpd
-import pandas as pd
-import requests
-from openeo.rest import OpenEoApiError, OpenEoApiPlainError, OpenEoRestError
 from openeo_gfmap import Backend
-from openeo_gfmap.manager.job_manager import GFMAPJobManager
 
-from worldcereal.extract.common import (
-    _merge_extraction_jobs,
-    _prepare_extraction_jobs,
-    pipeline_log,
-)
+from worldcereal.extract.common import run_extractions
 from worldcereal.stac.constants import ExtractionCollection
 
-# Pushover API endpoint, allowing to send notifications to personal devices.
-PUSHOVER_API_ENDPOINT = "https://api.pushover.net/1/messages.json"
 
-
-def send_notification(message: str, title: str = "OpenEO-GFMAP") -> None:
-    """Send a notification to the user's device using the Pushover API.
-
-    The environment needs to have the PUSHOVER_USER_TOKEN and PUSHOVER_APP_TOKEN
-    variables setup.
-    """
-    user_token = os.getenv("PUSHOVER_USER_TOKEN")
-    app_token = os.getenv("PUSHOVER_APP_TOKEN")
-
-    if user_token is None or app_token is None:
-        pipeline_log.warning("No pushover tokens found, skipping the notification.")
-        return
-
-    data = {
-        "token": app_token,
-        "user": user_token,
-        "message": message,
-        "title": title,
-    }
-    response = requests.post(PUSHOVER_API_ENDPOINT, data=data)
-
-    if response.status_code != 200:
-        pipeline_log.error("Error sending the notification: %s", response.text)
-
-
-def manager_main_loop(
-    manager: GFMAPJobManager,
-    collection: ExtractionCollection,
-    job_df: gpd.GeoDataFrame,
-    datacube_fn: Callable,
-    tracking_df_path: Path,
-) -> None:
-    """Main loop for the job manager, re-running it whenever an uncatched
-    OpenEO exception occurs, and notifying the user through the Pushover API
-    whenever the extraction start or an error occurs.
-    """
-    latest_exception_time = None
-    exception_counter = 0
-
-    while True:
-        pipeline_log.info("Launching the jobs manager.")
-        try:
-            send_notification(
-                title=f"WorldCereal Extraction {collection.value} - Started",
-                message="Extractions have been started.",
-            )
-            manager.run_jobs(job_df, datacube_fn, tracking_df_path)
-            return
-        except (
-            OpenEoApiPlainError,
-            OpenEoApiError,
-            OpenEoRestError,
-            requests.exceptions.ChunkedEncodingError,
-            requests.exceptions.HTTPError,
-        ) as e:
-            pipeline_log.exception("An error occurred during the extraction.\n%s", e)
-            send_notification(
-                title=f"WorldCereal Extraction {collection.value} - OpenEo Exception",
-                message=f"An OpenEO/Artifactory error occurred during the extraction.\n{e}",
-            )
-            if latest_exception_time is None:
-                latest_exception_time = pd.Timestamp.now()
-                exception_counter += 1
-            # 30 minutes between each exception
-            elif (datetime.now() - latest_exception_time).seconds < 1800:
-                exception_counter += 1
-            else:
-                latest_exception_time = None
-                exception_counter = 0
-
-            if exception_counter >= 3:
-                pipeline_log.error(
-                    "Too many OpenEO exceptions occurred in a short amount of time, stopping the extraction..."
-                )
-                send_notification(
-                    title=f"WorldCereal Extraction {collection.value} - Failed",
-                    message="Too many OpenEO exceptions occurred, stopping the extraction.",
-                )
-                raise e
-        except Exception as e:
-            pipeline_log.exception(
-                "An unexpected error occurred during the extraction.\n%s", e
-            )
-            send_notification(
-                title=f"WorldCereal Extraction {collection.value} - Failed",
-                message=f"An unexpected error occurred during the extraction.\n{e}",
-            )
-            raise e
-
-
-def run_extractions(
+def main(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
@@ -159,24 +55,27 @@ def run_extractions(
         All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
+    write_stac_api : bool, optional
+        Save metadata of extractions to STAC API (requires authentication), by default False
 
-    Raises
-    ------
-    ValueError
-        _description_
+    Returns
+    -------
+    None
     """
 
     # Compile custom job options
-    job_options: Dict[str, Union[str, int]] = {}
-    if memory:
-        job_options["memory"] = memory
-    if python_memory:
-        job_options["python_memory"] = python_memory
-    if max_executors:
-        job_options["max_executors"] = max_executors
+    job_options: Optional[Dict[str, Union[str, int]]] = {
+        key: value
+        for key, value in {
+            "memory": memory,
+            "python_memory": python_memory,
+            "max_executors": max_executors,
+        }.items()
+        if value is not None
+    } or None
 
-    # Prepare extraction jobs
-    job_manager, job_df, datacube_fn, tracking_df_path = _prepare_extraction_jobs(
+    # Fire up extractions
+    job_tracking_path = run_extractions(
         collection,
         output_folder,
         samples_df_path,
@@ -189,18 +88,9 @@ def run_extractions(
         write_stac_api=write_stac_api,
     )
 
-    # Run the extraction jobs with push notifications
-    manager_main_loop(job_manager, collection, job_df, datacube_fn, tracking_df_path)
-
-    pipeline_log.info("Extraction completed successfully.")
-
-    # Merge the extractions (for point jobs only)
-    _merge_extraction_jobs(collection, output_folder, samples_df_path)
-
-    send_notification(
-        title=f"WorldCereal Extraction {collection.value} - Completed",
-        message="Extractions have been completed successfully.",
-    )
+    # Print the path to the job tracking file
+    print(f"Job tracking file: {job_tracking_path}")
+    return
 
 
 if __name__ == "__main__":
@@ -266,7 +156,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    run_extractions(
+    main(
         collection=args.collection,
         output_folder=args.output_folder,
         samples_df_path=args.samples_df_path,
