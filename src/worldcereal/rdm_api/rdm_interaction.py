@@ -215,10 +215,7 @@ class RdmInteraction:
         """
         urls = []
 
-        if subset:
-            additional_part = "/sample"
-        else:
-            additional_part = ""
+        additional_part = "/sample" if subset else ""
 
         for id in ref_ids:
             url = f"{self.RDM_ENDPOINT}/collections/{id}{additional_part}/download"
