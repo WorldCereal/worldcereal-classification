@@ -56,9 +56,9 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
 )
 
 
-RETRIES = int(os.environ.get("WORLDCEREAL_RETRIES", 3))
-DELAY = int(os.environ.get("WORLDCEREAL_DELAY", 5))
-BACKOFF = int(os.environ.get("WORLDCEREAL_BACKOFF", 1))
+RETRIES = int(os.environ.get("WORLDCEREAL_EXTRACTION_RETRIES", 5))
+DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
+BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
 
 
 def post_job_action_patch(
