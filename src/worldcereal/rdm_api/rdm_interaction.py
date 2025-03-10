@@ -164,13 +164,8 @@ class RdmInteraction:
                 west=-180, south=-90, east=180, north=90, epsg=4326
             )
         # check if the geometry is valid
-        if (
-            spatial_extent.west < -180
-            or spatial_extent.south < -90
-            or spatial_extent.east > 180
-            or spatial_extent.north > 90
-        ):
-            raise ValueError("Invalid geometry. CRS should be EPSG:4326.")
+        self.assert_valid_spatial_extent(spatial_extent)
+
         bbox_str = f"Bbox={spatial_extent.west}&Bbox={spatial_extent.south}&Bbox={spatial_extent.east}&Bbox={spatial_extent.north}"
 
         # Handle temporal extent
@@ -391,6 +386,8 @@ class RdmInteraction:
             f"AND quality_score_ct >= {min_quality_ct}" if min_quality_ct > 0 else ""
         )
 
+        self.assert_valid_spatial_extent(spatial_extent)
+
         # Create a shapely polygon from the bounding box
         if isinstance(spatial_extent, BoundingBoxExtent):
             geometry = Polygon(
@@ -403,10 +400,6 @@ class RdmInteraction:
                 ]
             )
         else:
-            if not isinstance(spatial_extent, BaseGeometry):
-                raise ValueError(
-                    "Spatial extent should be either a BoundingBoxExtent or a shapely.BaseGeometry."
-                )
             geometry = spatial_extent
 
         for i, url in enumerate(urls):
@@ -753,3 +746,43 @@ class RdmInteraction:
         )
 
         return str(outfile)
+
+    def assert_valid_spatial_extent(
+        self, spatial_extent: Union[BoundingBoxExtent, BaseGeometry]
+    ) -> None:
+        """Validate that the given spatial extent is in EPSG:4326 and is either a BoundingBoxExtent or BaseGeometry.
+
+        Parameters
+        ----------
+        spatial_extent : Union[BoundingBoxExtent, BaseGeometry]
+            The spatial_extent to check.
+
+
+        Raises
+        ------
+        ValueError
+            If the spatial_extent is not in EPSG:4326 or either a BoundingBoxExtent or BaseGeometry
+        """
+
+        if isinstance(spatial_extent, BaseGeometry):
+            spatial_extent = spatial_extent.bounds
+            spatial_extent = BoundingBoxExtent(
+                west=spatial_extent[0],
+                south=spatial_extent[1],
+                east=spatial_extent[2],
+                north=spatial_extent[3],
+                epsg=4326,
+            )
+
+        elif not isinstance(spatial_extent, BoundingBoxExtent):
+            raise ValueError(
+                "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.base.BaseGeometry."
+            )
+
+        if (
+            spatial_extent.west < -180
+            or spatial_extent.south < -90
+            or spatial_extent.east > 180
+            or spatial_extent.north > 90
+        ):
+            raise ValueError("Invalid spatial_extent. CRS should be EPSG:4326.")
