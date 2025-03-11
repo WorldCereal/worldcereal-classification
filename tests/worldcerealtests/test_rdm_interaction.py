@@ -39,7 +39,7 @@ class TestRdmInteraction:
         ]
         interaction = RdmInteraction()
         collections = interaction.get_collections(
-            bbox=sample_bbox, temporal_extent=sample_temporal_extent
+            spatial_extent=sample_bbox, temporal_extent=sample_temporal_extent
         )
         ref_ids = [collection.id for collection in collections]
 
@@ -106,7 +106,7 @@ class TestRdmInteraction:
 
         interaction = RdmInteraction()
         result_gdf = interaction.get_samples(
-            bbox=sample_bbox,
+            spatial_extent=sample_bbox,
             temporal_extent=sample_temporal_extent,
             columns=["col1", "col2", "ref_id", "geometry"],
             ewoc_codes=["1", "2", "3", "4"],
