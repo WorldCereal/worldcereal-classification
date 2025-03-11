@@ -199,6 +199,7 @@ class RdmInteraction:
     def _get_download_urls(
         self,
         ref_ids: List[str],
+        subset: bool = False,
     ) -> List[str]:
         """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each ref ID.
 
@@ -214,9 +215,11 @@ class RdmInteraction:
         """
         urls = []
 
+        additional_part = "/sample" if subset else ""
+
         for id in ref_ids:
-            url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
-            response = self.session.get(url, headers=self._get_headers(), timeout=10)
+            url = f"{self.RDM_ENDPOINT}/collections/{id}{additional_part}/download"
+            response = self.session.get(url, headers=self._get_headers(), timeout=30)
             if response.status_code != 200:
                 raise Exception(
                     f"Failed to get download URL for collection {id}: {response.text}"
@@ -662,20 +665,14 @@ class RdmInteraction:
             If the request fails.
         """
 
-        # Get the metadata
-        metadata = self.get_collection_metadata(ref_id)
-
-        # Get the correct link from the metadata
-        if subset:
-            download_link = metadata["SampleDownloadUrl"]
-        else:
-            download_link = metadata["GeoParquetDownloadUrl"]
+        url = self._get_download_urls([ref_id], subset=subset)[0]
 
         # Download the file directly
-        filename = download_link.split("/")[-1]
+        part2 = "_samples" if subset else ""
+        filename = f"{ref_id}{part2}.parquet"
         outfile = Path(dst_path) / filename
         Path(dst_path).mkdir(parents=True, exist_ok=True)
-        response = requests.get(download_link)
+        response = requests.get(url, timeout=(5, 120))
         if response.status_code != 200:
             raise Exception(
                 f"Error downloading samples for collection {ref_id}: {response.text}"
@@ -689,7 +686,7 @@ class RdmInteraction:
 
     def download_collection_harmonization_info(self, ref_id: str, dst_path: str) -> str:
         """Download the harmonization information for a specific collection
-            as a PDF file.
+            as a PDF file. Only works for public collections!
 
         Parameters
         ----------
