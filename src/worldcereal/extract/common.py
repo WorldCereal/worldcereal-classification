@@ -8,7 +8,7 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
 import geojson
 import geopandas as gpd
@@ -278,6 +278,63 @@ def prepare_job_dataframe(
     return job_df
 
 
+def _count_by_status(job_status_df, statuses: Iterable[str] = ()) -> dict:
+    status_histogram = job_status_df.groupby("status").size().to_dict()
+    statuses = set(statuses)
+    if statuses:
+        status_histogram = {k: v for k, v in status_histogram.items() if k in statuses}
+    return status_histogram
+
+
+def check_job_status(output_folder: Path):
+    """Check the status of the jobs in the given output folder and
+        provide details on succeeded jobs (if any).
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    tuple[dict, pd.DataFrame]
+        status_histogram, succeeded_jobs
+
+    Raises
+    ------
+    FileNotFoundError
+        if the job status file is not found in the designated folder
+    """
+    # Get path to the job status file
+    job_status_file = output_folder / "job_tracking.csv"
+
+    # Read the file
+    if job_status_file.exists():
+        job_status_df = pd.read_csv(job_status_file)
+    else:
+        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+
+    # Summarize the status in histogram
+    status_histogram = _count_by_status(job_status_df)
+
+    # Gather metadata on succeeded jobs
+    succeeded_jobs = job_status_df[job_status_df["status"] == "finished"]
+    if len(succeeded_jobs) > 0:
+        # Derive number of features involved in each job
+        nfeatures = []
+        for i, row in succeeded_jobs.iterrows():
+            nfeatures.append(len(json.loads(row["geometry"])["features"]))
+        succeeded_jobs["n_features"] = nfeatures
+        # Gather essential columns
+        succeeded_jobs = succeeded_jobs[
+            ["id", "s2_tile", "n_features", "cpu", "memory", "duration", "costs"]
+        ]
+    else:
+        succeeded_jobs = pd.DataFrame()
+
+    return status_histogram, succeeded_jobs
+
+
 def setup_extraction_functions(
     collection: ExtractionCollection,
     extract_value: int,
@@ -447,6 +504,11 @@ def _prepare_extraction_jobs(
     if tracking_df_path.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
+        status_histogram, succeeded_jobs = check_job_status(output_folder)
+        pipeline_log.info(
+            "Job status histogram: %s",
+            status_histogram,
+        )
     else:
         # Load the input dataframe and build the job dataframe
         samples_gdf = load_dataframe(samples_df_path)
