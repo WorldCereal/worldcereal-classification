@@ -630,7 +630,7 @@ def run_extractions(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
-) -> Path:
+) -> None:
     """Main function responsible for launching point and patch extractions.
 
     Parameters
@@ -664,10 +664,6 @@ def run_extractions(
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
 
-    Returns
-    -------
-    Path
-        Path to the job tracking dataframe
     """
     pipeline_log.info("Starting the extractions workflow...")
 
@@ -692,5 +688,6 @@ def run_extractions(
     _merge_extraction_jobs(collection, output_folder, samples_df_path)
 
     pipeline_log.info("Extractions workflow completed.")
+    pipeline_log.info(f"Results stored in folder: {output_folder}.")
 
-    return tracking_df_path
+    return
