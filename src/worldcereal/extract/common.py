@@ -539,6 +539,13 @@ def _prepare_extraction_jobs(
     if tracking_df_path.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
+
+        # Change status "running" and "canceled" to "not_started"
+        job_df.loc[job_df.status.isin(["running", "canceled"]), "status"] = (
+            "not_started"
+        )
+        job_df.to_csv(tracking_df_path, index=False)
+
         status_histogram = check_job_status(output_folder)
         pipeline_log.info(
             "Job status histogram: %s",
