@@ -313,8 +313,7 @@ def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
 
 
 def check_job_status(output_folder: Path) -> dict:
-    """Check the status of the jobs in the given output folder and
-        provide details on succeeded jobs (if any).
+    """Check the status of the jobs in the given output folder.
 
     Parameters
     ----------
