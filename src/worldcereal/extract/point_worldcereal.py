@@ -2,6 +2,7 @@
 
 import copy
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -232,7 +233,7 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path]) -> Non
 
     # If merged parquet already exists, delete it
     if os.path.exists(merged_path):
-        os.remove(merged_path)
+        shutil.rmtree(merged_path)
 
     con = duckdb.connect()
     con.execute("INSTALL spatial;")
