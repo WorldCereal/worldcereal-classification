@@ -618,8 +618,7 @@ def _merge_extraction_jobs(
 
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
         pipeline_log.info("Merging Geoparquet results...")
-        ref_id = output_folder.name
-        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        merge_output_files_point_worldcereal(output_folder=output_folder)
         pipeline_log.info("Geoparquet results merged successfully.")
 
     return

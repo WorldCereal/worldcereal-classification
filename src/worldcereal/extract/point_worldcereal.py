@@ -214,7 +214,7 @@ def post_job_action_point_worldcereal(
     return job_items
 
 
-def merge_output_files_point_worldcereal(output_folder: Union[str, Path], ref_id: str):
+def merge_output_files_point_worldcereal(output_folder: Union[str, Path]) -> None:
     """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
 
     Parameters
