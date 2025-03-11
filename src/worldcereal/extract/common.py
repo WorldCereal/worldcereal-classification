@@ -286,7 +286,33 @@ def _count_by_status(job_status_df, statuses: Iterable[str] = ()) -> dict:
     return status_histogram
 
 
-def check_job_status(output_folder: Path):
+def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
+    """Read job tracking csv file.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    pd.DataFrame
+        job tracking dataframe
+
+    Raises
+    ------
+    FileNotFoundError
+        if the job status file is not found in the designated folder
+    """
+    job_status_file = output_folder / "job_tracking.csv"
+    if job_status_file.exists():
+        job_status_df = pd.read_csv(job_status_file)
+    else:
+        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+    return job_status_df
+
+
+def check_job_status(output_folder: Path) -> dict:
     """Check the status of the jobs in the given output folder and
         provide details on succeeded jobs (if any).
 
@@ -297,25 +323,34 @@ def check_job_status(output_folder: Path):
 
     Returns
     -------
-    tuple[dict, pd.DataFrame]
-        status_histogram, succeeded_jobs
-
-    Raises
-    ------
-    FileNotFoundError
-        if the job status file is not found in the designated folder
+    dict
+        status_histogram
     """
-    # Get path to the job status file
-    job_status_file = output_folder / "job_tracking.csv"
 
-    # Read the file
-    if job_status_file.exists():
-        job_status_df = pd.read_csv(job_status_file)
-    else:
-        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
 
     # Summarize the status in histogram
     status_histogram = _count_by_status(job_status_df)
+
+    return status_histogram
+
+
+def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
+    """Get details of succeeded extraction jobs in the given output folder.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+    Returns
+    -------
+    pd.DataFrame
+        details of succeeded jobs
+    """
+
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
 
     # Gather metadata on succeeded jobs
     succeeded_jobs = job_status_df[job_status_df["status"] == "finished"]
@@ -332,7 +367,7 @@ def check_job_status(output_folder: Path):
     else:
         succeeded_jobs = pd.DataFrame()
 
-    return status_histogram, succeeded_jobs
+    return succeeded_jobs
 
 
 def setup_extraction_functions(
@@ -504,7 +539,7 @@ def _prepare_extraction_jobs(
     if tracking_df_path.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
-        status_histogram, succeeded_jobs = check_job_status(output_folder)
+        status_histogram = check_job_status(output_folder)
         pipeline_log.info(
             "Job status histogram: %s",
             status_histogram,
