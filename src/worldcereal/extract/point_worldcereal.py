@@ -1,8 +1,9 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
+import copy
 import os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import duckdb
 import geojson
@@ -13,8 +14,19 @@ import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
-from worldcereal.extract.common import get_job_nb_polygons, pipeline_log
+from worldcereal.extract.utils import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+
+DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
+    "driver-memory": "2G",
+    "driver-memoryOverhead": "2G",
+    "driver-cores": "1",
+    "executor-memory": "1800m",
+    "python-memory": "3000m",
+    "executor-cores": "1",
+    "max-executors": 22,
+    "soft-errors": "true",
+}
 
 
 def generate_output_path_point_worldcereal(
@@ -111,9 +123,7 @@ def create_job_point_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -154,21 +164,15 @@ def create_job_point_worldcereal(
     if pipeline_log is not None:
         pipeline_log.debug("Number of polygons to extract %s", number_points)
 
-    job_options = {
-        "driver-memory": "2G",
-        "driver-memoryOverhead": "2G",
-        "driver-cores": "1",
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "executor-cores": "1",
-        "max-executors": max_executors,
-        "soft-errors": "true",
-    }
+    # Set job options
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="Parquet",
         title=f"Worldcereal_Point_Extraction_{row.s2_tile}",
-        job_options=job_options,
+        job_options=final_job_options,
     )
 
 

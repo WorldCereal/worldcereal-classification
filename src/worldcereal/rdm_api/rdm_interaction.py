@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -17,7 +17,8 @@ from openeo.rest.auth.oidc import (
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from requests.adapters import HTTPAdapter
 from shapely import wkb
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
 from worldcereal.rdm_api.rdm_collection import RdmCollection
@@ -109,7 +110,9 @@ class RdmInteraction:
 
     def get_collections(
         self,
-        bbox: Optional[BoundingBoxExtent] = None,
+        spatial_extent: Optional[
+            Union[BoundingBoxExtent, Polygon, MultiPolygon]
+        ] = None,
         temporal_extent: Optional[TemporalContext] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
@@ -120,8 +123,8 @@ class RdmInteraction:
 
         Parameters
         ----------
-        bbox : Optional[BoundingBoxExtent], optional
-            A user-defined bounding box for which all intersecting collections need to be found.
+        spatial_extent : Optional[Union[BoundingBoxExtent, Polygon, MultiPolygon]], optional
+            A user-defined bounding box, or shapely Polygon or MultiPolygon for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried, by default None
         temporal_extent : Optional[TemporalContext], optional
@@ -148,16 +151,26 @@ class RdmInteraction:
                 self.authenticate()
 
         # Handle geometry
-        if bbox is None:
-            bbox = BoundingBoxExtent(
+        if isinstance(spatial_extent, Polygon) or isinstance(
+            spatial_extent, MultiPolygon
+        ):
+            spatial_extent = spatial_extent.bounds
+            spatial_extent = BoundingBoxExtent(
+                west=spatial_extent[0],
+                south=spatial_extent[1],
+                east=spatial_extent[2],
+                north=spatial_extent[3],
+                epsg=4326,
+            )
+
+        if spatial_extent is None:
+            spatial_extent = BoundingBoxExtent(
                 west=-180, south=-90, east=180, north=90, epsg=4326
             )
         # check if the geometry is valid
-        if bbox.west < -180 or bbox.south < -90 or bbox.east > 180 or bbox.north > 90:
-            raise ValueError("Invalid geometry. CRS should be EPSG:4326.")
-        bbox_str = (
-            f"Bbox={bbox.west}&Bbox={bbox.south}&Bbox={bbox.east}&Bbox={bbox.north}"
-        )
+        self.assert_valid_spatial_extent(spatial_extent)
+
+        bbox_str = f"Bbox={spatial_extent.west}&Bbox={spatial_extent.south}&Bbox={spatial_extent.east}&Bbox={spatial_extent.north}"
 
         # Handle temporal extent
         val_time = (
@@ -199,6 +212,7 @@ class RdmInteraction:
     def _get_download_urls(
         self,
         ref_ids: List[str],
+        subset: bool = False,
     ) -> List[str]:
         """Queries the RDM API and finds all HTTP URLs for the GeoParquet files for each ref ID.
 
@@ -214,9 +228,11 @@ class RdmInteraction:
         """
         urls = []
 
+        additional_part = "/sample" if subset else ""
+
         for id in ref_ids:
-            url = f"{self.RDM_ENDPOINT}/collections/{id}/download"
-            response = self.session.get(url, headers=self._get_headers(), timeout=10)
+            url = f"{self.RDM_ENDPOINT}/collections/{id}{additional_part}/download"
+            response = self.session.get(url, headers=self._get_headers(), timeout=30)
             if response.status_code != 200:
                 raise Exception(
                     f"Failed to get download URL for collection {id}: {response.text}"
@@ -310,7 +326,7 @@ class RdmInteraction:
     def _setup_sql_query(
         self,
         urls: List[str],
-        bbox: BoundingBoxExtent,
+        spatial_extent: Union[BoundingBoxExtent, Polygon, MultiPolygon],
         columns: List[str],
         temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
@@ -324,8 +340,8 @@ class RdmInteraction:
         ----------
         urls : List[str]
             A list of URLs of the GeoParquet files.
-        bbox : BoundingBoxExtent
-            A user-defined bounding box.
+        spatial_extent : Union[BoundingBoxExtent, Polygon, MultiPolygon]
+            A user-defined bounding box, or shapely Polygon or MultiPolygon.
         columns :
             A list of column names to extract.
         temporal_extent : Optional[TemporalContext], optional
@@ -377,23 +393,28 @@ class RdmInteraction:
             f"AND quality_score_ct >= {min_quality_ct}" if min_quality_ct > 0 else ""
         )
 
+        self.assert_valid_spatial_extent(spatial_extent)
+
         # Create a shapely polygon from the bounding box
-        geometry = Polygon(
-            [
-                (bbox.west, bbox.south),
-                (bbox.east, bbox.south),
-                (bbox.east, bbox.north),
-                (bbox.west, bbox.north),
-                (bbox.west, bbox.south),
-            ]
-        )
+        if isinstance(spatial_extent, BoundingBoxExtent):
+            geometry = Polygon(
+                [
+                    (spatial_extent.west, spatial_extent.south),
+                    (spatial_extent.east, spatial_extent.south),
+                    (spatial_extent.east, spatial_extent.north),
+                    (spatial_extent.west, spatial_extent.north),
+                    (spatial_extent.west, spatial_extent.south),
+                ]
+            )
+        else:
+            geometry = spatial_extent
 
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""
-                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))) AS wkb_geometry, '{ref_id}' AS ref_id
+                SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))) AS wkb_geometry, '{ref_id}' AS ref_id
                 FROM read_parquet('{url}')
-                WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(geometry)}'))
+                WHERE ST_Intersects(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))
                 {optional_temporal}
                 {optional_ewoc_codes}
                 {optional_subset}
@@ -412,7 +433,9 @@ class RdmInteraction:
         ref_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
-        bbox: Optional[BoundingBoxExtent] = None,
+        spatial_extent: Optional[
+            Union[BoundingBoxExtent, Polygon, MultiPolygon]
+        ] = None,
         temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
@@ -434,8 +457,8 @@ class RdmInteraction:
             If True, only download a subset of the samples (for which extract attribute ==1)
             If False, extract all samples.
             Default is False.
-        bbox : Optional[BoundingBoxExtent], optional
-            A user-defined bounding box for which all intersecting samples need to be found.
+        spatial_extent : Optional[Union[BoundingBoxExtent, Polygon, MultiPolygon]], optional
+            A user-defined bounding box or shapely Polygon or MultiPolygon for which all intersecting samples need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried, by default None
         temporal_extent : TemporalContext, optional
@@ -461,7 +484,7 @@ class RdmInteraction:
         # Determine which collections need to be queried if they are not specified
         if not ref_ids:
             collections = self.get_collections(
-                bbox=bbox,
+                spatial_extent=spatial_extent,
                 temporal_extent=temporal_extent,
                 ewoc_codes=ewoc_codes,
                 include_public=include_public,
@@ -479,16 +502,16 @@ class RdmInteraction:
         # For each collection, get the download URL
         urls = self._get_download_urls(ref_ids)
 
-        # Ensure we have a valid bbox
-        if bbox is None:
-            bbox = BoundingBoxExtent(
+        # Ensure we have a valid spatial_extent
+        if spatial_extent is None:
+            spatial_extent = BoundingBoxExtent(
                 west=-180, south=-90, east=180, north=90, epsg=4326
             )
 
         # Set up the SQL query
         query = self._setup_sql_query(
             urls=urls,
-            bbox=bbox,
+            spatial_extent=spatial_extent,
             columns=columns,
             temporal_extent=temporal_extent,
             ewoc_codes=ewoc_codes,
@@ -662,20 +685,14 @@ class RdmInteraction:
             If the request fails.
         """
 
-        # Get the metadata
-        metadata = self.get_collection_metadata(ref_id)
-
-        # Get the correct link from the metadata
-        if subset:
-            download_link = metadata["SampleDownloadUrl"]
-        else:
-            download_link = metadata["GeoParquetDownloadUrl"]
+        url = self._get_download_urls([ref_id], subset=subset)[0]
 
         # Download the file directly
-        filename = download_link.split("/")[-1]
+        part2 = "_samples" if subset else ""
+        filename = f"{ref_id}{part2}.parquet"
         outfile = Path(dst_path) / filename
         Path(dst_path).mkdir(parents=True, exist_ok=True)
-        response = requests.get(download_link)
+        response = requests.get(url, timeout=(5, 120))
         if response.status_code != 200:
             raise Exception(
                 f"Error downloading samples for collection {ref_id}: {response.text}"
@@ -689,7 +706,7 @@ class RdmInteraction:
 
     def download_collection_harmonization_info(self, ref_id: str, dst_path: str) -> str:
         """Download the harmonization information for a specific collection
-            as a PDF file.
+            as a PDF file. Only works for public collections!
 
         Parameters
         ----------
@@ -732,3 +749,50 @@ class RdmInteraction:
         )
 
         return str(outfile)
+
+    def assert_valid_spatial_extent(
+        self, spatial_extent: Union[BoundingBoxExtent, Polygon, MultiPolygon]
+    ) -> None:
+        """Validate that the given spatial extent is in EPSG:4326 and is either a BoundingBoxExtent or shapely Polygon or MultiPolygon.
+
+        Parameters
+        ----------
+        spatial_extent : Union[BoundingBoxExtent, Polygon, MultiPolygon]
+            The spatial_extent to check.
+
+
+        Raises
+        ------
+        ValueError
+            If the spatial_extent is not in EPSG:4326 or either a BoundingBoxExtent or shapely Polygon or MultiPolygon
+        """
+
+        if isinstance(spatial_extent, BaseGeometry):
+            if not isinstance(spatial_extent, Polygon) and not isinstance(
+                spatial_extent, MultiPolygon
+            ):
+                raise ValueError(
+                    "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.Polygon or shapely.geometry.MultiPolygon."
+                )
+
+            spatial_extent = spatial_extent.bounds
+            spatial_extent = BoundingBoxExtent(
+                west=spatial_extent[0],
+                south=spatial_extent[1],
+                east=spatial_extent[2],
+                north=spatial_extent[3],
+                epsg=4326,
+            )
+
+        elif not isinstance(spatial_extent, BoundingBoxExtent):
+            raise ValueError(
+                "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.Polygon or shapely.geometry.MultiPolygon."
+            )
+
+        if (
+            spatial_extent.west < -180
+            or spatial_extent.south < -90
+            or spatial_extent.east > 180
+            or spatial_extent.north > 90
+        ):
+            raise ValueError("Invalid spatial_extent. CRS should be EPSG:4326.")
