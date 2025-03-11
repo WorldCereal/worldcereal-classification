@@ -611,7 +611,6 @@ def _run_extraction_jobs(
 def _merge_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
-    samples_df_path: Path,
 ) -> None:
 
     # Merge the extraction jobs
@@ -619,7 +618,7 @@ def _merge_extraction_jobs(
 
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
         pipeline_log.info("Merging Geoparquet results...")
-        ref_id = Path(samples_df_path).stem
+        ref_id = output_folder.name
         merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
         pipeline_log.info("Geoparquet results merged successfully.")
 
@@ -692,7 +691,7 @@ def run_extractions(
     _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
 
     # Merge the extraction jobs (for point extractions)
-    _merge_extraction_jobs(collection, output_folder, samples_df_path)
+    _merge_extraction_jobs(collection, output_folder)
 
     pipeline_log.info("Extractions workflow completed.")
     pipeline_log.info(f"Results stored in folder: {output_folder}.")
