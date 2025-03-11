@@ -230,6 +230,10 @@ def merge_output_files_point_worldcereal(output_folder: Union[str, Path]) -> Non
     output_dir = os.path.dirname(merged_path)
     os.makedirs(output_dir, exist_ok=True)
 
+    # If merged parquet already exists, delete it
+    if os.path.exists(merged_path):
+        os.remove(merged_path)
+
     con = duckdb.connect()
     con.execute("INSTALL spatial;")
     con.execute("LOAD spatial;")
