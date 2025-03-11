@@ -1,7 +1,8 @@
 """Extract S1 data using OpenEO-GFMAP package."""
 
+import copy
 from datetime import datetime
-from typing import List
+from typing import Dict, List, Optional, Union
 
 import geojson
 import geopandas as gpd
@@ -20,7 +21,7 @@ from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S1
 
-from worldcereal.extract.common import (  # isort: skip
+from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
@@ -28,6 +29,13 @@ from worldcereal.extract.common import (  # isort: skip
 )
 
 S1_GRD_CATALOGUE_BEGIN_DATE = datetime(2014, 10, 1)
+
+DEFAULT_JOB_OPTIONS_PATCH_S1 = {
+    "executor-memory": "1800m",
+    "python-memory": "1900m",
+    "max-executors": 22,
+    "soft-errors": "true",
+}
 
 
 def create_job_dataframe_patch_s1(
@@ -122,9 +130,7 @@ def create_job_patch_s1(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information. This job is a
     S1 patch of 32x32 pixels at 20m spatial resolution."""
@@ -170,16 +176,15 @@ def create_job_patch_s1(
     number_polygons = get_job_nb_polygons(row)
     pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
-    job_options = {
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "soft-errors": "true",
-        "max_executors": max_executors,
-    }
+    # Set job options
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S1)
+    if job_options:
+        final_job_options.update(job_options)
+
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_time}_{orbit_state}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )

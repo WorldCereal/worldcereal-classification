@@ -1,7 +1,8 @@
 """Extract S2 data using OpenEO-GFMAP package."""
 
+import copy
 from datetime import datetime
-from typing import List
+from typing import Dict, List, Optional, Union
 
 import geojson
 import geopandas as gpd
@@ -13,7 +14,7 @@ from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
 
-from worldcereal.extract.common import (  # isort: skip
+from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
@@ -21,6 +22,21 @@ from worldcereal.extract.common import (  # isort: skip
 
 
 S2_L2A_CATALOGUE_BEGIN_DATE = datetime(2017, 1, 1)
+
+
+DEFAULT_JOB_OPTIONS_PATCH_S2 = {
+    "driver-memory": "2G",
+    "driver-memoryOverhead": "2G",
+    "driver-cores": "1",
+    "executor-memory": "1800m",
+    "python-memory": "1900m",
+    "executor-cores": "1",
+    "max-executors": 22,
+    "soft-errors": "true",
+    "gdal-dataset-cache-size": 2,
+    "gdal-cachemax": 120,
+    "executor-threads-jvm": 1,
+}
 
 
 def create_job_dataframe_patch_s2(
@@ -72,10 +88,9 @@ def create_job_patch_s2(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
+
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -132,24 +147,15 @@ def create_job_patch_s2(
     number_polygons = get_job_nb_polygons(row)
     _log.debug("Number of polygons to extract %s", number_polygons)
 
-    job_options = {
-        "driver-memory": "2G",
-        "driver-memoryOverhead": "2G",
-        "driver-cores": "1",
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "executor-cores": "1",
-        "max-executors": max_executors,
-        "soft-errors": "true",
-        "gdal-dataset-cache-size": 2,
-        "gdal-cachemax": 120,
-        "executor-threads-jvm": 1,
-    }
+    # Set job options
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_S2)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )
