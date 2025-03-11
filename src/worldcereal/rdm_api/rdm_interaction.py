@@ -17,7 +17,7 @@ from openeo.rest.auth.oidc import (
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from requests.adapters import HTTPAdapter
 from shapely import wkb
-from shapely.geometry import Point, Polygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from urllib3.util.retry import Retry
 
@@ -110,7 +110,9 @@ class RdmInteraction:
 
     def get_collections(
         self,
-        spatial_extent: Optional[Union[BoundingBoxExtent, BaseGeometry]] = None,
+        spatial_extent: Optional[
+            Union[BoundingBoxExtent, Polygon, MultiPolygon]
+        ] = None,
         temporal_extent: Optional[TemporalContext] = None,
         include_public: Optional[bool] = True,
         include_private: Optional[bool] = False,
@@ -121,8 +123,8 @@ class RdmInteraction:
 
         Parameters
         ----------
-        spatial_extent : Optional[Union[BoundingBoxExtent, BaseGeometry]], optional
-            A user-defined bounding box, or geometry for which all intersecting collections need to be found.
+        spatial_extent : Optional[Union[BoundingBoxExtent, Polygon, MultiPolygon]], optional
+            A user-defined bounding box, or shapely Polygon or MultiPolygon for which all intersecting collections need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried, by default None
         temporal_extent : Optional[TemporalContext], optional
@@ -149,7 +151,9 @@ class RdmInteraction:
                 self.authenticate()
 
         # Handle geometry
-        if isinstance(spatial_extent, BaseGeometry):
+        if isinstance(spatial_extent, Polygon) or isinstance(
+            spatial_extent, MultiPolygon
+        ):
             spatial_extent = spatial_extent.bounds
             spatial_extent = BoundingBoxExtent(
                 west=spatial_extent[0],
@@ -319,7 +323,7 @@ class RdmInteraction:
     def _setup_sql_query(
         self,
         urls: List[str],
-        spatial_extent: Union[BoundingBoxExtent, BaseGeometry],
+        spatial_extent: Union[BoundingBoxExtent, Polygon, MultiPolygon],
         columns: List[str],
         temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
@@ -333,8 +337,8 @@ class RdmInteraction:
         ----------
         urls : List[str]
             A list of URLs of the GeoParquet files.
-        spatial_extent : Union[BoundingBoxExtent, BaseGeometry]
-            A user-defined bounding box, or geometry.
+        spatial_extent : Union[BoundingBoxExtent, Polygon, MultiPolygon]
+            A user-defined bounding box, or shapely Polygon or MultiPolygon.
         columns :
             A list of column names to extract.
         temporal_extent : Optional[TemporalContext], optional
@@ -426,7 +430,9 @@ class RdmInteraction:
         ref_ids: Optional[List[str]] = None,
         columns: List[str] = DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
-        spatial_extent: Optional[Union[BoundingBoxExtent, BaseGeometry]] = None,
+        spatial_extent: Optional[
+            Union[BoundingBoxExtent, Polygon, MultiPolygon]
+        ] = None,
         temporal_extent: Optional[TemporalContext] = None,
         ewoc_codes: Optional[List[int]] = None,
         include_public: Optional[bool] = True,
@@ -448,8 +454,8 @@ class RdmInteraction:
             If True, only download a subset of the samples (for which extract attribute ==1)
             If False, extract all samples.
             Default is False.
-        spatial_extent : Optional[Union[BoundingBoxExtent, BaseGeometry]], optional
-            A user-defined bounding box or geometry for which all intersecting samples need to be found.
+        spatial_extent : Optional[Union[BoundingBoxExtent, Polygon, MultiPolygon]], optional
+            A user-defined bounding box or shapely Polygon or MultiPolygon for which all intersecting samples need to be found.
             CRS should be EPSG:4326.
             If None, all available data will be queried, by default None
         temporal_extent : TemporalContext, optional
@@ -748,26 +754,28 @@ class RdmInteraction:
         return str(outfile)
 
     def assert_valid_spatial_extent(
-        self, spatial_extent: Union[BoundingBoxExtent, BaseGeometry]
+        self, spatial_extent: Union[BoundingBoxExtent, Polygon, MultiPolygon]
     ) -> None:
-        """Validate that the given spatial extent is in EPSG:4326 and is either a BoundingBoxExtent or BaseGeometry.
+        """Validate that the given spatial extent is in EPSG:4326 and is either a BoundingBoxExtent or shapely Polygon or MultiPolygon.
 
         Parameters
         ----------
-        spatial_extent : Union[BoundingBoxExtent, BaseGeometry]
+        spatial_extent : Union[BoundingBoxExtent, Polygon, MultiPolygon]
             The spatial_extent to check.
 
 
         Raises
         ------
         ValueError
-            If the spatial_extent is not in EPSG:4326 or either a BoundingBoxExtent or BaseGeometry
+            If the spatial_extent is not in EPSG:4326 or either a BoundingBoxExtent or shapely Polygon or MultiPolygon
         """
 
         if isinstance(spatial_extent, BaseGeometry):
-            if not isinstance(spatial_extent, Point):
+            if not isinstance(spatial_extent, Polygon) and not isinstance(
+                spatial_extent, MultiPolygon
+            ):
                 raise ValueError(
-                    "Spatial extent cannot be a shapely.geometry.Point object"
+                    "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.Polygon or shapely.geometry.MultiPolygon."
                 )
 
             spatial_extent = spatial_extent.bounds
@@ -781,7 +789,7 @@ class RdmInteraction:
 
         elif not isinstance(spatial_extent, BoundingBoxExtent):
             raise ValueError(
-                "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.base.BaseGeometry."
+                "Spatial extent should be either a BoundingBoxExtent or a shapely.geometry.Polygon or shapely.geometry.MultiPolygon."
             )
 
         if (
