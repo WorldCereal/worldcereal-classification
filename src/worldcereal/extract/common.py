@@ -358,11 +358,22 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
         nfeatures = []
         for i, row in succeeded_jobs.iterrows():
             nfeatures.append(len(json.loads(row["geometry"])["features"]))
-        succeeded_jobs["n_features"] = nfeatures
+        succeeded_jobs["n_samples"] = nfeatures
         # Gather essential columns
         succeeded_jobs = succeeded_jobs[
-            ["id", "s2_tile", "n_features", "cpu", "memory", "duration", "costs"]
+            [
+                "id",
+                "s2_tile",
+                "n_samples",
+                # "cpu", "memory",
+                "duration",
+                "costs",
+            ]
         ]
+        # Convert duration to minutes
+        seconds = succeeded_jobs["duration"].str.split("s").str[0].astype(int)
+        succeeded_jobs["duration"] = seconds / 60
+        succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
     else:
         succeeded_jobs = pd.DataFrame()
 
