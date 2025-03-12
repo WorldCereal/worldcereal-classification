@@ -115,6 +115,8 @@ def prepare_samples_dataframe(
         logger.warning(
             "The number of S2 tiles is high. Extractions will likely consume a lot of credits."
         )
+    # drop tile attribute again
+    gdf = gdf.drop(columns=["tile"])
 
     return gdf
 
