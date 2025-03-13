@@ -352,7 +352,7 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
     job_status_df = _read_job_tracking_csv(output_folder)
 
     # Gather metadata on succeeded jobs
-    succeeded_jobs = job_status_df[job_status_df["status"] == "finished"]
+    succeeded_jobs = job_status_df.loc[job_status_df["status"] == "finished"]
     if len(succeeded_jobs) > 0:
         # Derive number of features involved in each job
         nfeatures = []
