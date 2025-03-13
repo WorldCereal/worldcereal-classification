@@ -332,6 +332,19 @@ def check_job_status(output_folder: Path) -> dict:
     # Summarize the status in histogram
     status_histogram = _count_by_status(job_status_df)
 
+    # convert to pandas dataframe
+    status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"])
+    status_count = status_count.sort_values(by="count", ascending=False)
+
+    print(
+        f"""
+    -------------------------------------
+    Overall jobs status:
+    -------------------------------------
+    {status_count.to_string(index=False)}
+    """
+    )
+
     return status_histogram
 
 
