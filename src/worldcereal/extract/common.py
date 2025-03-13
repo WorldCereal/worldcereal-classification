@@ -341,7 +341,7 @@ def check_job_status(output_folder: Path) -> dict:
     -------------------------------------
     Overall jobs status:
     -------------------------------------
-    {status_count.to_string(index=False)}
+    {status_count.to_string(index=False, header=True)}
     -------------------------------------
     """
     )
@@ -366,13 +366,15 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
     job_status_df = _read_job_tracking_csv(output_folder)
 
     # Gather metadata on succeeded jobs
-    succeeded_jobs = job_status_df.loc[job_status_df["status"] == "finished"]
+    succeeded_jobs = job_status_df[
+        job_status_df["status"].isin(["finished", "postprocessing"])
+    ].copy()
     if len(succeeded_jobs) > 0:
         # Derive number of features involved in each job
         nfeatures = []
         for i, row in succeeded_jobs.iterrows():
             nfeatures.append(len(json.loads(row["geometry"])["features"]))
-        succeeded_jobs["n_samples"] = nfeatures
+        succeeded_jobs.loc[:, "n_samples"] = nfeatures
         # Gather essential columns
         succeeded_jobs = succeeded_jobs[
             [
@@ -390,6 +392,8 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
         seconds = succeeded_jobs["duration"].str.split("s").str[0].astype(int)
         succeeded_jobs["duration"] = seconds / 60
         succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
+        if succeeded_jobs["duration_mins"].sum() == 0:
+            succeeded_jobs.drop(columns=["duration_mins"], inplace=True)
     else:
         succeeded_jobs = pd.DataFrame()
 
@@ -414,7 +418,7 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
         -------------------------------------
         Details of succeeded jobs:
         -------------------------------------
-        {succeeded_jobs.to_string(index=False)}
+        {succeeded_jobs.to_string(index=False, header=True)}
         -------------------------------------
         """
         )

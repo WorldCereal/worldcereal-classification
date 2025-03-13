@@ -231,6 +231,16 @@ def get_band_statistics(extractions_dir: Path, subset=False) -> pd.DataFrame:
     # Convert to DataFrame
     stats_df = pd.DataFrame(band_stats).T
 
+    print(
+        f"""
+        -------------------------------------
+        Band statistics:
+        -------------------------------------
+        {stats_df.to_string(index=True, header=True)}
+
+        """
+    )
+
     return stats_df
 
 
@@ -278,7 +288,7 @@ def visualize_timeseries(
     else:
         selected_ids = sample_ids
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(12, 6))
 
     for sample_id in selected_ids:
         sample = gdf[gdf["sample_id"] == sample_id]
@@ -299,13 +309,14 @@ def visualize_timeseries(
             values[values == NODATAVALUE] = np.nan
 
         # plot
-        ax.scatter(sample["timestamp"], values, label=sample_id)
+        ax.plot(sample["timestamp"], values, marker="o", linestyle="-", label=sample_id)
 
     plt.xlabel("Date")
     plt.ylabel(band)
     plt.xticks(rotation=90)
     # put legend underneath the plot
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0)
+    fig.subplots_adjust(right=0.75)  # Ensures enough space for the legend
     # add gridlines
     plt.grid()
     plt.tight_layout()
