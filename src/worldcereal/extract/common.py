@@ -621,14 +621,26 @@ def _run_extraction_jobs(
 def _merge_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
+    filename: str,
 ) -> None:
+    """Merge all extractions into one partitioned geoparquet file.
+
+    Parameters
+    ----------
+    collection : ExtractionCollection
+        The collection to extract. Most popular: PATCH_WORLDCEREAL, POINT_WORLDCEREAL
+    output_folder : Path
+        Location where extractions are stored.
+    filename : str
+        filename to be assigned to final geoparquet file.
+    """
 
     # Merge the extraction jobs
     pipeline_log.info("Merging the extraction jobs.")
 
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
         pipeline_log.info("Merging Geoparquet results...")
-        merge_output_files_point_worldcereal(output_folder=output_folder)
+        merge_output_files_point_worldcereal(output_folder, filename)
         pipeline_log.info("Geoparquet results merged successfully.")
 
     return
@@ -699,8 +711,12 @@ def run_extractions(
     # Run the extraction jobs
     _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
 
+    # get ref_id from samples df
+    samples_gdf = load_dataframe(samples_df_path)
+    ref_id = samples_gdf.iloc[0]["ref_id"]
+
     # Merge the extraction jobs (for point extractions)
-    _merge_extraction_jobs(collection, output_folder)
+    _merge_extraction_jobs(collection, output_folder, ref_id)
 
     pipeline_log.info("Extractions workflow completed.")
     pipeline_log.info(f"Results stored in folder: {output_folder}.")
