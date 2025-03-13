@@ -371,6 +371,8 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
             ]
         ]
         # Convert duration to minutes
+        # convert NaN to 0 seconds
+        succeeded_jobs["duration"] = succeeded_jobs["duration"].fillna("0s")
         seconds = succeeded_jobs["duration"].str.split("s").str[0].astype(int)
         succeeded_jobs["duration"] = seconds / 60
         succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
