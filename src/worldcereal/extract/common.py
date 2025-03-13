@@ -222,7 +222,7 @@ def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
     """Load the input dataframe from the given path."""
     pipeline_log.info("Loading input dataframe from %s.", df_path)
 
-    if df_path.name.endswith(".geoparquet"):
+    if df_path.name.endswith("parquet"):
         return gpd.read_parquet(df_path)
     else:
         return gpd.read_file(df_path)
