@@ -215,17 +215,21 @@ def post_job_action_point_worldcereal(
     return job_items
 
 
-def merge_output_files_point_worldcereal(output_folder: Union[str, Path]) -> None:
+def merge_output_files_point_worldcereal(
+    output_folder: Union[str, Path], filename: str
+) -> None:
     """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
 
     Parameters
     ----------
     output_files : str
         glob pattern to the output files to merge
+    filename : str
+        name of the merged geoparquet
     """
     output_folder = Path(output_folder)
     files_to_merge = str(output_folder / "**" / "*.geoparquet")
-    merged_path = str(output_folder / "merged.geoparquet")
+    merged_path = str(output_folder / f"{filename}.geoparquet")
 
     # DuckDB requires the parent directory to exist
     output_dir = os.path.dirname(merged_path)
