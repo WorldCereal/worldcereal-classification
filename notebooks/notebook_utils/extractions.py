@@ -299,12 +299,15 @@ def visualize_timeseries(
             values[values == NODATAVALUE] = np.nan
 
         # plot
-        ax.plot(sample["timestamp"], values, label=sample_id)
+        ax.scatter(sample["timestamp"], values, label=sample_id)
 
     plt.xlabel("Date")
     plt.ylabel(band)
     plt.xticks(rotation=90)
-    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    # put legend underneath the plot
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)
+    # add gridlines
+    plt.grid()
     plt.tight_layout()
     plt.show()
 
