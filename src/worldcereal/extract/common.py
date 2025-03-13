@@ -342,6 +342,7 @@ def check_job_status(output_folder: Path) -> dict:
     Overall jobs status:
     -------------------------------------
     {status_count.to_string(index=False)}
+    -------------------------------------
     """
     )
 
@@ -391,6 +392,32 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
         succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
     else:
         succeeded_jobs = pd.DataFrame()
+
+    # Print costs (if not NaN)
+    if pd.notnull(succeeded_jobs["costs"]).all():
+        print(
+            f"""
+        -------------------------------------
+        Total credits consumed: {int(succeeded_jobs["costs"].sum())}
+        Average job cost: {int(succeeded_jobs["costs"].mean())} (over {succeeded_jobs.shape[0]} jobs)
+        -------------------------------------
+        """
+        )
+    # Print details of succeeded jobs
+    if not succeeded_jobs.empty:
+        print(
+            f"""
+        -------------------------------------
+        Number of samples successfully extracted:
+        -------------------------------------
+        {succeeded_jobs['n_samples'].sum()}
+        -------------------------------------
+        Details of succeeded jobs:
+        -------------------------------------
+        {succeeded_jobs.to_string(index=False)}
+        -------------------------------------
+        """
+        )
 
     return succeeded_jobs
 
