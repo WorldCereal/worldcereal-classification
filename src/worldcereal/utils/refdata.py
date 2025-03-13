@@ -1,6 +1,6 @@
 import importlib.resources
 import json
-from typing import Dict
+from typing import Dict, Literal
 
 import duckdb
 import geopandas as gpd
@@ -219,7 +219,7 @@ def get_best_valid_date(row: pd.Series):
         shifted valid date
     """
 
-    from presto.dataops import MIN_EDGE_BUFFER, NUM_TIMESTEPS
+    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
 
     def is_within_period(proposed_date, start_date, end_date):
         return (proposed_date - pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date) & (
@@ -273,7 +273,7 @@ def get_best_valid_date(row: pd.Series):
 def process_public_extractions_df(
     public_df_raw: pd.DataFrame,
     processing_period: TemporalContext = None,
-    freq: str = "MS",
+    freq: Literal["MS", "10D"] = "MS",
 ) -> pd.DataFrame:
     """Method to transform the raw parquet data into a format that can be used for
     training. Includes pivoting of the dataframe and mapping of the crop types.
@@ -293,8 +293,9 @@ def process_public_extractions_df(
     freq : str, optional
         Frequency of the time series, by default "MS". Provided frequency alias should be compatible with pandas.
         https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
+        Currently only MS and 10D are supported.
     """
-    from presto.utils import process_parquet
+    from worldcereal.utils.timeseries import process_parquet
 
     logger.info("Processing selected samples ...")
 
@@ -349,7 +350,9 @@ def process_public_extractions_df(
             sample_dates["proposed_valid_date"].isna(), "sample_id"
         ].values
         public_df_raw = public_df_raw[~public_df_raw["sample_id"].isin(invalid_samples)]
-        public_df_raw["valid_date"] = public_df_raw["sample_id"].map(
+
+        # put the proposed valid_date back into the main dataframe
+        public_df_raw.loc[:, "valid_date"] = public_df_raw["sample_id"].map(
             sample_dates.set_index("sample_id")["proposed_valid_date"]
         )
         if public_df_raw.empty:
@@ -361,7 +364,9 @@ def process_public_extractions_df(
                 f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
             )
 
-    public_df = process_parquet(public_df_raw)
+    public_df = process_parquet(
+        public_df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
+    )
 
     if processing_period is not None:
         # put back the true valid_date
