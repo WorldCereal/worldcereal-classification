@@ -8,7 +8,7 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
 import geojson
 import geopandas as gpd
@@ -222,7 +222,7 @@ def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
     """Load the input dataframe from the given path."""
     pipeline_log.info("Loading input dataframe from %s.", df_path)
 
-    if df_path.name.endswith(".geoparquet"):
+    if df_path.name.endswith("parquet"):
         return gpd.read_parquet(df_path)
     else:
         return gpd.read_file(df_path)
@@ -276,6 +276,154 @@ def prepare_job_dataframe(
     pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
 
     return job_df
+
+
+def _count_by_status(job_status_df, statuses: Iterable[str] = ()) -> dict:
+    status_histogram = job_status_df.groupby("status").size().to_dict()
+    statuses = set(statuses)
+    if statuses:
+        status_histogram = {k: v for k, v in status_histogram.items() if k in statuses}
+    return status_histogram
+
+
+def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
+    """Read job tracking csv file.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    pd.DataFrame
+        job tracking dataframe
+
+    Raises
+    ------
+    FileNotFoundError
+        if the job status file is not found in the designated folder
+    """
+    job_status_file = output_folder / "job_tracking.csv"
+    if job_status_file.exists():
+        job_status_df = pd.read_csv(job_status_file)
+    else:
+        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+    return job_status_df
+
+
+def check_job_status(output_folder: Path) -> dict:
+    """Check the status of the jobs in the given output folder.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    dict
+        status_histogram
+    """
+
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
+
+    # Summarize the status in histogram
+    status_histogram = _count_by_status(job_status_df)
+
+    # convert to pandas dataframe
+    status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"])
+    status_count = status_count.sort_values(by="count", ascending=False)
+
+    print(
+        f"""
+    -------------------------------------
+    Overall jobs status:
+    -------------------------------------
+    {status_count.to_string(index=False, header=True)}
+    -------------------------------------
+    """
+    )
+
+    return status_histogram
+
+
+def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
+    """Get details of succeeded extraction jobs in the given output folder.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+    Returns
+    -------
+    pd.DataFrame
+        details of succeeded jobs
+    """
+
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
+
+    # Gather metadata on succeeded jobs
+    succeeded_jobs = job_status_df[
+        job_status_df["status"].isin(["finished", "postprocessing"])
+    ].copy()
+    if len(succeeded_jobs) > 0:
+        # Derive number of features involved in each job
+        nfeatures = []
+        for i, row in succeeded_jobs.iterrows():
+            nfeatures.append(len(json.loads(row["geometry"])["features"]))
+        succeeded_jobs.loc[:, "n_samples"] = nfeatures
+        # Gather essential columns
+        succeeded_jobs = succeeded_jobs[
+            [
+                "id",
+                "s2_tile",
+                "n_samples",
+                # "cpu", "memory",
+                "duration",
+                "costs",
+            ]
+        ]
+        # Convert duration to minutes
+        # convert NaN to 0 seconds
+        succeeded_jobs["duration"] = succeeded_jobs["duration"].fillna("0s")
+        seconds = succeeded_jobs["duration"].str.split("s").str[0].astype(int)
+        succeeded_jobs["duration"] = seconds / 60
+        succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
+        if succeeded_jobs["duration_mins"].sum() == 0:
+            succeeded_jobs.drop(columns=["duration_mins"], inplace=True)
+    else:
+        succeeded_jobs = pd.DataFrame()
+
+    # Print costs (if not NaN)
+    if pd.notnull(succeeded_jobs["costs"]).all():
+        print(
+            f"""
+        -------------------------------------
+        Total credits consumed: {int(succeeded_jobs["costs"].sum())}
+        Average job cost: {int(succeeded_jobs["costs"].mean())} (over {succeeded_jobs.shape[0]} jobs)
+        -------------------------------------
+        """
+        )
+    # Print details of succeeded jobs
+    if not succeeded_jobs.empty:
+        print(
+            f"""
+        -------------------------------------
+        Number of samples successfully extracted:
+        -------------------------------------
+        {succeeded_jobs['n_samples'].sum()}
+        -------------------------------------
+        Details of succeeded jobs:
+        -------------------------------------
+        {succeeded_jobs.to_string(index=False, header=True)}
+        -------------------------------------
+        """
+        )
+
+    return succeeded_jobs
 
 
 def setup_extraction_functions(
@@ -447,6 +595,18 @@ def _prepare_extraction_jobs(
     if tracking_df_path.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
+
+        # Change status "running" and "canceled" to "not_started"
+        job_df.loc[job_df.status.isin(["running", "canceled"]), "status"] = (
+            "not_started"
+        )
+        job_df.to_csv(tracking_df_path, index=False)
+
+        status_histogram = check_job_status(output_folder)
+        pipeline_log.info(
+            "Job status histogram: %s",
+            status_histogram,
+        )
     else:
         # Load the input dataframe and build the job dataframe
         samples_gdf = load_dataframe(samples_df_path)
@@ -507,16 +667,26 @@ def _run_extraction_jobs(
 def _merge_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
-    samples_df_path: Path,
+    ref_id: str,
 ) -> None:
+    """Merge all extractions into one partitioned geoparquet file.
+
+    Parameters
+    ----------
+    collection : ExtractionCollection
+        The collection to extract. Most popular: PATCH_WORLDCEREAL, POINT_WORLDCEREAL
+    output_folder : Path
+        Location where extractions are stored.
+    ref_id : str
+        collection id of the samples
+    """
 
     # Merge the extraction jobs
     pipeline_log.info("Merging the extraction jobs.")
 
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
         pipeline_log.info("Merging Geoparquet results...")
-        ref_id = Path(samples_df_path).stem
-        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
+        merge_output_files_point_worldcereal(output_folder, ref_id)
         pipeline_log.info("Geoparquet results merged successfully.")
 
     return
@@ -533,7 +703,7 @@ def run_extractions(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
-) -> Path:
+) -> None:
     """Main function responsible for launching point and patch extractions.
 
     Parameters
@@ -567,10 +737,6 @@ def run_extractions(
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
 
-    Returns
-    -------
-    Path
-        Path to the job tracking dataframe
     """
     pipeline_log.info("Starting the extractions workflow...")
 
@@ -591,9 +757,14 @@ def run_extractions(
     # Run the extraction jobs
     _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
 
+    # get ref_id from samples df
+    samples_gdf = load_dataframe(samples_df_path)
+    ref_id = samples_gdf.iloc[0]["ref_id"]
+
     # Merge the extraction jobs (for point extractions)
-    _merge_extraction_jobs(collection, output_folder, samples_df_path)
+    _merge_extraction_jobs(collection, output_folder, ref_id)
 
     pipeline_log.info("Extractions workflow completed.")
+    pipeline_log.info(f"Results stored in folder: {output_folder}.")
 
-    return tracking_df_path
+    return

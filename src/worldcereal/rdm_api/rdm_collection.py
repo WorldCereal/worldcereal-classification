@@ -49,6 +49,31 @@ class RdmCollection:
         self.created_by = metadata.get("creatorId")
         self.fid = metadata.get("id")
 
+    def print_metadata(self):
+
+        print("#######################")
+        print("Collection Metadata:")
+        print(f"ID: {self.id}")
+        print(f"Title: {self.title}")
+        print(f"Number of samples: {self.feature_count}")
+        print(f"Data type: {self.data_type}")
+        print(f"Access type: {self.access_type}")
+        print(f"Observation method: {self.observation_method}")
+        print(f"Confidence score for land cover: {self.confidence_lc}")
+        print(f"Confidence score for crop type: {self.confidence_ct}")
+        print(f"Confidence score for irrigation label: {self.confidence_irr}")
+        print(f"List of available crop types: {self.ewoc_codes}")
+        print(f"List of available irrigation labels: {self.irr_codes}")
+        print(f"Spatial extent: {self.spatial_extent}")
+        print(f"Coordinate reference system (CRS): {self.crs}")
+        print(f"Temporal extent: {self.temporal_extent}")
+        print(f"Additional data: {self.additional_data}")
+        print(f"Last modified: {self.last_modified}")
+        print(f"Last modified by: {self.last_modified_by}")
+        print(f"Creation time: {self.creation_time}")
+        print(f"Created by: {self.created_by}")
+        print(f"fid: {self.fid}")
+
 
 def visualize_spatial_extents(collections: List[RdmCollection]):
     """Visualizes the spatial extent of multiple collections on a map."""
