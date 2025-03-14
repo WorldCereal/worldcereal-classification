@@ -1,6 +1,6 @@
 import importlib.resources
 import json
-from typing import Dict, Literal
+from typing import Dict, List, Literal, Union
 
 import duckdb
 import geopandas as gpd
@@ -173,6 +173,47 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
     )
 
     return processed_public_df
+
+
+def query_private_extractions(
+    private_collection_paths: Union[str, List[str]],
+    processing_period: TemporalContext = None,
+) -> pd.DataFrame:
+
+    db = duckdb.connect()
+    db.sql("INSTALL spatial")
+    db.load_extension("spatial")
+
+    if isinstance(private_collection_paths, str):
+        private_collection_paths = [private_collection_paths]
+
+    main_query = ""
+    for i, tpath in enumerate(private_collection_paths):
+        if tpath.endswith(".gpkg"):
+            reading_func = f"'{tpath}'"
+        if tpath.endswith("parquet"):
+            reading_func = f"read_parquet('{tpath}')"
+
+        query = f"SELECT * FROM {reading_func}"
+        if i == 0:
+            main_query += query
+        else:
+            main_query += f"UNION ALL {query}"
+
+    private_df_raw = db.sql(main_query).df()
+
+    if private_df_raw.empty:
+        logger.error(
+            f"No samples detected in the private collections: {private_collection_paths}."
+        )
+        raise ValueError("No samples detected in the private collections.")
+
+    # Process the parquet into the format we need for training
+    processed_private_df = process_public_extractions_df(
+        private_df_raw, processing_period
+    )
+
+    return processed_private_df
 
 
 def month_diff(month1: int, month2: int) -> int:
