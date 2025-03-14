@@ -333,17 +333,31 @@ def process_extractions_df(
 
     # TEMPORARY LINE FOR DEBUGGING AND COMPATIBILITY WITH PHASE I
     if "valid_date" in df_raw.columns:
-        df_raw.rename({"valid_date": "valid_time"}, axis=1, inplace=True)
+        df_raw.rename(
+            {
+                "valid_date": "valid_time",
+                "DEM-alt-20m": "elevation",
+                "DEM-slo-20m": "slope",
+            },
+            axis=1,
+            inplace=True,
+        )
+
+    # make sure the valid_time, start and end dates are datetime objects
+    for date_col in ["valid_time", "start_date", "end_date"]:
+        df_raw[date_col] = pd.to_datetime(df_raw[date_col])
+    # remove timezone information if present
+    if df_raw["timestamp"].dt.tz is not None:
+        df_raw["timestamp"] = df_raw["timestamp"].dt.tz_localize(None)
+    # drop geometry col if present
+    if "geometry" in df_raw.columns:
+        df_raw.drop(columns=["geometry"], inplace=True)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
 
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
-
-        # make sure the valid_time, start and end dates are datetime objects
-        for date_col in ["valid_time", "start_date", "end_date"]:
-            df_raw[date_col] = pd.to_datetime(df_raw[date_col])
 
         # sanity check to make sure freq is not something we still don't support in Presto
         if freq not in ["MS", "10D"]:
@@ -413,7 +427,8 @@ def process_extractions_df(
         df_processed["valid_time"] = df_processed.index.map(true_valid_date_map)
         df_processed["valid_time"] = df_processed["valid_time"].astype(str)
 
-    df_processed = map_croptypes(df_processed)
+    if "ewoc_code" not in df_processed.columns:
+        df_processed = map_croptypes(df_processed)
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
     )

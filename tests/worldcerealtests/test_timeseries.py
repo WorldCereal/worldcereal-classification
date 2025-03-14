@@ -37,8 +37,8 @@ class TestProcessParquet(TestCase):
             "timestamp": month_range,
             "start_date": [self.start_date] * self.n_months,
             "valid_date": [self.start_date + pd.DateOffset(months=9)] * self.n_months,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_months),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_months),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_months),
@@ -66,8 +66,8 @@ class TestProcessParquet(TestCase):
                 self.start_date + pd.DateOffset(months=(MIN_EDGE_BUFFER // 2))
             ]
             * self.n_months,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_months),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_months),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_months),
@@ -93,8 +93,8 @@ class TestProcessParquet(TestCase):
             "start_date": [self.start_date] * self.n_months,
             "valid_date": [self.end_date - pd.DateOffset(months=(MIN_EDGE_BUFFER // 2))]
             * self.n_months,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_months),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_months),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_months),
@@ -120,8 +120,8 @@ class TestProcessParquet(TestCase):
             "start_date": [self.start_date] * self.n_months,
             "valid_date": [self.end_date + pd.DateOffset(months=(MIN_EDGE_BUFFER + 1))]
             * self.n_months,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_months),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_months),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_months),
@@ -155,8 +155,8 @@ class TestProcessParquet(TestCase):
             "timestamp": dekad_range,
             "start_date": [self.start_date] * self.n_dekads,
             "valid_date": [pd.to_datetime("2021-07-05")] * self.n_dekads,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_dekads),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_dekads),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_dekads),
@@ -187,8 +187,8 @@ class TestProcessParquet(TestCase):
                 )
             ]
             * self.n_dekads,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_dekads),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_dekads),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_dekads),
@@ -219,8 +219,8 @@ class TestProcessParquet(TestCase):
                 )
             ]
             * self.n_dekads,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_dekads),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_dekads),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_dekads),
@@ -251,8 +251,8 @@ class TestProcessParquet(TestCase):
                 )
             ]
             * self.n_dekads,
-            "DEM-alt-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
-            "DEM-slo-20m": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "elevation": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
+            "slope": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_dekads),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.n_dekads),
             "S2-L2A-B02": np.random.randint(1000, size=self.n_dekads),
