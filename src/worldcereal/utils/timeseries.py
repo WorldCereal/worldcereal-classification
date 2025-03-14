@@ -24,7 +24,7 @@ BAND_MAPPINGS = {
         "OPTICAL-B12",
         "OPTICAL-B8A",
     ],
-    "100m": ["METEO-precipitation_flux", "METEO-temperature_mean"],
+    "100m": ["AGERA5-TMEAN", "AGERA5-PRECIP"],
 }
 
 FEATURE_COLUMNS = BAND_MAPPINGS["10m"] + BAND_MAPPINGS["20m"] + BAND_MAPPINGS["100m"]
@@ -41,8 +41,8 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B08": "OPTICAL-B08",
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
-    "AGERA5-precipitation-flux": "METEO-precipitation_flux",
-    "AGERA5-temperature-mean": "METEO-temperature_mean",
+    "AGERA5-precipitation-flux": "AGERA5-PRECIP",
+    "AGERA5-temperature-mean": "AGERA5-TMEAN",
     # since the openEO output has the attribute "valid_time",
     # # we need the following line for compatibility with earlier datasets
     "valid_date": "valid_time",
