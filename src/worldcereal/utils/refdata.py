@@ -538,9 +538,9 @@ def gdf_to_points(gdf):
 
     # reproject to projected system
     crs_ori = gdf.crs
-    polygons = gdf.to_crs(epsg=3857)
+    gdf = gdf.to_crs(epsg=3857)
     # convert polygons to points
-    polygons["centroid"] = gdf["geometry"].centroid
+    gdf["centroid"] = gdf["geometry"].centroid
     # check whether centroid is in the original geometry
     n_original = gdf.shape[0]
     gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
