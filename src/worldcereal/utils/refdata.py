@@ -435,29 +435,34 @@ def _check_geom(row):
 
 
 def gdf_to_points(gdf):
-    """Convert reference dataset to points."""
+    """Convert reference dataset to points.
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        input geodataframe containing reference data samples
+    Returns
+    -------
+    gpd.GeoDataFrame
+        geodataframe in which polygons have been converted to points
+    """
 
-    # if geometry type is point, return df
-    if gdf.iloc[0]["geometry"].geom_type == "Point":
-        return gdf
-    else:
-        # reproject to projected system
-        epsg_ori = gdf.crs.to_epsg()
-        gdf = gdf.to_crs(epsg=3857)
-        # convert polygons to points
-        gdf["centroid"] = gdf["geometry"].centroid
-        # check whether centroid is in the original geometry
-        npolygons = gdf.shape[0]
-        gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
-        gdf = gdf[gdf["centroid_in"]]
-        npoints = gdf.shape[0]
-        if npoints < npolygons:
-            logger.warning(
-                f"Removed {npolygons-npoints} polygons that do not contain their centroid."
-            )
-        gdf.drop(columns=["geometry", "centroid_in"], inplace=True)
-        gdf.rename(columns={"centroid": "geometry"}, inplace=True)
-        # reproject to original system
-        gdf = gdf.to_crs(epsg=epsg_ori)
+    # reproject to projected system
+    crs_ori = gdf.crs
+    polygons = gdf.to_crs(epsg=3857)
+    # convert polygons to points
+    polygons["centroid"] = gdf["geometry"].centroid
+    # check whether centroid is in the original geometry
+    n_original = gdf.shape[0]
+    gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
+    gdf = gdf[gdf["centroid_in"]]
+    n_remaining = gdf.shape[0]
+    if n_remaining < n_original:
+        logger.warning(
+            f"Removed {n_original - n_remaining} polygons that do not contain their centroid."
+        )
+    gdf.drop(columns=["geometry", "centroid_in"], inplace=True)
+    gdf.rename(columns={"centroid": "geometry"}, inplace=True)
+    # reproject to original system
+    gdf = gdf.to_crs(crs_ori)
 
-        return gdf
+    return gdf
