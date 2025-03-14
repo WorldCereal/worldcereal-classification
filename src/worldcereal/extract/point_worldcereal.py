@@ -215,7 +215,8 @@ def post_job_action_point_worldcereal(
 
 
 def merge_output_files_point_worldcereal(
-    output_folder: Union[str, Path], filename: str
+    output_folder: Union[str, Path],
+    ref_id: str,
 ) -> None:
     """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
 
@@ -223,8 +224,8 @@ def merge_output_files_point_worldcereal(
     ----------
     output_folder : Union[str, Path]
         Location where extractions are saved
-    filename : str
-        name of the merged geoparquet
+    ref_id : str
+    collection id of the samples
 
     Raises
     ------
@@ -232,25 +233,24 @@ def merge_output_files_point_worldcereal(
         If no geoparquet files are found in the output_folder
     """
     output_folder = Path(output_folder)
-    merged_path = output_folder / f"{filename}.geoparquet"
-
-    # delete merged folder if it already exists
-    if merged_path.exists():
-        if merged_path.is_dir():
-            shutil.rmtree(str(merged_path))
-        else:
-            merged_path.unlink()
+    merged_path = output_folder.parent / "worldcereal_merged_extractions.parquet"
 
     # Locate the files to merge and check whether there are any
-    file_check = list(output_folder.glob("**/*.geoparquet"))
-    if len(file_check) == 0:
+    filecheck = list(output_folder.glob("**/*.geoparquet"))
+    if len(filecheck) == 0:
         raise FileNotFoundError(f"No geoparquet files found in {output_folder}")
     else:
-        pipeline_log.info(f"Merging {len(file_check)} geoparquet files...")
+        pipeline_log.info(f"Merging {len(filecheck)} geoparquet files...")
     files_to_merge = str(output_folder / "**" / "*.geoparquet")
 
     # DuckDB requires the parent directory to exist
     output_folder.mkdir(parents=True, exist_ok=True)
+
+    # Check if this particular partition is already present in the merged path,
+    # and if yes, delete it
+    dir_name = merged_path / f"ref_id={ref_id}"
+    if dir_name.exists():
+        shutil.rmtree(str(dir_name))
 
     # Merge the files
     con = duckdb.connect()
@@ -260,7 +260,9 @@ def merge_output_files_point_worldcereal(
     con.execute(
         f"""
     COPY (
-        SELECT * FROM read_parquet('{files_to_merge}', filename=true)
-    ) TO '{str(merged_path)}' (FORMAT 'parquet', PARTITION_BY ref_id)
+        SELECT * FROM read_parquet('{files_to_merge}', filename=false)
+    ) TO '{str(merged_path)}' (FORMAT 'parquet', PARTITION_BY ref_id, OVERWRITE_OR_IGNORE, FILENAME_PATTERN '{ref_id}_{{i}}')
 """
     )
+
+    con.close()
