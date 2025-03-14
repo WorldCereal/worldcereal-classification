@@ -9,8 +9,8 @@ import pandas as pd
 import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
+from shapely import wkt
 from shapely.geometry import Polygon
-
 from worldcereal.data import croptype_mappings
 
 
@@ -80,34 +80,41 @@ def query_public_extractions(
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    metadata_s3_path = "s3://geoparquet/ref_id_extent.parquet"
+    # metadata_s3_path = "s3://geoparquet/ref_id_extent.parquet"
 
-    query_metadata = f"""
-    SET s3_endpoint='s3.waw3-1.cloudferro.com';
-    SET enable_progress_bar=false;
-    SELECT distinct ref_id
-    FROM read_parquet('{metadata_s3_path}') metadata
-    WHERE ST_Intersects(ST_GeomFromText(str_geom), ST_GeomFromText('{str(bbox_poly)}'))
-    """
-    ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
+    # query_metadata = f"""
+    # SET s3_endpoint='s3.waw3-1.cloudferro.com';
+    # SET enable_progress_bar=false;
+    # SELECT distinct ref_id
+    # FROM read_parquet('{metadata_s3_path}') metadata
+    # WHERE ST_Intersects(ST_GeomFromText(str_geom), ST_GeomFromText('{str(bbox_poly)}'))
+    # """
+    # ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
-    if len(ref_ids_lst) == 0:
-        logger.error(
-            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-        )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-        )
+    # if len(ref_ids_lst) == 0:
+    #     logger.error(
+    #         "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
+    #     )
+    #     Markdown(nodata_helper_message)
+    #     raise ValueError(
+    #         "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
+    #     )
 
-    logger.info(
-        f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
-    )
+    # logger.info(
+    #     f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
+    # )
 
-    # only querying the croptype data here
     logger.info(
         "Querying WorldCereal global extractions database (this can take a while) ..."
     )
+
+    query_ref_ids = """
+SET s3_endpoint='s3.waw3-1.cloudferro.com';
+SELECT distinct ref_id
+FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/*/*.parquet')
+    """
+
+    ref_ids_lst = db.sql(query_ref_ids).df()["ref_id"].values
 
     all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
     f = requests.get(all_extractions_url)
@@ -116,7 +123,7 @@ def query_public_extractions(
         xx
         for xx in all_dataset_names
         if xx.endswith(".parquet")
-        and xx.startswith("worldcereal_extractions_phase1")
+        and xx.startswith("worldcereal_public_extractions")
         and any([yy in xx for yy in ref_ids_lst])
     ]
     base_s3_path = "s3://geoparquet/"
@@ -126,11 +133,11 @@ def query_public_extractions(
     if filter_cropland:
         for i, url in enumerate(s3_urls_lst):
             query = f"""
-SELECT *
+SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
-WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
-AND LANDCOVER_LABEL = 11
-AND CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11, 9910, 6212, 7920, 9520, 3400, 3900, 4390, 4000, 4300)
+WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
+AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) < 1200000000
+AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) > 1100000000
 """
             if i == 0:
                 main_query += query
@@ -139,9 +146,9 @@ AND CROPTYPE_LABEL not in (0, 991, 7900, 9900, 9998, 1910, 1900, 1920, 1000, 11,
     else:
         for i, url in enumerate(s3_urls_lst):
             query = f"""
-SELECT *
+SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
-WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{str(bbox_poly)}'))
+WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 """
             if i == 0:
                 main_query += query
@@ -149,6 +156,11 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
                 main_query += f"UNION ALL {query}"
 
     public_df_raw = db.sql(main_query).df()
+    public_df_raw["geometry"] = public_df_raw["geom_text"].apply(
+        lambda x: wkt.loads(x) if isinstance(x, str) else None
+    )
+    # Convert to a GeoDataFrame
+    public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
 
     if public_df_raw.empty:
         logger.error(
@@ -158,9 +170,9 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         raise ValueError(
             "No samples from the WorldCereal global extractions database fall into the selected area."
         )
-    if public_df_raw["CROPTYPE_LABEL"].nunique() == 1:
+    if public_df_raw["ewoc_code"].nunique() == 1:
         logger.error(
-            f"Queried data contains only one class: {public_df_raw['croptype_name'].unique()[0]}. Cannot train a model with only one class."
+            f"Queried data contains only one class: {public_df_raw['ewoc_code'].unique()[0]}. Cannot train a model with only one class."
         )
         Markdown(nodata_helper_message)
         raise ValueError(
@@ -198,13 +210,22 @@ def query_private_extractions(
 
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
-        query = f"SELECT * FROM read_parquet('{tpath}') {spatial_query_part}"
+        query = f"""
+SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text 
+FROM read_parquet('{tpath}') 
+{spatial_query_part}
+"""
         if i == 0:
             main_query += query
         else:
             main_query += f"UNION ALL {query}"
 
     private_df_raw = db.sql(main_query).df()
+    private_df_raw["geometry"] = private_df_raw["geom_text"].apply(
+        lambda x: wkt.loads(x) if isinstance(x, str) else None
+    )
+    # Convert to a GeoDataFrame
+    private_df_raw = gpd.GeoDataFrame(private_df_raw, geometry="geometry")
 
     if private_df_raw.empty:
         logger.error(
@@ -314,10 +335,10 @@ def get_best_valid_date(row: pd.Series):
 
 
 def process_extractions_df(
-    df_raw: pd.DataFrame,
+    df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
     freq: Literal["MS", "10D"] = "MS",
-) -> pd.DataFrame:
+) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """Method to transform the raw parquet data into a format that can be used for
     training. Includes pivoting of the dataframe and mapping of the crop types.
 
@@ -360,9 +381,6 @@ def process_extractions_df(
     # remove timezone information if present
     if df_raw["timestamp"].dt.tz is not None:
         df_raw["timestamp"] = df_raw["timestamp"].dt.tz_localize(None)
-    # drop geometry col if present
-    # if "geometry" in df_raw.columns:
-    #     df_raw.drop(columns=["geometry"], inplace=True)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")

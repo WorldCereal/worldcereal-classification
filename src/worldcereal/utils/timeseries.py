@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -555,13 +556,13 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
 
 
 def process_parquet(
-    df: pd.DataFrame,
+    df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad", "MS", "10D"] = "month",
     use_valid_time: bool = True,
     required_min_timesteps: Optional[int] = None,
     min_edge_buffer: int = 2,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
-) -> pd.DataFrame:
+) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
 
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
@@ -612,12 +613,20 @@ def process_parquet(
     index_columns.append("available_timesteps")
     index_columns = list(set(index_columns))
 
+    # # detach geometry column, since pivoting cannot handle it properly
+    # geom_df = df[["sample_id", "geometry"]].drop_duplicates()
+    # df = df.drop(columns=["geometry"])
+
     # Transform to wide format
     df_pivot = df.pivot(
         index=index_columns,
         columns="timestamp_ind",
         values=FEATURE_COLUMNS,
     )
+
+    # # Re-attach geometry column
+    # df_pivot = df_pivot.merge(geom_df, on="sample_id", how="left")
+
     df_pivot = df_pivot.fillna(NODATAVALUE)
     if df_pivot.empty:
         raise ValueError("Left with an empty DataFrame!")
