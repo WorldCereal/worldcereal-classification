@@ -96,12 +96,8 @@ def prepare_samples_dataframe(
     gdf["ref_id"] = ref_id
 
     # Convert geometries to points
-    n_samples = len(gdf)
-    logger.info(f"Loaded {n_samples} samples from {samples_df_path}")
+    logger.info(f"Loaded {len(gdf)} samples from {samples_df_path}")
     gdf = gdf_to_points(gdf)
-    n_dropped = n_samples - len(gdf)
-    if n_dropped > 0:
-        logger.warning(f"Dropped {n_dropped} samples with invalid geometries.")
     if len(gdf) == 0:
         logger.warning("No valid samples left in your dataset.")
     if len(gdf) > 1000:
@@ -110,6 +106,7 @@ def prepare_samples_dataframe(
         )
 
     # Check how many S2 tiles are involved
+    gdf = gdf.to_crs(epsg=4326)
     s2_grid = load_s2_grid()
     gdf = gpd.sjoin(
         gdf,
