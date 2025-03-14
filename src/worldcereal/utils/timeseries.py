@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-STATIC_FEATURES = ["DEM-alt-20m", "DEM-slo-20m", "lat", "lon"]
+STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
 NODATAVALUE = 65535
 MIN_EDGE_BUFFER = 2
@@ -145,12 +145,16 @@ All samples have fewer timesteps than required ({required_min_timesteps})."
         )
 
         if freq == "month":
+            expected_distance = EXPECTED_DISTANCES["month"]
             samples_with_mismatching_distance = median_distance[
-                median_distance != EXPECTED_DISTANCES["month"]
+                (median_distance < expected_distance - 2)
+                | (median_distance > expected_distance + 2)
             ]
         elif freq == "dekad":
+            expected_distance = EXPECTED_DISTANCES["dekad"]
             samples_with_mismatching_distance = median_distance[
-                median_distance != EXPECTED_DISTANCES["dekad"]
+                (median_distance < expected_distance - 2)
+                | (median_distance > expected_distance + 2)
             ]
         else:
             raise NotImplementedError(f"Frequency {freq} not supported")
