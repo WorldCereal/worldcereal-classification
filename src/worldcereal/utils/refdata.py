@@ -1,6 +1,6 @@
 import importlib.resources
 import json
-from typing import Dict, List, Literal, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -176,18 +176,29 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
 def query_private_extractions(
     private_collection_paths: Union[str, List[str]],
     processing_period: TemporalContext = None,
+    bbox_poly: Optional[Polygon] = None,
 ) -> pd.DataFrame:
+
+    if isinstance(private_collection_paths, str):
+        private_collection_paths = [private_collection_paths]
+
+    if bbox_poly is not None:
+        bbox_poly = gpd.GeoSeries(bbox_poly, crs="EPSG:4326")[0]
+        xmin, ymin, xmax, ymax = bbox_poly.bounds
+        bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
+        spatial_query_part = (
+            f"WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))"
+        )
+    else:
+        spatial_query_part = ""
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    if isinstance(private_collection_paths, str):
-        private_collection_paths = [private_collection_paths]
-
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
-        query = f"SELECT * FROM read_parquet('{tpath}')"
+        query = f"SELECT * FROM read_parquet('{tpath}') {spatial_query_part}"
         if i == 0:
             main_query += query
         else:
@@ -350,8 +361,8 @@ def process_extractions_df(
     if df_raw["timestamp"].dt.tz is not None:
         df_raw["timestamp"] = df_raw["timestamp"].dt.tz_localize(None)
     # drop geometry col if present
-    if "geometry" in df_raw.columns:
-        df_raw.drop(columns=["geometry"], inplace=True)
+    # if "geometry" in df_raw.columns:
+    #     df_raw.drop(columns=["geometry"], inplace=True)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
