@@ -1,4 +1,3 @@
-import glob
 import logging
 from pathlib import Path
 from typing import List, Optional, Union
@@ -36,13 +35,21 @@ BANDS = {
 NODATAVALUE = 65535
 
 
-########## FUNCTIONS FOR PREPARING POINT EXTRACTIONS ##########
-
-
 def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
-    """Load the input dataframe from the given path."""
+    """Load the input dataframe from the given path.
 
-    if df_path.name.endswith(".geoparquet"):
+    Parameters
+    ----------
+    df_path : Path
+        path to the input dataframe
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the
+        input dataframe
+    """
+
+    if df_path.name.endswith("parquet"):
         return gpd.read_parquet(df_path)
     else:
         return gpd.read_file(df_path)
@@ -77,7 +84,7 @@ def prepare_samples_dataframe(
 
     # Check presence of essential attributes
     missing_attributes = set(RDM_ATTRIBUTES) - set(gdf.columns)
-    if missing_attributes:
+    if len(missing_attributes) > 0:
         raise ValueError(
             f"Missing essential attributes in the input dataframe: {missing_attributes}"
         )
@@ -99,7 +106,7 @@ def prepare_samples_dataframe(
         logger.warning("No valid samples left in your dataset.")
     if len(gdf) > 1000:
         logger.warning(
-            "More than 1000 samples in your dataset. Extractions will take a while."
+            "More than 1000 samples in your dataset. Extractions will likely consume a considerable amount of credits."
         )
 
     # Check how many S2 tiles are involved
@@ -113,7 +120,7 @@ def prepare_samples_dataframe(
     logger.info(f"Samples cover {n_tiles} S2 tiles.")
     if n_tiles > 50:
         logger.warning(
-            "The number of S2 tiles is high. Extractions will likely consume a lot of credits."
+            "The number of S2 tiles is high. Extractions will take a while..."
         )
     # drop tile attribute again
     gdf = gdf.drop(columns=["tile"])
@@ -121,11 +128,23 @@ def prepare_samples_dataframe(
     return gdf
 
 
-########## FUNCTIONS FOR QUALITY CHECK OF POINT EXTRACTIONS ##########
-
-
 def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
-    """Apply scaling to the band values based on the band name."""
+    """Apply scaling to the band values based on the band name.
+    Parameters
+    ----------
+    array : np.array
+        array containing the band values
+    bandname : str
+        name of the band
+    Returns
+    -------
+    np.array
+        array containing the scaled band values
+    Raises
+    ------
+    ValueError
+        If the band is not supported
+    """
 
     idx_valid = array != NODATAVALUE
     array = array.astype(np.float32)
@@ -167,23 +186,23 @@ def load_point_extractions(extractions_dir: Path, subset=False) -> gpd.GeoDataFr
         (each row represents a single timestep for a single sample)
     """
 
-    dfs = []
-    # Get all subfolders
-    zones = [x for x in extractions_dir.iterdir() if x.is_dir()]
-    for zone in zones:
-        tiles = [x for x in zone.iterdir() if x.is_dir()]
-        for tile in tiles:
-            infiles = glob.glob(str(tile / "*.geoparquet"))
-            for infile in infiles:
-                dfs.append(gpd.read_parquet(infile))
-                if subset:
-                    # Only load the first file
-                    break
+    # Look for all extractions in the given folder
+    infiles = list(Path(extractions_dir).glob("**/*.geoparquet"))
+    # Get rid of merged geoparquet
+    infiles = [f for f in infiles if not Path(f).is_dir()]
 
-    if len(dfs) == 0:
+    if len(infiles) == 0:
         raise FileNotFoundError(f"No point extractions found in {extractions_dir}")
+    logger.info(f"Found {len(infiles)} geoparquet files in {extractions_dir}")
 
-    return pd.concat(dfs)
+    if subset:
+        # only load first file
+        gdf = gpd.read_parquet(infiles[0])
+    else:
+        # load all files
+        gdf = gpd.read_parquet(infiles)
+
+    return gdf
 
 
 def get_band_statistics(extractions_dir: Path, subset=False) -> pd.DataFrame:
