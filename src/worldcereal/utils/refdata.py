@@ -11,6 +11,7 @@ from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
+
 from worldcereal.data import croptype_mappings
 
 
@@ -178,11 +179,10 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
         raise ValueError(
             "Queried data contains only one class. Cannot train a model with only one class."
         )
+    # add filename column for compatibility with private extractions; make it copy of ref_id for now
+    public_df_raw["filename"] = public_df_raw["ref_id"]
 
-    # Process the parquet into the format we need for training
-    processed_public_df = process_extractions_df(public_df_raw, processing_period)
-
-    return processed_public_df
+    return public_df_raw
 
 
 def query_private_extractions(
@@ -233,10 +233,7 @@ FROM read_parquet('{tpath}')
         )
         raise ValueError("No samples detected in the private collections.")
 
-    # Process the parquet into the format we need for training
-    processed_private_df = process_extractions_df(private_df_raw, processing_period)
-
-    return processed_private_df
+    return private_df_raw
 
 
 def month_diff(month1: int, month2: int) -> int:
