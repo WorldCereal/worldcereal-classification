@@ -447,8 +447,14 @@ def gdf_to_points(gdf):
         # convert polygons to points
         gdf["centroid"] = gdf["geometry"].centroid
         # check whether centroid is in the original geometry
+        npolygons = gdf.shape[0]
         gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
         gdf = gdf[gdf["centroid_in"]]
+        npoints = gdf.shape[0]
+        if npoints < npolygons:
+            logger.warning(
+                f"Removed {npolygons-npoints} polygons that do not contain their centroid."
+            )
         gdf.drop(columns=["geometry", "centroid_in"], inplace=True)
         gdf.rename(columns={"centroid": "geometry"}, inplace=True)
         # reproject to original system
