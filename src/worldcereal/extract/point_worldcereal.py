@@ -1,7 +1,6 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
 import copy
-import os
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -222,23 +221,38 @@ def merge_output_files_point_worldcereal(
 
     Parameters
     ----------
-    output_files : str
-        glob pattern to the output files to merge
+    output_folder : Union[str, Path]
+        Location where extractions are saved
     filename : str
         name of the merged geoparquet
+
+    Raises
+    ------
+    FileNotFoundError
+        If no geoparquet files are found in the output_folder
     """
     output_folder = Path(output_folder)
+    merged_path = output_folder / f"{filename}.geoparquet"
+
+    # delete merged folder if it already exists
+    if merged_path.exists():
+        if merged_path.is_dir():
+            shutil.rmtree(str(merged_path))
+        else:
+            merged_path.unlink()
+
+    # Locate the files to merge and check whether there are any
+    file_check = list(output_folder.glob("**/*.geoparquet"))
+    if len(file_check) == 0:
+        raise FileNotFoundError(f"No geoparquet files found in {output_folder}")
+    else:
+        pipeline_log.info(f"Merging {len(file_check)} geoparquet files...")
     files_to_merge = str(output_folder / "**" / "*.geoparquet")
-    merged_path = str(output_folder / f"{filename}.geoparquet")
 
     # DuckDB requires the parent directory to exist
-    output_dir = os.path.dirname(merged_path)
-    os.makedirs(output_dir, exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-    # If merged parquet already exists, delete it
-    if os.path.exists(merged_path):
-        shutil.rmtree(merged_path)
-
+    # Merge the files
     con = duckdb.connect()
     con.execute("INSTALL spatial;")
     con.execute("LOAD spatial;")
@@ -247,6 +261,6 @@ def merge_output_files_point_worldcereal(
         f"""
     COPY (
         SELECT * FROM read_parquet('{files_to_merge}', filename=true)
-    ) TO '{merged_path}' (FORMAT 'parquet', PARTITION_BY ref_id)
+    ) TO '{str(merged_path)}' (FORMAT 'parquet', PARTITION_BY ref_id)
 """
     )
