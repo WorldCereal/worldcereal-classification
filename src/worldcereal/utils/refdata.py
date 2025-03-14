@@ -168,9 +168,7 @@ WHERE ST_Intersects(ST_MakeValid(ST_GeomFromText(geometry)), ST_GeomFromText('{s
         )
 
     # Process the parquet into the format we need for training
-    processed_public_df = process_public_extractions_df(
-        public_df_raw, processing_period
-    )
+    processed_public_df = process_extractions_df(public_df_raw, processing_period)
 
     return processed_public_df
 
@@ -189,12 +187,7 @@ def query_private_extractions(
 
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
-        if tpath.endswith(".gpkg"):
-            reading_func = f"'{tpath}'"
-        if tpath.endswith("parquet"):
-            reading_func = f"read_parquet('{tpath}')"
-
-        query = f"SELECT * FROM {reading_func}"
+        query = f"SELECT * FROM read_parquet('{tpath}')"
         if i == 0:
             main_query += query
         else:
@@ -209,9 +202,7 @@ def query_private_extractions(
         raise ValueError("No samples detected in the private collections.")
 
     # Process the parquet into the format we need for training
-    processed_private_df = process_public_extractions_df(
-        private_df_raw, processing_period
-    )
+    processed_private_df = process_extractions_df(private_df_raw, processing_period)
 
     return processed_private_df
 
@@ -278,7 +269,7 @@ def get_best_valid_date(row: pd.Series):
             & (valid_date <= proposed_end_date)
         )
 
-    valid_date = row["valid_date"]
+    valid_date = row["valid_time"]
     start_date = row["start_date"]
     end_date = row["end_date"]
 
@@ -311,8 +302,8 @@ def get_best_valid_date(row: pd.Series):
         )
 
 
-def process_public_extractions_df(
-    public_df_raw: pd.DataFrame,
+def process_extractions_df(
+    df_raw: pd.DataFrame,
     processing_period: TemporalContext = None,
     freq: Literal["MS", "10D"] = "MS",
 ) -> pd.DataFrame:
@@ -321,7 +312,7 @@ def process_public_extractions_df(
 
     Parameters
     ----------
-    public_df_raw : pd.DataFrame
+    df_raw : pd.DataFrame
         Input raw flattened dataframe from the global database.
     processing_period: TemporalContext, optional
         User-defined temporal extent to align the samples with, by default None,
@@ -340,11 +331,19 @@ def process_public_extractions_df(
 
     logger.info("Processing selected samples ...")
 
+    # TEMPORARY LINE FOR DEBUGGING AND COMPATIBILITY WITH PHASE I
+    if "valid_date" in df_raw.columns:
+        df_raw.rename({"valid_date": "valid_time"}, axis=1, inplace=True)
+
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
 
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
+
+        # make sure the valid_time, start and end dates are datetime objects
+        for date_col in ["valid_time", "start_date", "end_date"]:
+            df_raw[date_col] = pd.to_datetime(df_raw[date_col])
 
         # sanity check to make sure freq is not something we still don't support in Presto
         if freq not in ["MS", "10D"]:
@@ -359,16 +358,16 @@ def process_public_extractions_df(
 
         # get a lighter subset with only the necessary columns
         sample_dates = (
-            public_df_raw[["sample_id", "start_date", "end_date", "valid_date"]]
+            df_raw[["sample_id", "start_date", "end_date", "valid_time"]]
             .drop_duplicates()
             .reset_index(drop=True)
         )
 
         # save the true valid_date for later
-        true_valid_date_map = sample_dates.set_index("sample_id")["valid_date"]
+        true_valid_date_map = sample_dates.set_index("sample_id")["valid_time"]
 
         # calculate the shifts and assign new valid date
-        sample_dates["true_valid_date_month"] = public_df_raw["valid_date"].dt.month
+        sample_dates["true_valid_date_month"] = df_raw["valid_time"].dt.month
         sample_dates["proposed_valid_date_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
@@ -390,13 +389,13 @@ def process_public_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_date"].isna(), "sample_id"
         ].values
-        public_df_raw = public_df_raw[~public_df_raw["sample_id"].isin(invalid_samples)]
+        df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
 
         # put the proposed valid_date back into the main dataframe
-        public_df_raw.loc[:, "valid_date"] = public_df_raw["sample_id"].map(
+        df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
             sample_dates.set_index("sample_id")["proposed_valid_date"]
         )
-        if public_df_raw.empty:
+        if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
             logger.error(error_msg)
             raise ValueError(error_msg)
@@ -405,21 +404,21 @@ def process_public_extractions_df(
                 f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
             )
 
-    public_df = process_parquet(
-        public_df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
+    df_processed = process_parquet(
+        df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
     )
 
     if processing_period is not None:
         # put back the true valid_date
-        public_df["valid_date"] = public_df.index.map(true_valid_date_map)
-        public_df["valid_date"] = public_df["valid_date"].astype(str)
+        df_processed["valid_time"] = df_processed.index.map(true_valid_date_map)
+        df_processed["valid_time"] = df_processed["valid_time"].astype(str)
 
-    public_df = map_croptypes(public_df)
+    df_processed = map_croptypes(df_processed)
     logger.info(
-        f"Extracted and processed {public_df.shape[0]} samples from global database."
+        f"Extracted and processed {df_processed.shape[0]} samples from global database."
     )
 
-    return public_df
+    return df_processed
 
 
 def map_croptypes(
