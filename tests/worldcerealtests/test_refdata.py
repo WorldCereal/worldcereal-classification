@@ -1,7 +1,11 @@
 import pandas as pd
 from shapely.geometry import Polygon
-from worldcereal.utils.refdata import (get_best_valid_date, month_diff,
-                                       query_public_extractions)
+
+from worldcereal.utils.refdata import (
+    get_best_valid_date,
+    month_diff,
+    query_public_extractions,
+)
 
 
 def test_query_public_extractions():
