@@ -1,11 +1,7 @@
 import pandas as pd
 from shapely.geometry import Polygon
-
-from worldcereal.utils.refdata import (
-    get_best_valid_date,
-    month_diff,
-    query_public_extractions,
-)
+from worldcereal.utils.refdata import (get_best_valid_date, month_diff,
+                                       query_public_extractions)
 
 
 def test_query_public_extractions():
@@ -25,7 +21,7 @@ def test_get_best_valid_date():
     def process_test_case(test_case: pd.Series) -> pd.DataFrame:
         test_case_res = []
         for processing_period_middle_month in range(1, 13):
-            test_case["true_valid_date_month"] = test_case["valid_date"].month
+            test_case["true_valid_date_month"] = test_case["valid_time"].month
             test_case["proposed_valid_date_month"] = processing_period_middle_month
             test_case["valid_month_shift_backward"] = month_diff(
                 test_case["proposed_valid_date_month"],
@@ -45,21 +41,21 @@ def test_get_best_valid_date():
         {
             "start_date": pd.to_datetime("2019-01-01"),
             "end_date": pd.to_datetime("2019-12-01"),
-            "valid_date": pd.to_datetime("2019-06-01"),
+            "valid_time": pd.to_datetime("2019-06-01"),
         }
     )
     test_case2 = pd.Series(
         {
             "start_date": pd.to_datetime("2019-01-01"),
             "end_date": pd.to_datetime("2019-12-01"),
-            "valid_date": pd.to_datetime("2019-10-01"),
+            "valid_time": pd.to_datetime("2019-10-01"),
         }
     )
     test_case3 = pd.Series(
         {
             "start_date": pd.to_datetime("2019-01-01"),
             "end_date": pd.to_datetime("2019-12-01"),
-            "valid_date": pd.to_datetime("2019-03-01"),
+            "valid_time": pd.to_datetime("2019-03-01"),
         }
     )
 
