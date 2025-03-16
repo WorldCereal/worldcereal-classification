@@ -11,7 +11,6 @@ from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
-
 from worldcereal.data import croptype_mappings
 
 
@@ -137,9 +136,12 @@ FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/*/*.pa
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
-AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) < 1200000000
-AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) > 1100000000
+AND ewoc_code < 1200000000
+AND ewoc_code > 1100000000
 """
+# AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) < 1200000000
+# AND CAST(REPLACE(ewoc_code, '-', '') AS BIGINT) > 1100000000
+
             if i == 0:
                 main_query += query
             else:
