@@ -112,7 +112,7 @@ def query_public_extractions(
     query_ref_ids = """
 SET s3_endpoint='s3.waw3-1.cloudferro.com';
 SELECT distinct ref_id
-FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/*/*.parquet')
+FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/**/*.parquet')
     """
 
     ref_ids_lst = db.sql(query_ref_ids).df()["ref_id"].values
