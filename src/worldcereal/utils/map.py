@@ -116,6 +116,8 @@ class ui_map:
         self.bbox = None
         self.poly = None
 
+        self.show_map()
+
     def show_map(self):
         vbox = widgets.VBox(
             [self.map, self.output],
