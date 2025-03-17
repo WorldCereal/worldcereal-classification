@@ -75,7 +75,7 @@ def main(
     } or None
 
     # Fire up extractions
-    job_tracking_path = run_extractions(
+    run_extractions(
         collection,
         output_folder,
         samples_df_path,
@@ -88,8 +88,6 @@ def main(
         write_stac_api=write_stac_api,
     )
 
-    # Print the path to the job tracking file
-    print(f"Job tracking file: {job_tracking_path}")
     return
 
 

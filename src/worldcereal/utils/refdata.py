@@ -434,18 +434,35 @@ def _check_geom(row):
     return result
 
 
-def _to_points(df):
-    """Convert reference dataset to points."""
+def gdf_to_points(gdf):
+    """Convert reference dataset to points.
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        input geodataframe containing reference data samples
+    Returns
+    -------
+    gpd.GeoDataFrame
+        geodataframe in which polygons have been converted to points
+    """
 
-    # if geometry type is point, return df
-    if df["geometry"].geom_type[0] == "Point":
-        return df
-    else:
-        # convert polygons to points
-        df["centroid"] = df["geometry"].centroid
-        # check whether centroid is in the original geometry
-        df["centroid_in"] = df.apply(lambda x: _check_geom(x), axis=1)
-        df = df[df["centroid_in"]]
-        df.drop(columns=["geometry", "centroid_in"], inplace=True)
-        df.rename(columns={"centroid": "geometry"}, inplace=True)
-        return df
+    # reproject to projected system
+    crs_ori = gdf.crs
+    gdf = gdf.to_crs(epsg=3857)
+    # convert polygons to points
+    gdf["centroid"] = gdf["geometry"].centroid
+    # check whether centroid is in the original geometry
+    n_original = gdf.shape[0]
+    gdf["centroid_in"] = gdf.apply(lambda x: _check_geom(x), axis=1)
+    gdf = gdf[gdf["centroid_in"]]
+    n_remaining = gdf.shape[0]
+    if n_remaining < n_original:
+        logger.warning(
+            f"Removed {n_original - n_remaining} polygons that do not contain their centroid."
+        )
+    gdf.drop(columns=["geometry", "centroid_in"], inplace=True)
+    gdf.rename(columns={"centroid": "geometry"}, inplace=True)
+    # reproject to original system
+    gdf = gdf.to_crs(crs_ori)
+
+    return gdf
