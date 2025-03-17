@@ -3,7 +3,6 @@ from typing import Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
-import numpy as np
 from ipyleaflet import (
     DrawControl,
     GeoJSON,
@@ -38,10 +37,10 @@ def handle_draw(instance, action, geo_json, output, area_limit):
             logger.info(f"Area of extent: {area:.2f} km²")
 
             if area_limit is not None:
-                if (area > area_limit) or (area > 2500):
+                if area > area_limit:
                     logger.error(
                         f"Area of extent is too large. "
-                        f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
+                        f"Please select an area smaller than {area_limit} km²."
                     )
                     instance.last_draw = {"type": "Feature", "geometry": None}
 
