@@ -131,13 +131,20 @@ FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/**/*.p
     s3_urls_lst = [f"{base_s3_path}{xx}" for xx in matching_dataset_names]
 
     main_query = "SET s3_endpoint='s3.waw3-1.cloudferro.com';"
+
+    # worldcereal provides two types of presto models: for binary crop/nocrop task and for multiclass croptype task
+    # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
+    # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
+    # temporary_cropland is defined based on WorldCereal legend
+    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
+    # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         for i, url in enumerate(s3_urls_lst):
             query = f"""
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
-AND ewoc_code < 1200000000
+AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
             if i == 0:
