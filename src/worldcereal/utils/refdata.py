@@ -48,7 +48,7 @@ def query_public_extractions(
         limit the query to samples on cropland only, by default True
     processing_period : TemporalContext, optional
         user-defined temporal extent to align the samples with, by default None,
-        which means that 12-month processing window will be aligned around each sample's original valid_date.
+        which means that 12-month processing window will be aligned around each sample's original valid_time.
 
     Returns
     -------
@@ -275,7 +275,7 @@ def month_diff(month1: int, month2: int) -> int:
     return (month2 - month1) % 12
 
 
-def get_best_valid_date(row: pd.Series):
+def get_best_valid_time(row: pd.Series):
     """Determine the best valid date for a given row based on forward and backward shifts.
     This function checks if shifting the valid date forward or backward by a specified number of months
     will fit within the existing extraction dates. It returns the new valid date based on the shifts or
@@ -286,7 +286,7 @@ def get_best_valid_date(row: pd.Series):
     row : pd.Series
         A row from raw flattened dataframe from the global database that contains the following columns:
         - "sample_id" (str): The unique sample identifier.
-        - "valid_date" (pd.Timestamp): The original valid date.
+        - "valid_time" (pd.Timestamp): The original valid date.
         - "valid_month_shift_forward" (int): Number of months to shift forward.
         - "valid_month_shift_backward" (int): Number of months to shift backward.
         - "start_date" (pd.Timestamp): The start date of the extraction period.
@@ -305,47 +305,47 @@ def get_best_valid_date(row: pd.Series):
             proposed_date + pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
         )
 
-    def check_shift(proposed_date, valid_date, start_date, end_date):
+    def check_shift(proposed_date, valid_time, start_date, end_date):
         proposed_start_date = proposed_date - pd.DateOffset(
             months=(NUM_TIMESTEPS // 2 - 1)
         )
         proposed_end_date = proposed_date + pd.DateOffset(months=(NUM_TIMESTEPS // 2))
         return (
             is_within_period(proposed_date, start_date, end_date)
-            & (valid_date >= proposed_start_date)
-            & (valid_date <= proposed_end_date)
+            & (valid_time >= proposed_start_date)
+            & (valid_time <= proposed_end_date)
         )
 
-    valid_date = row["valid_time"]
+    valid_time = row["valid_time"]
     start_date = row["start_date"]
     end_date = row["end_date"]
 
-    proposed_valid_date_fwd = valid_date + pd.DateOffset(
+    proposed_valid_time_fwd = valid_time + pd.DateOffset(
         months=row["valid_month_shift_forward"]
     )
-    proposed_valid_date_bwd = valid_date - pd.DateOffset(
+    proposed_valid_time_bwd = valid_time - pd.DateOffset(
         months=row["valid_month_shift_backward"]
     )
 
     shift_forward_ok = check_shift(
-        proposed_valid_date_fwd, valid_date, start_date, end_date
+        proposed_valid_time_fwd, valid_time, start_date, end_date
     )
     shift_backward_ok = check_shift(
-        proposed_valid_date_bwd, valid_date, start_date, end_date
+        proposed_valid_time_bwd, valid_time, start_date, end_date
     )
 
     if not shift_forward_ok and not shift_backward_ok:
         return np.nan
     if shift_forward_ok and not shift_backward_ok:
-        return proposed_valid_date_fwd
+        return proposed_valid_time_fwd
     if not shift_forward_ok and shift_backward_ok:
-        return proposed_valid_date_bwd
+        return proposed_valid_time_bwd
     if shift_forward_ok and shift_backward_ok:
         return (
-            proposed_valid_date_bwd
+            proposed_valid_time_bwd
             if (row["valid_month_shift_backward"] - row["valid_month_shift_forward"])
             <= MIN_EDGE_BUFFER
-            else proposed_valid_date_fwd
+            else proposed_valid_time_fwd
         )
 
 
@@ -363,10 +363,10 @@ def process_extractions_df(
         Input raw flattened dataframe from the global database.
     processing_period: TemporalContext, optional
         User-defined temporal extent to align the samples with, by default None,
-        which means that 12-month processing window will be aligned around each sample's original valid_date.
+        which means that 12-month processing window will be aligned around each sample's original valid_time.
         If provided, the processing window will be aligned with the middle of the user-defined temporal extent, according to the
         following principles:
-        - the original valid_date of the sample should remain within the processing window
+        - the original valid_time of the sample should remain within the processing window
         - the center of the user-defined temporal extent should be not closer than MIN_EDGE_BUFFER (by default 2 months)
           to the start or end of the extraction period
     freq : str, optional
@@ -407,37 +407,37 @@ def process_extractions_df(
             .reset_index(drop=True)
         )
 
-        # save the true valid_date for later
-        true_valid_date_map = sample_dates.set_index("sample_id")["valid_time"]
+        # save the true valid_time for later
+        true_valid_time_map = sample_dates.set_index("sample_id")["valid_time"]
 
         # calculate the shifts and assign new valid date
-        sample_dates["true_valid_date_month"] = df_raw["valid_time"].dt.month
-        sample_dates["proposed_valid_date_month"] = processing_period_middle_month
+        sample_dates["true_valid_time_month"] = df_raw["valid_time"].dt.month
+        sample_dates["proposed_valid_time_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
-                xx["proposed_valid_date_month"], xx["true_valid_date_month"]
+                xx["proposed_valid_time_month"], xx["true_valid_time_month"]
             ),
             axis=1,
         )
         sample_dates["valid_month_shift_forward"] = sample_dates.apply(
             lambda xx: month_diff(
-                xx["true_valid_date_month"], xx["proposed_valid_date_month"]
+                xx["true_valid_time_month"], xx["proposed_valid_time_month"]
             ),
             axis=1,
         )
-        sample_dates["proposed_valid_date"] = sample_dates.apply(
-            lambda xx: get_best_valid_date(xx), axis=1
+        sample_dates["proposed_valid_time"] = sample_dates.apply(
+            lambda xx: get_best_valid_time(xx), axis=1
         )
 
         # remove invalid samples
         invalid_samples = sample_dates.loc[
-            sample_dates["proposed_valid_date"].isna(), "sample_id"
+            sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
         df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
 
-        # put the proposed valid_date back into the main dataframe
+        # put the proposed valid_time back into the main dataframe
         df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
-            sample_dates.set_index("sample_id")["proposed_valid_date"]
+            sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
@@ -453,8 +453,8 @@ def process_extractions_df(
     )
 
     if processing_period is not None:
-        # put back the true valid_date
-        df_processed["valid_time"] = df_processed.index.map(true_valid_date_map)
+        # put back the true valid_time
+        df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
         df_processed["valid_time"] = df_processed["valid_time"].astype(str)
 
     if "ewoc_code" not in df_processed.columns:
