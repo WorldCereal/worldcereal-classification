@@ -378,24 +378,10 @@ def process_extractions_df(
 
     logger.info("Processing selected samples ...")
 
-    # TEMPORARY LINE FOR DEBUGGING AND COMPATIBILITY WITH PHASE I
-    if "valid_date" in df_raw.columns:
-        df_raw.rename(
-            {
-                "valid_date": "valid_time",
-                "DEM-alt-20m": "elevation",
-                "DEM-slo-20m": "slope",
-            },
-            axis=1,
-            inplace=True,
-        )
-
     # make sure the valid_time, start and end dates are datetime objects
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-    # remove timezone information if present
-    if df_raw["timestamp"].dt.tz is not None:
-        df_raw["timestamp"] = df_raw["timestamp"].dt.tz_localize(None)
+        df_raw[date_col] = df_raw[date_col].dt.tz_localize(df_raw["timestamp"].dt.tz)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
