@@ -139,29 +139,24 @@ FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/**/*.p
     # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
-        for i, url in enumerate(s3_urls_lst):
-            query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
-FROM read_parquet('{url}')
-WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
+        cropland_filter_query_part = """
 AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
-            if i == 0:
-                main_query += query
-            else:
-                main_query += f"UNION ALL {query}"
     else:
-        for i, url in enumerate(s3_urls_lst):
-            query = f"""
+        cropland_filter_query_part = ""
+
+    for i, url in enumerate(s3_urls_lst):
+        query = f"""
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
+{cropland_filter_query_part}
 """
-            if i == 0:
-                main_query += query
-            else:
-                main_query += f"UNION ALL {query}"
+        if i == 0:
+            main_query += query
+        else:
+            main_query += f"UNION ALL {query}"
 
     public_df_raw = db.sql(main_query).df()
     public_df_raw["geometry"] = public_df_raw["geom_text"].apply(
@@ -196,6 +191,7 @@ def query_private_extractions(
     private_collection_paths: Union[str, List[str]],
     processing_period: TemporalContext = None,
     bbox_poly: Optional[Polygon] = None,
+    filter_cropland: bool = True,
 ) -> pd.DataFrame:
 
     if isinstance(private_collection_paths, str):
@@ -215,12 +211,27 @@ def query_private_extractions(
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
+    # worldcereal provides two types of presto models: for binary crop/nocrop task and for multiclass croptype task
+    # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
+    # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
+    # temporary_cropland is defined based on WorldCereal legend
+    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
+    # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
+    if filter_cropland:
+        cropland_filter_query_part = """
+AND ewoc_code < 1115000000
+AND ewoc_code > 1100000000
+"""
+    else:
+        cropland_filter_query_part = ""
+
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text 
 FROM read_parquet('{tpath}') 
 {spatial_query_part}
+{cropland_filter_query_part}
 """
         if i == 0:
             main_query += query
