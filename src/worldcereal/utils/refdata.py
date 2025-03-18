@@ -34,28 +34,40 @@ def query_public_extractions(
     bbox_poly: Polygon,
     buffer: int = 250000,
     filter_cropland: bool = True,
-    processing_period: TemporalContext = None,
 ) -> pd.DataFrame:
-    """Function that queries the WorldCereal global database of pre-extracted input
-    data for a given area.
+    """
+    Query the WorldCereal global extractions database for reference data within a specified area.
+
+    This function retrieves training samples from the WorldCereal public extractions database
+    that intersect with the provided polygon (with optional buffer). The function connects to
+    an S3 bucket containing WorldCereal reference data and performs spatial queries to find
+    relevant samples.
 
     Parameters
     ----------
     bbox_poly : Polygon
-        bounding box of the area to make the query for. Expected to be in WGS84 coordinates.
-    buffer : int, optional
-        buffer (in meters) to apply to the requested area, by default 250000
-    filter_cropland : bool, optional
-        limit the query to samples on cropland only, by default True
-    processing_period : TemporalContext, optional
-        user-defined temporal extent to align the samples with, by default None,
-        which means that 12-month processing window will be aligned around each sample's original valid_time.
+        A shapely Polygon object defining the area of interest in EPSG:4326 (WGS84)
+    buffer : int, default=250000
+        Buffer distance in meters to expand the search area around the input polygon.
+        The buffer is applied in EPSG:3785 (Web Mercator) projection.
+    filter_cropland : bool, default=True
+        If True, filter results to include only temporary cropland samples (WorldCereal
+        classes with codes 11-... except fallow classes 11-15-...). This step is needed
+        when preparing data for croptype classification models.
 
     Returns
     -------
     pd.DataFrame
-        DataFrame containing the extractions matching the request.
+        A GeoDataFrame containing reference data points that intersect with the area of interest.
+        Each row represents a single sample with its geometry and associated attributes.
+
+    Raises
+    ------
+    ValueError
+        If no datasets are found that intersect with the area, or if the query returns
+        only a single class (insufficient for model training).
     """
+
     from IPython.display import Markdown
 
     nodata_helper_message = f"""
@@ -182,11 +194,45 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 
 def query_private_extractions(
     merged_private_parquet_path: str,
-    processing_period: TemporalContext = None,
     bbox_poly: Optional[Polygon] = None,
     filter_cropland: bool = True,
     buffer: int = 250000,
 ) -> pd.DataFrame:
+    """
+    Query and filter private extraction data stored in parquet files.
+
+    This function reads parquet files from a specified path, optionally filters them based
+    on spatial and cropland criteria, and returns the results as a GeoPandas DataFrame.
+
+    Parameters
+    ----------
+    merged_private_parquet_path : str
+        Path to the directory containing private parquet files, which will be searched recursively.
+    bbox_poly : Optional[Polygon], default=None
+        Optional bounding box polygon to spatially filter the data. If provided, only data
+        intersecting with this polygon (after buffering) will be returned.
+    filter_cropland : bool, default=True
+        Whether to filter for temporary cropland samples (WorldCereal codes 1100000000-1115000000,
+        excluding fallow classes). Should be True when using data for croptype classification.
+    buffer : int, default=250000
+        Buffer distance in meters to apply to the bounding box polygon when spatial filtering.
+
+    Returns
+    -------
+    pd.DataFrame
+        A GeoPandas DataFrame containing the filtered private extraction data with valid geometry objects.
+
+    Raises
+    ------
+    ValueError
+        If no samples are found in the private collections after filtering.
+
+    Notes
+    -----
+    - The function uses DuckDB with spatial extension for efficient spatial querying.
+    - Temporary cropland is defined based on WorldCereal legend codes starting with 11-...,
+      except fallow classes (11-15-...).
+    """
 
     private_collection_paths = glob.glob(
         f"{merged_private_parquet_path}/**/*.parquet",
@@ -278,26 +324,35 @@ def month_diff(month1: int, month2: int) -> int:
 
 
 def get_best_valid_time(row: pd.Series):
-    """Determine the best valid date for a given row based on forward and backward shifts.
-    This function checks if shifting the valid date forward or backward by a specified number of months
-    will fit within the existing extraction dates. It returns the new valid date based on the shifts or
-    NaN if neither shift is possible.
+    """
+    Determines the best valid time for a given row of data based on specified shift constraints.
+
+    This function evaluates potential valid times by shifting the original valid time
+    forward or backward according to the values in 'valid_month_shift_forward' and
+    'valid_month_shift_backward' fields. It ensures the shifted time remains within
+    the period defined by 'start_date' and 'end_date' with sufficient buffer.
 
     Parameters
     ----------
     row : pd.Series
-        A row from raw flattened dataframe from the global database that contains the following columns:
-        - "sample_id" (str): The unique sample identifier.
-        - "valid_time" (pd.Timestamp): The original valid date.
-        - "valid_month_shift_forward" (int): Number of months to shift forward.
-        - "valid_month_shift_backward" (int): Number of months to shift backward.
-        - "start_date" (pd.Timestamp): The start date of the extraction period.
-        - "end_date" (pd.Timestamp): The end date of the extraction period.
+        A pandas Series containing the following fields:
+        - valid_time: The original valid time
+        - start_date: The start date of the allowed period
+        - end_date: The end date of the allowed period
+        - valid_month_shift_forward: Number of months to shift forward
+        - valid_month_shift_backward: Number of months to shift backward
 
     Returns
     -------
-    pd.Datetime
-        shifted valid date
+    datetime or np.nan
+        The best valid time after applying shifts, or np.nan if no valid time can be found.
+        If both forward and backward shifts are valid, the choice depends on the relative
+        magnitude of the shifts compared to MIN_EDGE_BUFFER.
+
+    Notes
+    -----
+    The function uses MIN_EDGE_BUFFER and NUM_TIMESTEPS constants imported from
+    worldcereal.utils.timeseries to determine valid periods and time windows.
     """
 
     from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
@@ -356,24 +411,40 @@ def process_extractions_df(
     processing_period: TemporalContext = None,
     freq: Literal["month", "dekad"] = "month",
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
-    """Method to transform the raw parquet data into a format that can be used for
-    training. Includes pivoting of the dataframe and mapping of the crop types.
+    """
+    Process a dataframe of extracted samples to align with a specified temporal context and frequency.
+
+    This function processes a dataframe of raw samples, typically extracted from a reference database,
+    by ensuring datetime consistency, aligning samples with a specified temporal extent (if provided),
+    and applying additional time-series processing.
 
     Parameters
     ----------
-    df_raw : pd.DataFrame
-        Input raw flattened dataframe from the global database.
-    processing_period: TemporalContext, optional
-        User-defined temporal extent to align the samples with, by default None,
-        which means that 12-month processing window will be aligned around each sample's original valid_time.
-        If provided, the processing window will be aligned with the middle of the user-defined temporal extent, according to the
-        following principles:
-        - the original valid_time of the sample should remain within the processing window
-        - the center of the user-defined temporal extent should be not closer than MIN_EDGE_BUFFER (by default 2 months)
-          to the start or end of the extraction period
-    freq : str, optional
-        Frequency of the time series, by default "month". Currently only month and dekad are supported.
+    df_raw : Union[pd.DataFrame, gpd.GeoDataFrame]
+        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time',
+        'start_date', 'end_date', and 'timestamp' columns.
+    processing_period : TemporalContext, optional
+        User-defined temporal context to align samples with. If provided, samples that do not fit
+        within this temporal extent will be removed. Default is None (no temporal filtering).
+    freq : Literal["month", "dekad"], default "month"
+        Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
+
+    Returns
+    -------
+    Union[pd.DataFrame, gpd.GeoDataFrame]
+        Processed dataframe with time series aligned to the specified frequency and temporal context.
+        Will include 'ewoc_code' column mapping crop types if not already present.
+
+    Raises
+    ------
+    ValueError
+        If an unsupported frequency alias is provided or if no samples match the proposed temporal extent.
+
+    Notes
+    -----
+    The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
+
     from worldcereal.utils.timeseries import TimeSeriesProcessor, process_parquet
 
     logger.info("Processing selected samples ...")
@@ -458,63 +529,11 @@ def process_extractions_df(
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
         df_processed["valid_time"] = df_processed["valid_time"].astype(str)
 
-    if "ewoc_code" not in df_processed.columns:
-        df_processed = map_croptypes(df_processed)
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
     )
 
     return df_processed
-
-
-def map_croptypes(
-    df: pd.DataFrame, downstream_classes: str = "CROPTYPE9"
-) -> pd.DataFrame:
-    """Helper function to map croptypes to a specific legend.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        input dataframe containing the croptype labels
-    downstream_classes : str, optional
-        column name with the labels, by default "CROPTYPE9"
-
-    Returns
-    -------
-    pd.DataFrame
-        mapped crop types
-    """
-    with importlib.resources.open_text(croptype_mappings, "wc2eurocrops_map.csv") as f:  # type: ignore
-        wc2ewoc_map = pd.read_csv(f)
-
-    wc2ewoc_map["ewoc_code"] = wc2ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
-
-    # type: ignore
-    with importlib.resources.open_text(
-        croptype_mappings, "eurocrops_map_wcr_edition.csv"
-    ) as f:
-        ewoc_map = pd.read_csv(f)
-
-    ewoc_map = ewoc_map[ewoc_map["ewoc_code"].notna()]
-    ewoc_map["ewoc_code"] = ewoc_map["ewoc_code"].str.replace("-", "").astype(int)
-    ewoc_map = ewoc_map.apply(lambda x: x[: x.last_valid_index()].ffill(), axis=1)
-    ewoc_map.set_index("ewoc_code", inplace=True)
-
-    df["CROPTYPE_LABEL"] = df["CROPTYPE_LABEL"].replace(0, np.nan)
-    df["CROPTYPE_LABEL"] = df["CROPTYPE_LABEL"].fillna(df["LANDCOVER_LABEL"])
-
-    df["ewoc_code"] = df["CROPTYPE_LABEL"].map(
-        wc2ewoc_map.set_index("croptype")["ewoc_code"]
-    )
-    df["label_level1"] = df["ewoc_code"].map(ewoc_map["cropland_name"])
-    df["label_level2"] = df["ewoc_code"].map(ewoc_map["landcover_name"])
-    df["label_level3"] = df["ewoc_code"].map(ewoc_map["croptype_name"])
-
-    df["downstream_class"] = df["ewoc_code"].map(
-        {int(k): v for k, v in get_class_mappings()[downstream_classes].items()}
-    )
-
-    return df
 
 
 def _check_geom(row):
