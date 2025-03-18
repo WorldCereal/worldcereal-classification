@@ -165,7 +165,10 @@ def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
     return array
 
 
-def load_point_extractions(extractions_dir: Path, subset=False) -> gpd.GeoDataFrame:
+def load_point_extractions(
+    extractions_dir: Path,
+    subset=False,
+) -> gpd.GeoDataFrame:
     """Load point extractions from the given folder.
 
     Parameters
@@ -202,22 +205,19 @@ def load_point_extractions(extractions_dir: Path, subset=False) -> gpd.GeoDataFr
     return gdf
 
 
-def get_band_statistics(extractions_dir: Path, subset=False) -> pd.DataFrame:
+def get_band_statistics(
+    extractions_gdf: gpd.GeoDataFrame,
+) -> pd.DataFrame:
     """Get the band statistics for the point extractions.
     Parameters
     ----------
-    extractions_dir : Path
-        path to the directory containing the extractions
-    subset : bool, optional
-        whether to subset the data to reduce the size, by default False
+    extractions_gdf : gpd.GeoDataFrame
+        GeoDataFrame containing the point extractions in LONG format.
     Returns
     -------
     pd.DataFrame
         DataFrame containing the band statistics
     """
-
-    # Load the point extractions
-    gdf = load_point_extractions(extractions_dir, subset=subset)
 
     # Get the band statistics
     band_stats = {}
@@ -227,12 +227,14 @@ def get_band_statistics(extractions_dir: Path, subset=False) -> pd.DataFrame:
                 bandname = band
             else:
                 bandname = f"{sensor}-{band}"
-            if bandname in gdf.columns:
+            if bandname in extractions_gdf.columns:
                 # count percentage of nodata values
-                nodata_count = (gdf[bandname] == NODATAVALUE).sum()
-                nodata_percentage = nodata_count / len(gdf) * 100
+                nodata_count = (extractions_gdf[bandname] == NODATAVALUE).sum()
+                nodata_percentage = nodata_count / len(extractions_gdf) * 100
                 # Apply scaling
-                scaled_values = _apply_band_scaling(gdf[bandname].values, bandname)
+                scaled_values = _apply_band_scaling(
+                    extractions_gdf[bandname].values, bandname
+                )
                 # discard nodata values
                 scaled_values = scaled_values[scaled_values != NODATAVALUE]
                 # get the statistics and only show 2 decimals
@@ -261,19 +263,19 @@ def get_band_statistics(extractions_dir: Path, subset=False) -> pd.DataFrame:
 
 
 def visualize_timeseries(
-    extractions_dir: Path,
+    extractions_gdf: gpd.GeoDataFrame,
     nsamples: int = 5,
     band: str = "NDVI",
     outfile: Optional[Path] = None,
     sample_ids: Optional[List] = None,
 ):
     """Function to visaulize the timeseries for one band and random or specific samples
-    from an extractions folder.
+    from an extractions dataframe.
 
     Parameters
     ----------
-    extractions_dir : Path
-        path to the directory containing the extractions
+    extractions_gdf : gpd.GeoDataFrame
+        geodataframe containing extractions in LONG format.
     nsamples : int, optional
         number of random samples to visualize, by default 5.
         Gets overruled if sample_ids are specified.
@@ -294,12 +296,9 @@ def visualize_timeseries(
     if band not in supported_bands:
         raise ValueError(f"Band {band} not found in the extractions dataframe")
 
-    # Load the point extractions
-    gdf = load_point_extractions(extractions_dir)
-
     # Sample the data
     if sample_ids is None:
-        sample_ids = gdf["sample_id"].unique()
+        sample_ids = extractions_gdf["sample_id"].unique()
         selected_ids = np.random.choice(sample_ids, nsamples, replace=False)
     else:
         selected_ids = sample_ids
@@ -307,7 +306,7 @@ def visualize_timeseries(
     fig, ax = plt.subplots(figsize=(12, 6))
 
     for sample_id in selected_ids:
-        sample = gdf[gdf["sample_id"] == sample_id]
+        sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
 
         # Prepare the data to be shown
