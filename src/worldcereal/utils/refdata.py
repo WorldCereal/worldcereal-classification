@@ -1,6 +1,7 @@
+import glob
 import importlib.resources
 import json
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -180,15 +181,17 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 
 
 def query_private_extractions(
-    private_collection_paths: Union[str, List[str]],
+    merged_private_parquet_path: str,
     processing_period: TemporalContext = None,
     bbox_poly: Optional[Polygon] = None,
     filter_cropland: bool = True,
     buffer: int = 250000,
 ) -> pd.DataFrame:
 
-    if isinstance(private_collection_paths, str):
-        private_collection_paths = [private_collection_paths]
+    private_collection_paths = glob.glob(
+        f"{merged_private_parquet_path}/**/*.parquet",
+        recursive=True,
+    )
 
     if bbox_poly is not None:
         bbox_poly = (
