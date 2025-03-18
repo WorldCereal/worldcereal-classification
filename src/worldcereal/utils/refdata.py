@@ -145,7 +145,7 @@ def query_public_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+AND ewoc_code < 1114000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -259,7 +259,7 @@ def query_private_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+AND ewoc_code < 1114000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -268,8 +268,8 @@ AND ewoc_code > 1100000000
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text 
-FROM read_parquet('{tpath}') 
+SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+FROM read_parquet('{tpath}')
 {spatial_query_part}
 {cropland_filter_query_part}
 """
