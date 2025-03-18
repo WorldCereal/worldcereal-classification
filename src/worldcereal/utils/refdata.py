@@ -400,7 +400,11 @@ def process_extractions_df(
     # make sure the valid_time, start and end dates are datetime objects
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = df_raw[date_col].dt.tz_localize(df_raw["timestamp"].dt.tz)
+        df_raw[date_col] = (
+            df_raw[date_col]
+            .dt.tz_localize(None)
+            .dt.tz_localize(df_raw["timestamp"].dt.tz)
+        )
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -431,7 +435,7 @@ def process_extractions_df(
         true_valid_time_map = sample_dates.set_index("sample_id")["valid_time"]
 
         # calculate the shifts and assign new valid date
-        sample_dates["true_valid_time_month"] = df_raw["valid_time"].dt.month
+        sample_dates["true_valid_time_month"] = sample_dates["valid_time"].dt.month
         sample_dates["proposed_valid_time_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
@@ -455,10 +459,6 @@ def process_extractions_df(
         ].values
         df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
 
-        # put the proposed valid_time back into the main dataframe
-        df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
-            sample_dates.set_index("sample_id")["proposed_valid_time"]
-        )
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
             logger.error(error_msg)
@@ -467,6 +467,11 @@ def process_extractions_df(
             logger.warning(
                 f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
             )
+
+        # put the proposed valid_time back into the main dataframe
+        df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
+            sample_dates.set_index("sample_id")["proposed_valid_time"]
+        )
 
     df_processed = process_parquet(
         df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
