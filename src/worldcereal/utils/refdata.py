@@ -1,7 +1,5 @@
 import glob
-import importlib.resources
-import json
-from typing import Dict, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -12,22 +10,6 @@ from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
-
-from worldcereal.data import croptype_mappings
-
-
-def get_class_mappings() -> Dict:
-    """Method to get the WorldCereal class mappings for downstream task.
-
-    Returns
-    -------
-    Dict
-        the resulting dictionary with the class mappings
-    """
-    with importlib.resources.open_text(croptype_mappings, "croptype_classes.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
-
-    return CLASS_MAPPINGS
 
 
 def query_public_extractions(
