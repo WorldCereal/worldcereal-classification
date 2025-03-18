@@ -75,6 +75,7 @@ class CropTypePicker:
         ewoc_codes: Optional[List[int]] = None,
         sample_df: pd.DataFrame = None,
         count_threshold: int = 100,
+        expand: bool = False,
     ):
         """
         Crop type picker widget for selecting crop types of interest.
@@ -92,6 +93,9 @@ class CropTypePicker:
             Minimum count threshold for a crop type to be included in the picker.
             If a crop has a lower count, it will be aggregated to its parent.
             By default 100.
+        expand : bool, optional
+            Whether to expand the widget by default.
+            By default False.
         """
 
         self.ewoc_codes = ewoc_codes
@@ -102,6 +106,7 @@ class CropTypePicker:
         else:
             self.df = None
         self.count_threshold = count_threshold
+        self.expand = expand
 
         self.legend = None
         self.hierarchy = None
@@ -306,12 +311,24 @@ class CropTypePicker:
                         child_items,
                         layout=widgets.Layout(width="100%", align_items="flex-start"),
                     )
-                    children_vbox.layout.display = "none"  # Hide by default
+                    if self.expand:
+                        children_vbox.layout.display = "flex"
+                    else:
+                        children_vbox.layout.display = "none"  # Hide by default
+
+                    if self.expand:
+                        value = True
+                        description = "Collapse"
+                        icon = "chevron-up"
+                    else:
+                        value = False
+                        description = "Expand"
+                        icon = "chevron-down"
 
                     toggle_button = widgets.ToggleButton(
-                        value=False,
-                        description="Expand",
-                        icon="chevron-down",
+                        value=value,
+                        description=description,
+                        icon=icon,
                         layout=widgets.Layout(
                             width="150px", margin=f"0 5px 0 {level * 20}px"
                         ),
@@ -540,7 +557,9 @@ def clean_hierarchy_keys(hierarchy):
     return recursive_update_key(hierarchy)
 
 
-def apply_croptypepicker_to_df(df, croptypepicker):
+def apply_croptypepicker_to_df(
+    df, croptypepicker, other_label: str = "other_temporary_crops"
+):
     """Apply the selected crop types from the CropTypePicker to a DataFrame of samples
     Parameters
     ----------
@@ -548,6 +567,10 @@ def apply_croptypepicker_to_df(df, croptypepicker):
         DataFrame containing samples. There should be a column "ewoc_code" indicating the crop type for each sample.
     croptypepicker : CropTypePicker
         CropTypePicker object containing the selected crop types.
+    other_label : str, optional
+        Label to assign to samples that do not belong to the selected crop types.
+        By default "other_temporary_crops".
+
     Returns
     -------
     pd.DataFrame
@@ -557,10 +580,18 @@ def apply_croptypepicker_to_df(df, croptypepicker):
     if croptypepicker.croptypes.empty:
         raise ValueError("No crop types selected, cannot proceed.")
 
+    # Isolate all crop types that have NOT been selected
+    included = croptypepicker.croptypes.index.values
+    excluded = df[~df["ewoc_code"].isin(included)]
+    print(excluded)
+
     # Prepare a mapping dictionary from original labels (index) to new labels
     label_mapping = croptypepicker.croptypes["new_label"].to_dict()
 
     # Apply the mapping to the ewoc_code column
     df["downstream_class"] = df["ewoc_code"].map(label_mapping)
+
+    # Excluded crop types are assigned to "other_temporary_crops" class
+    df.loc[excluded.index, "downstream_class"] = "other_temporary_crops"
 
     return df
