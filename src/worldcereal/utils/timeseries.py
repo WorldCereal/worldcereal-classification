@@ -48,6 +48,7 @@ COLUMN_RENAMES: Dict[str, str] = {
     "valid_date": "valid_time",
 }
 
+# Expected distances between observations for different frequencies, in days
 EXPECTED_DISTANCES = {"month": 31, "dekad": 10}
 
 
@@ -64,6 +65,26 @@ class DataFrameValidator:
 
     @staticmethod
     def validate_timestamps(df_long: pd.DataFrame, freq: str = "month") -> None:
+        """
+        Validate that timestamps in DataFrame adhere to specific frequency requirements.
+
+        Parameters
+        ----------
+        df_long : pd.DataFrame
+            DataFrame containing a 'timestamp' column with datetime objects.
+        freq : str, default='month'
+            Frequency to validate against. Currently supported values are:
+            - 'month': requires timestamps at the beginning of each month
+            - 'dekad': requires timestamps on the 1st, 11th, or 21st of each month
+
+        Raises
+        ------
+        ValueError
+            If any timestamp does not conform to the specified frequency pattern.
+        NotImplementedError
+            If the specified frequency is not supported.
+        """
+
         if freq == "month":
             if not df_long["timestamp"].dt.is_month_start.all():
                 bad_dates = df_long[~df_long["timestamp"].dt.is_month_start][
@@ -84,6 +105,32 @@ class DataFrameValidator:
     def check_faulty_samples(
         df_wide: pd.DataFrame, min_edge_buffer: int
     ) -> pd.DataFrame:
+        """
+        Filter out faulty samples from a DataFrame based on timestamp validations.
+
+        This function evaluates if a valid center point can be established for each sample
+        within the given edge buffer constraints.
+
+        Parameters
+        ----------
+        df_wide : pd.DataFrame
+            Input DataFrame containing at least the columns 'available_timesteps', 'valid_position'.
+            - 'available_timesteps': The total number of timesteps available for a sample
+            - 'valid_position': The position index that is considered valid
+
+        min_edge_buffer : int
+            Minimum required buffer from the edge of the time series. This ensures that
+            windows created around valid positions maintain a minimum distance from the edges.
+
+        Returns
+        -------
+        pd.DataFrame
+            Filtered DataFrame with faulty samples removed.
+
+        Notes
+        -----
+        The function logs a warning message indicating how many faulty samples were dropped.
+        """
         min_center_point = np.maximum(
             df_wide["available_timesteps"] // 2,
             df_wide["valid_position"]
@@ -107,6 +154,32 @@ class DataFrameValidator:
     def check_min_timesteps(
         df_wide: pd.DataFrame, required_min_timesteps: int
     ) -> pd.DataFrame:
+        """
+        Filter out samples from a DataFrame that don't have the minimum required number of timesteps.
+
+        Parameters
+        ----------
+        df_wide : pd.DataFrame
+            DataFrame containing a column 'available_timesteps' that indicates the number of
+            available timesteps for each sample.
+        required_min_timesteps : int
+            The minimum number of timesteps required for each sample to be kept.
+
+        Returns
+        -------
+        pd.DataFrame
+            Filtered DataFrame containing only samples with at least the required minimum number of timesteps.
+
+        Raises
+        ------
+        ValueError
+            If all samples have fewer timesteps than required, resulting in an empty DataFrame.
+
+        Notes
+        -----
+        The function logs a warning message indicating the number of samples dropped due to
+        insufficient timesteps.
+        """
         samples_with_too_few_ts = (
             df_wide["available_timesteps"] < required_min_timesteps
         )
@@ -126,10 +199,42 @@ All samples have fewer timesteps than required ({required_min_timesteps})."
 
     @staticmethod
     def check_median_distance(df_long: pd.DataFrame, freq: str) -> pd.DataFrame:
-        # compute median distance between observations
-        # and use it as an approximation for frequency
+        """
+        Validates if the temporal frequency of observations in the dataframe matches the expected frequency.
 
-        # Pre-calculate daily differences without repeated .unique()
+        This function computes the median time distance between observations for each sample and
+        compares it with the expected distance for the given frequency. Samples with median distances
+        that deviate significantly from the expected distance are removed from the dataset.
+
+        Parameters
+        ----------
+        df_long : pd.DataFrame
+            A long-format DataFrame containing at least 'sample_id' and 'timestamp' columns.
+            The timestamp column should be in datetime format.
+
+        freq : str
+            The expected frequency of observations. Must be one of:
+            - 'month': Monthly observations
+            - 'dekad': Dekadal observations (10-day periods)
+
+        Returns
+        -------
+        pd.DataFrame
+            The input DataFrame with samples removed if their observation frequency
+            doesn't match the expected frequency.
+
+        Raises
+        ------
+        NotImplementedError
+            If the specified frequency is not supported.
+        ValueError
+            If all samples are removed due to frequency mismatch.
+
+        Notes
+        -----
+        The function allows for a tolerance of ±2 days from the expected distance.
+        """
+
         ts_subset_df = (
             df_long[["sample_id", "timestamp"]]
             .drop_duplicates()
@@ -186,6 +291,25 @@ Median observed distance between observations: {median_distance.unique()} days"
 class TimeSeriesProcessor:
     @staticmethod
     def calculate_valid_position(df_long: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate the valid position for each sample in the dataframe based on the minimum absolute
+        time difference between 'valid_time' and 'timestamp'.
+
+        This function adds two new columns to the input dataframe:
+        1. 'valid_time_ts_diff_days': The absolute difference in days between 'valid_time' and 'timestamp'
+        2. 'valid_position': Maps each sample_id to the timestamp_ind where the time difference is minimal
+
+        Parameters
+        ----------
+        df_long : pd.DataFrame
+            Input dataframe containing at least columns: 'sample_id', 'timestamp', 'valid_time', 'timestamp_ind'
+
+        Returns
+        -------
+        pd.DataFrame
+            The input dataframe with added 'valid_time_ts_diff_days' and 'valid_position' columns
+        """
+
         df_long["valid_time_ts_diff_days"] = (
             df_long["valid_time"] - df_long["timestamp"]
         ).dt.days.abs()
@@ -201,6 +325,44 @@ class TimeSeriesProcessor:
     def fill_missing_dates(
         df_long: pd.DataFrame, freq: str, index_columns: List[str]
     ) -> pd.DataFrame:
+        """
+        Fill missing dates in a DataFrame with NODATAVALUE for feature columns.
+
+        This function identifies samples with missing observations based on the expected
+        frequency (monthly or dekadal) and fills in the gaps with NODATAVALUE.
+
+        Parameters
+        ----------
+        df_long : pd.DataFrame
+            Input DataFrame in long format containing time series data.
+            Must have 'start_date', 'end_date', 'timestamp', and 'sample_id' columns.
+        freq : str
+            Frequency of the time series data. Supported values are:
+            - 'month': Monthly data with timestamps at the start of each month
+            - 'dekad': Dekadal data (10-day periods)
+        index_columns : List[str]
+            List of column names that uniquely identify each sample and should be
+            preserved when filling missing dates.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with the same structure as the input but with rows added for
+            any missing timestamps, where feature columns are filled with NODATAVALUE.
+
+        Notes
+        -----
+        - If all samples already have the expected number of observations, the original
+          DataFrame is returned unchanged.
+        - The function preserves all metadata columns specified in index_columns.
+        - Expected timestamps are determined based on the start_date and end_date for each sample.
+
+        Raises
+        ------
+        NotImplementedError
+            If a frequency other than 'month' or 'dekad' is provided.
+        """
+
         def get_expected_dates(start_date, end_date, freq):
             if freq == "month":
                 return pd.date_range(start=start_date, end=end_date, freq="MS")
@@ -282,6 +444,38 @@ Filling them with NODATAVALUE."
     def add_dummy_timestamps(
         df_long: pd.DataFrame, min_edge_buffer: int, freq: str
     ) -> pd.DataFrame:
+        """
+        Add dummy timestamps to a time series DataFrame to ensure minimum buffer before and after valid observations.
+
+        This function adds dummy timestamps with NODATAVALUE for features to ensure there are at least
+        `min_edge_buffer` timestamps before the first valid observation and after the last valid observation
+        for each sample. Samples with valid times outside the start and end dates will be removed.
+
+        Parameters
+        ----------
+        df_long : pd.DataFrame
+            Longitudinal DataFrame containing time series data with columns including 'sample_id',
+            'timestamp', 'valid_position', 'timestamp_ind', and feature columns.
+        min_edge_buffer : int
+            Minimum number of timestamps required as buffer before the first valid observation
+            and after the last valid observation.
+        freq : str
+            Frequency of time series data, either 'month' or 'dekad' (10-day period).
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with added dummy timestamps where needed to satisfy the minimum edge buffer
+            requirement. The returned DataFrame has recalculated timestamp indices, start/end dates,
+            and valid positions.
+
+        Notes
+        -----
+        - The function will remove samples where the valid time is before the start date or after the end date.
+        - For each sample requiring buffer, dummy rows with NODATAVALUE for features are added.
+        - The function recalculates temporal indices and positions after adding dummy timestamps.
+        """
+
         def create_dummy_rows(samples_to_add, n_ts_to_add, direction, freq):
             dummy_df = df_long[
                 df_long["sample_id"].isin(samples_to_add)
@@ -381,6 +575,18 @@ for {intermediate_dummy_df['sample_id'].nunique()} samples to fill in the found 
 
 
 class ColumnProcessor:
+    """
+    ColumnProcessor contains static methods that standardize column names and structure,
+    handle missing data, and perform validation on DataFrame columns.
+
+    Methods:
+        rename_columns: Rename DataFrame columns according to predefined mappings.
+        add_band_suffix: Add band-specific suffixes to column names in wide-format DataFrames.
+        construct_index: Identify and return columns to be used as an index in the DataFrame.
+        check_feature_columns: Validate that all required feature columns are present.
+        check_sar_columns: Validate and correct SAR data to prevent invalid values.
+    """
+
     @staticmethod
     def rename_columns(df_long: pd.DataFrame) -> pd.DataFrame:
         return df_long.rename(columns=COLUMN_RENAMES)
@@ -563,6 +769,50 @@ def process_parquet(
     min_edge_buffer: int = 2,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
+    """
+    Process a DataFrame or GeoDataFrame with time series data by filling missing timestamps,
+    transforming to wide format, and validating the data.
+
+    Parameters
+    ----------
+    df : Union[pd.DataFrame, gpd.GeoDataFrame]
+        Input DataFrame or GeoDataFrame containing time series data.
+        Must include 'sample_id' and 'timestamp' columns.
+    freq : Literal["month", "dekad", "MS", "10D"], default="month"
+        Frequency of the time series data.
+        "MS" is an alias for "month" and "10D" is an alias for "dekad".
+    use_valid_time : bool, default=True
+        Whether to calculate and use valid time positions in the time series.
+    required_min_timesteps : Optional[int], default=None
+        Minimum number of timesteps required for each sample.
+        Samples with fewer timesteps will be filtered out.
+    min_edge_buffer : int, default=2
+        Minimum number of timesteps to include as buffer at the edges
+        when calculating valid positions. Only used if use_valid_time is True.
+    return_after_fill : bool, default=False
+        If True, returns the DataFrame after filling missing dates
+        but before pivoting. Used for debugging purposes.
+
+    Returns
+    -------
+    Union[pd.DataFrame, gpd.GeoDataFrame]
+        Processed DataFrame in wide format with features spread across columns
+        by timestamp index. Index is set to 'sample_id'.
+
+    Raises
+    ------
+    ValueError
+        If the input DataFrame is empty or if the resulting DataFrame after processing is empty.
+
+    Notes
+    -----
+    The function performs several operations including:
+    - Validating required columns and timestamps
+    - Checking and processing feature columns
+    - Filling in missing dates according to the specified frequency
+    - Converting from long to wide format
+    - Adding suffixes to band names for clarity
+    """
 
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
@@ -613,19 +863,12 @@ def process_parquet(
     index_columns.append("available_timesteps")
     index_columns = list(set(index_columns))
 
-    # # detach geometry column, since pivoting cannot handle it properly
-    # geom_df = df[["sample_id", "geometry"]].drop_duplicates()
-    # df = df.drop(columns=["geometry"])
-
     # Transform to wide format
     df_pivot = df.pivot(
         index=index_columns,
         columns="timestamp_ind",
         values=FEATURE_COLUMNS,
     )
-
-    # # Re-attach geometry column
-    # df_pivot = df_pivot.merge(geom_df, on="sample_id", how="left")
 
     df_pivot = df_pivot.fillna(NODATAVALUE)
     if df_pivot.empty:
