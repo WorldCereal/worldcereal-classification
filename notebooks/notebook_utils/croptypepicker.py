@@ -583,7 +583,6 @@ def apply_croptypepicker_to_df(
     # Isolate all crop types that have NOT been selected
     included = croptypepicker.croptypes.index.values
     excluded = df[~df["ewoc_code"].isin(included)]
-    print(excluded)
 
     # Prepare a mapping dictionary from original labels (index) to new labels
     label_mapping = croptypepicker.croptypes["new_label"].to_dict()
