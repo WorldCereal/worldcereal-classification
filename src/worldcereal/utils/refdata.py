@@ -43,23 +43,8 @@ def query_public_extractions(
         A GeoDataFrame containing reference data points that intersect with the area of interest.
         Each row represents a single sample with its geometry and associated attributes.
 
-    Raises
-    ------
-    ValueError
-        If no datasets are found that intersect with the area, or if the query returns
-        only a single class (insufficient for model training).
     """
 
-    from IPython.display import Markdown
-
-    nodata_helper_message = f"""
-### What to do?
-1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
-    *Current setting is: {buffer} m².*
-2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://rdm.esa-worldcereal.org/map).
-3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
-4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
-"""
     logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
 
     bbox_poly = (
@@ -88,13 +73,10 @@ def query_public_extractions(
     ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
     if len(ref_ids_lst) == 0:
-        logger.error(
+        logger.warning(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-        )
+        return pd.DataFrame()
 
     logger.info(
         f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
@@ -153,13 +135,11 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
     public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
 
     if public_df_raw.empty:
-        logger.error(
-            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)}km2."
+        logger.warning(
+            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)} km²."
         )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "No samples from the WorldCereal global extractions database fall into the selected area."
-        )
+        return pd.DataFrame()
+
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
     public_df_raw["filename"] = public_df_raw["ref_id"]
 
@@ -195,11 +175,6 @@ def query_private_extractions(
     -------
     pd.DataFrame
         A GeoPandas DataFrame containing the filtered private extraction data with valid geometry objects.
-
-    Raises
-    ------
-    ValueError
-        If no samples are found in the private collections after filtering.
 
     Notes
     -----
@@ -268,10 +243,9 @@ FROM read_parquet('{tpath}')
     private_df_raw = gpd.GeoDataFrame(private_df_raw, geometry="geometry")
 
     if private_df_raw.empty:
-        logger.error(
-            f"No samples detected in the private collections: {private_collection_paths}."
+        logger.warning(
+            f"No intersecting samples detected in the private collections: {private_collection_paths}."
         )
-        raise ValueError("No samples detected in the private collections.")
 
     return private_df_raw
 
