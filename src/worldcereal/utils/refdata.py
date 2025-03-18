@@ -178,14 +178,6 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
         raise ValueError(
             "No samples from the WorldCereal global extractions database fall into the selected area."
         )
-    if public_df_raw["ewoc_code"].nunique() == 1:
-        logger.error(
-            f"Queried data contains only one class: {public_df_raw['ewoc_code'].unique()[0]}. Cannot train a model with only one class."
-        )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "Queried data contains only one class. Cannot train a model with only one class."
-        )
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
     public_df_raw["filename"] = public_df_raw["ref_id"]
 
