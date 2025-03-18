@@ -184,13 +184,20 @@ def query_private_extractions(
     processing_period: TemporalContext = None,
     bbox_poly: Optional[Polygon] = None,
     filter_cropland: bool = True,
+    buffer: int = 250000,
 ) -> pd.DataFrame:
 
     if isinstance(private_collection_paths, str):
         private_collection_paths = [private_collection_paths]
 
     if bbox_poly is not None:
-        bbox_poly = gpd.GeoSeries(bbox_poly, crs="EPSG:4326")[0]
+        bbox_poly = (
+            gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
+            .to_crs(epsg=3785)
+            .buffer(buffer, cap_style="square", join_style="mitre")
+            .to_crs(epsg=4326)[0]
+        )
+
         xmin, ymin, xmax, ymax = bbox_poly.bounds
         bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
         spatial_query_part = (
