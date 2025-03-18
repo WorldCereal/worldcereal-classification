@@ -875,6 +875,18 @@ def process_parquet(
     index_columns.extend(["start_date", "end_date"])
     index_columns = list(set(index_columns))
 
+    # Perform check on number of unique values for each index column
+    nsamples = df["sample_id"].nunique()
+    to_drop = []
+    for col in index_columns:
+        if df[col].nunique() > nsamples:
+            df = df.drop(col, axis=1)
+            to_drop.append(col)
+            logger.warning(
+                f"Column {col} has more unique values than samples. This may cause issues, column has been dropped!"
+            )
+    index_columns = [col for col in index_columns if col not in to_drop]
+
     # Process time series
     processor = TimeSeriesProcessor()
     df = processor.fill_missing_dates(df, freq, index_columns)
