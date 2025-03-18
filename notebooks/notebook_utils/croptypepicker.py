@@ -72,7 +72,7 @@ class CropTypePicker:
     def __init__(
         self,
         ewoc_codes: Optional[List[int]] = None,
-        sample_count_df: pd.DataFrame = None,
+        sample_df: pd.DataFrame = None,
         count_threshold: int = 100,
     ):
         """
@@ -84,9 +84,8 @@ class CropTypePicker:
             List of EWOC codes to be included in the crop type picker.
             By default None, meaning all crop types from the legend are included
             (this takes a while to load).
-        sample_count_df : pd.DataFrame, optional
-            DataFrame containing the sample counts for your crop types of interest.
-            Crop types (ewoc_codes) should be in the index and the counts in the "count" column.
+        sample_df : pd.DataFrame, optional
+            DataFrame containing samples. There should be a column "ewoc_code" indicating the crop type for each sample.
             By default None.
         count_threshold : int, optional
             Minimum count threshold for a crop type to be included in the picker.
@@ -95,7 +94,12 @@ class CropTypePicker:
         """
 
         self.ewoc_codes = ewoc_codes
-        self.df = sample_count_df
+        if sample_df is not None:
+            # Count number of samples for each crop type
+            sample_count_df = sample_df["ewoc_code"].value_counts().sort_index()
+            self.df = sample_count_df.rename("count")
+        else:
+            self.df = None
         self.count_threshold = count_threshold
 
         self.legend = None
@@ -107,6 +111,9 @@ class CropTypePicker:
         # Initialize the hierarchy and widget
         self._build_hierarchy()
         self._create_widget()
+
+        # Display the application
+        self.display()
 
     def _simplify_legend(self):
         """Simplify the legend filling missing values with lower levels of the hierarchy"""
@@ -504,3 +511,29 @@ def clean_hierarchy_keys(hierarchy):
         return node  # Return leaf nodes unchanged
 
     return recursive_update_key(hierarchy)
+
+
+def apply_croptypepicker_to_df(df, croptypepicker):
+    """Apply the selected crop types from the CropTypePicker to a DataFrame of samples
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing samples. There should be a column "ewoc_code" indicating the crop type for each sample.
+    croptypepicker : CropTypePicker
+        CropTypePicker object containing the selected crop types.
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing only the samples that belong to the selected crop types.
+    """
+
+    if croptypepicker.croptypes.empty:
+        raise ValueError("No crop types selected, cannot proceed.")
+
+    # Prepare a mapping dictionary from original labels (index) to new labels
+    label_mapping = croptypepicker.croptypes["new_label"].to_dict()
+
+    # Apply the mapping to the ewoc_code column
+    df["downstream_class"] = df["ewoc_code"].map(label_mapping)
+
+    return df
