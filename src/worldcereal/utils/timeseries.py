@@ -289,6 +289,34 @@ Median observed distance between observations: {median_distance.unique()} days"
 
 
 class TimeSeriesProcessor:
+    """
+    TimeSeriesProcessor contains methods for common time series data processing tasks,
+    particularly focused on handling temporal observations with varying frequencies
+    and managing missing data points.
+
+    Methods
+    calculate_valid_position(df_long)
+        Calculate the valid position for each sample based on minimum absolute time difference
+        between valid time and timestamp.
+
+    get_expected_dates(start_date, end_date, freq)
+        Generate a sequence of expected timestamps between start and end dates based on
+        the specified frequency.
+
+    fill_missing_dates(df_long, freq, index_columns)
+        Fill missing dates in a DataFrame with NODATAVALUE for feature columns based
+        on expected frequency.
+
+    add_dummy_timestamps(df_long, min_edge_buffer, freq)
+        Add dummy timestamps to ensure minimum buffer before and after valid observations.
+
+    The class is designed to work with pandas DataFrames containing time series data
+    with specific expected columns including 'sample_id', 'timestamp', and temporal
+    indicators.
+
+    Currently supports 'month' and 'dekad' (10-day periods) frequencies.
+    """
+
     @staticmethod
     def calculate_valid_position(df_long: pd.DataFrame) -> pd.DataFrame:
         """
