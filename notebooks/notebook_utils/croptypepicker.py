@@ -3,6 +3,7 @@ from typing import List, Optional
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
+from IPython.display import display
 
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
@@ -107,13 +108,13 @@ class CropTypePicker:
         self.widget = None
         self.widgets_dict: dict[int, widgets.Checkbox] = {}
         self.croptypes = pd.DataFrame()
+        self.output = widgets.Output()
 
         # Initialize the hierarchy and widget
         self._build_hierarchy()
         self._create_widget()
 
-        # Display the application
-        self.display()
+        display(self.widget)
 
     def _simplify_legend(self):
         """Simplify the legend filling missing values with lower levels of the hierarchy"""
@@ -217,9 +218,6 @@ class CropTypePicker:
         # Get rid of unknown class
         self.legend = self.full_legend.loc[self.full_legend.index != 0]
 
-        # Add count column to legend
-        self.legend = self.legend.assign(count=0)
-
         # Filter legend based on EWOC codes
         if self.ewoc_codes is not None:
             self.legend = self.legend.loc[self.ewoc_codes]
@@ -231,6 +229,9 @@ class CropTypePicker:
             self.legend = self.legend.join(self.df)
             # Sort on index
             self.legend = self.legend.sort_index()
+        else:
+            # Add empty count column to legend
+            self.legend = self.legend.assign(count=0)
 
         # Simplify the legend by removing NaN's in intermediate levels
         self._simplify_legend()
@@ -280,7 +281,9 @@ class CropTypePicker:
                 checkbox = widgets.Checkbox(
                     value=False,
                     description=description,
-                    layout=widgets.Layout(margin=f"0 0 0 {level * 40}px", width="auto"),
+                    layout=widgets.Layout(
+                        margin=f"0 0 0 {level * 20}px", width="auto", max_width="95%"
+                    ),
                 )
                 self.widgets_dict[current_path] = checkbox
 
@@ -299,7 +302,10 @@ class CropTypePicker:
                 # Append children if they exist
                 if child_items:
                     # Create a collapsible section with a toggle button
-                    children_vbox = widgets.VBox(child_items)
+                    children_vbox = widgets.VBox(
+                        child_items,
+                        layout=widgets.Layout(width="100%", align_items="flex-start"),
+                    )
                     children_vbox.layout.display = "none"  # Hide by default
 
                     toggle_button = widgets.ToggleButton(
@@ -307,8 +313,9 @@ class CropTypePicker:
                         description="Expand",
                         icon="chevron-down",
                         layout=widgets.Layout(
-                            width="200px", margin=f"0 20px 0 {level * 40 + 20}px"
+                            width="150px", margin=f"0 5px 0 {level * 20}px"
                         ),
+                        style={"button_color": "#A9A9A9"},
                     )
 
                     def toggle_visibility(
@@ -325,7 +332,10 @@ class CropTypePicker:
 
                     toggle_button.observe(toggle_visibility, names="value")
 
-                    vbox = widgets.VBox([checkbox, toggle_button, children_vbox])
+                    vbox = widgets.VBox(
+                        [checkbox, toggle_button, children_vbox],
+                        layout=widgets.Layout(width="100%", align_items="flex-start"),
+                    )
 
                     # Define behavior for disabling all descendants when a parent is selected
                     def on_parent_change(change, target_child_items=child_items):
@@ -340,7 +350,9 @@ class CropTypePicker:
                     items.append(vbox)
                 else:
                     items.append(checkbox)
-            return widgets.VBox(items)
+            return widgets.VBox(
+                items, layout=widgets.Layout(width="100%", align_items="flex-start")
+            )
 
         submit_button = widgets.Button(description="Apply", button_style="success")
         submit_button.on_click(self.apply_selection)
@@ -350,12 +362,24 @@ class CropTypePicker:
         )
         clear_button.on_click(self.clear_selection)
 
-        buttons = widgets.HBox([submit_button, clear_button])
+        buttons = widgets.HBox(
+            [submit_button, clear_button],
+            layout=widgets.Layout(
+                aligh_items="flex-start",
+                justify_content="flex-start",
+                width="100%",
+            ),
+        )
 
         title = widgets.HTML("""<h2>Select your crop types of interest:</h2>""")
 
         self.widget = widgets.VBox(
-            [title, recursive_create_widgets(self.hierarchy), buttons]
+            [title, recursive_create_widgets(self.hierarchy), buttons, self.output],
+            layout=widgets.Layout(
+                overflow="hidden",
+                width="100%",
+                align_items="flex-start",
+            ),
         )
 
     def apply_selection(self, change=None):
@@ -376,7 +400,9 @@ class CropTypePicker:
         for path, checkbox in self.widgets_dict.items():
             checkbox.value = False
         self.croptypes = pd.DataFrame()
-        print("Selection cleared.")
+        with self.output:
+            self.output.clear_output()
+            print("Selection cleared.")
 
     def _apply_hierarchy_on_selection(self, paths_to_search):
         """Apply the selected crop types on the hierarchy and return the extensive list of crop types
@@ -431,12 +457,13 @@ class CropTypePicker:
 
         final_types = np.unique(self.croptypes["new_label"].values)
 
-        print(
-            f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes: {final_types}."
-        )
-
-    def display(self):
-        return self.widget
+        with self.output:
+            self.output.clear_output()
+            print(
+                f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes:"
+            )
+            for ct in final_types:
+                print(f"- {ct}")
 
     def _simplify_hierarchy(self, hierarchy):
         """
