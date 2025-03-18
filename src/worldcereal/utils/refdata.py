@@ -352,7 +352,7 @@ def get_best_valid_time(row: pd.Series):
 def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
-    freq: Literal["MS", "10D"] = "MS",
+    freq: Literal["month", "dekad"] = "month",
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """Method to transform the raw parquet data into a format that can be used for
     training. Includes pivoting of the dataframe and mapping of the crop types.
@@ -370,11 +370,9 @@ def process_extractions_df(
         - the center of the user-defined temporal extent should be not closer than MIN_EDGE_BUFFER (by default 2 months)
           to the start or end of the extraction period
     freq : str, optional
-        Frequency of the time series, by default "MS". Provided frequency alias should be compatible with pandas.
-        https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#timeseries-offset-aliases
-        Currently only MS and 10D are supported.
+        Frequency of the time series, by default "month". Currently only month and dekad are supported.
     """
-    from worldcereal.utils.timeseries import process_parquet
+    from worldcereal.utils.timeseries import TimeSeriesProcessor, process_parquet
 
     logger.info("Processing selected samples ...")
 
@@ -390,12 +388,13 @@ def process_extractions_df(
         start_date, end_date = processing_period.to_datetime()
 
         # sanity check to make sure freq is not something we still don't support in Presto
-        if freq not in ["MS", "10D"]:
+        if freq not in ["month", "dekad"]:
             raise ValueError(
-                f"Unsupported frequency alias: {freq}. Please use 'MS' or '10D'."
+                f"Unsupported frequency alias: {freq}. Please use 'month' or 'dekad'."
             )
 
-        date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
+        date_range = TimeSeriesProcessor.get_expected_dates(start_date, end_date, freq)
+
         middle_index = len(date_range) // 2 - 1
         processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month

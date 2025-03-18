@@ -322,6 +322,22 @@ class TimeSeriesProcessor:
         return df_long
 
     @staticmethod
+    def get_expected_dates(start_date, end_date, freq):
+        if freq == "month":
+            return pd.date_range(start=start_date, end=end_date, freq="MS")
+        elif freq == "dekad":
+            return pd.DatetimeIndex(
+                np.unique(
+                    [
+                        _dekad_startdate_from_date(xx)
+                        for xx in _dekad_timestamps(start_date, end_date)
+                    ]
+                )
+            )
+        else:
+            raise NotImplementedError(f"Frequency {freq} not supported")
+
+    @staticmethod
     def fill_missing_dates(
         df_long: pd.DataFrame, freq: str, index_columns: List[str]
     ) -> pd.DataFrame:
@@ -363,23 +379,8 @@ class TimeSeriesProcessor:
             If a frequency other than 'month' or 'dekad' is provided.
         """
 
-        def get_expected_dates(start_date, end_date, freq):
-            if freq == "month":
-                return pd.date_range(start=start_date, end=end_date, freq="MS")
-            elif freq == "dekad":
-                return pd.DatetimeIndex(
-                    np.unique(
-                        [
-                            _dekad_startdate_from_date(xx)
-                            for xx in _dekad_timestamps(start_date, end_date)
-                        ]
-                    )
-                )
-            else:
-                raise NotImplementedError(f"Frequency {freq} not supported")
-
         def fill_sample(sample_df):
-            expected_dates = get_expected_dates(
+            expected_dates = TimeSeriesProcessor.get_expected_dates(
                 sample_df["start_date"].iloc[0], sample_df["end_date"].iloc[0], freq
             )
             missing_dates = expected_dates.difference(sample_df["timestamp"])
@@ -395,7 +396,11 @@ class TimeSeriesProcessor:
 
         unique_date_pairs = df_long[["start_date", "end_date"]].drop_duplicates()
         unique_date_pairs["expected_n_observations"] = unique_date_pairs.apply(
-            lambda xx: len(get_expected_dates(xx["start_date"], xx["end_date"], freq)),
+            lambda xx: len(
+                TimeSeriesProcessor.get_expected_dates(
+                    xx["start_date"], xx["end_date"], freq
+                )
+            ),
             axis=1,
         )
         unique_date_pairs.set_index(["start_date", "end_date"], inplace=True)
