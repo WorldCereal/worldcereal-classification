@@ -81,41 +81,33 @@ def query_public_extractions(
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    # metadata_s3_path = "s3://geoparquet/ref_id_extent.parquet"
+    metadata_s3_path = "s3://geoparquet/worldcereal_public_extractions_extent.parquet"
 
-    # query_metadata = f"""
-    # SET s3_endpoint='s3.waw3-1.cloudferro.com';
-    # SET enable_progress_bar=false;
-    # SELECT distinct ref_id
-    # FROM read_parquet('{metadata_s3_path}') metadata
-    # WHERE ST_Intersects(ST_GeomFromText(str_geom), ST_GeomFromText('{str(bbox_poly)}'))
-    # """
-    # ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
+    query_metadata = f"""
+    SET s3_endpoint='s3.waw3-1.cloudferro.com';
+    SET enable_progress_bar=false;
+    SELECT distinct ref_id
+    FROM read_parquet('{metadata_s3_path}') metadata
+    WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))
+    """
+    ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
-    # if len(ref_ids_lst) == 0:
-    #     logger.error(
-    #         "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-    #     )
-    #     Markdown(nodata_helper_message)
-    #     raise ValueError(
-    #         "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-    #     )
+    if len(ref_ids_lst) == 0:
+        logger.error(
+            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
+        )
+        Markdown(nodata_helper_message)
+        raise ValueError(
+            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
+        )
 
-    # logger.info(
-    #     f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
-    # )
+    logger.info(
+        f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
+    )
 
     logger.info(
         "Querying WorldCereal global extractions database (this can take a while) ..."
     )
-
-    query_ref_ids = """
-SET s3_endpoint='s3.waw3-1.cloudferro.com';
-SELECT distinct ref_id
-FROM read_parquet('s3://geoparquet/worldcereal_public_extractions.parquet/**/*.parquet')
-    """
-
-    ref_ids_lst = db.sql(query_ref_ids).df()["ref_id"].values
 
     all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
     f = requests.get(all_extractions_url)
