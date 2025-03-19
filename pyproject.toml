@@ -73,8 +73,7 @@ train = [
 ]
 notebooks = [
   "ipywidgets==8.1.3",
-  "leafmap==0.35.1",
-  "localtileserver==0.10.4"
+  "leafmap==0.35.1"
 ]
 
 [tool.pytest.ini_options]
