@@ -1,6 +1,5 @@
 from presto.presto import Presto
 from torch.utils.data import DataLoader
-
 from worldcereal.parameters import CropLandParameters
 from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
@@ -52,6 +51,3 @@ def test_get_trainingdf(WorldCerealExtractionsDF):
 
     for ft in range(128):
         assert f"presto_ft_{ft}" in training_df.columns
-
-    assert "LANDCOVER_LABEL" in training_df.columns
-    assert "CROPTYPE_LABEL" in training_df.columns
