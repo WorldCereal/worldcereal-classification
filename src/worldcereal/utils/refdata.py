@@ -400,7 +400,7 @@ def process_extractions_df(
     # make sure the valid_time, start and end dates are datetime objects
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = df_raw[date_col].dt.tz_localize(df_raw["timestamp"].dt.tz)
+        df_raw[date_col] = df_raw[date_col].dt.tz_localize(None).dt.tz_localize(df_raw["timestamp"].dt.tz)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
