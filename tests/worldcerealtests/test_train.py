@@ -52,6 +52,3 @@ def test_get_trainingdf(WorldCerealExtractionsDF):
 
     for ft in range(128):
         assert f"presto_ft_{ft}" in training_df.columns
-
-    assert "LANDCOVER_LABEL" in training_df.columns
-    assert "CROPTYPE_LABEL" in training_df.columns

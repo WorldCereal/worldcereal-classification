@@ -298,7 +298,7 @@ class TestProcessParquet(TestCase):
             self.assertFalse(result.empty)
             self.assertIn("OPTICAL-B02-ts0-10m", result.columns)
             self.assertIn("SAR-VV-ts0-20m", result.columns)
-            self.assertIn("AGERA5-PRECIP-ts0-100m", result.columns)
+            self.assertIn("METEO-temperature_mean-ts0-100m", result.columns)
 
     def test_process_parquet_missing_timestamps(self):
         for freq in self.allowed_freqs:
