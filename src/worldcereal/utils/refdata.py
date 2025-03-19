@@ -45,7 +45,9 @@ def query_public_extractions(
 
     """
 
-    logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
+    logger.info(
+        f"Applying a buffer of {int(buffer / 1000)} km to the selected area ..."
+    )
 
     bbox_poly = (
         gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
@@ -136,7 +138,7 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 
     if public_df_raw.empty:
         logger.warning(
-            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)} km²."
+            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer / 1000)} km²."
         )
         return pd.DataFrame()
 
@@ -400,7 +402,11 @@ def process_extractions_df(
     # make sure the valid_time, start and end dates are datetime objects
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = df_raw[date_col].dt.tz_localize(None).dt.tz_localize(df_raw["timestamp"].dt.tz)
+        df_raw[date_col] = (
+            df_raw[date_col]
+            .dt.tz_localize(None)
+            .dt.tz_localize(df_raw["timestamp"].dt.tz)
+        )
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
