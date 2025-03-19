@@ -1,5 +1,6 @@
 from presto.presto import Presto
 from torch.utils.data import DataLoader
+
 from worldcereal.parameters import CropLandParameters
 from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
