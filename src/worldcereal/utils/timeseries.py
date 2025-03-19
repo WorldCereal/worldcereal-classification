@@ -42,8 +42,8 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
     "valid_date": "valid_time",
-    "AGERA5-PRECIP": "METEO-precipitation-flux",
-    "AGERA5-TMEAN": "METEO-temperature-mean",
+    "AGERA5-PRECIP": "METEO-precipitation_flux",
+    "AGERA5-TMEAN": "METEO-temperature_mean",
     "slope": "DEM-slo-20m",
     "elevation": "DEM-alt-20m",
 }
@@ -861,12 +861,18 @@ def process_parquet(
     validator.validate_timestamps(df, freq)
     df = validator.check_median_distance(df, freq)
 
+    print(f"cols before rename: {df.columns}")
+
     # Process columns
     df = (
         df.pipe(ColumnProcessor.rename_columns)
         .pipe(ColumnProcessor.check_feature_columns)
         .pipe(ColumnProcessor.check_sar_columns)
     )
+
+    print(f"cols after rename: {df.columns}")
+
+
     index_columns = ColumnProcessor.construct_index(df)
 
     # Assign start_date and end_date as the minimum and maximum available timestamp
