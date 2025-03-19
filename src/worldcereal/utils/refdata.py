@@ -1,7 +1,5 @@
 import glob
-import importlib.resources
-import json
-from typing import Dict, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -12,22 +10,6 @@ from loguru import logger
 from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
-
-from worldcereal.data import croptype_mappings
-
-
-def get_class_mappings() -> Dict:
-    """Method to get the WorldCereal class mappings for downstream task.
-
-    Returns
-    -------
-    Dict
-        the resulting dictionary with the class mappings
-    """
-    with importlib.resources.open_text(croptype_mappings, "croptype_classes.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
-
-    return CLASS_MAPPINGS
 
 
 def query_public_extractions(
@@ -61,23 +43,8 @@ def query_public_extractions(
         A GeoDataFrame containing reference data points that intersect with the area of interest.
         Each row represents a single sample with its geometry and associated attributes.
 
-    Raises
-    ------
-    ValueError
-        If no datasets are found that intersect with the area, or if the query returns
-        only a single class (insufficient for model training).
     """
 
-    from IPython.display import Markdown
-
-    nodata_helper_message = f"""
-### What to do?
-1. **Increase the buffer size**: Try increasing the buffer size by passing the `buffer` parameter to the `query_public_extractions` function (to a reasonable extent).
-    *Current setting is: {buffer} m².*
-2. **Consult the WorldCereal Reference Data Module portal**: Assess data density in the selected region by visiting the [WorldCereal Reference Data Module portal](https://rdm.esa-worldcereal.org/map).
-3. **Pick another area**: Consult RDM portal (see above) to find areas with more data density.
-4. **Contribute data**: Collect some data and contribute to our global database! 🌍🌾 [Learn how to contribute here.](https://worldcereal.github.io/worldcereal-documentation/rdm/upload.html)
-"""
     logger.info(f"Applying a buffer of {int(buffer/1000)} km to the selected area ...")
 
     bbox_poly = (
@@ -106,13 +73,10 @@ def query_public_extractions(
     ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
     if len(ref_ids_lst) == 0:
-        logger.error(
+        logger.warning(
             "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
         )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
-        )
+        return pd.DataFrame()
 
     logger.info(
         f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
@@ -145,7 +109,7 @@ def query_public_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+AND ewoc_code < 1114000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -171,13 +135,11 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
     public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
 
     if public_df_raw.empty:
-        logger.error(
-            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)}km2."
+        logger.warning(
+            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer/1000)} km²."
         )
-        Markdown(nodata_helper_message)
-        raise ValueError(
-            "No samples from the WorldCereal global extractions database fall into the selected area."
-        )
+        return pd.DataFrame()
+
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
     public_df_raw["filename"] = public_df_raw["ref_id"]
 
@@ -213,11 +175,6 @@ def query_private_extractions(
     -------
     pd.DataFrame
         A GeoPandas DataFrame containing the filtered private extraction data with valid geometry objects.
-
-    Raises
-    ------
-    ValueError
-        If no samples are found in the private collections after filtering.
 
     Notes
     -----
@@ -259,7 +216,7 @@ def query_private_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+AND ewoc_code < 1114000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -268,8 +225,8 @@ AND ewoc_code > 1100000000
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text 
-FROM read_parquet('{tpath}') 
+SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+FROM read_parquet('{tpath}')
 {spatial_query_part}
 {cropland_filter_query_part}
 """
@@ -286,10 +243,9 @@ FROM read_parquet('{tpath}')
     private_df_raw = gpd.GeoDataFrame(private_df_raw, geometry="geometry")
 
     if private_df_raw.empty:
-        logger.error(
-            f"No samples detected in the private collections: {private_collection_paths}."
+        logger.warning(
+            f"No intersecting samples detected in the private collections: {private_collection_paths}."
         )
-        raise ValueError("No samples detected in the private collections.")
 
     return private_df_raw
 
@@ -475,7 +431,7 @@ def process_extractions_df(
         true_valid_time_map = sample_dates.set_index("sample_id")["valid_time"]
 
         # calculate the shifts and assign new valid date
-        sample_dates["true_valid_time_month"] = df_raw["valid_time"].dt.month
+        sample_dates["true_valid_time_month"] = sample_dates["valid_time"].dt.month
         sample_dates["proposed_valid_time_month"] = processing_period_middle_month
         sample_dates["valid_month_shift_backward"] = sample_dates.apply(
             lambda xx: month_diff(
@@ -499,10 +455,6 @@ def process_extractions_df(
         ].values
         df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
 
-        # put the proposed valid_time back into the main dataframe
-        df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
-            sample_dates.set_index("sample_id")["proposed_valid_time"]
-        )
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
             logger.error(error_msg)
@@ -512,6 +464,11 @@ def process_extractions_df(
                 f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
             )
 
+        # put the proposed valid_time back into the main dataframe
+        df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
+            sample_dates.set_index("sample_id")["proposed_valid_time"]
+        )
+
     df_processed = process_parquet(
         df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
     )
@@ -519,7 +476,11 @@ def process_extractions_df(
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
-        df_processed["valid_time"] = df_processed["valid_time"].astype(str)
+        # temporary fix to deal with tz-aware datetime objects
+        df_processed["valid_time"] = (
+            df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+        )
+        df_processed["valid_date"] = df_processed["valid_time"].copy()
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."

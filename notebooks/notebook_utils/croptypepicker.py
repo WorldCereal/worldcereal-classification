@@ -3,6 +3,7 @@ from typing import List, Optional
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
+from IPython.display import display
 
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
@@ -72,8 +73,9 @@ class CropTypePicker:
     def __init__(
         self,
         ewoc_codes: Optional[List[int]] = None,
-        sample_count_df: pd.DataFrame = None,
+        sample_df: pd.DataFrame = None,
         count_threshold: int = 100,
+        expand: bool = False,
     ):
         """
         Crop type picker widget for selecting crop types of interest.
@@ -84,29 +86,40 @@ class CropTypePicker:
             List of EWOC codes to be included in the crop type picker.
             By default None, meaning all crop types from the legend are included
             (this takes a while to load).
-        sample_count_df : pd.DataFrame, optional
-            DataFrame containing the sample counts for your crop types of interest.
-            Crop types (ewoc_codes) should be in the index and the counts in the "count" column.
+        sample_df : pd.DataFrame, optional
+            DataFrame containing samples. There should be a column "ewoc_code" indicating the crop type for each sample.
             By default None.
         count_threshold : int, optional
             Minimum count threshold for a crop type to be included in the picker.
             If a crop has a lower count, it will be aggregated to its parent.
             By default 100.
+        expand : bool, optional
+            Whether to expand the widget by default.
+            By default False.
         """
 
         self.ewoc_codes = ewoc_codes
-        self.df = sample_count_df
+        if sample_df is not None:
+            # Count number of samples for each crop type
+            sample_count_df = sample_df["ewoc_code"].value_counts().sort_index()
+            self.df = sample_count_df.rename("count")
+        else:
+            self.df = None
         self.count_threshold = count_threshold
+        self.expand = expand
 
         self.legend = None
         self.hierarchy = None
         self.widget = None
         self.widgets_dict: dict[int, widgets.Checkbox] = {}
         self.croptypes = pd.DataFrame()
+        self.output = widgets.Output()
 
         # Initialize the hierarchy and widget
         self._build_hierarchy()
         self._create_widget()
+
+        display(self.widget)
 
     def _simplify_legend(self):
         """Simplify the legend filling missing values with lower levels of the hierarchy"""
@@ -210,9 +223,6 @@ class CropTypePicker:
         # Get rid of unknown class
         self.legend = self.full_legend.loc[self.full_legend.index != 0]
 
-        # Add count column to legend
-        self.legend = self.legend.assign(count=0)
-
         # Filter legend based on EWOC codes
         if self.ewoc_codes is not None:
             self.legend = self.legend.loc[self.ewoc_codes]
@@ -224,6 +234,9 @@ class CropTypePicker:
             self.legend = self.legend.join(self.df)
             # Sort on index
             self.legend = self.legend.sort_index()
+        else:
+            # Add empty count column to legend
+            self.legend = self.legend.assign(count=0)
 
         # Simplify the legend by removing NaN's in intermediate levels
         self._simplify_legend()
@@ -273,7 +286,9 @@ class CropTypePicker:
                 checkbox = widgets.Checkbox(
                     value=False,
                     description=description,
-                    layout=widgets.Layout(margin=f"0 0 0 {level * 40}px", width="auto"),
+                    layout=widgets.Layout(
+                        margin=f"0 0 0 {level * 20}px", width="auto", max_width="95%"
+                    ),
                 )
                 self.widgets_dict[current_path] = checkbox
 
@@ -292,16 +307,32 @@ class CropTypePicker:
                 # Append children if they exist
                 if child_items:
                     # Create a collapsible section with a toggle button
-                    children_vbox = widgets.VBox(child_items)
-                    children_vbox.layout.display = "none"  # Hide by default
+                    children_vbox = widgets.VBox(
+                        child_items,
+                        layout=widgets.Layout(width="100%", align_items="flex-start"),
+                    )
+                    if self.expand:
+                        children_vbox.layout.display = "flex"
+                    else:
+                        children_vbox.layout.display = "none"  # Hide by default
+
+                    if self.expand:
+                        value = True
+                        description = "Collapse"
+                        icon = "chevron-up"
+                    else:
+                        value = False
+                        description = "Expand"
+                        icon = "chevron-down"
 
                     toggle_button = widgets.ToggleButton(
-                        value=False,
-                        description="Expand",
-                        icon="chevron-down",
+                        value=value,
+                        description=description,
+                        icon=icon,
                         layout=widgets.Layout(
-                            width="200px", margin=f"0 20px 0 {level * 40 + 20}px"
+                            width="150px", margin=f"0 5px 0 {level * 20}px"
                         ),
+                        style={"button_color": "#A9A9A9"},
                     )
 
                     def toggle_visibility(
@@ -318,7 +349,10 @@ class CropTypePicker:
 
                     toggle_button.observe(toggle_visibility, names="value")
 
-                    vbox = widgets.VBox([checkbox, toggle_button, children_vbox])
+                    vbox = widgets.VBox(
+                        [checkbox, toggle_button, children_vbox],
+                        layout=widgets.Layout(width="100%", align_items="flex-start"),
+                    )
 
                     # Define behavior for disabling all descendants when a parent is selected
                     def on_parent_change(change, target_child_items=child_items):
@@ -333,7 +367,9 @@ class CropTypePicker:
                     items.append(vbox)
                 else:
                     items.append(checkbox)
-            return widgets.VBox(items)
+            return widgets.VBox(
+                items, layout=widgets.Layout(width="100%", align_items="flex-start")
+            )
 
         submit_button = widgets.Button(description="Apply", button_style="success")
         submit_button.on_click(self.apply_selection)
@@ -343,12 +379,24 @@ class CropTypePicker:
         )
         clear_button.on_click(self.clear_selection)
 
-        buttons = widgets.HBox([submit_button, clear_button])
+        buttons = widgets.HBox(
+            [submit_button, clear_button],
+            layout=widgets.Layout(
+                aligh_items="flex-start",
+                justify_content="flex-start",
+                width="100%",
+            ),
+        )
 
         title = widgets.HTML("""<h2>Select your crop types of interest:</h2>""")
 
         self.widget = widgets.VBox(
-            [title, recursive_create_widgets(self.hierarchy), buttons]
+            [title, recursive_create_widgets(self.hierarchy), buttons, self.output],
+            layout=widgets.Layout(
+                overflow="hidden",
+                width="100%",
+                align_items="flex-start",
+            ),
         )
 
     def apply_selection(self, change=None):
@@ -369,7 +417,9 @@ class CropTypePicker:
         for path, checkbox in self.widgets_dict.items():
             checkbox.value = False
         self.croptypes = pd.DataFrame()
-        print("Selection cleared.")
+        with self.output:
+            self.output.clear_output()
+            print("Selection cleared.")
 
     def _apply_hierarchy_on_selection(self, paths_to_search):
         """Apply the selected crop types on the hierarchy and return the extensive list of crop types
@@ -424,12 +474,13 @@ class CropTypePicker:
 
         final_types = np.unique(self.croptypes["new_label"].values)
 
-        print(
-            f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes: {final_types}."
-        )
-
-    def display(self):
-        return self.widget
+        with self.output:
+            self.output.clear_output()
+            print(
+                f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes:"
+            )
+            for ct in final_types:
+                print(f"- {ct}")
 
     def _simplify_hierarchy(self, hierarchy):
         """
@@ -504,3 +555,42 @@ def clean_hierarchy_keys(hierarchy):
         return node  # Return leaf nodes unchanged
 
     return recursive_update_key(hierarchy)
+
+
+def apply_croptypepicker_to_df(
+    df, croptypepicker, other_label: str = "other_temporary_crops"
+):
+    """Apply the selected crop types from the CropTypePicker to a DataFrame of samples
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing samples. There should be a column "ewoc_code" indicating the crop type for each sample.
+    croptypepicker : CropTypePicker
+        CropTypePicker object containing the selected crop types.
+    other_label : str, optional
+        Label to assign to samples that do not belong to the selected crop types.
+        By default "other_temporary_crops".
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing only the samples that belong to the selected crop types.
+    """
+
+    if croptypepicker.croptypes.empty:
+        raise ValueError("No crop types selected, cannot proceed.")
+
+    # Isolate all crop types that have NOT been selected
+    included = croptypepicker.croptypes.index.values
+    excluded = df[~df["ewoc_code"].isin(included)]
+
+    # Prepare a mapping dictionary from original labels (index) to new labels
+    label_mapping = croptypepicker.croptypes["new_label"].to_dict()
+
+    # Apply the mapping to the ewoc_code column
+    df["downstream_class"] = df["ewoc_code"].map(label_mapping)
+
+    # Excluded crop types are assigned to "other_temporary_crops" class
+    df.loc[excluded.index, "downstream_class"] = "other_temporary_crops"
+
+    return df

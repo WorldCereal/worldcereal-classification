@@ -24,7 +24,7 @@ BAND_MAPPINGS = {
         "OPTICAL-B12",
         "OPTICAL-B8A",
     ],
-    "100m": ["AGERA5-TMEAN", "AGERA5-PRECIP"],
+    "100m": ["METEO-temperature_mean", "METEO-precipitation_flux"],
 }
 
 FEATURE_COLUMNS = BAND_MAPPINGS["10m"] + BAND_MAPPINGS["20m"] + BAND_MAPPINGS["100m"]
@@ -41,11 +41,11 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B08": "OPTICAL-B08",
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
-    "AGERA5-precipitation-flux": "AGERA5-PRECIP",
-    "AGERA5-temperature-mean": "AGERA5-TMEAN",
-    # since the openEO output has the attribute "valid_time",
-    # # we need the following line for compatibility with earlier datasets
     "valid_date": "valid_time",
+    "AGERA5-PRECIP": "METEO-precipitation_flux",
+    "AGERA5-TMEAN": "METEO-temperature_mean",
+    "slope": "DEM-slo-20m",
+    "elevation": "DEM-alt-20m",
 }
 
 # Expected distances between observations for different frequencies, in days
@@ -867,6 +867,7 @@ def process_parquet(
         .pipe(ColumnProcessor.check_feature_columns)
         .pipe(ColumnProcessor.check_sar_columns)
     )
+
     index_columns = ColumnProcessor.construct_index(df)
 
     # Assign start_date and end_date as the minimum and maximum available timestamp
@@ -874,6 +875,18 @@ def process_parquet(
     df["end_date"] = df["sample_id"].map(df.groupby(["sample_id"])["timestamp"].max())
     index_columns.extend(["start_date", "end_date"])
     index_columns = list(set(index_columns))
+
+    # Perform check on number of unique values for each index column
+    nsamples = df["sample_id"].nunique()
+    to_drop = []
+    for col in index_columns:
+        if df[col].nunique() > nsamples:
+            df = df.drop(col, axis=1)
+            to_drop.append(col)
+            logger.warning(
+                f"Column {col} has more unique values than samples. This may cause issues, column has been dropped!"
+            )
+    index_columns = [col for col in index_columns if col not in to_drop]
 
     # Process time series
     processor = TimeSeriesProcessor()
@@ -912,14 +925,22 @@ def process_parquet(
 
     if use_valid_time:
         df_pivot["year"] = df_pivot["valid_time"].dt.year
-        df_pivot["valid_time"] = df_pivot["valid_time"].dt.date.astype(str)
+        df_pivot["valid_time"] = (
+            df_pivot["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+        )
+        df_pivot["valid_date"] = df_pivot["valid_time"].copy()
         df_pivot = validator.check_faulty_samples(df_pivot, min_edge_buffer)
 
     if required_min_timesteps:
         df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
 
-    df_pivot["start_date"] = df_pivot["start_date"].dt.date.astype(str)
-    df_pivot["end_date"] = df_pivot["end_date"].dt.date.astype(str)
+    df_pivot["start_date"] = (
+        df_pivot["start_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+    )
+    df_pivot["end_date"] = (
+        df_pivot["end_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+    )
+
     df_pivot = df_pivot.set_index("sample_id")
 
     return df_pivot

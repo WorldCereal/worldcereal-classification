@@ -14,7 +14,7 @@ class date_slider:
     The processing period will always start the first day of a month and end the last day of a month.
     """
 
-    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2023, 12, 1)):
+    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2024, 12, 1)):
 
         # Define the slider
         dates = pd.date_range(start_date, end_date, freq="MS")
@@ -49,7 +49,7 @@ class date_slider:
             pd.to_datetime(start_date) + pd.DateOffset(months=6)
         ).strftime("%b %Y")
         self.html_text = widgets.HTML(
-            value=f"<b>Selected range:</b> {initial_range[0]} - {initial_range[1]}<br><b>Focus time:</b> {initial_focus_time}",
+            value=f"<b>Selected range:</b> {initial_range[0]} - {initial_range[1]}<br><b>Season center:</b> {initial_focus_time}",
             placeholder="HTML placeholder",
             description="",
             layout=widgets.Layout(justify_content="center", display="flex"),
@@ -175,7 +175,7 @@ class date_slider:
             ).strftime("%d %b %Y"),
         ]
         focus_time = (start + pd.DateOffset(months=6)).strftime("%b %Y")
-        self.html_text.value = f"<b>Selected range:</b> {range[0]} - {range[1]}<br><b>Focus time:</b> {focus_time}"
+        self.html_text.value = f"<b>Selected range:</b> {range[0]} - {range[1]}<br><b>Season center:</b> {focus_time}"
 
     def get_processing_period(self):
 
