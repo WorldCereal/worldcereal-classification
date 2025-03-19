@@ -861,17 +861,12 @@ def process_parquet(
     validator.validate_timestamps(df, freq)
     df = validator.check_median_distance(df, freq)
 
-    print(f"cols before rename: {df.columns}")
-
     # Process columns
     df = (
         df.pipe(ColumnProcessor.rename_columns)
         .pipe(ColumnProcessor.check_feature_columns)
         .pipe(ColumnProcessor.check_sar_columns)
     )
-
-    print(f"cols after rename: {df.columns}")
-
 
     index_columns = ColumnProcessor.construct_index(df)
 
