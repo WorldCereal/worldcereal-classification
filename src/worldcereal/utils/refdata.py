@@ -400,11 +400,7 @@ def process_extractions_df(
     # make sure the valid_time, start and end dates are datetime objects
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = (
-            df_raw[date_col]
-            .dt.tz_localize(None)
-            .dt.tz_localize(df_raw["timestamp"].dt.tz)
-        )
+        df_raw[date_col] = df_raw[date_col].dt.tz_localize(df_raw["timestamp"].dt.tz)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -480,7 +476,11 @@ def process_extractions_df(
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
-        df_processed["valid_time"] = df_processed["valid_time"].astype(str)
+        # temporary fix to deal with tz-aware datetime objects
+        df_processed["valid_time"] = (
+            df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+        )
+        df_processed["valid_date"] = df_processed["valid_time"].copy()
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
