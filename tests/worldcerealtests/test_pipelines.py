@@ -36,6 +36,13 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     )
 
     assert not private_df.empty, "Should have found private extractions"
+    logger.info(
+        (
+            f"Found {private_df['sample_id'].nunique()} unique samples in the "
+            f"private data, spread across {private_df['ref_id'].nunique()} "
+            "unique reference datasets."
+        )
+    )
 
     public_df = query_public_extractions(
         SPATIAL_EXTENT,
@@ -44,6 +51,13 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     )
 
     assert not public_df.empty, "Should have found public extractions"
+    logger.info(
+        (
+            f"Found {public_df['sample_id'].nunique()} unique samples in the "
+            f"public data, spread across {public_df['ref_id'].nunique()} "
+            "unique reference datasets."
+        )
+    )
 
     # Concatenate extractions
     extractions_df = pd.concat([private_df, public_df])
