@@ -67,6 +67,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     # Process the merged data
     processing_period = TemporalContext("2020-01-01", "2020-12-31")
     training_df = process_extractions_df(extractions_df, processing_period)
+    logger.info(f"training_df shape: {training_df.shape}")
 
     # Drop labels that occur infrequently for this test
     value_counts = training_df["ewoc_code"].value_counts()
