@@ -466,9 +466,10 @@ def process_extractions_df(
             logger.error(error_msg)
             raise ValueError(error_msg)
         else:
-            logger.warning(
-                f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
-            )
+            if invalid_samples.shape[0] > 0:
+                logger.warning(
+                    f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
+                )
 
         # put the proposed valid_time back into the main dataframe
         df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
