@@ -218,29 +218,31 @@ def generate_output_path_patch(
     )
 
 
-def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
+def load_dataframe(df_path: Path, extract_value: int = 0) -> gpd.GeoDataFrame:
     """Load the input dataframe from the given path."""
     pipeline_log.info("Loading input dataframe from %s.", df_path)
 
+    # Specify a filter for "extract" column. Only extract the samples
+    # with a value >= extract_value
+    filters = [("extract", ">=", extract_value)]
+
+    pipeline_log.info("Reading the input dataframe with filters: %s", filters)
+
     if df_path.name.endswith("parquet"):
-        return gpd.read_parquet(df_path)
+        return gpd.read_parquet(df_path, filters=filters)
     else:
-        return gpd.read_file(df_path)
+        return gpd.read_file(df_path, filters=filters)
 
 
 def prepare_job_dataframe(
     samples_gdf: gpd.GeoDataFrame,
     collection: ExtractionCollection,
     max_locations: int,
-    extract_value: int,
     backend: Backend,
 ) -> gpd.GeoDataFrame:
     """Prepare the job dataframe to extract the data from the given input
     dataframe."""
     pipeline_log.info("Preparing the job dataframe.")
-
-    # Filter the input dataframe to only keep the locations to extract
-    samples_gdf = samples_gdf[samples_gdf["extract"] >= extract_value].copy()
 
     # Split the locations into chunks of max_locations
     split_dfs = []
@@ -414,7 +416,7 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
         -------------------------------------
         Number of samples successfully extracted:
         -------------------------------------
-        {succeeded_jobs['n_samples'].sum()}
+        {succeeded_jobs["n_samples"].sum()}
         -------------------------------------
         Details of succeeded jobs:
         -------------------------------------
@@ -609,10 +611,10 @@ def _prepare_extraction_jobs(
         )
     else:
         # Load the input dataframe and build the job dataframe
-        samples_gdf = load_dataframe(samples_df_path)
+        samples_gdf = load_dataframe(samples_df_path, extract_value)
         pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
-            samples_gdf, collection, max_locations_per_job, extract_value, backend
+            samples_gdf, collection, max_locations_per_job, backend
         )
 
     # Setup the extraction functions
@@ -656,7 +658,6 @@ def _run_extraction_jobs(
     datacube_fn: Callable,
     tracking_df_path: Path,
 ) -> None:
-
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
     job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
@@ -761,5 +762,3 @@ def run_extractions(
 
     pipeline_log.info("Extractions workflow completed.")
     pipeline_log.info(f"Results stored in folder: {output_folder}.")
-
-    return
