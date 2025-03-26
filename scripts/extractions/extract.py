@@ -81,13 +81,12 @@ def main(
         if value is not None
     } or None
 
-    if collection.name.startswith("PATCH"):
-        # For patch extractions we need to be sure that the
-        # output_folder points to the correct ref_id
-        if output_folder.name != ref_id:
-            raise ValueError(
-                f"`root_folder` should point to ref_id `{ref_id}`, instead got: {output_folder}"
-            )
+    # We need to be sure that the
+    # output_folder points to the correct ref_id
+    if output_folder.name != ref_id:
+        raise ValueError(
+            f"`root_folder` should point to ref_id `{ref_id}`, instead got: {output_folder}"
+        )
 
     # Fire up extractions
     run_extractions(
