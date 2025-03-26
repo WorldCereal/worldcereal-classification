@@ -205,14 +205,6 @@ def generate_output_path_patch(
     # First extract the sample ID from the asset ID
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
-    # Find which index in the FeatureCollection corresponds to the sample_id
-    features = geojson.loads(row.geometry)["features"]
-    sample_id_to_index = {
-        feature.properties.get("sample_id", None): index
-        for index, feature in enumerate(features)
-    }
-    geometry_index = sample_id_to_index.get(sample_id, None)
-
     if "orbit_state" in row:
         orbit_state = f"_{row.orbit_state}"
     else:
