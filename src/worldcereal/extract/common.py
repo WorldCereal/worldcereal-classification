@@ -199,7 +199,8 @@ def generate_output_path_patch(
     asset_id: str,
 ):
     """Generate the output path for the extracted data, from a base path and
-    the row information.
+    the row information. `root_folder` is assumed to point to the specific
+    output folder for a `ref_id`
     """
     # First extract the sample ID from the asset ID
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
@@ -222,7 +223,7 @@ def generate_output_path_patch(
     s2_tile_id = row.s2_tile
     utm_zone = str(s2_tile_id[0:2])
 
-    subfolder = root_folder / ref_id / utm_zone / s2_tile_id / sample_id
+    subfolder = root_folder / utm_zone / s2_tile_id / sample_id
 
     return (
         subfolder
