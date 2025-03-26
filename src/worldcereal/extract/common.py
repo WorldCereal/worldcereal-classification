@@ -502,7 +502,7 @@ def setup_extraction_functions(
         ExtractionCollection.PATCH_SENTINEL2: partial(
             post_job_action_patch,
             extract_value=extract_value,
-            description="Sentinel2 L2A observations, processed.",
+            description="Sentinel-2 L2A surface reflectance observations.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
             sensor="Sentinel2",
