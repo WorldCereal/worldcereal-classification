@@ -1,5 +1,6 @@
 """Common functions used by extraction scripts."""
 
+import grp
 import json
 import os
 import shutil
@@ -150,6 +151,9 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+            os.chmod(item_asset_path, 0o755)
+            gid = grp.getgrnam("vito").gr_gid
+            shutil.chown(item_asset_path, group=gid)
 
         # Update the metadata of the item
         if write_stac_api:
@@ -166,6 +170,14 @@ def post_job_action_patch(
     if write_stac_api:
         username = os.getenv("STAC_API_USERNAME")
         password = os.getenv("STAC_API_PASSWORD")
+
+        if not username or not password:
+            error_msg = (
+                "STAC API credentials not found. Please set "
+                "STAC_API_USERNAME and STAC_API_PASSWORD."
+            )
+            pipeline_log.error(error_msg)
+            raise ValueError(error_msg)
 
         stac_api_interaction = StacApiInteraction(
             sensor=sensor,
@@ -538,6 +550,7 @@ def _prepare_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
+    ref_id: str,
     max_locations_per_job: int = 500,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
@@ -558,6 +571,8 @@ def _prepare_extraction_jobs(
     samples_df_path : Path
         Path to the input dataframe containing the geometries
         for which extractions need to be done
+    ref_id : str
+        Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
     job_options : Optional[Dict[str, Union[str, int]]], optional
@@ -612,6 +627,7 @@ def _prepare_extraction_jobs(
     else:
         # Load the input dataframe and build the job dataframe
         samples_gdf = load_dataframe(samples_df_path, extract_value)
+        samples_gdf["ref_id"] = ref_id
         pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
             samples_gdf, collection, max_locations_per_job, backend
@@ -690,6 +706,7 @@ def run_extractions(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
+    ref_id: str,
     max_locations_per_job: int = 500,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
@@ -709,6 +726,8 @@ def run_extractions(
     samples_df_path : Path
         Path to the input dataframe containing the geometries
         for which extractions need to be done
+    ref_id : str
+        Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
     job_options : Optional[Dict[str, Union[str, int]]], optional
@@ -739,6 +758,7 @@ def run_extractions(
         collection,
         output_folder,
         samples_df_path,
+        ref_id,
         max_locations_per_job=max_locations_per_job,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
@@ -753,10 +773,6 @@ def run_extractions(
 
     # Merge the extraction jobs (for point extractions)
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
-        # get ref_id from samples df
-        samples_gdf = load_dataframe(samples_df_path)
-        ref_id = samples_gdf.iloc[0]["ref_id"]
-
         # Merge extractions
         _merge_extraction_jobs(output_folder, ref_id)
 
