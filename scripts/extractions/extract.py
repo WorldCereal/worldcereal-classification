@@ -15,6 +15,7 @@ def main(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
+    ref_id: str,
     max_locations_per_job: int = 500,
     memory: Optional[str] = None,
     python_memory: Optional[str] = None,
@@ -36,6 +37,8 @@ def main(
     samples_df_path : Path
         Path to the input dataframe containing the geometries
         for which extractions need to be done
+    ref_id : str
+        Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
     memory : str, optional
@@ -79,6 +82,7 @@ def main(
         collection,
         output_folder,
         samples_df_path,
+        ref_id,
         max_locations_per_job=max_locations_per_job,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
@@ -106,6 +110,12 @@ if __name__ == "__main__":
         "samples_df_path",
         type=Path,
         help="Path to the samples dataframe with the data to extract",
+    )
+    parser.add_argument(
+        "--ref_id",
+        type=str,
+        required=True,
+        help="Official `ref_id` of the source dataset",
     )
     parser.add_argument(
         "--max_locations",
@@ -158,6 +168,7 @@ if __name__ == "__main__":
         collection=args.collection,
         output_folder=args.output_folder,
         samples_df_path=args.samples_df_path,
+        ref_id=args.ref_id,
         max_locations_per_job=args.max_locations,
         memory=args.memory,
         python_memory=args.python_memory,
