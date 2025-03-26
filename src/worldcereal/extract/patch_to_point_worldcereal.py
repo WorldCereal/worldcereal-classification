@@ -102,7 +102,6 @@ def create_job_patch_to_point_worldcereal(
     max_executors: int,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
-    pass
 
     # Assume row has the following fields: backend, start_date, end_date, epsg, ref_id and geometry_url
 
