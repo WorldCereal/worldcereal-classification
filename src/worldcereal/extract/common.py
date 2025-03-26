@@ -11,7 +11,6 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, Iterable, List, Optional, Union
 
-import geojson
 import geopandas as gpd
 import pandas as pd
 import pystac
