@@ -1,5 +1,6 @@
 """Common functions used by extraction scripts."""
 
+import grp
 import json
 import os
 import shutil
@@ -150,6 +151,9 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+            os.chmod(item_asset_path, 0o755)
+            gid = grp.getgrnam("vito").gr_gid
+            shutil.chown(item_asset_path, group=gid)
 
         # Update the metadata of the item
         if write_stac_api:
