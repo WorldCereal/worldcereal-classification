@@ -213,8 +213,6 @@ def generate_output_path_patch(
     }
     geometry_index = sample_id_to_index.get(sample_id, None)
 
-    ref_id = features[geometry_index].properties["ref_id"]
-
     if "orbit_state" in row:
         orbit_state = f"_{row.orbit_state}"
     else:
