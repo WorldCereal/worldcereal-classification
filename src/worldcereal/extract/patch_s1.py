@@ -59,8 +59,9 @@ def create_job_dataframe_patch_s1(
         end_date = min(end_date, datetime.now())
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
@@ -183,7 +184,7 @@ def create_job_patch_s1(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S1_{s2_tile}_{valid_time}_{orbit_state}",
+        title=f"Worldcereal_Patch-S1_Extraction_{s2_tile}_{orbit_state}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
         feature_id_property="sample_id",

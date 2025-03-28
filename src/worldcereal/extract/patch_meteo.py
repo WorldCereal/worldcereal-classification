@@ -36,7 +36,6 @@ def create_job_patch_meteo(
     connection_provider,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
-
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -82,7 +81,7 @@ def create_job_patch_meteo(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_time}",
+        title=f"WorldCereal_Patch-AGERA5_Extraction_{h3index}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
     )
