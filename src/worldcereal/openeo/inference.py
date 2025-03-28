@@ -29,9 +29,14 @@ class CropClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        lut = self._parameters.get("lookup_table", None)
-        if lut is None:
-            raise ValueError("Lookup table is not defined.")
+        """
+        Returns the output labels for the classification.
+
+        LUT needs to be explicitly sorted here as openEO does
+        not guarantee the order of a json object being preserved when decoding
+        a process graph in the backend.
+        """
+        lut = self._parameters["lookup_table"]
         lut_sorted = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
         class_names = lut_sorted.keys()
 
@@ -42,6 +47,10 @@ class CropClassifier(ModelInference):
     def predict(self, features: np.ndarray) -> np.ndarray:
         """
         Predicts labels using the provided features array.
+
+        LUT needs to be explicitly sorted here as openEO does
+        not guarantee the order of a json object being preserved when decoding
+        a process graph in the backend.
         """
         import numpy as np
 
