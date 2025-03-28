@@ -61,6 +61,45 @@ DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
 BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
 
 
+def extraction_job_quality_check(
+    job_entry: pd.Series, orfeo_error_threshold: float = 0.3
+) -> None:
+    """Perform quality checks on an extraction job.
+
+    Parameters
+    ----------
+    job_entry : pd.Series
+        The job entry containing information about the extraction job.
+    orfeo_error_threshold : float, optional
+        The threshold for the SAR backscatter error ratio, by default 0.3.
+
+    Raises
+    ------
+    Exception
+        Raised if the job has no assets.
+    Exception
+        Raised if the SAR backscatter error ratio exceeds the threshold.
+    """
+    conn = BACKEND_CONNECTIONS[Backend[job_entry["backend_name"].upper()]]()
+    job = conn.job(job_entry.id)
+
+    # Check if we have any assets resulting from the job
+    job_results = job.get_results()
+    if len(job_results.get_metadata()["assets"]) == 0:
+        raise Exception(f"Job {job_entry.id} has no assets!")
+
+    # Check if SAR backscatter error ratio exceeds the threshold
+    actual_orfeo_error_rate = job.describe()["usage"]["sar_backscatter_soft_errors"][
+        "value"
+    ]
+    if actual_orfeo_error_rate > orfeo_error_threshold:
+        raise Exception(
+            f"Job {job_entry.id} had a ORFEO error rate of {actual_orfeo_error_rate}!"
+        )
+
+    pipeline_log.debug("Quality checks passed!")
+
+
 def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
@@ -73,6 +112,10 @@ def post_job_action_patch(
     sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
+
+    # First do some basic quality checks to see if everything went right
+    extraction_job_quality_check(row)
+
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
