@@ -26,6 +26,7 @@ def main(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     image_name: Optional[str] = None,
+    organization_id: Optional[int] = None,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
 
@@ -63,6 +64,9 @@ def main(
         Save metadata of extractions to STAC API (requires authentication), by default False
     image_name : str, optional
         Specific openEO image name to use for the jobs, by default None
+    organization_id : int, optional
+        ID of the organization to use for the job, by default None in which case
+        the active organization for the user is used
 
     Returns
     -------
@@ -77,6 +81,7 @@ def main(
             "python-memory": python_memory,
             "max-executors": max_executors,
             "image-name": image_name,
+            "etl_organization_id": organization_id,
         }.items()
         if value is not None
     } or None
@@ -178,6 +183,12 @@ if __name__ == "__main__":
         default=None,
         help="Specific openEO image name to use for the jobs.",
     )
+    parser.add_argument(
+        "--organization_id",
+        type=int,
+        default=None,
+        help="ID of the organization to use for the job.",
+    )
 
     args = parser.parse_args()
 
@@ -196,4 +207,5 @@ if __name__ == "__main__":
         backend=Backend.CDSE,
         write_stac_api=args.write_stac_api,
         image_name=args.image_name,
+        organization_id=args.organization_id,
     )
