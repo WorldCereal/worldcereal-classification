@@ -128,12 +128,13 @@ def create_job_patch_to_point_worldcereal(
         properties=stac_property_filter,
         temporal_extent=[row["start_date"], row["end_date"]],
     )
-    s2 = median_compositing(s2_raw, period="month")
+    s2 = s2_raw.linear_scale_range(0, 65534, 0, 65534)
+    s2 = median_compositing(s2, period="month")
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
     dem = dem_raw.min_time()
-    dem = dem.rename_labels(dimension="bands", target=["elevation"], source=["DEM"])
     dem = dem.linear_scale_range(0, 65534, 0, 65534)
+    dem = dem.rename_labels(dimension="bands", target=["elevation"], source=["DEM"])
     dem = dem.resample_cube_spatial(s2, method="bilinear")
     dem = dem.rename_labels(dimension="bands", target=["elevation"])
     # TODO: slope?
@@ -144,16 +145,16 @@ def create_job_patch_to_point_worldcereal(
         bands=["temperature-mean", "precipitation-flux"],
     )
 
-    meteo_raw.result_node().update_arguments(
-        featureflags={"tilesize": 4}
-    )  # Need at least tilesize 4 for bilinear resampling
-
-    meteo = meteo_raw.resample_cube_spatial(s2, method="bilinear")
+    meteo = meteo_raw.resample_spatial(
+        resolution=10.0, projection=int(row["epsg"]), method="bilinear"
+    )
     meteo = meteo.rename_labels(
-        dimension="bands", target=["AGERA5-PRECIP", "AGERA5-TMEAN"]
+        dimension="bands",
+        source=["temperature-mean", "precipitation-flux"],
+        target=["AGERA5-TMEAN", "AGERA5-PRECIP"],
     )
 
-    cube = s1.merge_cubes(s2)
+    cube = s2.merge_cubes(s1)
     cube = cube.merge_cubes(dem)
     cube = cube.merge_cubes(meteo)
 
