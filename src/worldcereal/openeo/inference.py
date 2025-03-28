@@ -29,7 +29,11 @@ class CropClassifier(ModelInference):
         return []  # Disable the dependencies from PIP install
 
     def output_labels(self) -> list:
-        class_names = self._parameters["lookup_table"].keys()
+        lut = self._parameters.get("lookup_table", None)
+        if lut is None:
+            raise ValueError("Lookup table is not defined.")
+        lut_sorted = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
+        class_names = lut_sorted.keys()
 
         return ["classification", "probability"] + [
             f"probability_{name}" for name in class_names
@@ -49,6 +53,10 @@ class CropClassifier(ModelInference):
                 "Lookup table is not defined. Please provide lookup_table in the UDFs parameters."
             )
 
+        lut_sorted = {
+            k: v for k, v in sorted(lookup_table.items(), key=lambda item: item[1])
+        }
+
         if self.onnx_session is None:
             raise ValueError("Model has not been loaded. Please load a model first.")
 
@@ -59,14 +67,14 @@ class CropClassifier(ModelInference):
         labels = np.zeros((len(outputs[0]),), dtype=np.uint16)
         probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)
         for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
-            labels[i] = lookup_table[label]
+            labels[i] = lut_sorted[label]
             probabilities[i] = int(round(prob[label] * 100))
 
         # Extract per class probabilities
         output_probabilities = []
         for output_px in outputs[1]:
             output_probabilities.append(
-                [output_px[label] for label in self._parameters["lookup_table"].keys()]
+                [output_px[label] for label in lut_sorted.keys()]
             )
 
         output_probabilities = (
