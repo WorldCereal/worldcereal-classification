@@ -154,6 +154,8 @@ def post_job_action_patch(
             gid = grp.getgrnam("vito").gr_gid
             shutil.chown(item_asset_path, group=gid)
 
+        pipeline_log.info(f"Final output file created: {item_asset_path}")
+
         # Update the metadata of the item
         if write_stac_api:
             item.properties.update(new_attributes)
