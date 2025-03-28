@@ -3,6 +3,7 @@
 import logging
 import os
 from tempfile import NamedTemporaryFile
+from typing import Optional
 
 import geojson
 import geopandas as gpd
@@ -73,20 +74,25 @@ def filter_extract_true(
 
 
 def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+    gdf: gpd.GeoDataFrame,
+    name: str,
+    collection: str = "",
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> str:
     """Upload the given GeoDataFrame to artifactory and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
+    uploaded file.
     """
     # Save the dataframe as geoparquet to upload it to artifactory
     temporary_file = NamedTemporaryFile()
     gdf.to_parquet(temporary_file.name)
 
-    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
-    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
+    if not username:
+        username = os.getenv("ARTIFACTORY_USERNAME")
+    if not password:
+        password = os.getenv("ARTIFACTORY_PASSWORD")
 
-    if not artifactory_username or not artifactory_password:
+    if not username or not password:
         raise ValueError(
             "Artifactory credentials not found. Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD."
         )
@@ -100,7 +106,7 @@ def upload_geoparquet_artifactory(
             upload_url,
             headers=headers,
             data=f,
-            auth=(artifactory_username, artifactory_password),
+            auth=(username, password),
             timeout=180,
         )
 
