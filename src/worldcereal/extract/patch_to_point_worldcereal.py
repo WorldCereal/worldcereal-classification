@@ -27,6 +27,7 @@ STAC_ENDPOINT_METEO_TERRASCOPE = (
     "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
 )
 
+
 def sample_points_centroid(
     gdf: gpd.GeoDataFrame, epsg: Optional[int] = None
 ) -> gpd.GeoDataFrame:
@@ -55,7 +56,6 @@ def get_sample_points_from_rdm(row: pd.Series) -> gpd.GeoDataFrame:
     }
     client = pystac_client.Client.open("https://stac.openeo.vito.be/")
 
-
     search_s1 = client.search(
         collections=["worldcereal_sentinel_1_patch_extractions"], query=stac_query
     )
@@ -63,8 +63,14 @@ def get_sample_points_from_rdm(row: pd.Series) -> gpd.GeoDataFrame:
         collections=["worldcereal_sentinel_2_patch_extractions"], query=stac_query
     )
 
-    items_s1 = {item.properties["sample_id"]: shape(item.geometry).buffer(1e-9) for item in search_s1.items()}
-    items_s2 = {item.properties["sample_id"]: shape(item.geometry).buffer(1e-9) for item in search_s2.items()}
+    items_s1 = {
+        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
+        for item in search_s1.items()
+    }
+    items_s2 = {
+        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
+        for item in search_s2.items()
+    }
 
     # Find sample_ids which are present in both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
