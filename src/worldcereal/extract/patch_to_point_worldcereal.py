@@ -27,14 +27,6 @@ STAC_ENDPOINT_METEO_TERRASCOPE = (
     "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
 )
 
-
-def to_rdm_ref_id(ref_id: str) -> str:
-    """
-    Convert a ref_id to the format used in the RDM API.
-    """
-    return ref_id.lower()
-
-
 def sample_points_centroid(
     gdf: gpd.GeoDataFrame, epsg: Optional[int] = None
 ) -> gpd.GeoDataFrame:
@@ -63,21 +55,25 @@ def get_sample_points_from_rdm(row: pd.Series) -> gpd.GeoDataFrame:
     }
     client = pystac_client.Client.open("https://stac.openeo.vito.be/")
 
-    search = client.search(
-        collections=[
-            "worldcereal_sentinel_1_patch_extractions"
-        ],  # We base ourselves on S1 patch extractions, could also use S2
-        query=stac_query,
+
+    search_s1 = client.search(
+        collections=["worldcereal_sentinel_1_patch_extractions"], query=stac_query
+    )
+    search_s2 = client.search(
+        collections=["worldcereal_sentinel_2_patch_extractions"], query=stac_query
     )
 
-    polygons = []
+    items_s1 = {item.properties["sample_id"]: shape(item.geometry).buffer(1e-9) for item in search_s1.items()}
+    items_s2 = {item.properties["sample_id"]: shape(item.geometry).buffer(1e-9) for item in search_s2.items()}
 
-    for item in search.items():
-        polygons.append(
-            shape(item.geometry).buffer(1e-9)
-        )  # Add buffer to avoid TopologyException
+    # Find sample_ids which are present in both STAC collections
+    common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
+
+    # Items with the same sample_id will also have the same geometry
+    polygons = [items_s1[sample_id] for sample_id in common_sample_ids]
 
     multi_polygon = MultiPolygon(polygons)
+
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
     # From the RDM API, we also want other 'collateral' geometries from different ref_ids.
