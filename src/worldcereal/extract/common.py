@@ -89,13 +89,14 @@ def extraction_job_quality_check(
         raise Exception(f"Job {job_entry.id} has no assets!")
 
     # Check if SAR backscatter error ratio exceeds the threshold
-    actual_orfeo_error_rate = job.describe()["usage"]["sar_backscatter_soft_errors"][
-        "value"
-    ]
-    if actual_orfeo_error_rate > orfeo_error_threshold:
-        raise Exception(
-            f"Job {job_entry.id} had a ORFEO error rate of {actual_orfeo_error_rate}!"
-        )
+    if "sar_backscatter_soft_errors" in job.describe()["usage"].keys():
+        actual_orfeo_error_rate = job.describe()["usage"][
+            "sar_backscatter_soft_errors"
+        ]["value"]
+        if actual_orfeo_error_rate > orfeo_error_threshold:
+            raise Exception(
+                f"Job {job_entry.id} had a ORFEO error rate of {actual_orfeo_error_rate}!"
+            )
 
     pipeline_log.debug("Quality checks passed!")
 
