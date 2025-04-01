@@ -27,6 +27,10 @@ STAC_ENDPOINT_METEO_TERRASCOPE = (
     "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
 )
 
+STAC_ENDPOINT_SLOPE_TERRASCOPE = (
+    "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
+)
+
 
 def sample_points_centroid(
     gdf: gpd.GeoDataFrame, epsg: Optional[int] = None
@@ -135,11 +139,21 @@ def create_job_patch_to_point_worldcereal(
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
     dem = dem_raw.min_time()
-    dem = dem.linear_scale_range(0, 65534, 0, 65534)
     dem = dem.rename_labels(dimension="bands", target=["elevation"], source=["DEM"])
-    dem = dem.resample_cube_spatial(s2, method="bilinear")
-    dem = dem.rename_labels(dimension="bands", target=["elevation"])
-    # TODO: slope?
+
+    slope = connection.load_stac(
+        STAC_ENDPOINT_SLOPE_TERRASCOPE,
+        bands=["Slope"],
+    ).rename_labels(dimension="bands", target=["slope"])
+    # Client fix for CDSE, the openeo client might be unsynchronized with
+    # the backend.
+    if "t" not in slope.metadata.dimension_names():
+        slope.metadata = slope.metadata.add_dimension("t", "2020-01-01", "temporal")
+    slope = slope.min_time()
+
+    copernicus = slope.merge_cubes(dem)
+    copernicus = copernicus.resample_cube_spatial(s2, method="bilinear")
+    copernicus = copernicus.linear_scale_range(0, 65534, 0, 65534)
 
     meteo_raw = connection.load_stac(
         url=STAC_ENDPOINT_METEO_TERRASCOPE,
