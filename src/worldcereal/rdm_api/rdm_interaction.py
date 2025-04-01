@@ -80,12 +80,13 @@ class RdmInteraction:
         dict[str, str]
             A Dictionary containing the headers.
         """
+        # Set up the OIDC provider and client information
         provider_info = OidcProviderInfo(
-            issuer="https://sso.terrascope.be/auth/realms/terrascope"
+            issuer="https://identity.dataspace.copernicus.eu/auth/realms/CDSE"
         )
 
         client_info = OidcClientInfo(
-            client_id="worldcereal-rdm",
+            client_id="openeo-worldcereal-rdm",
             provider=provider_info,
         )
 
