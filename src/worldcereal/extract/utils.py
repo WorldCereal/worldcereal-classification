@@ -93,7 +93,7 @@ def upload_geoparquet_artifactory(
 
     headers = {"Content-Type": "application/octet-stream"}
 
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}{name}.parquet"
+    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
 
     with open(temporary_file.name, "rb") as f:
         response = requests.put(
