@@ -73,7 +73,7 @@ def filter_extract_true(
 
 
 def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+    gdf: gpd.GeoDataFrame, name: str, collection: str
 ) -> str:
     """Upload the given GeoDataFrame to artifactory and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
