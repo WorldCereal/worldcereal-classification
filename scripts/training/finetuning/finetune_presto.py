@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from presto.utils import prep_dataframe, process_parquet
 from prometheo.datasets import WorldCerealLabelledDataset
 from prometheo.finetune import Hyperparams, run_finetuning
 from prometheo.models.presto import param_groups_lrd
@@ -20,6 +19,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from worldcereal.utils.refdata import split_df
+from worldcereal.utils.timeseries import process_parquet
 
 
 def prepare_training_df(
@@ -39,14 +39,12 @@ def prepare_training_df(
         _data = pd.read_parquet(f, engine="fastparquet")
         _ref_id = f.split("/")[-2].split("=")[-1]
         _data["ref_id"] = _ref_id
-        _data_pivot = process_parquet(_data)
+        _data_pivot = process_parquet(_data, freq="month")
         _data_pivot.reset_index(inplace=True)
         df_list.append(_data_pivot)
     df = pd.concat(df_list)
     df = df.fillna(NODATAVALUE)
     del df_list
-
-    df = prep_dataframe(df, filter_function=None, dekadal=False).reset_index()
 
     if val_samples_file is not None:
         logger.info(f"Controlled train/test split based on: {val_samples_file}")
@@ -172,7 +170,7 @@ if __name__ == "__main__":
     # ------------------------------------------
 
     # Path to the training data
-    parquet_file = "/home/vito/vtrichtk/projects/worldcereal/data/worldcereal_training_data_monthly.parquet/worldcereal_training_data.parquet"
+    parquet_file = "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/worldcereal_all_extractions.parquet"
     val_samples_file = "/home/vito/vtrichtk/git/worldcereal-classification/scripts/training/finetuning/cropland_random_generalization_test_split_samples.csv"
     # val_samples_file = None  # If None, random split is used
 
