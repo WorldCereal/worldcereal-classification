@@ -73,7 +73,7 @@ def filter_extract_true(
 
 
 def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+    gdf: gpd.GeoDataFrame, name: str, collection: str
 ) -> str:
     """Upload the given GeoDataFrame to artifactory and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
@@ -93,7 +93,7 @@ def upload_geoparquet_artifactory(
 
     headers = {"Content-Type": "application/octet-stream"}
 
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}{name}.parquet"
+    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
 
     with open(temporary_file.name, "rb") as f:
         response = requests.put(

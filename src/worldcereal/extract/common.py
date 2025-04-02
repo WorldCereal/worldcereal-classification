@@ -61,6 +61,46 @@ DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
 BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
 
 
+def extraction_job_quality_check(
+    job_entry: pd.Series, orfeo_error_threshold: float = 0.3
+) -> None:
+    """Perform quality checks on an extraction job.
+
+    Parameters
+    ----------
+    job_entry : pd.Series
+        The job entry containing information about the extraction job.
+    orfeo_error_threshold : float, optional
+        The threshold for the SAR backscatter error ratio, by default 0.3.
+
+    Raises
+    ------
+    Exception
+        Raised if the job has no assets.
+    Exception
+        Raised if the SAR backscatter error ratio exceeds the threshold.
+    """
+    conn = BACKEND_CONNECTIONS[Backend[job_entry["backend_name"].upper()]]()
+    job = conn.job(job_entry.id)
+
+    # Check if we have any assets resulting from the job
+    job_results = job.get_results()
+    if len(job_results.get_metadata()["assets"]) == 0:
+        raise Exception(f"Job {job_entry.id} has no assets!")
+
+    # Check if SAR backscatter error ratio exceeds the threshold
+    if "sar_backscatter_soft_errors" in job.describe()["usage"].keys():
+        actual_orfeo_error_rate = job.describe()["usage"][
+            "sar_backscatter_soft_errors"
+        ]["value"]
+        if actual_orfeo_error_rate > orfeo_error_threshold:
+            raise Exception(
+                f"Job {job_entry.id} had a ORFEO error rate of {actual_orfeo_error_rate}!"
+            )
+
+    pipeline_log.debug("Quality checks passed!")
+
+
 def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
@@ -73,6 +113,10 @@ def post_job_action_patch(
     sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
+
+    # First do some basic quality checks to see if everything went right
+    extraction_job_quality_check(row)
+
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
@@ -153,6 +197,8 @@ def post_job_action_patch(
             os.chmod(item_asset_path, 0o755)
             gid = grp.getgrnam("vito").gr_gid
             shutil.chown(item_asset_path, group=gid)
+
+        pipeline_log.info(f"Final output file created: {item_asset_path}")
 
         # Update the metadata of the item
         if write_stac_api:
@@ -603,10 +649,8 @@ def _prepare_extraction_jobs(
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
 
-        # Change status "running" and "canceled" to "not_started"
-        job_df.loc[job_df.status.isin(["running", "canceled"]), "status"] = (
-            "not_started"
-        )
+        # Change status "canceled" to "not_started"
+        job_df.loc[job_df.status.isin(["canceled"]), "status"] = "not_started"
         job_df.to_csv(tracking_df_path, index=False)
 
         status_histogram = check_job_status(output_folder)

@@ -160,7 +160,7 @@ def create_job_patch_worldcereal(
 
     geometry_df = _to_gdf(geometry)
     spatial_extent_url = upload_geoparquet_artifactory(
-        geometry_df, row.name, collection="worldcereal"
+        geometry_df, row.name, collection="WORLDCEREAL"
     )
 
     # Backend name and fetching type
@@ -204,7 +204,7 @@ def create_job_patch_worldcereal(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_WORLDCEREAL_{s2_tile}_{valid_time}",
+        title=f"Worldcereal_Patch-WorldCereal_Extraction_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
         feature_id_property="sample_id",
