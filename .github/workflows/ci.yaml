@@ -37,7 +37,7 @@ jobs:
         pip install .
         cd ..
     - name: Install WorldCereal dependencies
-      run: pip install ".[dev,train]"
+      run: pip install ".[dev,train,notebooks]"
     - name: Run WorldCereal tests
       run: python -m pytest -s --log-cli-level=INFO tests
       env:

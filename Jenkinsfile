@@ -9,7 +9,7 @@ pythonPipeline {
   test_module_name = 'worldcereal'
   wipeout_workspace = true
   python_version = ["3.10"]
-  extras_require = "dev,train"
+  extras_require = "dev,train,notebooks"
   upload_dev_wheels = false
   pipeline_triggers = [cron('H H(0-6) * * *')]
   pep440 = true

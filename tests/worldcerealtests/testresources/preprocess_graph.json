@@ -653,42 +653,6 @@
             "bands": [
                 "Slope"
             ],
-            "spatial_extent": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            },
             "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
         }
     },
@@ -896,47 +860,11 @@
                 "precipitation-flux",
                 "temperature-mean"
             ],
-            "spatial_extent": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            },
             "temporal_extent": [
                 "2020-06-01",
                 "2021-05-31"
             ],
-            "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
         }
     },
     "renamelabels7": {

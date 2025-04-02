@@ -267,3 +267,76 @@ def delete_legend_file(srcpath: str, retries=3, wait=2):
         retries=retries,
         wait=wait,
     )
+
+
+def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
+    """Translate EWOC codes to their corresponding labels in the WorldCereal legend,
+        keeping all levels of the hierarchy.
+
+    Parameters
+    ----------
+    ewoc_codes : list[int]
+        List of EWOC codes to be translated.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing the EWOC codes and their corresponding labels across the hierarchy.
+    """
+
+    legend = get_legend()
+    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
+    legend = legend.set_index("ewoc_code")
+    columns_to_keep = [
+        "label_full",
+        "level_1",
+        "level_2",
+        "level_3",
+        "level_4",
+        "level_5",
+        "definition",
+    ]
+    legend = legend[columns_to_keep]
+    # Filter the legend to only include the requested EWOC codes
+    # but also deal with the case where some EWOC codes are not present in the legend
+    codes_not_in_legend = set(ewoc_codes) - set(legend.index)
+    ewoc_codes = list(set(ewoc_codes) - codes_not_in_legend)
+    legend = legend.loc[ewoc_codes]
+    # sort by index
+    legend = legend.sort_index()
+
+    # replace NaN's with empty strings
+    legend = legend.fillna("")
+
+    if codes_not_in_legend:
+        logger.warning(
+            f"The following crop type codes are not present in the legend: {codes_not_in_legend}"
+        )
+
+    return legend
+
+
+def ewoc_code_to_label(ewoc_codes: list[int]) -> list[str]:
+    """Translate EWOC codes to their corresponding full label in the WorldCereal legend.
+
+    Parameters
+    ----------
+    ewoc_codes : list[int]
+        List of EWOC codes to be translated.
+
+    Returns
+    -------
+    list[str]
+        List of full labels corresponding to the EWOC codes.
+    """
+
+    df = translate_ewoc_codes(ewoc_codes)
+
+    result = []
+    for code in ewoc_codes:
+        if code not in df.index:
+            result.append("Unknown")
+        else:
+            result.append(df.loc[code, "label_full"])
+
+    return result

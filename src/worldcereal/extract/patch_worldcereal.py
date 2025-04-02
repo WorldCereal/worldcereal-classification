@@ -1,11 +1,12 @@
 """Extract WorldCereal preprocessed inputs using OpenEO-GFMAP package."""
 
+import copy
 import json
 import shutil
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import geojson
 import geopandas as gpd
@@ -21,7 +22,6 @@ from openeo_gfmap import (
     FetchType,
     TemporalContext,
 )
-from openeo_gfmap.manager.job_splitters import load_s2_grid
 from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
 from pyproj import CRS
 from tqdm import tqdm
@@ -33,14 +33,23 @@ from worldcereal.openeo.preprocessing import (
 )
 from worldcereal.utils.geoloader import load_reproject
 
-from worldcereal.openeo.extract import (  # isort: skip
+from worldcereal.extract.utils import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
+    S2_GRID,  # isort: skip
 )
 
 
 WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
+
+
+DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL = {
+    "executor-memory": "1800m",
+    "python-memory": "3000m",
+    "soft-errors": "true",
+    "max_executors": 22,
+}
 
 
 def create_job_dataframe_patch_worldcereal(
@@ -68,8 +77,9 @@ def create_job_dataframe_patch_worldcereal(
         end_date = end_date + pd.offsets.MonthEnd(0)
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         s2_tile = job.tile.iloc[0]  # Job dataframes are split depending on the
@@ -124,9 +134,7 @@ def create_job_patch_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> openeo.BatchJob:
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -159,15 +167,6 @@ def create_job_patch_worldcereal(
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Get S2 tile extent
-    s2_grid = load_s2_grid()
-    geojson_features = (
-        s2_grid.set_index("tile").loc[[row.s2_tile]].geometry.__geo_interface__
-    )
-    s2_tile_extent = geojson.GeoJSON(
-        {"type": "FeatureCollection", "features": geojson_features["features"]}
-    )
-
     # Create the job to extract preprocessed worldcereal inputs
     # Disable default meteo fetching
     cube = worldcereal_preprocessed_inputs(
@@ -185,7 +184,6 @@ def create_job_patch_worldcereal(
     meteo_cube = precomposited_datacube_METEO(
         connection=connection,
         temporal_extent=temporal_context,
-        spatial_extent=s2_tile_extent,
     )
 
     # Join the meteo cube with the other inputs
@@ -199,17 +197,16 @@ def create_job_patch_worldcereal(
     number_polygons = get_job_nb_polygons(row)
     pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
-    job_options = {
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "soft-errors": "true",
-        "max_executors": max_executors,
-    }
+    # Set job options
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL)
+    if job_options:
+        final_job_options.update(job_options)
+
     return cube.create_job(
         out_format="NetCDF",
         title=f"GFMAP_Extraction_WORLDCEREAL_{s2_tile}_{valid_time}",
         sample_by_feature=True,
-        job_options=job_options,
+        job_options=final_job_options,
         feature_id_property="sample_id",
     )
 
@@ -337,9 +334,6 @@ def post_job_action_patch_worldcereal(
     job_items: List[pystac.Item],
     row: pd.Series,
     extract_value: int,
-    description: str,
-    title: str,
-    spatial_resolution: str,
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
@@ -383,10 +377,10 @@ def post_job_action_patch_worldcereal(
             "valid_time": valid_time,
             "GFMAP_version": version("openeo_gfmap"),
             "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "description": description,
-            "title": title,
+            "description": "WorldCereal preprocessed inputs",
+            "title": "WorldCereal inputs",
             "sample_id": sample_id,
-            "spatial_resolution": spatial_resolution,
+            "spatial_resolution": "10m",
             "s2_tile": s2_tile,
             "_FillValue": 65535,  # No data value for uint16
         }
@@ -402,7 +396,6 @@ def generate_output_path_patch_worldcereal(
     job_index: int,
     row: pd.Series,
     asset_id: str,
-    s2_grid: gpd.GeoDataFrame,
 ):
     """Generate the output path for the extracted data, from a base path and
     the row information.
@@ -410,7 +403,7 @@ def generate_output_path_patch_worldcereal(
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
     s2_tile_id = row.s2_tile
-    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
+    epsg = S2_GRID[S2_GRID.tile == s2_tile_id].iloc[0].epsg
 
     return (
         root_folder

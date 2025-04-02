@@ -58,20 +58,29 @@ class VitoStacApiAuthentication(AuthBase):
 class StacApiInteraction:
     """Class that handles the interaction with a STAC API."""
 
+    _SENSOR_COLLECTION_CATALOG = {
+        "Sentinel1": "worldcereal_sentinel_1_patch_extractions",
+        "Sentinel2": "worldcereal_sentinel_2_patch_extractions",
+    }
+
     def __init__(
         self, sensor: str, base_url: str, auth: AuthBase, bulk_size: int = 500
     ):
-        if sensor not in ["Sentinel1", "Sentinel2"]:
+        if sensor not in self.catalog.keys():
             raise ValueError(
-                f"Invalid sensor '{sensor}'. Allowed values are 'Sentinel1' and 'Sentinel2'."
+                f"Invalid sensor '{sensor}'. Allowed values are: {', '.join(self.catalog.keys())}."
             )
         self.sensor = sensor
         self.base_url = base_url
-        self.collection_id = f"worldcereal_{sensor.lower()}_patch_extractions"
+        self.collection_id = self.catalog[self.sensor]
 
         self.auth = auth
 
         self.bulk_size = bulk_size
+
+    @property
+    def catalog(self):
+        return self._SENSOR_COLLECTION_CATALOG.copy()
 
     def exists(self) -> bool:
         client = pystac_client.Client.open(self.base_url)

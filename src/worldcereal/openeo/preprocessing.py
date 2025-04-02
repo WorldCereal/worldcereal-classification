@@ -253,7 +253,7 @@ def raw_datacube_DEM(
     cube = extractor.get_cube(connection, spatial_extent, None)
     cube = cube.rename_labels(dimension="bands", target=["elevation"])
 
-    if backend_context.backend == Backend.CDSE:
+    if backend_context.backend in [Backend.CDSE, Backend.CDSE_STAGING]:
         # On CDSE we can load the slope from a global slope collection
 
         if isinstance(spatial_extent, BoundingBoxExtent):
@@ -261,7 +261,6 @@ def raw_datacube_DEM(
 
         slope = connection.load_stac(
             "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
-            spatial_extent=spatial_extent,
             bands=["Slope"],
         ).rename_labels(dimension="bands", target=["slope"])
         # Client fix for CDSE, the openeo client might be unsynchronized with
@@ -296,7 +295,6 @@ def raw_datacube_METEO(
 def precomposited_datacube_METEO(
     connection: Connection,
     temporal_extent: TemporalContext,
-    spatial_extent: SpatialContext = None,
 ) -> DataCube:
     """Extract the precipitation and temperature AGERA5 data from a
     pre-composited and pre-processed collection. The data is stored in the
@@ -306,17 +304,12 @@ def precomposited_datacube_METEO(
     Limitations:
         - Only monthly composited data is available.
         - Only two bands are available: precipitation-flux and temperature-mean.
-        - This function do not support fetching points or polygons, but only
-          tiles.
     """
     temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        spatial_extent = dict(spatial_extent)
 
     # Monthly composited METEO data
     cube = connection.load_stac(
-        "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json",
-        spatial_extent=spatial_extent,
+        "https://stac.openeo.vito.be/collections/agera5_monthly",
         temporal_extent=temporal_extent,
         bands=["precipitation-flux", "temperature-mean"],
     )
@@ -341,7 +334,6 @@ def worldcereal_preprocessed_inputs(
     tile_size: Optional[int] = None,
     s2_tile: Optional[str] = None,
 ) -> DataCube:
-
     # First validate the temporal context
     if validate_temporal_context:
         _validate_temporal_context(temporal_extent)
@@ -416,7 +408,6 @@ def worldcereal_preprocessed_inputs(
     if not disable_meteo:
         meteo_data = precomposited_datacube_METEO(
             connection=connection,
-            spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
         )
 

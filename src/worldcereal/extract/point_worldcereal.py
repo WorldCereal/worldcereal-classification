@@ -1,8 +1,11 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
+import copy
+import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
+import duckdb
 import geojson
 import geopandas as gpd
 import openeo
@@ -11,8 +14,19 @@ import pystac
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from tqdm import tqdm
 
-from worldcereal.openeo.extract import get_job_nb_polygons, pipeline_log
+from worldcereal.extract.utils import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+
+DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
+    "driver-memory": "2G",
+    "driver-memoryOverhead": "2G",
+    "driver-cores": "1",
+    "executor-memory": "1800m",
+    "python-memory": "3000m",
+    "executor-cores": "1",
+    "max-executors": 22,
+    "soft-errors": "true",
+}
 
 
 def generate_output_path_point_worldcereal(
@@ -109,9 +123,7 @@ def create_job_point_worldcereal(
     connection: openeo.DataCube,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
-    max_executors: int,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -152,21 +164,15 @@ def create_job_point_worldcereal(
     if pipeline_log is not None:
         pipeline_log.debug("Number of polygons to extract %s", number_points)
 
-    job_options = {
-        "driver-memory": "2G",
-        "driver-memoryOverhead": "2G",
-        "driver-cores": "1",
-        "executor-memory": executor_memory,
-        "python-memory": python_memory,
-        "executor-cores": "1",
-        "max-executors": max_executors,
-        "soft-errors": "true",
-    }
+    # Set job options
+    final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL)
+    if job_options:
+        final_job_options.update(job_options)
 
     return cube.create_job(
         out_format="Parquet",
         title=f"Worldcereal_Point_Extraction_{row.s2_tile}",
-        job_options=job_options,
+        job_options=final_job_options,
     )
 
 
@@ -206,3 +212,57 @@ def post_job_action_point_worldcereal(
         gdf.to_parquet(item_asset_path, index=False)
 
     return job_items
+
+
+def merge_output_files_point_worldcereal(
+    output_folder: Union[str, Path],
+    ref_id: str,
+) -> None:
+    """Merge the output geoparquet files of the point extractions. Partitioned per ref_id
+
+    Parameters
+    ----------
+    output_folder : Union[str, Path]
+        Location where extractions are saved
+    ref_id : str
+    collection id of the samples
+
+    Raises
+    ------
+    FileNotFoundError
+        If no geoparquet files are found in the output_folder
+    """
+    output_folder = Path(output_folder)
+    merged_path = output_folder.parent / "worldcereal_merged_extractions.parquet"
+
+    # Locate the files to merge and check whether there are any
+    filecheck = list(output_folder.glob("**/*.geoparquet"))
+    if len(filecheck) == 0:
+        raise FileNotFoundError(f"No geoparquet files found in {output_folder}")
+    else:
+        pipeline_log.info(f"Merging {len(filecheck)} geoparquet files...")
+    files_to_merge = str(output_folder / "**" / "*.geoparquet")
+
+    # DuckDB requires the parent directory to exist
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # Check if this particular partition is already present in the merged path,
+    # and if yes, delete it
+    dir_name = merged_path / f"ref_id={ref_id}"
+    if dir_name.exists():
+        shutil.rmtree(str(dir_name))
+
+    # Merge the files
+    con = duckdb.connect()
+    con.execute("INSTALL spatial;")
+    con.execute("LOAD spatial;")
+
+    con.execute(
+        f"""
+    COPY (
+        SELECT * FROM read_parquet('{files_to_merge}', filename=false)
+    ) TO '{str(merged_path)}' (FORMAT 'parquet', PARTITION_BY ref_id, OVERWRITE_OR_IGNORE, FILENAME_PATTERN '{ref_id}_{{i}}')
+"""
+    )
+
+    con.close()

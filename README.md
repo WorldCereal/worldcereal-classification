@@ -35,8 +35,11 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 | :point_up:    | Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. Did you choose "Terrascope" by accident? Then go to File > Hub Control Panel > Stop my server, and click the link below once again.  |
 |---------------|:------------------------|
 
-- For a cropland map generation demo without any model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_default_cropland.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
-- For a croptype map generation demo with model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_v1_demo_custom_croptype.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20croptype%20demo-Terrascope-brightgreen" alt="Run croptype demo" valign="middle"></a>
+- For a cropland map generation demo without any model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_default_cropland.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
+
+- For a crop type map generation demo with model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_custom_croptype.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20croptype%20demo-Terrascope-brightgreen" alt="Run croptype demo" valign="middle"></a>
+
+- For a demo on how to interact with the WorldCereal Reference Data Module (RDM): <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_RDM_demo.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20RDM%20demo-Terrascope-brightgreen" alt="Run RDM demo" valign="middle"></a>
 
 #### Option 2: Install Locally
 
@@ -49,7 +52,7 @@ cd worldcereal-classification
 ```
 Next, install the package locally:
 - for Conda: `conda env create -f environment.yml`
-- for Pip: `pip install .`
+- for Pip: `pip install .[train,notebooks]`
 
 ## Usage Example
 In it's most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:

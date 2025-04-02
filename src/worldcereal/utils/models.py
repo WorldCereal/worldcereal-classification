@@ -82,4 +82,6 @@ def load_model_lut(model_url: str) -> dict:
     metadata = model.get_modelmeta().custom_metadata_map
     class_params = json.loads(metadata["class_params"])
 
-    return dict(zip(class_params["class_names"], class_params["class_to_label"]))
+    lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+    sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
+    return sorted_lut
