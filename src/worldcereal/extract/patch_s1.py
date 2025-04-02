@@ -150,7 +150,9 @@ def create_job_patch_s1(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
-    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
+    spatial_extent_url = upload_geoparquet_artifactory(
+        geometry_df, row.name, "SENTINEL1"
+    )
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
