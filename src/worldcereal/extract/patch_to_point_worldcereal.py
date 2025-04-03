@@ -166,12 +166,11 @@ def create_job_patch_to_point_worldcereal(
     )
     meteo = meteo.rename_labels(
         dimension="bands",
-        source=["temperature-mean", "precipitation-flux"],
         target=["AGERA5-TMEAN", "AGERA5-PRECIP"],
     )
 
     cube = s2.merge_cubes(s1)
-    cube = cube.merge_cubes(dem)
+    cube = cube.merge_cubes(copernicus)
     cube = cube.merge_cubes(meteo)
 
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
