@@ -78,8 +78,8 @@ def main(
         key: value
         for key, value in {
             "memory": memory,
-            "python_memory": python_memory,
-            "max_executors": max_executors,
+            "python-memory": python_memory,
+            "max-executors": max_executors,
             "image-name": image_name,
             "etl_organization_id": organization_id,
         }.items()

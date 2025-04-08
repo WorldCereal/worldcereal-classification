@@ -17,7 +17,7 @@ from worldcereal.openeo.preprocessing import raw_datacube_S2
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
-    upload_geoparquet_artifactory,  # isort: skip
+    upload_geoparquet_s3,  # isort: skip
 )  # isort: skip
 
 
@@ -61,8 +61,9 @@ def create_job_dataframe_patch_s2(
         h3_l3_cell = job.h3_l3_cell.iloc[0]
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         # Set back the valid_time in the geometry as string
@@ -90,7 +91,6 @@ def create_job_patch_s2(
     connection_provider,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
-
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -105,7 +105,9 @@ def create_job_patch_s2(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
-    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
+    spatial_extent_url = upload_geoparquet_s3(
+        connection, geometry_df, row.name, "SENTINEL2"
+    )
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
@@ -154,7 +156,7 @@ def create_job_patch_s2(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
+        title=f"Worldcereal_Patch-S2_Extraction_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
         feature_id_property="sample_id",

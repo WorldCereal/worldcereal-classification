@@ -36,7 +36,7 @@ from worldcereal.utils.geoloader import load_reproject
 from worldcereal.extract.utils import (  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
-    upload_geoparquet_artifactory,  # isort: skip
+    upload_geoparquet_s3,  # isort: skip
     S2_GRID,  # isort: skip
 )
 
@@ -159,8 +159,8 @@ def create_job_patch_worldcereal(
         return gdf
 
     geometry_df = _to_gdf(geometry)
-    spatial_extent_url = upload_geoparquet_artifactory(
-        geometry_df, row.name, collection="worldcereal"
+    spatial_extent_url = upload_geoparquet_s3(
+        connection, geometry_df, row.name, collection="WORLDCEREAL"
     )
 
     # Backend name and fetching type
@@ -204,7 +204,7 @@ def create_job_patch_worldcereal(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_WORLDCEREAL_{s2_tile}_{valid_time}",
+        title=f"Worldcereal_Patch-WorldCereal_Extraction_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
         feature_id_property="sample_id",
