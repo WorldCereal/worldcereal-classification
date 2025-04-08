@@ -12,7 +12,7 @@ from openeo_gfmap import Backend, TemporalContext
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     filter_extract_true,  # isort: skip
-    upload_geoparquet_artifactory,  # isort: skip
+    upload_geoparquet_s3,  # isort: skip
 )  # isort: skip
 
 
@@ -50,7 +50,9 @@ def create_job_patch_meteo(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=5)
-    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name, "METEO")
+    spatial_extent_url = upload_geoparquet_s3(
+        connection, geometry_df, row.name, "METEO"
+    )
 
     bands_to_download = ["temperature-mean", "precipitation-flux"]
 
