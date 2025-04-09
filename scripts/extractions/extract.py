@@ -77,7 +77,7 @@ def main(
     job_options: Optional[Dict[str, Union[str, int]]] = {
         key: value
         for key, value in {
-            "memory": memory,
+            "executor-memory": memory,
             "python-memory": python_memory,
             "max-executors": max_executors,
             "image-name": image_name,
