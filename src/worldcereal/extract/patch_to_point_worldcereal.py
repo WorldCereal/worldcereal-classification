@@ -31,6 +31,22 @@ STAC_ENDPOINT_SLOPE_TERRASCOPE = (
     "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
 )
 
+S2_BANDS = [
+    "S2-L2A-B01",
+    "S2-L2A-B02",
+    "S2-L2A-B03",
+    "S2-L2A-B04",
+    "S2-L2A-B05",
+    "S2-L2A-B06",
+    "S2-L2A-B07",
+    "S2-L2A-B08",
+    "S2-L2A-B8A",
+    "S2-L2A-B09",
+    "S2-L2A-B11",
+    "S2-L2A-B12",
+    "S2-L2A-SCL_DILATED_MASK",
+]
+
 
 def sample_points_centroid(
     gdf: gpd.GeoDataFrame, epsg: Optional[int] = None
@@ -129,11 +145,20 @@ def create_job_patch_to_point_worldcereal(
     s1 = mean_compositing(s1, period="month")
     s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
 
-    s2_raw = connection.load_stac(
-        url=STAC_ENDPOINT_S2,
-        properties=stac_property_filter,
-        temporal_extent=[row["start_date"], row["end_date"]],
-    )
+    s2_raw = (
+        connection.load_stac(
+            url=STAC_ENDPOINT_S2,
+            properties=stac_property_filter,
+            temporal_extent=[row["start_date"], row["end_date"]],
+        )
+        .rename_labels(dimension="bands", target=S2_BANDS)
+        .filter_bands(S2_BANDS)
+    )  # Using the bands argument in load_stac doesn't work, see: https://github.com/Open-EO/openeo-geopyspark-driver/issues/873
+
+    cloud_mask = s2_raw.band("S2-L2A-SCL_DILATED_MASK")
+    s2 = s2_raw.filter_bands(S2_BANDS[:-1])
+    s2 = s2.mask(cloud_mask)
+
     s2 = s2_raw.linear_scale_range(0, 65534, 0, 65534)
     s2 = median_compositing(s2, period="month")
 
@@ -175,7 +200,13 @@ def create_job_patch_to_point_worldcereal(
 
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
 
+    job_options = {
+        "executor-memory": executor_memory,
+        "executor-memoryOverhead": python_memory,
+        "max-executors": max_executors,
+    }
     return cube.create_job(
         title="Test patch_to_point_worldcereal",
         out_format="Parquet",
+        job_options=job_options,
     )
