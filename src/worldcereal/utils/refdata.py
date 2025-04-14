@@ -1,5 +1,8 @@
 import glob
-from typing import Literal, Optional, Union
+import importlib.resources
+import json
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import duckdb
 import geopandas as gpd
@@ -8,8 +11,27 @@ import pandas as pd
 import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
+from prometheo.utils import DEFAULT_SEED
 from shapely import wkt
 from shapely.geometry import Polygon
+
+from worldcereal.data import croptype_mappings
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def get_class_mappings() -> Dict:
+    """Method to get the WorldCereal class mappings for downstream task.
+
+    Returns
+    -------
+    Dict
+        the resulting dictionary with the class mappings
+    """
+    with importlib.resources.open_text(croptype_mappings, "croptype_classes.json") as f:  # type: ignore
+        CLASS_MAPPINGS = json.load(f)
+
+    return CLASS_MAPPINGS
 
 
 def query_public_extractions(
@@ -493,6 +515,82 @@ def process_extractions_df(
     )
 
     return df_processed
+
+
+def join_with_world_df(dataframe: pd.DataFrame) -> pd.DataFrame:
+    filename = (
+        "world-administrative-boundaries/world-administrative-boundaries.geoparquet"
+    )
+    world_df = gpd.read_parquet(DATA_DIR / filename)
+    world_df = world_df.drop(columns=["status", "color_code", "iso_3166_1_"])
+
+    gdataframe = gpd.GeoDataFrame(
+        data=dataframe,
+        geometry=gpd.GeoSeries.from_xy(x=dataframe.lon, y=dataframe.lat),
+        crs="EPSG:4326",
+    )
+    # project to non geographic CRS, otherwise geopandas gives a warning
+    joined = gpd.sjoin_nearest(
+        gdataframe.to_crs("EPSG:3857"), world_df.to_crs("EPSG:3857"), how="left"
+    )
+    joined = joined[~joined.index.duplicated(keep="first")]
+    if joined.isna().any(axis=1).any():
+        logger.warning("Some coordinates couldn't be matched to a country")
+    return joined.to_crs("EPSG:4326")
+
+
+def split_df(
+    df: pd.DataFrame,
+    val_sample_ids: Optional[List[str]] = None,
+    val_countries_iso3: Optional[List[str]] = None,
+    val_years: Optional[List[int]] = None,
+    val_size: Optional[float] = None,
+    train_only_samples: Optional[List[str]] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if val_size is not None:
+        assert (
+            (val_countries_iso3 is None)
+            and (val_years is None)
+            and (val_sample_ids is None)
+        )
+        val, train = np.split(
+            df.sample(frac=1, random_state=DEFAULT_SEED), [int(val_size * len(df))]
+        )
+        logger.info(f"Using {len(train)} train and {len(val)} val samples")
+        return pd.DataFrame(train), pd.DataFrame(val)
+    if val_sample_ids is not None:
+        assert (val_countries_iso3 is None) and (val_years is None)
+        is_val = df.sample_id.isin(val_sample_ids)
+        is_train = ~df.sample_id.isin(val_sample_ids)
+    elif val_countries_iso3 is not None:
+        assert (val_sample_ids is None) and (val_years is None)
+        df = join_with_world_df(df)
+        for country in val_countries_iso3:
+            assert df.iso3.str.contains(country).any(), (
+                f"Tried removing {country} but it is not in the dataframe"
+            )
+        if train_only_samples is not None:
+            is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
+                train_only_samples
+            )
+        else:
+            is_val = df.iso3.isin(val_countries_iso3)
+        is_train = ~df.iso3.isin(val_countries_iso3)
+    elif val_years is not None:
+        df["end_date_ts"] = pd.to_datetime(df.end_date)
+        if train_only_samples is not None:
+            is_val = df.end_date_ts.dt.year.isin(val_years) & ~df.sample_id.isin(
+                train_only_samples
+            )
+        else:
+            is_val = df.end_date_ts.dt.year.isin(val_years)
+        is_train = ~df.end_date_ts.dt.year.isin(val_years)
+
+    logger.info(
+        f"Using {len(is_val) - sum(is_val)} train and {sum(is_val)} val samples"
+    )
+
+    return df[is_train], df[is_val]
 
 
 def _check_geom(row):
