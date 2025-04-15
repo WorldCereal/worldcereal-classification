@@ -27,7 +27,7 @@ description = "WorldCereal classification module"
 readme = "README.md"
 requires-python = ">=3.8"
 # dynamic = ["version"]
-version = "2.1.2"
+version = "2.2.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
