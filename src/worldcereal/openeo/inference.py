@@ -1,5 +1,10 @@
 """Model inference on Presto feature for binary classication"""
 
+import functools
+import json
+
+import onnxruntime as ort
+import requests
 import xarray as xr
 from openeo_gfmap.inference.model_inference import ModelInference
 
@@ -28,6 +33,42 @@ class CropClassifier(ModelInference):
     def dependencies(self) -> list:
         return []  # Disable the dependencies from PIP install
 
+    @classmethod
+    @functools.lru_cache(maxsize=6)
+    def load_and_prepare_model(cls, model_url: str):
+        """Method to be used instead the default GFMap load_ort_model function.
+        Loads the model, validates it and extracts LUT from the model metadata.
+
+
+        Parameters
+        ----------
+        model_url : str
+            Public URL to the ONNX classification model.
+        """
+        # Load the model
+        response = requests.get(model_url, timeout=120)
+        model = ort.InferenceSession(response.content)
+
+        # Validate the model
+        metadata = model.get_modelmeta().custom_metadata_map
+
+        if "class_params" not in metadata:
+            raise ValueError("Could not find class names in the model metadata.")
+
+        class_params = json.loads(metadata["class_params"])
+
+        if "class_names" not in class_params:
+            raise ValueError("Could not find class names in the model metadata.")
+
+        if "class_to_label" not in class_params:
+            raise ValueError("Could not find class to labels in the model metadata.")
+
+        # Load model LUT
+        lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
+
+        return model, sorted_lut
+
     def output_labels(self) -> list:
         """
         Returns the output labels for the classification.
@@ -36,7 +77,7 @@ class CropClassifier(ModelInference):
         not guarantee the order of a json object being preserved when decoding
         a process graph in the backend.
         """
-        lut = self._parameters["lookup_table"]
+        _, lut = self.load_and_prepare_model(self._parameters["classifier_url"])
         lut_sorted = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
         class_names = lut_sorted.keys()
 
@@ -59,7 +100,7 @@ class CropClassifier(ModelInference):
 
         if lookup_table is None:
             raise ValueError(
-                "Lookup table is not defined. Please provide lookup_table in the UDFs parameters."
+                "Lookup table is not defined. Please provide lookup_table in the model metadata."
             )
 
         lut_sorted = {
@@ -105,7 +146,9 @@ class CropClassifier(ModelInference):
         x_coords, y_coords = inarr.x.values, inarr.y.values
         inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()
 
-        self.onnx_session = self.load_ort_session(classifier_url)
+        self.onnx_session, self._parameters["lookup_table"] = (
+            self.load_and_prepare_model(classifier_url)
+        )
 
         # Run catboost classification
         self.logger.info("Catboost classification with input shape: %s", inarr.shape)
