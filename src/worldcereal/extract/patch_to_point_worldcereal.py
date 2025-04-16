@@ -32,7 +32,6 @@ STAC_ENDPOINT_SLOPE_TERRASCOPE = (
 )
 
 S2_BANDS = [
-    "S2-L2A-B01",
     "S2-L2A-B02",
     "S2-L2A-B03",
     "S2-L2A-B04",
@@ -41,7 +40,6 @@ S2_BANDS = [
     "S2-L2A-B07",
     "S2-L2A-B08",
     "S2-L2A-B8A",
-    "S2-L2A-B09",
     "S2-L2A-B11",
     "S2-L2A-B12",
     "S2-L2A-SCL_DILATED_MASK",
