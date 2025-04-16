@@ -1,13 +1,13 @@
 """This short script demonstrates how to run WorldCereal cropland extent inference through
-    an OpenEO User-Defined Process (UDP) on CDSE.
+an OpenEO User-Defined Process (UDP) on CDSE.
 
-    The WorldCereal default cropland model is used and default post-processing is applied
-    (using smooth_probabilities method).
+The WorldCereal default cropland model is used and default post-processing is applied
+(using smooth_probabilities method).
 
-    The user needs to manually download the resulting map through the OpenEO Web UI:
-    https://openeo.dataspace.copernicus.eu/
-    Or use the openeo API to fetch the resulting map.
-    """
+The user needs to manually download the resulting map through the OpenEO Web UI:
+https://openeo.dataspace.copernicus.eu/
+Or use the openeo API to fetch the resulting map.
+"""
 
 import openeo
 
@@ -47,7 +47,7 @@ c = openeo.connect("openeo.dataspace.copernicus.eu").authenticate_oidc()
 # Define the operations
 classes = c.datacube_from_process(
     process_id="worldcereal_crop_extent",
-    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/tags/worldcereal_crop_extent_v1.0.1/src/worldcereal/udp/worldcereal_crop_extent.json",
+    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/tags/worldcereal_crop_extent_v1.0.2/src/worldcereal/udp/worldcereal_crop_extent.json",
     temporal_extent=temporal_extent,
     spatial_extent=spatial_extent,
     projection=target_projection,

@@ -1,5 +1,6 @@
 """Common functions used by extraction scripts."""
 
+import grp
 import json
 import os
 import shutil
@@ -8,9 +9,8 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
-import geojson
 import geopandas as gpd
 import pandas as pd
 import pystac
@@ -61,6 +61,46 @@ DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
 BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
 
 
+def extraction_job_quality_check(
+    job_entry: pd.Series, orfeo_error_threshold: float = 0.3
+) -> None:
+    """Perform quality checks on an extraction job.
+
+    Parameters
+    ----------
+    job_entry : pd.Series
+        The job entry containing information about the extraction job.
+    orfeo_error_threshold : float, optional
+        The threshold for the SAR backscatter error ratio, by default 0.3.
+
+    Raises
+    ------
+    Exception
+        Raised if the job has no assets.
+    Exception
+        Raised if the SAR backscatter error ratio exceeds the threshold.
+    """
+    conn = BACKEND_CONNECTIONS[Backend[job_entry["backend_name"].upper()]]()
+    job = conn.job(job_entry.id)
+
+    # Check if we have any assets resulting from the job
+    job_results = job.get_results()
+    if len(job_results.get_metadata()["assets"]) == 0:
+        raise Exception(f"Job {job_entry.id} has no assets!")
+
+    # Check if SAR backscatter error ratio exceeds the threshold
+    if "sar_backscatter_soft_errors" in job.describe()["usage"].keys():
+        actual_orfeo_error_rate = job.describe()["usage"][
+            "sar_backscatter_soft_errors"
+        ]["value"]
+        if actual_orfeo_error_rate > orfeo_error_threshold:
+            raise Exception(
+                f"Job {job_entry.id} had a ORFEO error rate of {actual_orfeo_error_rate}!"
+            )
+
+    pipeline_log.debug("Quality checks passed!")
+
+
 def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
@@ -73,6 +113,10 @@ def post_job_action_patch(
     sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
+
+    # First do some basic quality checks to see if everything went right
+    extraction_job_quality_check(row)
+
     base_gpd = gpd.GeoDataFrame.from_features(json.loads(row.geometry)).set_crs(
         epsg=4326
     )
@@ -150,6 +194,11 @@ def post_job_action_patch(
         with NamedTemporaryFile(delete=False) as temp_file:
             ds.to_netcdf(temp_file.name)
             shutil.move(temp_file.name, item_asset_path)
+            os.chmod(item_asset_path, 0o755)
+            gid = grp.getgrnam("vito").gr_gid
+            shutil.chown(item_asset_path, group=gid)
+
+        pipeline_log.info(f"Final output file created: {item_asset_path}")
 
         # Update the metadata of the item
         if write_stac_api:
@@ -166,6 +215,14 @@ def post_job_action_patch(
     if write_stac_api:
         username = os.getenv("STAC_API_USERNAME")
         password = os.getenv("STAC_API_PASSWORD")
+
+        if not username or not password:
+            error_msg = (
+                "STAC API credentials not found. Please set "
+                "STAC_API_USERNAME and STAC_API_PASSWORD."
+            )
+            pipeline_log.error(error_msg)
+            raise ValueError(error_msg)
 
         stac_api_interaction = StacApiInteraction(
             sensor=sensor,
@@ -187,20 +244,11 @@ def generate_output_path_patch(
     asset_id: str,
 ):
     """Generate the output path for the extracted data, from a base path and
-    the row information.
+    the row information. `root_folder` is assumed to point to the specific
+    output folder for a `ref_id`
     """
     # First extract the sample ID from the asset ID
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
-
-    # Find which index in the FeatureCollection corresponds to the sample_id
-    features = geojson.loads(row.geometry)["features"]
-    sample_id_to_index = {
-        feature.properties.get("sample_id", None): index
-        for index, feature in enumerate(features)
-    }
-    geometry_index = sample_id_to_index.get(sample_id, None)
-
-    ref_id = features[geometry_index].properties["ref_id"]
 
     if "orbit_state" in row:
         orbit_state = f"_{row.orbit_state}"
@@ -210,7 +258,7 @@ def generate_output_path_patch(
     s2_tile_id = row.s2_tile
     utm_zone = str(s2_tile_id[0:2])
 
-    subfolder = root_folder / ref_id / utm_zone / s2_tile_id / sample_id
+    subfolder = root_folder / utm_zone / s2_tile_id / sample_id
 
     return (
         subfolder
@@ -218,29 +266,31 @@ def generate_output_path_patch(
     )
 
 
-def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
+def load_dataframe(df_path: Path, extract_value: int = 0) -> gpd.GeoDataFrame:
     """Load the input dataframe from the given path."""
     pipeline_log.info("Loading input dataframe from %s.", df_path)
 
-    if df_path.name.endswith(".geoparquet"):
-        return gpd.read_parquet(df_path)
+    # Specify a filter for "extract" column. Only extract the samples
+    # with a value >= extract_value
+    filters = [("extract", ">=", extract_value)]
+
+    pipeline_log.info("Reading the input dataframe with filters: %s", filters)
+
+    if df_path.name.endswith("parquet"):
+        return gpd.read_parquet(df_path, filters=filters)
     else:
-        return gpd.read_file(df_path)
+        return gpd.read_file(df_path, filters=filters)
 
 
 def prepare_job_dataframe(
     samples_gdf: gpd.GeoDataFrame,
     collection: ExtractionCollection,
     max_locations: int,
-    extract_value: int,
     backend: Backend,
 ) -> gpd.GeoDataFrame:
     """Prepare the job dataframe to extract the data from the given input
     dataframe."""
     pipeline_log.info("Preparing the job dataframe.")
-
-    # Filter the input dataframe to only keep the locations to extract
-    samples_gdf = samples_gdf[samples_gdf["extract"] >= extract_value].copy()
 
     # Split the locations into chunks of max_locations
     split_dfs = []
@@ -276,6 +326,154 @@ def prepare_job_dataframe(
     pipeline_log.info("Job dataframe created with %s jobs.", len(job_df))
 
     return job_df
+
+
+def _count_by_status(job_status_df, statuses: Iterable[str] = ()) -> dict:
+    status_histogram = job_status_df.groupby("status").size().to_dict()
+    statuses = set(statuses)
+    if statuses:
+        status_histogram = {k: v for k, v in status_histogram.items() if k in statuses}
+    return status_histogram
+
+
+def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
+    """Read job tracking csv file.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    pd.DataFrame
+        job tracking dataframe
+
+    Raises
+    ------
+    FileNotFoundError
+        if the job status file is not found in the designated folder
+    """
+    job_status_file = output_folder / "job_tracking.csv"
+    if job_status_file.exists():
+        job_status_df = pd.read_csv(job_status_file)
+    else:
+        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+    return job_status_df
+
+
+def check_job_status(output_folder: Path) -> dict:
+    """Check the status of the jobs in the given output folder.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+
+    Returns
+    -------
+    dict
+        status_histogram
+    """
+
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
+
+    # Summarize the status in histogram
+    status_histogram = _count_by_status(job_status_df)
+
+    # convert to pandas dataframe
+    status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"])
+    status_count = status_count.sort_values(by="count", ascending=False)
+
+    print(
+        f"""
+    -------------------------------------
+    Overall jobs status:
+    -------------------------------------
+    {status_count.to_string(index=False, header=True)}
+    -------------------------------------
+    """
+    )
+
+    return status_histogram
+
+
+def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
+    """Get details of succeeded extraction jobs in the given output folder.
+
+    Parameters
+    ----------
+    output_folder : Path
+        folder where extractions are stored
+    Returns
+    -------
+    pd.DataFrame
+        details of succeeded jobs
+    """
+
+    # Read job tracking csv file
+    job_status_df = _read_job_tracking_csv(output_folder)
+
+    # Gather metadata on succeeded jobs
+    succeeded_jobs = job_status_df[
+        job_status_df["status"].isin(["finished", "postprocessing"])
+    ].copy()
+    if len(succeeded_jobs) > 0:
+        # Derive number of features involved in each job
+        nfeatures = []
+        for i, row in succeeded_jobs.iterrows():
+            nfeatures.append(len(json.loads(row["geometry"])["features"]))
+        succeeded_jobs.loc[:, "n_samples"] = nfeatures
+        # Gather essential columns
+        succeeded_jobs = succeeded_jobs[
+            [
+                "id",
+                "s2_tile",
+                "n_samples",
+                # "cpu", "memory",
+                "duration",
+                "costs",
+            ]
+        ]
+        # Convert duration to minutes
+        # convert NaN to 0 seconds
+        succeeded_jobs["duration"] = succeeded_jobs["duration"].fillna("0s")
+        seconds = succeeded_jobs["duration"].str.split("s").str[0].astype(int)
+        succeeded_jobs["duration"] = seconds / 60
+        succeeded_jobs.rename(columns={"duration": "duration_mins"}, inplace=True)
+        if succeeded_jobs["duration_mins"].sum() == 0:
+            succeeded_jobs.drop(columns=["duration_mins"], inplace=True)
+    else:
+        succeeded_jobs = pd.DataFrame()
+
+    # Print costs (if not NaN)
+    if pd.notnull(succeeded_jobs["costs"]).all():
+        print(
+            f"""
+        -------------------------------------
+        Total credits consumed: {int(succeeded_jobs["costs"].sum())}
+        Average job cost: {int(succeeded_jobs["costs"].mean())} (over {succeeded_jobs.shape[0]} jobs)
+        -------------------------------------
+        """
+        )
+    # Print details of succeeded jobs
+    if not succeeded_jobs.empty:
+        print(
+            f"""
+        -------------------------------------
+        Number of samples successfully extracted:
+        -------------------------------------
+        {succeeded_jobs["n_samples"].sum()}
+        -------------------------------------
+        Details of succeeded jobs:
+        -------------------------------------
+        {succeeded_jobs.to_string(index=False, header=True)}
+        -------------------------------------
+        """
+        )
+
+    return succeeded_jobs
 
 
 def setup_extraction_functions(
@@ -352,7 +550,7 @@ def setup_extraction_functions(
         ExtractionCollection.PATCH_SENTINEL2: partial(
             post_job_action_patch,
             extract_value=extract_value,
-            description="Sentinel2 L2A observations, processed.",
+            description="Sentinel-2 L2A surface reflectance observations.",
             title="Sentinel-2 L2A",
             spatial_resolution="10m",
             sensor="Sentinel2",
@@ -388,6 +586,7 @@ def _prepare_extraction_jobs(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
+    ref_id: str,
     max_locations_per_job: int = 500,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
@@ -408,6 +607,8 @@ def _prepare_extraction_jobs(
     samples_df_path : Path
         Path to the input dataframe containing the geometries
         for which extractions need to be done
+    ref_id : str
+        Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
     job_options : Optional[Dict[str, Union[str, int]]], optional
@@ -447,12 +648,23 @@ def _prepare_extraction_jobs(
     if tracking_df_path.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
         job_df = pd.read_csv(tracking_df_path)
+
+        # Change status "canceled" to "not_started"
+        job_df.loc[job_df.status.isin(["canceled"]), "status"] = "not_started"
+        job_df.to_csv(tracking_df_path, index=False)
+
+        status_histogram = check_job_status(output_folder)
+        pipeline_log.info(
+            "Job status histogram: %s",
+            status_histogram,
+        )
     else:
         # Load the input dataframe and build the job dataframe
-        samples_gdf = load_dataframe(samples_df_path)
+        samples_gdf = load_dataframe(samples_df_path, extract_value)
+        samples_gdf["ref_id"] = ref_id
         pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
-            samples_gdf, collection, max_locations_per_job, extract_value, backend
+            samples_gdf, collection, max_locations_per_job, backend
         )
 
     # Setup the extraction functions
@@ -496,7 +708,6 @@ def _run_extraction_jobs(
     datacube_fn: Callable,
     tracking_df_path: Path,
 ) -> None:
-
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
     job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
@@ -505,27 +716,31 @@ def _run_extraction_jobs(
 
 
 def _merge_extraction_jobs(
-    collection: ExtractionCollection,
     output_folder: Path,
-    samples_df_path: Path,
+    ref_id: str,
 ) -> None:
+    """Merge all extractions into one partitioned geoparquet file.
+
+    Parameters
+    ----------
+    output_folder : Path
+        Location where extractions are stored.
+    ref_id : str
+        collection id of the samples
+    """
 
     # Merge the extraction jobs
     pipeline_log.info("Merging the extraction jobs.")
-
-    if collection == ExtractionCollection.POINT_WORLDCEREAL:
-        pipeline_log.info("Merging Geoparquet results...")
-        ref_id = Path(samples_df_path).stem
-        merge_output_files_point_worldcereal(output_folder=output_folder, ref_id=ref_id)
-        pipeline_log.info("Geoparquet results merged successfully.")
-
-    return
+    pipeline_log.info("Merging Geoparquet results...")
+    merge_output_files_point_worldcereal(output_folder, ref_id)
+    pipeline_log.info("Geoparquet results merged successfully.")
 
 
 def run_extractions(
     collection: ExtractionCollection,
     output_folder: Path,
     samples_df_path: Path,
+    ref_id: str,
     max_locations_per_job: int = 500,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
@@ -533,7 +748,7 @@ def run_extractions(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
-) -> Path:
+) -> None:
     """Main function responsible for launching point and patch extractions.
 
     Parameters
@@ -545,6 +760,8 @@ def run_extractions(
     samples_df_path : Path
         Path to the input dataframe containing the geometries
         for which extractions need to be done
+    ref_id : str
+        Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
     job_options : Optional[Dict[str, Union[str, int]]], optional
@@ -567,10 +784,6 @@ def run_extractions(
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
 
-    Returns
-    -------
-    Path
-        Path to the job tracking dataframe
     """
     pipeline_log.info("Starting the extractions workflow...")
 
@@ -579,6 +792,7 @@ def run_extractions(
         collection,
         output_folder,
         samples_df_path,
+        ref_id,
         max_locations_per_job=max_locations_per_job,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
@@ -592,8 +806,9 @@ def run_extractions(
     _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
 
     # Merge the extraction jobs (for point extractions)
-    _merge_extraction_jobs(collection, output_folder, samples_df_path)
+    if collection == ExtractionCollection.POINT_WORLDCEREAL:
+        # Merge extractions
+        _merge_extraction_jobs(output_folder, ref_id)
 
     pipeline_log.info("Extractions workflow completed.")
-
-    return tracking_df_path
+    pipeline_log.info(f"Results stored in folder: {output_folder}.")

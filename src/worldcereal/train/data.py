@@ -175,7 +175,6 @@ class WorldCerealTrainingDataset(WorldCerealLabelledDataset):
         mask_ratio: float = 0.0,
         repeats: int = 1,
     ):
-        dataframe = dataframe.loc[~dataframe.LANDCOVER_LABEL.isin(self.FILTER_LABELS)]
 
         self.task_type = task_type
         self.croptype_list = croptype_list
@@ -219,13 +218,8 @@ class WorldCerealTrainingDataset(WorldCerealLabelledDataset):
         row = self.df.iloc[self.indices[idx], :]
 
         attrs = [
-            "WORLDCOVER-LABEL-10m",
             "lat",
             "lon",
-            "CROPTYPE_LABEL",
-            "LANDCOVER_LABEL",
-            "POTAPOV-LABEL-10m",
-            "location_id",
             "ref_id",
             "sample_id",
             "downstream_class",

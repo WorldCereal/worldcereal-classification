@@ -3,7 +3,6 @@ from typing import Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
-import numpy as np
 from ipyleaflet import (
     DrawControl,
     GeoJSON,
@@ -15,7 +14,6 @@ from ipyleaflet import (
 )
 from IPython.display import display
 from ipywidgets import HTML, Layout, VBox, widgets
-from loguru import logger
 from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
@@ -29,20 +27,18 @@ def handle_draw(instance, action, geo_json, output, area_limit):
         if action == "created":
             poly = Polygon(shape(geo_json.get("geometry")))
             bbox = poly.bounds
-            logger.info(f"Your extent: {bbox}")
+            display(HTML(f"<b>Your extent:</b> {bbox}"))
 
             # We convert our bounding box to local UTM projection
             # for further processing
             bbox_utm, epsg = _latlon_to_utm(bbox)
             area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1000000
-            logger.info(f"Area of extent: {area:.2f} km²")
+            display(HTML(f"<b>Area of extent:</b> {area:.2f} km²"))
 
             if area_limit is not None:
-                if (area > area_limit) or (area > 2500):
-                    logger.error(
-                        f"Area of extent is too large. "
-                        f"Please select an area smaller than {np.min([area_limit, 2500])} km²."
-                    )
+                if area > area_limit:
+                    message = f"Area of extent is too large. Please select an area smaller than {area_limit} km²."
+                    display(HTML(f'<span style="color: red;"><b>{message}</b></span>'))
                     instance.last_draw = {"type": "Feature", "geometry": None}
 
         elif action == "deleted":
@@ -120,6 +116,8 @@ class ui_map:
         self.bbox = None
         self.poly = None
 
+        self.show_map()
+
     def show_map(self):
         vbox = widgets.VBox(
             [self.map, self.output],
@@ -166,8 +164,6 @@ class ui_map:
             self.spatial_extent = BoundingBoxExtent(*bbox_utm, epsg)
         else:
             self.spatial_extent = BoundingBoxExtent(*bbox)
-
-        logger.info(f"Your extent: {bbox}")
 
         return self.spatial_extent
 
