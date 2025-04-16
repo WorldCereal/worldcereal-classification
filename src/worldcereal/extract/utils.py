@@ -2,7 +2,6 @@
 
 import logging
 from tempfile import NamedTemporaryFile
-from typing import Optional
 
 import geojson
 import geopandas as gpd
