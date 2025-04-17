@@ -1,3 +1,7 @@
+import functools
+
+import onnxruntime as ort
+import requests
 import xarray as xr
 from openeo_gfmap.inference.model_inference import ModelInference
 
@@ -26,6 +30,42 @@ class PostProcessor(ModelInference):
 
     def dependencies(self) -> list:
         return []
+
+    @classmethod
+    @functools.lru_cache(maxsize=6)
+    def lut_from_url(cls, model_url: str) -> dict:
+        """Method to extract lookup table from model URL.
+        Loads the model, validates it and extracts LUT from the model metadata.
+
+        Parameters
+        ----------
+        model_url : str
+            Public URL to the ONNX classification model.
+        """
+
+        # Load the model
+        response = requests.get(model_url, timeout=120)
+        model = ort.InferenceSession(response.content)
+
+        # Validate the model
+        metadata = model.get_modelmeta().custom_metadata_map
+
+        if "class_params" not in metadata:
+            raise ValueError("Could not find class names in the model metadata.")
+
+        class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
+
+        if "class_names" not in class_params:
+            raise ValueError("Could not find class names in the model metadata.")
+
+        if "class_to_label" not in class_params:
+            raise ValueError("Could not find class to labels in the model metadata.")
+
+        # Load model LUT
+        lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
+
+        return sorted_lut
 
     @classmethod
     def majority_vote(
@@ -239,6 +279,12 @@ class PostProcessor(ModelInference):
         )
 
     def execute(self, inarr: xr.DataArray) -> xr.DataArray:
+
+        if "classifier_url" not in self._parameters:
+            raise ValueError('Missing required parameter "classifier_url"')
+        classifier_url = self._parameters.get("classifier_url")
+
+        self._parameters["lookup_table"] = self.lut_from_url(classifier_url)
 
         if self._parameters.get("method") == "smooth_probabilities":
             # Cast to float for more accurate gaussian smoothing
