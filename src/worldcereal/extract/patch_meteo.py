@@ -50,9 +50,7 @@ def create_job_patch_meteo(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=5)
-    spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, "METEO"
-    )
+    spatial_extent_url = upload_geoparquet_s3(provider, geometry_df, row.name, "METEO")
 
     bands_to_download = ["temperature-mean", "precipitation-flux"]
 
