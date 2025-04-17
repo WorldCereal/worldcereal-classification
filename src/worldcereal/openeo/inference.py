@@ -31,7 +31,9 @@ class CropClassifier(ModelInference):
         self.onnx_session = None
 
     def dependencies(self) -> list:
-        return []  # Disable the dependencies from PIP install
+        return [
+            "json"
+        ]  # json is a dependency that is not present in the GFMap inference module
 
     @classmethod
     @functools.lru_cache(maxsize=6)
