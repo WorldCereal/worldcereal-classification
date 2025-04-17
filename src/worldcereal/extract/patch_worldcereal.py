@@ -160,7 +160,7 @@ def create_job_patch_worldcereal(
 
     geometry_df = _to_gdf(geometry)
     spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, collection="WORLDCEREAL"
+        provider, geometry_df, row.name, collection="WORLDCEREAL"
     )
 
     # Backend name and fetching type
