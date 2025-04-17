@@ -653,6 +653,16 @@ def _prepare_extraction_jobs(
 
         # Change status "canceled" to "not_started"
         job_df.loc[job_df.status.isin(["canceled"]), "status"] = "not_started"
+
+        # If restart_failed is True, reset some statuses as well.
+        # Normally should be handled in GFMap but does not always work
+        if restart_failed:
+            pipeline_log.info("Resetting failed jobs.")
+            job_df.loc[
+                job_df["status"].isin(["error", "postprocessing-error"]), "status"
+            ] = "not_started"
+
+        # Save new job tracking dataframe
         job_df.to_csv(tracking_df_path, index=False)
 
         status_histogram = check_job_status(output_folder)
