@@ -1,7 +1,6 @@
 """Model inference on Presto feature for binary classication"""
 
 import functools
-import json
 
 import onnxruntime as ort
 import requests
@@ -31,9 +30,7 @@ class CropClassifier(ModelInference):
         self.onnx_session = None
 
     def dependencies(self) -> list:
-        return [
-            "json"
-        ]  # json is a dependency that is not present in the GFMap inference module
+        return []
 
     @classmethod
     @functools.lru_cache(maxsize=6)
@@ -57,7 +54,7 @@ class CropClassifier(ModelInference):
         if "class_params" not in metadata:
             raise ValueError("Could not find class names in the model metadata.")
 
-        class_params = json.loads(metadata["class_params"])
+        class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
 
         if "class_names" not in class_params:
             raise ValueError("Could not find class names in the model metadata.")
