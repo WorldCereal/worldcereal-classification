@@ -157,7 +157,7 @@ def create_job_patch_to_point_worldcereal(
     s2 = s2_raw.filter_bands(S2_BANDS[:-1])
     s2 = s2.mask(cloud_mask)
 
-    s2 = s2_raw.linear_scale_range(0, 65534, 0, 65534)
+    s2 = s2.linear_scale_range(0, 65534, 0, 65534)
     s2 = median_compositing(s2, period="month")
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
