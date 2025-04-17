@@ -204,7 +204,7 @@ def create_job_patch_to_point_worldcereal(
         "max-executors": max_executors,
     }
     return cube.create_job(
-        title="Test patch_to_point_worldcereal",
+        title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
         out_format="Parquet",
         job_options=job_options,
     )
