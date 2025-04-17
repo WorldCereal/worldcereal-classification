@@ -300,7 +300,9 @@ def prepare_job_dataframe(
     samples_gdf["valid_time"] = pd.to_datetime(samples_gdf.valid_time)
     samples_gdf["year"] = samples_gdf.valid_time.dt.year
 
-    split_dfs_time = [group.reset_index() for _, group in samples_gdf.groupby("year")]
+    split_dfs_time = [
+        group.reset_index(drop=True) for _, group in samples_gdf.groupby("year")
+    ]
     pipeline_log.info("Performing splitting by s2 grid...")
     for df in split_dfs_time:
         s2_split_df = split_job_s2grid(df, max_points=max_locations)
