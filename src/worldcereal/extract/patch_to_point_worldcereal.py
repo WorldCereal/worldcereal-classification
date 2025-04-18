@@ -4,7 +4,7 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac_client
-from openeo.processes import eq
+from openeo.processes import ProcessBuilder, eq, if_
 from openeo_gfmap import TemporalContext
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import (
@@ -153,9 +153,15 @@ def create_job_patch_to_point_worldcereal(
         .filter_bands(S2_BANDS)
     )  # Using the bands argument in load_stac doesn't work, see: https://github.com/Open-EO/openeo-geopyspark-driver/issues/873
 
-    cloud_mask = s2_raw.band("S2-L2A-SCL_DILATED_MASK")
-    s2 = s2_raw.filter_bands(S2_BANDS[:-1])
-    s2 = s2.mask(cloud_mask)
+    def fancy_mask(input: ProcessBuilder):
+        mask_band = input.array_element(label="S2-L2A-SCL_DILATED_MASK")
+        return if_(mask_band != 1, input)
+
+    s2 = s2_raw.apply_dimension(dimension="bands", process=fancy_mask)
+
+    # cloud_mask = s2_raw.band("S2-L2A-SCL_DILATED_MASK")
+    s2 = s2.filter_bands(S2_BANDS[:-1])
+    # s2 = s2.mask(cloud_mask)
 
     s2 = s2.linear_scale_range(0, 65534, 0, 65534)
     s2 = median_compositing(s2, period="month")
