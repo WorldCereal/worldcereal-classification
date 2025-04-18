@@ -163,11 +163,15 @@ def create_job_patch_to_point_worldcereal(
         .filter_bands(S2_BANDS)
     )  # Using the bands argument in load_stac doesn't work, see: https://github.com/Open-EO/openeo-geopyspark-driver/issues/873
 
-    def fancy_mask(input: ProcessBuilder):
+    def optimized_mask(input: ProcessBuilder):
+        """
+        To be used as a callback to apply_dimension on the band dimension.
+        It's an optimized way of masking, if the mask is already present in the cube.
+        """
         mask_band = input.array_element(label="S2-L2A-SCL_DILATED_MASK")
         return if_(mask_band != 1, input)
 
-    s2 = s2_raw.apply_dimension(dimension="bands", process=fancy_mask)
+    s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask)
 
     # cloud_mask = s2_raw.band("S2-L2A-SCL_DILATED_MASK")
     s2 = s2.filter_bands(S2_BANDS[:-1])
