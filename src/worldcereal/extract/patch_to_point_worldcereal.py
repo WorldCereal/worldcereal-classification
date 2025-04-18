@@ -129,14 +129,24 @@ def create_job_patch_to_point_worldcereal(
 
     point_geometries = connection.load_url(url=row["geometry_url"], format="Parquet")
 
-    stac_property_filter = {
+    orbit_state = row.get(
+        "orbit_state", "DESCENDING"
+    )  # default to DESCENDING, same as for inference workflow
+
+    s1_stac_property_filter = {
+        "ref_id": lambda x: eq(x, row["ref_id"]),
+        "proj:epsg": lambda x: eq(x, int(row["epsg"])),
+        "sat:orbit_state": lambda x: eq(x, orbit_state),
+    }
+
+    s2_stac_property_filter = {
         "ref_id": lambda x: eq(x, row["ref_id"]),
         "proj:epsg": lambda x: eq(x, int(row["epsg"])),
     }
 
     s1_raw = connection.load_stac(
         url=STAC_ENDPOINT_S1,
-        properties=stac_property_filter,
+        properties=s1_stac_property_filter,
         temporal_extent=[row["start_date"], row["end_date"]],
     )
     s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
@@ -146,7 +156,7 @@ def create_job_patch_to_point_worldcereal(
     s2_raw = (
         connection.load_stac(
             url=STAC_ENDPOINT_S2,
-            properties=stac_property_filter,
+            properties=s2_stac_property_filter,
             temporal_extent=[row["start_date"], row["end_date"]],
         )
         .rename_labels(dimension="bands", target=S2_BANDS)
@@ -207,7 +217,7 @@ def create_job_patch_to_point_worldcereal(
     job_options = {
         "executor-memory": executor_memory,
         "executor-memoryOverhead": python_memory,
-        "max-executors": max_executors,
+        "max_executors": max_executors,
     }
     return cube.create_job(
         title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
