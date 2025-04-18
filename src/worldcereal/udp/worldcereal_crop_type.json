@@ -652,6 +652,10 @@
                   "enable": true,
                   "keep_class_probs": false,
                   "kernel_size": 5,
+                  "lookup_table": {
+                    "cropland": 1,
+                    "other": 0
+                  },
                   "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx",
                   "method": "smooth_probabilities",
                   "save_intermediate": false
@@ -707,6 +711,27 @@
                   "enable": true,
                   "keep_class_probs": false,
                   "kernel_size": 5,
+                  "lookup_table": {
+                    "alliums": 0,
+                    "beans": 1,
+                    "beet": 2,
+                    "brassica_oleracea_cabbage": 3,
+                    "carrots_daucus": 4,
+                    "cauliflower_broccoli": 5,
+                    "chicory_chicories": 6,
+                    "fibre_crops": 7,
+                    "leafy_stem_vegetables": 8,
+                    "maize": 9,
+                    "oilseed_crops": 10,
+                    "onion_shallot": 11,
+                    "other_temporary_crops": 12,
+                    "peas": 13,
+                    "potatoes": 14,
+                    "root_vegetables": 15,
+                    "spinach": 16,
+                    "unspecified_barley": 17,
+                    "unspecified_wheat": 18
+                  },
                   "classifier_url": {
                     "from_parameter": "model_url"
                   },
