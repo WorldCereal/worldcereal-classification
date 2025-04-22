@@ -22,9 +22,9 @@ class PostProcessor(ModelInference):
 
     def output_labels(self) -> list:
         if self._parameters.get("keep_class_probs", False):
+            lut = self.lut_from_url(self._parameters["classifier_url"])
             return ["classification", "probability"] + [
-                f"probability_{name}"
-                for name in self._parameters["lookup_table"].keys()
+                f"probability_{name}" for name in lut.keys()
             ]
         return ["classification", "probability"]
 
