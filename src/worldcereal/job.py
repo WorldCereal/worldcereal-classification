@@ -295,14 +295,17 @@ def collect_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        validate_temporal_context=False,
     )
+
+    inputs = inputs.filter_bbox(dict(spatial_extent))
 
     JOB_OPTIONS = {
         "driver-memory": "4g",
         "executor-memory": "1g",
         "executor-memoryOverhead": "1g",
-        "python-memory": "2g",
-        "soft-errors": "true",
+        "python-memory": "3g",
+        "soft-errors": 0.1,
     }
     if job_options is not None:
         JOB_OPTIONS.update(job_options)

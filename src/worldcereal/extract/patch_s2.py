@@ -136,10 +136,10 @@ def create_job_patch_s2(
     cube = raw_datacube_S2(
         connection,
         backend_context,
-        spatial_extent_url,
         temporal_context,
         bands_to_download,
         FetchType.POLYGON,
+        spatial_extent=spatial_extent_url,
         filter_tile=s2_tile,
         apply_mask_flag=False,
         additional_masks_flag=True,
