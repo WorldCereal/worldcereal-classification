@@ -443,6 +443,7 @@ class RdmInteraction:
         include_private: Optional[bool] = False,
         min_quality_lc: int = 0,
         min_quality_ct: int = 0,
+        ground_truth_file: Optional[Union[Path, str]] = None,
     ) -> gpd.GeoDataFrame:
         """Queries the RDM API and generates a GeoPandas GeoDataframe of all samples meeting the search criteria.
 
@@ -475,6 +476,9 @@ class RdmInteraction:
             Minimum quality score for land cover [0-100].
         min_quality_ct: int = 0
             Minimum quality score for crop type [0-100].
+        ground_truth_file: Optional[Union[Path, str]] = None
+            Optional path to a ground truth file. If provided, the query to the
+            RDM is bypassed and the ground truth file is used instead.
 
         Returns
         -------
@@ -482,26 +486,30 @@ class RdmInteraction:
             A GeoDataFrame containing the extracted samples.
         """
 
-        # Determine which collections need to be queried if they are not specified
-        if not ref_ids:
-            collections = self.get_collections(
-                spatial_extent=spatial_extent,
-                temporal_extent=temporal_extent,
-                ewoc_codes=ewoc_codes,
-                include_public=include_public,
-                include_private=include_private,
-            )
-            if not collections:
-                logger.warning(
-                    "No collections found in the RDM for your search criteria."
+        if ground_truth_file is None:
+            # Determine which collections need to be queried if they are not specified
+            if not ref_ids:
+                collections = self.get_collections(
+                    spatial_extent=spatial_extent,
+                    temporal_extent=temporal_extent,
+                    ewoc_codes=ewoc_codes,
+                    include_public=include_public,
+                    include_private=include_private,
                 )
-                return gpd.GeoDataFrame()
-            ref_ids = [col.id for col in collections]
+                if not collections:
+                    logger.warning(
+                        "No collections found in the RDM for your search criteria."
+                    )
+                    return gpd.GeoDataFrame()
+                ref_ids = [col.id for col in collections]
 
-        logger.info(f"Querying {len(ref_ids)} collections...")
+            logger.info(f"Querying {len(ref_ids)} collections...")
 
-        # For each collection, get the download URL
-        urls = self._get_download_urls(ref_ids)
+            # For each collection, get the download URL
+            urls = self._get_download_urls(ref_ids)
+        else:
+            logger.info(f"Querying ground truth from: {ground_truth_file}")
+            urls = [str(ground_truth_file)]
 
         # Ensure we have a valid spatial_extent
         if spatial_extent is None:

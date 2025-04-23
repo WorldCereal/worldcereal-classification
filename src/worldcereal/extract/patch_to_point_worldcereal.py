@@ -1,4 +1,5 @@
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 import geopandas as gpd
 import openeo
@@ -66,7 +67,7 @@ S2_BANDS_SELECTED = [
 ]
 
 
-def sample_points_centroid(
+def label_points_centroid(
     gdf: gpd.GeoDataFrame, epsg: Optional[int] = None
 ) -> gpd.GeoDataFrame:
     """
@@ -83,10 +84,28 @@ def sample_points_centroid(
     return gdf
 
 
-def get_sample_points_from_rdm(row: pd.Series) -> gpd.GeoDataFrame:
+def get_label_points(
+    row: pd.Series, ground_truth_file: Optional[Union[Path, str]] = None
+) -> gpd.GeoDataFrame:
     """
-    Get sample points from the random points of the input row.
+    Retrieve label points for a given row from STAC collections and RDM API.
+
+    Parameters
+    ----------
+    row : pd.Series
+        The row containing ref_id, epsg, start_date, and end_date.
+    ground_truth_file : Optional[Union[Path, str]], optional
+        The path to the ground truth file. If provided, this file will
+        be queried for getting the ground truth. If not, the RDM will
+        be used for the query.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        The label points as a GeoDataFrame.
+
     """
+
     # Find all items (i.e. patches) corresponding to the given ref_id and epsg
     stac_query = {
         "ref_id": {"eq": row["ref_id"]},
@@ -125,9 +144,10 @@ def get_sample_points_from_rdm(row: pd.Series) -> gpd.GeoDataFrame:
         spatial_extent=multi_polygon,
         temporal_extent=temporal_extent,
         include_private=True,
+        ground_truth_file=ground_truth_file,
     )
 
-    sampled_gdf = sample_points_centroid(gdf=gdf, epsg=int(row["epsg"]))
+    sampled_gdf = label_points_centroid(gdf=gdf, epsg=int(row["epsg"]))
 
     return sampled_gdf
 
