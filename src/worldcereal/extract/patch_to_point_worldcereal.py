@@ -159,7 +159,6 @@ def create_job_patch_to_point_worldcereal(
     connection_provider,
     executor_memory: str,
     python_memory: str,
-    max_executors: int,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -255,7 +254,6 @@ def create_job_patch_to_point_worldcereal(
     job_options = {
         "executor-memory": executor_memory,
         "executor-memoryOverhead": python_memory,
-        "max_executors": max_executors,
     }
     return cube.create_job(
         title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
