@@ -5,7 +5,6 @@ from tempfile import NamedTemporaryFile
 
 import geojson
 import geopandas as gpd
-import openeo
 import pandas as pd
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
@@ -74,7 +73,7 @@ def filter_extract_true(
 
 
 def upload_geoparquet_s3(
-    conn: openeo.Connection, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+    backend: str, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
 ) -> str:
     """Upload the given GeoDataFrame to s3 and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
@@ -86,7 +85,7 @@ def upload_geoparquet_s3(
 
     targetpath = f"openeogfmap_dataframe_{collection}_{name}.parquet"
 
-    artifact_helper = OpenEOArtifactHelper.from_openeo_connection(conn)
+    artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
     normal_s3_uri = artifact_helper.upload_file(targetpath, temporary_file.name)
     presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)
 

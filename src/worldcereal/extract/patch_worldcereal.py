@@ -47,7 +47,7 @@ WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL = {
     "executor-memory": "1800m",
     "python-memory": "3000m",
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "max_executors": 22,
 }
 
@@ -160,7 +160,7 @@ def create_job_patch_worldcereal(
 
     geometry_df = _to_gdf(geometry)
     spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, collection="WORLDCEREAL"
+        provider, geometry_df, row.name, collection="WORLDCEREAL"
     )
 
     # Backend name and fetching type
