@@ -164,29 +164,60 @@ def create_job_patch_to_point_worldcereal(
 
     # Assume row has the following fields: backend, start_date, end_date, epsg, ref_id and geometry_url
 
-    # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
-
-    point_geometries = connection.load_url(url=row["geometry_url"], format="Parquet")
-
-    orbit_state = row.get(
+    s1_orbit_state = row.get(
         "orbit_state", "DESCENDING"
     )  # default to DESCENDING, same as for inference workflow
 
+    temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
+
+    # Get preprocessed cube from patch extractions
+    cube = worldcereal_preprocessed_inputs_from_patches(
+        connection,
+        temporal_extent=temporal_extent,
+        ref_id=row["ref_id"],
+        epsg=int(row["epsg"]),
+        s1_orbit_state=s1_orbit_state,
+    )
+
+    # Do spatial aggregation
+    point_geometries = connection.load_url(url=row["geometry_url"], format="Parquet")
+    cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
+
+    job_options = {
+        "executor-memory": executor_memory,
+        "executor-memoryOverhead": python_memory,
+    }
+
+    return cube.create_job(
+        title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
+        out_format="Parquet",
+        job_options=job_options,
+    )
+
+
+def worldcereal_preprocessed_inputs_from_patches(
+    connection,
+    temporal_extent,
+    ref_id: str,
+    epsg: int,
+    s1_orbit_state: Optional[str] = None,
+):
+    # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
-        "ref_id": lambda x: eq(x, row["ref_id"]),
-        "proj:epsg": lambda x: eq(x, int(row["epsg"])),
-        "sat:orbit_state": lambda x: eq(x, orbit_state),
+        "ref_id": lambda x: eq(x, ref_id),
+        "proj:epsg": lambda x: eq(x, epsg),
+        "sat:orbit_state": lambda x: eq(x, s1_orbit_state),
     }
 
     s2_stac_property_filter = {
-        "ref_id": lambda x: eq(x, row["ref_id"]),
-        "proj:epsg": lambda x: eq(x, int(row["epsg"])),
+        "ref_id": lambda x: eq(x, ref_id),
+        "proj:epsg": lambda x: eq(x, epsg),
     }
 
     s1_raw = connection.load_stac(
         url=STAC_ENDPOINT_S1,
         properties=s1_stac_property_filter,
-        temporal_extent=[row["start_date"], row["end_date"]],
+        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
     )
     s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
@@ -196,7 +227,7 @@ def create_job_patch_to_point_worldcereal(
     s2_raw = connection.load_stac(
         url=STAC_ENDPOINT_S2,
         properties=s2_stac_property_filter,
-        temporal_extent=[row["start_date"], row["end_date"]],
+        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=S2_BANDS,
     ).filter_bands(S2_BANDS_SELECTED)
 
@@ -210,7 +241,7 @@ def create_job_patch_to_point_worldcereal(
 
     s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask)
     s2 = median_compositing(s2, period="month")
-    s2 = s2.filter_bands(S2_BANDS[:-1])
+    s2 = s2.filter_bands(S2_BANDS_SELECTED[:-1])
     s2 = s2.linear_scale_range(0, 65534, 0, 65534)
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
@@ -233,12 +264,12 @@ def create_job_patch_to_point_worldcereal(
 
     meteo_raw = connection.load_stac(
         url=STAC_ENDPOINT_METEO_TERRASCOPE,
-        temporal_extent=[row["start_date"], row["end_date"]],
+        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=["temperature-mean", "precipitation-flux"],
     )
 
     meteo = meteo_raw.resample_spatial(
-        resolution=10.0, projection=int(row["epsg"]), method="bilinear"
+        resolution=10.0, projection=epsg, method="bilinear"
     )
     meteo = meteo.rename_labels(
         dimension="bands",
@@ -249,14 +280,4 @@ def create_job_patch_to_point_worldcereal(
     cube = cube.merge_cubes(meteo)
     cube = cube.merge_cubes(copernicus)
 
-    cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
-
-    job_options = {
-        "executor-memory": executor_memory,
-        "executor-memoryOverhead": python_memory,
-    }
-    return cube.create_job(
-        title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
-        out_format="Parquet",
-        job_options=job_options,
-    )
+    return cube
