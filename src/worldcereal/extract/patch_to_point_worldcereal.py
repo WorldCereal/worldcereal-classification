@@ -31,7 +31,27 @@ STAC_ENDPOINT_SLOPE_TERRASCOPE = (
     "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
 )
 
+# Due to a bug on openEO side (https://github.com/Open-EO/openeo-geopyspark-driver/issues/1153)
+# We have to provide here ALL bands in ALPHABETICAL order!
 S2_BANDS = [
+    "S2-L2A-B01",
+    "S2-L2A-B02",
+    "S2-L2A-B03",
+    "S2-L2A-B04",
+    "S2-L2A-B05",
+    "S2-L2A-B06",
+    "S2-L2A-B07",
+    "S2-L2A-B08",
+    "S2-L2A-B09",
+    "S2-L2A-B11",
+    "S2-L2A-B12",
+    "S2-L2A-B8A",
+    "S2-L2A-DISTANCE-TO-CLOUD",
+    "S2-L2A-SCL",
+    "S2-L2A-SCL_DILATED_MASK",
+]
+
+S2_BANDS_SELECTED = [
     "S2-L2A-B02",
     "S2-L2A-B03",
     "S2-L2A-B04",
@@ -148,20 +168,18 @@ def create_job_patch_to_point_worldcereal(
         url=STAC_ENDPOINT_S1,
         properties=s1_stac_property_filter,
         temporal_extent=[row["start_date"], row["end_date"]],
+        bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
     )
     s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
     s1 = mean_compositing(s1, period="month")
     s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
 
-    s2_raw = (
-        connection.load_stac(
-            url=STAC_ENDPOINT_S2,
-            properties=s2_stac_property_filter,
-            temporal_extent=[row["start_date"], row["end_date"]],
-        )
-        .rename_labels(dimension="bands", target=S2_BANDS)
-        .filter_bands(S2_BANDS)
-    )  # Using the bands argument in load_stac doesn't work, see: https://github.com/Open-EO/openeo-geopyspark-driver/issues/873
+    s2_raw = connection.load_stac(
+        url=STAC_ENDPOINT_S2,
+        properties=s2_stac_property_filter,
+        temporal_extent=[row["start_date"], row["end_date"]],
+        bands=S2_BANDS,
+    ).filter_bands(S2_BANDS_SELECTED)
 
     def optimized_mask(input: ProcessBuilder):
         """
@@ -172,13 +190,9 @@ def create_job_patch_to_point_worldcereal(
         return if_(mask_band != 1, input)
 
     s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask)
-
-    # cloud_mask = s2_raw.band("S2-L2A-SCL_DILATED_MASK")
-    s2 = s2.filter_bands(S2_BANDS[:-1])
-    # s2 = s2.mask(cloud_mask)
-
-    s2 = s2.linear_scale_range(0, 65534, 0, 65534)
     s2 = median_compositing(s2, period="month")
+    s2 = s2.filter_bands(S2_BANDS[:-1])
+    s2 = s2.linear_scale_range(0, 65534, 0, 65534)
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
     dem = dem_raw.min_time()
