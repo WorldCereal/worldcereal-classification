@@ -394,6 +394,7 @@ def worldcereal_preprocessed_inputs(
     # available products.
     s1_data = raw_datacube_S1(
         connection=connection,
+        spatial_extent=spatial_extent,
         backend_context=backend_context,
         temporal_extent=temporal_extent,
         bands=[
