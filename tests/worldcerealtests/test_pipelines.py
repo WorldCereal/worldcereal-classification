@@ -74,6 +74,11 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     single_labels = value_counts[value_counts < 3].index.to_list()
     training_df = training_df[~training_df["ewoc_code"].isin(single_labels)]
 
+    print("*" * 40)
+    for c in training_df.columns:
+        print(c)
+    print("*" * 40)
+
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
     assert training_df.shape == (238, 316)
 
