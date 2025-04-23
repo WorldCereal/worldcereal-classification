@@ -197,7 +197,7 @@ def generate_map(
         "executor-memory": "2g",
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
-        "soft-errors": "true",
+        "soft-errors": 0.1,
         "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
     }
     if job_options is not None:
@@ -302,7 +302,7 @@ def collect_inputs(
         "executor-memory": "1g",
         "executor-memoryOverhead": "1g",
         "python-memory": "2g",
-        "soft-errors": "true",
+        "soft-errors": 0.1,
     }
     if job_options is not None:
         JOB_OPTIONS.update(job_options)

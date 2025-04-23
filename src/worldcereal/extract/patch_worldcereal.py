@@ -47,7 +47,7 @@ WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL = {
     "executor-memory": "1800m",
     "python-memory": "3000m",
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "max_executors": 22,
 }
 

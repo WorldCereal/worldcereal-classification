@@ -34,7 +34,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S1 = {
     "executor-memory": "1800m",
     "python-memory": "1900m",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
 }
 
 

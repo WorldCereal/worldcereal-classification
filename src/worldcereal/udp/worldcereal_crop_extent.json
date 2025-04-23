@@ -1307,7 +1307,7 @@
     "executor-memory": "2g",
     "executor-memoryOverhead": "1g",
     "python-memory": "3g",
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "udf-dependency-archives": [
       "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip#onnx_deps"
     ]

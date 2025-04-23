@@ -32,7 +32,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S2 = {
     "python-memory": "1900m",
     "executor-cores": "1",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "gdal-dataset-cache-size": 2,
     "gdal-cachemax": 120,
     "executor-threads-jvm": 1,
