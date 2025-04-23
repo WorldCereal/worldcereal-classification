@@ -300,7 +300,9 @@ def prepare_job_dataframe(
     samples_gdf["valid_time"] = pd.to_datetime(samples_gdf.valid_time)
     samples_gdf["year"] = samples_gdf.valid_time.dt.year
 
-    split_dfs_time = [group.reset_index() for _, group in samples_gdf.groupby("year")]
+    split_dfs_time = [
+        group.reset_index(drop=True) for _, group in samples_gdf.groupby("year")
+    ]
     pipeline_log.info("Performing splitting by s2 grid...")
     for df in split_dfs_time:
         s2_split_df = split_job_s2grid(df, max_points=max_locations)
@@ -651,6 +653,16 @@ def _prepare_extraction_jobs(
 
         # Change status "canceled" to "not_started"
         job_df.loc[job_df.status.isin(["canceled"]), "status"] = "not_started"
+
+        # If restart_failed is True, reset some statuses as well.
+        # Normally should be handled in GFMap but does not always work
+        if restart_failed:
+            pipeline_log.info("Resetting failed jobs.")
+            job_df.loc[
+                job_df["status"].isin(["error", "postprocessing-error"]), "status"
+            ] = "not_started"
+
+        # Save new job tracking dataframe
         job_df.to_csv(tracking_df_path, index=False)
 
         status_histogram = check_job_status(output_folder)

@@ -34,7 +34,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S1 = {
     "executor-memory": "1800m",
     "python-memory": "1900m",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
 }
 
 
@@ -151,14 +151,14 @@ def create_job_patch_s1(
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
     spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, "SENTINEL1"
+        provider, geometry_df, row.name, "SENTINEL1"
     )
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Create the job to extract S2
+    # Create the job to extract S1
     cube = raw_datacube_S1(
         connection=connection,
         backend_context=backend_context,

@@ -32,7 +32,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S2 = {
     "python-memory": "1900m",
     "executor-cores": "1",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "gdal-dataset-cache-size": 2,
     "gdal-cachemax": 120,
     "executor-threads-jvm": 1,
@@ -106,7 +106,7 @@ def create_job_patch_s2(
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
     spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, "SENTINEL2"
+        provider, geometry_df, row.name, "SENTINEL2"
     )
 
     # Backend name and fetching type
