@@ -227,8 +227,8 @@ def create_job_patch_to_point_worldcereal(
     )
 
     cube = s2.merge_cubes(s1)
-    cube = cube.merge_cubes(copernicus)
     cube = cube.merge_cubes(meteo)
+    cube = cube.merge_cubes(copernicus)
 
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
 
