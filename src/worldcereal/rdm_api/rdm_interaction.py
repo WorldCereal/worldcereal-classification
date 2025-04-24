@@ -412,6 +412,7 @@ class RdmInteraction:
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""
+                SET TimeZone = 'UTC';
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))) AS wkb_geometry, '{ref_id}' AS ref_id
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))
