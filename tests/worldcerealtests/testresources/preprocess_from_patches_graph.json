@@ -1,0 +1,779 @@
+{
+    "loadstac1": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B01",
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B09",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-B8A",
+                "S2-L2A-DISTANCE-TO-CLOUD",
+                "S2-L2A-SCL",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "properties": {
+                "ref_id": {
+                    "process_graph": {
+                        "eq1": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": "test_ref_id"
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "proj:epsg": {
+                    "process_graph": {
+                        "eq2": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": 32631
+                            },
+                            "result": true
+                        }
+                    }
+                }
+            },
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/worldcereal_sentinel_2_patch_extractions"
+        }
+    },
+    "filterbands1": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "data": {
+                "from_node": "loadstac1"
+            }
+        }
+    },
+    "applydimension1": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "filterbands1"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement1": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "label": "S2-L2A-SCL_DILATED_MASK"
+                        }
+                    },
+                    "neq1": {
+                        "process_id": "neq",
+                        "arguments": {
+                            "x": {
+                                "from_node": "arrayelement1"
+                            },
+                            "y": 1
+                        }
+                    },
+                    "if1": {
+                        "process_id": "if",
+                        "arguments": {
+                            "accept": {
+                                "from_parameter": "data"
+                            },
+                            "value": {
+                                "from_node": "neq1"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "aggregatetemporalperiod1": {
+        "process_id": "aggregate_temporal_period",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension1"
+            },
+            "dimension": "t",
+            "period": "month",
+            "reducer": {
+                "process_graph": {
+                    "median1": {
+                        "process_id": "median",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "filterbands2": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
+                "S2-L2A-B11",
+                "S2-L2A-B12"
+            ],
+            "data": {
+                "from_node": "aggregatetemporalperiod1"
+            }
+        }
+    },
+    "apply1": {
+        "process_id": "apply",
+        "arguments": {
+            "data": {
+                "from_node": "filterbands2"
+            },
+            "process": {
+                "process_graph": {
+                    "linearscalerange1": {
+                        "process_id": "linear_scale_range",
+                        "arguments": {
+                            "inputMax": 65534,
+                            "inputMin": 0,
+                            "outputMax": 65534,
+                            "outputMin": 0,
+                            "x": {
+                                "from_parameter": "x"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "loadstac2": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "S1-SIGMA0-VH",
+                "S1-SIGMA0-VV"
+            ],
+            "properties": {
+                "ref_id": {
+                    "process_graph": {
+                        "eq3": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": "test_ref_id"
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "proj:epsg": {
+                    "process_graph": {
+                        "eq4": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": 32631
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "sat:orbit_state": {
+                    "process_graph": {
+                        "eq5": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": null
+                            },
+                            "result": true
+                        }
+                    }
+                }
+            },
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/worldcereal_sentinel_1_patch_extractions"
+        }
+    },
+    "applydimension2": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "loadstac2"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement2": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 0
+                        }
+                    },
+                    "log1": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement2"
+                            }
+                        }
+                    },
+                    "multiply1": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 20.0,
+                            "y": {
+                                "from_node": "log1"
+                            }
+                        }
+                    },
+                    "subtract1": {
+                        "process_id": "subtract",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply1"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide1": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "subtract1"
+                            },
+                            "y": 10.0
+                        }
+                    },
+                    "power1": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide1"
+                            }
+                        }
+                    },
+                    "arrayelement3": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 1
+                        }
+                    },
+                    "log2": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement3"
+                            }
+                        }
+                    },
+                    "multiply2": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 20.0,
+                            "y": {
+                                "from_node": "log2"
+                            }
+                        }
+                    },
+                    "subtract2": {
+                        "process_id": "subtract",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply2"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide2": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "subtract2"
+                            },
+                            "y": 10.0
+                        }
+                    },
+                    "power2": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide2"
+                            }
+                        }
+                    },
+                    "arraycreate1": {
+                        "process_id": "array_create",
+                        "arguments": {
+                            "data": [
+                                {
+                                    "from_node": "power1"
+                                },
+                                {
+                                    "from_node": "power2"
+                                }
+                            ]
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "aggregatetemporalperiod2": {
+        "process_id": "aggregate_temporal_period",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension2"
+            },
+            "dimension": "t",
+            "period": "month",
+            "reducer": {
+                "process_graph": {
+                    "mean1": {
+                        "process_id": "mean",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "applydimension3": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "aggregatetemporalperiod2"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement4": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 0
+                        }
+                    },
+                    "log3": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement4"
+                            }
+                        }
+                    },
+                    "multiply3": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 10.0,
+                            "y": {
+                                "from_node": "log3"
+                            }
+                        }
+                    },
+                    "add1": {
+                        "process_id": "add",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply3"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide3": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "add1"
+                            },
+                            "y": 20.0
+                        }
+                    },
+                    "power3": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide3"
+                            }
+                        }
+                    },
+                    "arrayelement5": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 1
+                        }
+                    },
+                    "log4": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement5"
+                            }
+                        }
+                    },
+                    "multiply4": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 10.0,
+                            "y": {
+                                "from_node": "log4"
+                            }
+                        }
+                    },
+                    "add2": {
+                        "process_id": "add",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply4"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide4": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "add2"
+                            },
+                            "y": 20.0
+                        }
+                    },
+                    "power4": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide4"
+                            }
+                        }
+                    },
+                    "arraycreate2": {
+                        "process_id": "array_create",
+                        "arguments": {
+                            "data": [
+                                {
+                                    "from_node": "power3"
+                                },
+                                {
+                                    "from_node": "power4"
+                                }
+                            ]
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "apply2": {
+        "process_id": "apply",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension3"
+            },
+            "process": {
+                "process_graph": {
+                    "linearscalerange2": {
+                        "process_id": "linear_scale_range",
+                        "arguments": {
+                            "inputMax": 65534,
+                            "inputMin": 1,
+                            "outputMax": 65534,
+                            "outputMin": 1,
+                            "x": {
+                                "from_parameter": "x"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "mergecubes1": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "apply1"
+            },
+            "cube2": {
+                "from_node": "apply2"
+            }
+        }
+    },
+    "loadstac3": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "temperature-mean",
+                "precipitation-flux"
+            ],
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
+        }
+    },
+    "resamplespatial1": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadstac3"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
+    "renamelabels1": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial1"
+            },
+            "dimension": "bands",
+            "target": [
+                "AGERA5-TMEAN",
+                "AGERA5-PRECIP"
+            ]
+        }
+    },
+    "mergecubes2": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "mergecubes1"
+            },
+            "cube2": {
+                "from_node": "renamelabels1"
+            }
+        }
+    },
+    "loadstac4": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "Slope"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
+        }
+    },
+    "renamelabels2": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "loadstac4"
+            },
+            "dimension": "bands",
+            "target": [
+                "slope"
+            ]
+        }
+    },
+    "reducedimension1": {
+        "process_id": "reduce_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "renamelabels2"
+            },
+            "dimension": "t",
+            "reducer": {
+                "process_graph": {
+                    "min1": {
+                        "process_id": "min",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "loadcollection1": {
+        "process_id": "load_collection",
+        "arguments": {
+            "bands": [
+                "DEM"
+            ],
+            "id": "COPERNICUS_30",
+            "spatial_extent": null,
+            "temporal_extent": null
+        }
+    },
+    "reducedimension2": {
+        "process_id": "reduce_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "loadcollection1"
+            },
+            "dimension": "t",
+            "reducer": {
+                "process_graph": {
+                    "min2": {
+                        "process_id": "min",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "renamelabels3": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "reducedimension2"
+            },
+            "dimension": "bands",
+            "source": [
+                "DEM"
+            ],
+            "target": [
+                "elevation"
+            ]
+        }
+    },
+    "mergecubes3": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "reducedimension1"
+            },
+            "cube2": {
+                "from_node": "renamelabels3"
+            }
+        }
+    },
+    "resamplecubespatial1": {
+        "process_id": "resample_cube_spatial",
+        "arguments": {
+            "data": {
+                "from_node": "mergecubes3"
+            },
+            "method": "bilinear",
+            "target": {
+                "from_node": "apply1"
+            }
+        }
+    },
+    "apply3": {
+        "process_id": "apply",
+        "arguments": {
+            "data": {
+                "from_node": "resamplecubespatial1"
+            },
+            "process": {
+                "process_graph": {
+                    "linearscalerange3": {
+                        "process_id": "linear_scale_range",
+                        "arguments": {
+                            "inputMax": 65534,
+                            "inputMin": 0,
+                            "outputMax": 65534,
+                            "outputMin": 0,
+                            "x": {
+                                "from_parameter": "x"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "mergecubes4": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "mergecubes2"
+            },
+            "cube2": {
+                "from_node": "apply3"
+            }
+        },
+        "result": true
+    }
+}
