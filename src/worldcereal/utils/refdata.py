@@ -68,6 +68,7 @@ def query_public_extractions(
     query_metadata = f"""
     SET s3_endpoint='s3.waw3-1.cloudferro.com';
     SET enable_progress_bar=false;
+    SET TimeZone = 'UTC';
     SELECT distinct ref_id
     FROM read_parquet('{metadata_s3_path}') metadata
     WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))
@@ -227,6 +228,7 @@ AND ewoc_code > 1100000000
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
+SET TimeZone = 'UTC';
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{tpath}')
 {spatial_query_part}
@@ -466,9 +468,10 @@ def process_extractions_df(
             logger.error(error_msg)
             raise ValueError(error_msg)
         else:
-            logger.warning(
-                f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
-            )
+            if invalid_samples.shape[0] > 0:
+                logger.warning(
+                    f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
+                )
 
         # put the proposed valid_time back into the main dataframe
         df_raw.loc[:, "valid_time"] = df_raw["sample_id"].map(
