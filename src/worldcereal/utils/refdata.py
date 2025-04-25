@@ -16,6 +16,7 @@ def query_public_extractions(
     bbox_poly: Polygon,
     buffer: int = 250000,
     filter_cropland: bool = True,
+    crop_types: Optional[list[int]] = None,
 ) -> pd.DataFrame:
     """
     Query the WorldCereal global extractions database for reference data within a specified area.
@@ -36,6 +37,9 @@ def query_public_extractions(
         If True, filter results to include only temporary cropland samples (WorldCereal
         classes with codes 11-... except fallow classes 11-15-...). This step is needed
         when preparing data for croptype classification models.
+    crop_types : Optional[List[int]], optional
+        List of crop types to filter on, by default None
+        If None, all crop types are included.
 
     Returns
     -------
@@ -118,6 +122,12 @@ AND ewoc_code > 1100000000
     else:
         cropland_filter_query_part = ""
 
+    if crop_types is not None:
+        ct_list_str = ",".join([str(x) for x in crop_types])
+        cropland_filter_query_part += f"""
+AND ewoc_code IN ({ct_list_str})
+"""
+
     for i, url in enumerate(s3_urls_lst):
         query = f"""
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
@@ -154,6 +164,7 @@ def query_private_extractions(
     bbox_poly: Optional[Polygon] = None,
     filter_cropland: bool = True,
     buffer: int = 250000,
+    crop_types: Optional[list[int]] = None,
 ) -> pd.DataFrame:
     """
     Query and filter private extraction data stored in parquet files.
@@ -173,6 +184,9 @@ def query_private_extractions(
         excluding fallow classes). Should be True when using data for croptype classification.
     buffer : int, default=250000
         Buffer distance in meters to apply to the bounding box polygon when spatial filtering.
+    crop_types : Optional[List[int]], optional
+            List of crop types to filter on, by default None
+            If None, all crop types are included.
 
     Returns
     -------
@@ -224,6 +238,12 @@ AND ewoc_code > 1100000000
 """
     else:
         cropland_filter_query_part = ""
+
+    if crop_types is not None:
+        ct_list_str = ",".join([str(x) for x in crop_types])
+        cropland_filter_query_part += f"""
+AND ewoc_code IN ({ct_list_str})
+"""
 
     main_query = ""
     for i, tpath in enumerate(private_collection_paths):
