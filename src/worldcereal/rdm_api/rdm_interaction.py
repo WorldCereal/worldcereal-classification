@@ -37,6 +37,7 @@ class RdmInteraction:
         "sample_id",
         "ewoc_code",
         "valid_time",
+        "irrigation_status",
         "quality_score_lc",
         "quality_score_ct",
         "extract",
