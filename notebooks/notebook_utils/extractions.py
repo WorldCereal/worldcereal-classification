@@ -357,6 +357,7 @@ def query_extractions(
     filter_cropland: bool = True,
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
+    crop_types: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     """Wrapper function to query both public and private extractions in a given area.
 
@@ -372,6 +373,9 @@ def query_extractions(
         Whether to include public extractions, by default True
     private_parquet_path : Optional[Path], optional
         Path to a parquet file containing private extractions, by default None
+    crop_types : Optional[List[int]], optional
+            List of crop types to filter on, by default None
+            If None, all crop types are included.
 
     Returns
     -------
@@ -387,6 +391,7 @@ def query_extractions(
             bbox_poly,
             buffer=buffer,
             filter_cropland=filter_cropland,
+            crop_types=crop_types,
         )
 
         if len(public_df) > 0:
@@ -411,6 +416,7 @@ def query_extractions(
             bbox_poly=bbox_poly,
             filter_cropland=filter_cropland,
             buffer=buffer,
+            crop_types=crop_types,
         )
 
         if len(private_df) > 0:
