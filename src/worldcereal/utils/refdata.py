@@ -401,7 +401,22 @@ def process_extractions_df(
 
     logger.info("Processing selected samples ...")
 
-    # make sure the valid_time, start and end dates are datetime objects
+    # check for essential attributes
+    required_columns = [
+        "valid_time",
+        "start_date",
+        "end_date",
+        "timestamp",
+        "sample_id",
+    ]
+    for col in required_columns:
+        if col not in df_raw.columns:
+            error_msg = f"Missing required column: {col}. Please check the input data."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+    # make sure the timestamp, valid_time, start and end dates are datetime objects
+    df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"])
     for date_col in ["valid_time", "start_date", "end_date"]:
         df_raw[date_col] = pd.to_datetime(df_raw[date_col])
         df_raw[date_col] = (
