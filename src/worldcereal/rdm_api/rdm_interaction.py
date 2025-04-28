@@ -24,6 +24,20 @@ from urllib3.util.retry import Retry
 from worldcereal.rdm_api.rdm_collection import RdmCollection
 from worldcereal.utils.legend import ewoc_code_to_label
 
+# Define the default columns to be extracted from the RDM API
+RDM_DEFAULT_COLUMNS = [
+    "sample_id",
+    "ewoc_code",
+    "valid_time",
+    "irrigation_status",
+    "quality_score_lc",
+    "quality_score_ct",
+    "extract",
+    "h3_l3_cell",
+    "ref_id",
+    "geometry",
+]
+
 
 class NoIntersectingCollections(Exception):
     """Raised when no spatiotemporally intersecting collection IDs are found in the RDM."""
@@ -31,19 +45,6 @@ class NoIntersectingCollections(Exception):
 
 class RdmInteraction:
     """Class to interact with the WorldCereal RDM API."""
-
-    # Define the default columns to be extracted from the RDM API
-    DEFAULT_COLUMNS = [
-        "sample_id",
-        "ewoc_code",
-        "valid_time",
-        "quality_score_lc",
-        "quality_score_ct",
-        "extract",
-        "h3_l3_cell",
-        "ref_id",
-        "geometry",
-    ]
 
     # RDM API Endpoint
     RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
@@ -413,6 +414,7 @@ class RdmInteraction:
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""
+                SET TimeZone = 'UTC';
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))) AS wkb_geometry, '{ref_id}' AS ref_id
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))
@@ -432,7 +434,7 @@ class RdmInteraction:
     def get_samples(
         self,
         ref_ids: Optional[List[str]] = None,
-        columns: List[str] = DEFAULT_COLUMNS,
+        columns: List[str] = RDM_DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
         spatial_extent: Optional[
             Union[BoundingBoxExtent, Polygon, MultiPolygon]
@@ -443,6 +445,7 @@ class RdmInteraction:
         include_private: Optional[bool] = False,
         min_quality_lc: int = 0,
         min_quality_ct: int = 0,
+        ground_truth_file: Optional[Union[Path, str]] = None,
     ) -> gpd.GeoDataFrame:
         """Queries the RDM API and generates a GeoPandas GeoDataframe of all samples meeting the search criteria.
 
@@ -475,6 +478,9 @@ class RdmInteraction:
             Minimum quality score for land cover [0-100].
         min_quality_ct: int = 0
             Minimum quality score for crop type [0-100].
+        ground_truth_file: Optional[Union[Path, str]] = None
+            Optional path to a ground truth file. If provided, the query to the
+            RDM is bypassed and the ground truth file is used instead.
 
         Returns
         -------
@@ -482,26 +488,30 @@ class RdmInteraction:
             A GeoDataFrame containing the extracted samples.
         """
 
-        # Determine which collections need to be queried if they are not specified
-        if not ref_ids:
-            collections = self.get_collections(
-                spatial_extent=spatial_extent,
-                temporal_extent=temporal_extent,
-                ewoc_codes=ewoc_codes,
-                include_public=include_public,
-                include_private=include_private,
-            )
-            if not collections:
-                logger.warning(
-                    "No collections found in the RDM for your search criteria."
+        if ground_truth_file is None:
+            # Determine which collections need to be queried if they are not specified
+            if not ref_ids:
+                collections = self.get_collections(
+                    spatial_extent=spatial_extent,
+                    temporal_extent=temporal_extent,
+                    ewoc_codes=ewoc_codes,
+                    include_public=include_public,
+                    include_private=include_private,
                 )
-                return gpd.GeoDataFrame()
-            ref_ids = [col.id for col in collections]
+                if not collections:
+                    logger.warning(
+                        "No collections found in the RDM for your search criteria."
+                    )
+                    return gpd.GeoDataFrame()
+                ref_ids = [col.id for col in collections]
 
-        logger.info(f"Querying {len(ref_ids)} collections...")
+            logger.info(f"Querying {len(ref_ids)} collections...")
 
-        # For each collection, get the download URL
-        urls = self._get_download_urls(ref_ids)
+            # For each collection, get the download URL
+            urls = self._get_download_urls(ref_ids)
+        else:
+            logger.info(f"Querying ground truth from: {ground_truth_file}")
+            urls = [str(ground_truth_file)]
 
         # Ensure we have a valid spatial_extent
         if spatial_extent is None:

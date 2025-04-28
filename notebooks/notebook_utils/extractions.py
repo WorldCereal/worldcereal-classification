@@ -10,6 +10,7 @@ from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
 
+from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import (
     gdf_to_points,
     query_private_extractions,
@@ -18,17 +19,6 @@ from worldcereal.utils.refdata import (
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
-RDM_ATTRIBUTES = [
-    "sample_id",
-    "ewoc_code",
-    "valid_time",
-    "irrigation_status",
-    "extract",
-    "quality_score_lc",
-    "quality_score_ct",
-    "h3_l3_cell",
-    "geometry",
-]
 
 BANDS = {
     "S2-L2A": ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B11", "B12"],
@@ -87,18 +77,18 @@ def prepare_samples_dataframe(
 
     gdf = load_dataframe(Path(samples_df_path))
 
+    # Add ref_id attribute
+    gdf["ref_id"] = ref_id
+
     # Check presence of essential attributes
-    missing_attributes = set(RDM_ATTRIBUTES) - set(gdf.columns)
+    missing_attributes = set(RDM_DEFAULT_COLUMNS) - set(gdf.columns)
     if len(missing_attributes) > 0:
         raise ValueError(
             f"Missing essential attributes in the input dataframe: {missing_attributes}"
         )
 
     # Keep essential attributes only
-    gdf = gdf[RDM_ATTRIBUTES]
-
-    # Add ref_id attribute
-    gdf["ref_id"] = ref_id
+    gdf = gdf[RDM_DEFAULT_COLUMNS]
 
     # Convert geometries to points
     logger.info(f"Loaded {len(gdf)} samples from {samples_df_path}")
@@ -357,6 +347,7 @@ def query_extractions(
     filter_cropland: bool = True,
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
+    crop_types: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     """Wrapper function to query both public and private extractions in a given area.
 
@@ -372,6 +363,9 @@ def query_extractions(
         Whether to include public extractions, by default True
     private_parquet_path : Optional[Path], optional
         Path to a parquet file containing private extractions, by default None
+    crop_types : Optional[List[int]], optional
+            List of crop types to filter on, by default None
+            If None, all crop types are included.
 
     Returns
     -------
@@ -387,6 +381,7 @@ def query_extractions(
             bbox_poly,
             buffer=buffer,
             filter_cropland=filter_cropland,
+            crop_types=crop_types,
         )
 
         if len(public_df) > 0:
@@ -411,6 +406,7 @@ def query_extractions(
             bbox_poly=bbox_poly,
             filter_cropland=filter_cropland,
             buffer=buffer,
+            crop_types=crop_types,
         )
 
         if len(private_df) > 0:

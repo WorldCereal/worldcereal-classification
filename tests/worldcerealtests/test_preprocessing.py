@@ -7,6 +7,9 @@ from openeo_gfmap import BoundingBoxExtent, FetchType
 from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
 from openeo_gfmap.temporal import TemporalContext
 
+from worldcereal.extract.patch_to_point_worldcereal import (
+    worldcereal_preprocessed_inputs_from_patches,
+)
 from worldcereal.openeo.preprocessing import (
     InvalidTemporalContextError,
     _validate_temporal_context,
@@ -87,6 +90,30 @@ def test_worldcereal_preprocessed_inputs_graph_withslope():
 
     # Ref file with processing graph
     ref_graph = basedir / "testresources" / "preprocess_graphwithslope.json"
+
+    # # uncomment to save current graph to the ref file
+    # with open(ref_graph, "w") as f:
+    #     f.write(json.dumps(cube.flat_graph(), indent=4))
+
+    with open(ref_graph, "r") as f:
+        expected = json.load(f)
+        assert expected == cube.flat_graph()
+
+
+def test_worldcereal_preprocessed_inputs_from_patches_graph():
+    """This version gets a preprocessed cube from extracted patches."""
+
+    temporal_extent = TemporalContext("2020-01-01", "2020-12-31")
+
+    cube = worldcereal_preprocessed_inputs_from_patches(
+        connection=cdse_connection(),
+        temporal_extent=temporal_extent,
+        ref_id="test_ref_id",
+        epsg=32631,
+    )
+
+    # Ref file with processing graph
+    ref_graph = basedir / "testresources" / "preprocess_from_patches_graph.json"
 
     # # uncomment to save current graph to the ref file
     # with open(ref_graph, "w") as f:
