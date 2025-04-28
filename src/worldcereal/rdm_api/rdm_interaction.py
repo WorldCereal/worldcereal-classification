@@ -24,6 +24,20 @@ from urllib3.util.retry import Retry
 from worldcereal.rdm_api.rdm_collection import RdmCollection
 from worldcereal.utils.legend import ewoc_code_to_label
 
+# Define the default columns to be extracted from the RDM API
+RDM_DEFAULT_COLUMNS = [
+    "sample_id",
+    "ewoc_code",
+    "valid_time",
+    "irrigation_status",
+    "quality_score_lc",
+    "quality_score_ct",
+    "extract",
+    "h3_l3_cell",
+    "ref_id",
+    "geometry",
+]
+
 
 class NoIntersectingCollections(Exception):
     """Raised when no spatiotemporally intersecting collection IDs are found in the RDM."""
@@ -31,20 +45,6 @@ class NoIntersectingCollections(Exception):
 
 class RdmInteraction:
     """Class to interact with the WorldCereal RDM API."""
-
-    # Define the default columns to be extracted from the RDM API
-    DEFAULT_COLUMNS = [
-        "sample_id",
-        "ewoc_code",
-        "valid_time",
-        "irrigation_status",
-        "quality_score_lc",
-        "quality_score_ct",
-        "extract",
-        "h3_l3_cell",
-        "ref_id",
-        "geometry",
-    ]
 
     # RDM API Endpoint
     RDM_ENDPOINT = "https://ewoc-rdm-api.iiasa.ac.at"
@@ -434,7 +434,7 @@ class RdmInteraction:
     def get_samples(
         self,
         ref_ids: Optional[List[str]] = None,
-        columns: List[str] = DEFAULT_COLUMNS,
+        columns: List[str] = RDM_DEFAULT_COLUMNS,
         subset: Optional[bool] = False,
         spatial_extent: Optional[
             Union[BoundingBoxExtent, Polygon, MultiPolygon]
