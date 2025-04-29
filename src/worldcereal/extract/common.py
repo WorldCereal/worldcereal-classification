@@ -200,6 +200,16 @@ def post_job_action_patch(
 
         pipeline_log.info(f"Final output file created: {item_asset_path}")
 
+        # Test if the file is not corrupt
+        try:
+            ds = xr.open_dataset(item_asset_path)
+            ds.close()
+        except Exception as e:
+            pipeline_log.error(
+                "The output file %s is corrupt. Error: %s", item_asset_path, e
+            )
+            raise
+
         # Update the metadata of the item
         if write_stac_api:
             item.properties.update(new_attributes)
@@ -724,7 +734,6 @@ def _run_extraction_jobs(
     pipeline_log.info("Running the extraction jobs.")
     job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
     pipeline_log.info("Extraction jobs completed.")
-    return
 
 
 def _merge_extraction_jobs(
