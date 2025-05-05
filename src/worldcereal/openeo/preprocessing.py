@@ -24,6 +24,53 @@ class InvalidTemporalContextError(Exception):
     pass
 
 
+def spatially_filter_cube(
+    connection: Connection, cube: DataCube, spatial_extent: Optional[SpatialContext]
+) -> DataCube:
+    """
+    Apply spatial filtering to a data cube based on the given spatial extent.
+
+
+    Parameters
+    ----------
+    connection : Connection
+        The connection object used to interact with the openEO backend.
+    cube : DataCube
+        The input data cube to be spatially filtered.
+    spatial_extent : Optional[SpatialContext]
+        The spatial extent used for filtering the data cube. It can be a BoundingBoxExtent,
+        a GeoJSON object, or a URL to a GeoJSON or Parquet file. If set to `None`,
+        no spatial filtering will be applied.
+
+    Returns
+    -------
+    DataCube
+        The spatially filtered data cube.
+
+    Raises
+    ------
+    ValueError
+        If the spatial_extent parameter is not of type BoundingBoxExtent, GeoJSON, or str.
+
+    """
+    if isinstance(spatial_extent, BoundingBoxExtent):
+        cube = cube.filter_bbox(dict(spatial_extent))
+    elif isinstance(spatial_extent, GeoJSON):
+        cube = cube.filter_spatial(spatial_extent)
+    elif isinstance(spatial_extent, str):
+        geometry = connection.load_url(
+            spatial_extent,
+            format=(
+                "Parquet"
+                if ".parquet" in spatial_extent or ".geoparquet" in spatial_extent
+                else "GeoJSON"
+            ),
+        )
+        cube = cube.filter_spatial(geometry)
+
+    return cube
+
+
 def raw_datacube_S2(
     connection: Connection,
     backend_context: BackendContext,
@@ -144,8 +191,18 @@ def raw_datacube_S2(
     # Do spatial filtering
     if isinstance(spatial_extent, BoundingBoxExtent):
         s2_cube = s2_cube.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON) or isinstance(spatial_extent, str):
+    elif isinstance(spatial_extent, GeoJSON):
         s2_cube = s2_cube.filter_spatial(spatial_extent)
+    elif isinstance(spatial_extent, str):
+        geometry = connection.load_url(
+            spatial_extent,
+            format=(
+                "Parquet"
+                if ".parquet" in spatial_extent or ".geoparquet" in spatial_extent
+                else "GeoJSON"
+            ),
+        )
+        s2_cube = s2_cube.filter_spatial(geometry)
 
     return s2_cube
 
@@ -230,10 +287,7 @@ def raw_datacube_S1(
     ).get_cube(connection, None, temporal_extent)
 
     # Do spatial filtering
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        s1_cube = s1_cube.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON) or isinstance(spatial_extent, str):
-        s1_cube = s1_cube.filter_spatial(spatial_extent)
+    s1_cube = spatially_filter_cube(connection, s1_cube, spatial_extent)
 
     return s1_cube
 
@@ -281,10 +335,7 @@ def raw_datacube_DEM(
         cube = slope.merge_cubes(cube)
 
     # Do spatial filtering
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        cube = cube.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON) or isinstance(spatial_extent, str):
-        cube = cube.filter_spatial(spatial_extent)
+    cube = spatially_filter_cube(connection, cube, spatial_extent)
 
     return cube
 
@@ -306,10 +357,7 @@ def raw_datacube_METEO(
     meteo_cube = extractor.get_cube(connection, None, temporal_extent)
 
     # Do spatial filtering
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        meteo_cube = meteo_cube.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON) or isinstance(spatial_extent, str):
-        meteo_cube = meteo_cube.filter_spatial(spatial_extent)
+    meteo_cube = spatially_filter_cube(connection, meteo_cube, spatial_extent)
 
     return meteo_cube
 
@@ -437,10 +485,7 @@ def worldcereal_preprocessed_inputs(
         data = data.merge_cubes(meteo_data)
 
     # Spatial filtering at the end
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        data = data.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON) or isinstance(spatial_extent, str):
-        data = data.filter_spatial(spatial_extent)
+    data = spatially_filter_cube(connection, data, spatial_extent)
 
     return data
 
