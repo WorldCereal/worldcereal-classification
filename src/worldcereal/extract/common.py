@@ -669,7 +669,10 @@ def _prepare_extraction_jobs(
         if restart_failed:
             pipeline_log.info("Resetting failed jobs.")
             job_df.loc[
-                job_df["status"].isin(["error", "postprocessing-error"]), "status"
+                job_df["status"].isin(
+                    ["error", "postprocessing-error", "start_failed"]
+                ),
+                "status",
             ] = "not_started"
 
         # Save new job tracking dataframe
