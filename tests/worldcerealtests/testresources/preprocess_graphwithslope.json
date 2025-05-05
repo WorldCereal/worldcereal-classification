@@ -30,14 +30,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -67,14 +60,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -284,14 +270,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -586,14 +565,7 @@
                 "DEM"
             ],
             "id": "COPERNICUS_30",
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": null
         }
     },
@@ -752,6 +724,21 @@
             },
             "cube2": {
                 "from_node": "resamplecubespatial2"
+            }
+        }
+    },
+    "filterbbox1": {
+        "process_id": "filter_bbox",
+        "arguments": {
+            "data": {
+                "from_node": "mergecubes4"
+            },
+            "extent": {
+                "west": 44.432274,
+                "east": 44.698802,
+                "north": 51.428224,
+                "south": 51.317362,
+                "crs": "EPSG:4326"
             }
         },
         "result": true
