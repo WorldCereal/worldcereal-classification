@@ -13,11 +13,12 @@ from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S2
+from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
-    upload_geoparquet_s3,  # isort: skip
+    upload_geoparquet_artifactory,  # isort: skip
 )  # isort: skip
 
 
@@ -46,6 +47,9 @@ def create_job_dataframe_patch_s2(
     """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
     rows = []
     for job in tqdm(split_jobs):
+        # Subset on required attributes
+        job = job[RDM_DEFAULT_COLUMNS]
+
         # Compute the average in the valid date and make a buffer of 1.5 year around
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
@@ -105,8 +109,11 @@ def create_job_patch_s2(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
-    spatial_extent_url = upload_geoparquet_s3(
-        provider, geometry_df, row.name, "SENTINEL2"
+    # spatial_extent_url = upload_geoparquet_s3(
+    #     provider, geometry_df, row.name, "SENTINEL2"
+    # )
+    spatial_extent_url = upload_geoparquet_artifactory(
+        geometry_df, row.name, collection="SENTINEL2"
     )
 
     # Backend name and fetching type

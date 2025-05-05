@@ -20,6 +20,7 @@ from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate_vvvh
 from tqdm import tqdm
 
 from worldcereal.openeo.preprocessing import raw_datacube_S1
+from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
@@ -45,6 +46,10 @@ def create_job_dataframe_patch_s1(
     """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
     rows = []
     for job in tqdm(split_jobs):
+
+        # Subset on required attributes
+        job = job[RDM_DEFAULT_COLUMNS]
+
         # Compute the average in the valid date and make a buffer of 1.5 year around
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
