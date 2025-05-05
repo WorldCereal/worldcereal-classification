@@ -71,6 +71,41 @@ def spatially_filter_cube(
     return cube
 
 
+def select_best_s1_orbit_direction(
+    backend_context: BackendContext,
+    spatial_extent: SpatialContext,
+    temporal_extent: TemporalContext,
+) -> str:
+    """Selects the best Sentinel-1 orbit direction based on the given spatio-temporal context.
+
+    Parameters
+    ----------
+    backend_context : BackendContext
+        The backend context for accessing the data.
+    spatial_extent : SpatialContext
+        The spatial extent of the data.
+    temporal_extent : TemporalContext
+        The temporal extent of the data.
+
+    Returns
+    -------
+    str
+        The selected orbit direction (either "ASCENDING" or "DESCENDING").
+    """
+    try:
+        orbit_direction = select_s1_orbitstate_vvvh(
+            backend_context, spatial_extent, temporal_extent
+        )
+    except UncoveredS1Exception as exc:
+        orbit_direction = "ASCENDING"
+        print(
+            f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
+            f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
+        )
+
+    return orbit_direction
+
+
 def raw_datacube_S2(
     connection: Connection,
     backend_context: BackendContext,
@@ -238,34 +273,11 @@ def raw_datacube_S1(
     target_resolution : float, optional
         Target resolution to resample the data to, by default 20.0.
     orbit_direction : Optional[str], optional
-        Orbit direction to filter the data, by default None. If None and the
-        backend is in CDSE, then querries the catalogue for the best orbit
-        direction to use. In the case querrying is unavailable or fails, then
-        uses "ASCENDING" as a last resort.
+        Orbit direction to filter the data, by default None.
     """
     extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
     }
-    if orbit_direction is None and backend_context.backend in [
-        Backend.CDSE,
-        Backend.CDSE_STAGING,
-        Backend.FED,
-    ]:
-        if spatial_extent is None:
-            raise ValueError(
-                "If the `orbit_direction` is not specified, the spatial"
-                " extent must be provided to determine the best orbit direction."
-            )
-        try:
-            orbit_direction = select_s1_orbitstate_vvvh(
-                backend_context, spatial_extent, temporal_extent
-            )
-        except UncoveredS1Exception as exc:
-            orbit_direction = "ASCENDING"
-            print(
-                f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
-                f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
-            )
 
     if orbit_direction is not None:
         extractor_parameters["load_collection"] = {
@@ -440,9 +452,16 @@ def worldcereal_preprocessed_inputs(
     # Extraction of the S1 data
     # Decides on the orbit direction from the maximum overlapping area of
     # available products.
+    if s1_orbit_state is None and backend_context.backend in [
+        Backend.CDSE,
+        Backend.CDSE_STAGING,
+        Backend.FED,
+    ]:
+        s1_orbit_state = select_best_s1_orbit_direction(
+            backend_context, spatial_extent, temporal_extent
+        )
     s1_data = raw_datacube_S1(
         connection=connection,
-        spatial_extent=spatial_extent,
         backend_context=backend_context,
         temporal_extent=temporal_extent,
         bands=[
