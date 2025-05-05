@@ -46,10 +46,6 @@ def create_job_dataframe_patch_s1(
     """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
     rows = []
     for job in tqdm(split_jobs):
-
-        # Subset on required attributes
-        job = job[RDM_DEFAULT_COLUMNS]
-
         # Compute the average in the valid date and make a buffer of 1.5 year around
         min_time = job.valid_time.min()
         max_time = job.valid_time.max()
@@ -100,6 +96,9 @@ def create_job_dataframe_patch_s1(
 
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
+
+        # Subset on required attributes
+        job = job[RDM_DEFAULT_COLUMNS]
 
         variables = {
             "backend_name": backend.value,
