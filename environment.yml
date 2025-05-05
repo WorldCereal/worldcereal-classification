@@ -18,7 +18,7 @@ dependencies:
   - loguru=0.7.2
   - netcdf4
   - numpy<2.0.0
-  - openeo=0.31.0
+  - openeo=0.35.0
   - pip
   - pyarrow=16.1.0
   - pydantic=2.8.0
