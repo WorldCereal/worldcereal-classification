@@ -224,20 +224,7 @@ def raw_datacube_S2(
     ).get_cube(connection, None, temporal_extent)
 
     # Do spatial filtering
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        s2_cube = s2_cube.filter_bbox(dict(spatial_extent))
-    elif isinstance(spatial_extent, GeoJSON):
-        s2_cube = s2_cube.filter_spatial(spatial_extent)
-    elif isinstance(spatial_extent, str):
-        geometry = connection.load_url(
-            spatial_extent,
-            format=(
-                "Parquet"
-                if ".parquet" in spatial_extent or ".geoparquet" in spatial_extent
-                else "GeoJSON"
-            ),
-        )
-        s2_cube = s2_cube.filter_spatial(geometry)
+    s2_cube = spatially_filter_cube(connection, s2_cube, spatial_extent)
 
     return s2_cube
 
