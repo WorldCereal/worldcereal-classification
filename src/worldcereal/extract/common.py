@@ -1,6 +1,5 @@
 """Common functions used by extraction scripts."""
 
-import grp
 import json
 import os
 import shutil
@@ -113,6 +112,8 @@ def post_job_action_patch(
     sensor: str = "Sentinel1",
 ) -> list:
     """From the job items, extract the metadata and save it in a netcdf file."""
+
+    import grp
 
     # First do some basic quality checks to see if everything went right
     extraction_job_quality_check(row)
