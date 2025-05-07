@@ -159,7 +159,7 @@ def create_job_patch_s1(
     #     provider, geometry_df, f"{row.s2_tile}_{row.name}", "SENTINEL1"
     # )
     spatial_extent_url = upload_geoparquet_artifactory(
-        geometry_df, f"{row.s2_tile}_{row.name}", collection="SENTINEL2"
+        geometry_df, f"{row.s2_tile}_{row.name}", collection="SENTINEL1"
     )
 
     # Backend name and fetching type
