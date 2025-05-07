@@ -19,6 +19,7 @@ from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
+    # upload_geoparquet_s3,  # isort: skip
 )  # isort: skip
 
 
@@ -110,10 +111,10 @@ def create_job_patch_s2(
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
     # spatial_extent_url = upload_geoparquet_s3(
-    #     provider, geometry_df, row.name, "SENTINEL2"
+    #     provider, geometry_df, f"{row.s2_tile}_{row.name}", "SENTINEL2"
     # )
     spatial_extent_url = upload_geoparquet_artifactory(
-        geometry_df, row.name, collection="SENTINEL2"
+        geometry_df, f"{row.s2_tile}_{row.name}", collection="SENTINEL2"
     )
 
     # Backend name and fetching type
