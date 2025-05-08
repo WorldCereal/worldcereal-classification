@@ -725,50 +725,6 @@
             "cube2": {
                 "from_node": "resamplecubespatial2"
             }
-        }
-    },
-    "filterspatial1": {
-        "process_id": "filter_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "mergecubes4"
-            },
-            "geometries": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            }
         },
         "result": true
     }
