@@ -15,14 +15,11 @@ from openeo_gfmap import (
     FetchType,
     TemporalContext,
 )
-from openeo_gfmap.preprocessing.sar import (
-    compress_backscatter_uint16,
-    spatially_filter_cube,
-)
+from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate_vvvh
 from tqdm import tqdm
 
-from worldcereal.openeo.preprocessing import raw_datacube_S1
+from worldcereal.openeo.preprocessing import raw_datacube_S1, spatially_filter_cube
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
