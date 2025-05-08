@@ -12,7 +12,7 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
-from worldcereal.openeo.preprocessing import raw_datacube_S2
+from worldcereal.openeo.preprocessing import raw_datacube_S2, spatially_filter_cube
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
@@ -152,6 +152,9 @@ def create_job_patch_s2(
         apply_mask_flag=False,
         additional_masks_flag=True,
     )
+
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_polygons = get_job_nb_polygons(row)

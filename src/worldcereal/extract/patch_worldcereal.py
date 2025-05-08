@@ -27,7 +27,10 @@ from pyproj import CRS
 from tqdm import tqdm
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+from worldcereal.openeo.preprocessing import (
+    spatially_filter_cube,
+    worldcereal_preprocessed_inputs,
+)
 from worldcereal.utils.geoloader import load_reproject
 
 from worldcereal.extract.utils import (  # isort: skip
@@ -174,6 +177,9 @@ def create_job_patch_worldcereal(
         s1_orbit_state=orbit_state,
         validate_temporal_context=False,
     )
+
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Additional values to generate the BatchJob name
     s2_tile = row.s2_tile

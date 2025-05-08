@@ -15,7 +15,10 @@ from openeo_gfmap import (
     FetchType,
     TemporalContext,
 )
-from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
+from openeo_gfmap.preprocessing.sar import (
+    compress_backscatter_uint16,
+    spatially_filter_cube,
+)
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate_vvvh
 from tqdm import tqdm
 
@@ -178,6 +181,9 @@ def create_job_patch_s1(
         orbit_direction=orbit_state,
     )
     cube = compress_backscatter_uint16(backend_context, cube)
+
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Additional values to generate the BatcJob name
     s2_tile = row.s2_tile
