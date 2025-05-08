@@ -223,10 +223,6 @@ def raw_datacube_S2(
         **extraction_parameters,
     ).get_cube(connection, None, temporal_extent)
 
-    # Do spatial filtering in case of tile fetching
-    if fetch_type == FetchType.TILE:
-        s2_cube = spatially_filter_cube(connection, s2_cube, spatial_extent)
-
     return s2_cube
 
 
@@ -286,10 +282,6 @@ def raw_datacube_S1(
         backend_context, bands=bands, fetch_type=fetch_type, **extractor_parameters
     ).get_cube(connection, None, temporal_extent)
 
-    # Do spatial filtering in case of tile fetching
-    if fetch_type == FetchType.TILE:
-        s1_cube = spatially_filter_cube(connection, s1_cube, spatial_extent)
-
     return s1_cube
 
 
@@ -335,10 +327,6 @@ def raw_datacube_DEM(
         # to merge DEM with, as it comes at 20m resolution.
         cube = slope.merge_cubes(cube)
 
-    # Do spatial filtering in case of tile fetching
-    if fetch_type == FetchType.TILE:
-        cube = spatially_filter_cube(connection, cube, spatial_extent)
-
     return cube
 
 
@@ -357,10 +345,6 @@ def raw_datacube_METEO(
     )
 
     meteo_cube = extractor.get_cube(connection, None, temporal_extent)
-
-    # Do spatial filtering in case of tile fetching
-    if fetch_type == FetchType.TILE:
-        meteo_cube = spatially_filter_cube(connection, meteo_cube, spatial_extent)
 
     return meteo_cube
 
@@ -493,10 +477,6 @@ def worldcereal_preprocessed_inputs(
         meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
 
         data = data.merge_cubes(meteo_data)
-
-    # Do spatial filtering at the end in case of tile fetching
-    if fetch_type == FetchType.TILE:
-        data = spatially_filter_cube(connection, data, spatial_extent)
 
     return data
 

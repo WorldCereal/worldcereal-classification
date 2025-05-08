@@ -143,8 +143,7 @@ def generate_map(
         # disable_meteo=True,
     )
 
-    # Explicit filtering again for bbox because of METEO low
-    # resolution causing issues
+    # Spatial filtering
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     # Construct the feature extraction and model inference pipeline
@@ -298,6 +297,7 @@ def collect_inputs(
         validate_temporal_context=False,
     )
 
+    # Spatial filtering
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     JOB_OPTIONS = {
