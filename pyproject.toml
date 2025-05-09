@@ -15,6 +15,9 @@ exclude = [
 path = "src/worldcereal/_version.py"
 pattern = "^__version__ = ['\"](?P<version>[^'\"]+)['\"]$"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "worldcereal"
 authors = [
@@ -26,8 +29,7 @@ authors = [
 description = "WorldCereal classification module"
 readme = "README.md"
 requires-python = ">=3.8"
-# dynamic = ["version"]
-version = "2.2.1.dev0"
+dynamic = ["version"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -84,15 +86,9 @@ addopts = [
   "--import-mode=prepend",
 ]
 
-[tool.isort]
-profile = "black"
-
-
 [tool.ruff]
-# line-length = 88
+line-length = 88
+extend-select = ["I"]  # Enable import sorting
 
 [tool.ruff.lint]
 select = ["E", "F"]
-ignore = [
-  "E501",  # Ignore "line-too-long" issues, let black handle that.
-]
