@@ -28,13 +28,12 @@ from tqdm import tqdm
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.preprocessing import (
-    precomposited_datacube_METEO,
+    spatially_filter_cube,
     worldcereal_preprocessed_inputs,
 )
 from worldcereal.utils.geoloader import load_reproject
 
 from worldcereal.extract.utils import (  # isort: skip
-    get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_s3,  # isort: skip
     S2_GRID,  # isort: skip
@@ -47,7 +46,7 @@ WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
 DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL = {
     "executor-memory": "1800m",
     "python-memory": "3000m",
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "max_executors": 22,
 }
 
@@ -150,7 +149,7 @@ def create_job_patch_worldcereal(
     # Get the S1 orbit state
     orbit_state = row.orbit_state
 
-    # Transfor to a GeoDataFrame
+    # Transform to a GeoDataFrame
     def _to_gdf(geometries: geojson.FeatureCollection) -> gpd.GeoDataFrame:
         gdf = gpd.GeoDataFrame.from_features(geometries).set_crs(epsg=4326)
         utm = gdf.estimate_utm_crs()
@@ -160,7 +159,7 @@ def create_job_patch_worldcereal(
 
     geometry_df = _to_gdf(geometry)
     spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, collection="WORLDCEREAL"
+        provider, geometry_df, row.name, collection="WORLDCEREAL"
     )
 
     # Backend name and fetching type
@@ -176,26 +175,15 @@ def create_job_patch_worldcereal(
         temporal_extent=temporal_context,
         fetch_type=FetchType.POLYGON,
         s1_orbit_state=orbit_state,
-        tile_size=128,
-        disable_meteo=True,
+        validate_temporal_context=False,
     )
 
-    # Get precomposited meteo cube using s2 tile extent
-    meteo_cube = precomposited_datacube_METEO(
-        connection=connection,
-        temporal_extent=temporal_context,
-    )
-
-    # Join the meteo cube with the other inputs
-    cube = cube.merge_cubes(meteo_cube)
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Additional values to generate the BatchJob name
     s2_tile = row.s2_tile
     valid_time = geometry.features[0].properties["valid_time"]
-
-    # Increase the memory of the jobs depending on the number of polygons to extract
-    number_polygons = get_job_nb_polygons(row)
-    pipeline_log.debug("Number of polygons to extract %s", number_polygons)
 
     # Set job options
     final_job_options = copy.deepcopy(DEFAULT_JOB_OPTIONS_PATCH_WORLDCEREAL)

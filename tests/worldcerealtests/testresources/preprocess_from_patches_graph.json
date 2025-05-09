@@ -1,152 +1,9 @@
 {
-    "loadcollection1": {
-        "process_id": "load_collection",
+    "loadstac1": {
+        "process_id": "load_stac",
         "arguments": {
             "bands": [
-                "B02",
-                "B03",
-                "B04",
-                "B05",
-                "B06",
-                "B07",
-                "B08",
-                "B11",
-                "B12"
-            ],
-            "id": "SENTINEL2_L2A",
-            "properties": {
-                "eo:cloud_cover": {
-                    "process_graph": {
-                        "lte1": {
-                            "process_id": "lte",
-                            "arguments": {
-                                "x": {
-                                    "from_parameter": "value"
-                                },
-                                "y": 95.0
-                            },
-                            "result": true
-                        }
-                    }
-                }
-            },
-            "spatial_extent": null,
-            "temporal_extent": [
-                "2020-06-01",
-                "2021-05-31"
-            ]
-        }
-    },
-    "loadcollection2": {
-        "process_id": "load_collection",
-        "arguments": {
-            "bands": [
-                "SCL"
-            ],
-            "id": "SENTINEL2_L2A",
-            "properties": {
-                "eo:cloud_cover": {
-                    "process_graph": {
-                        "lte2": {
-                            "process_id": "lte",
-                            "arguments": {
-                                "x": {
-                                    "from_parameter": "value"
-                                },
-                                "y": 95.0
-                            },
-                            "result": true
-                        }
-                    }
-                }
-            },
-            "spatial_extent": null,
-            "temporal_extent": [
-                "2020-06-01",
-                "2021-05-31"
-            ]
-        }
-    },
-    "resamplespatial1": {
-        "process_id": "resample_spatial",
-        "arguments": {
-            "align": "upper-left",
-            "data": {
-                "from_node": "loadcollection2"
-            },
-            "method": "near",
-            "projection": null,
-            "resolution": 10
-        }
-    },
-    "toscldilationmask1": {
-        "process_id": "to_scl_dilation_mask",
-        "arguments": {
-            "data": {
-                "from_node": "resamplespatial1"
-            },
-            "erosion_kernel_size": 3,
-            "kernel1_size": 17,
-            "kernel2_size": 77,
-            "mask1_values": [
-                2,
-                4,
-                5,
-                6,
-                7
-            ],
-            "mask2_values": [
-                3,
-                8,
-                9,
-                10,
-                11
-            ],
-            "scl_band_name": "SCL"
-        }
-    },
-    "renamelabels1": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "toscldilationmask1"
-            },
-            "dimension": "bands",
-            "target": [
-                "S2-L2A-SCL_DILATED_MASK"
-            ]
-        }
-    },
-    "mask1": {
-        "process_id": "mask",
-        "arguments": {
-            "data": {
-                "from_node": "loadcollection1"
-            },
-            "mask": {
-                "from_node": "renamelabels1"
-            }
-        }
-    },
-    "renamelabels2": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "mask1"
-            },
-            "dimension": "bands",
-            "source": [
-                "B02",
-                "B03",
-                "B04",
-                "B05",
-                "B06",
-                "B07",
-                "B08",
-                "B11",
-                "B12"
-            ],
-            "target": [
+                "S2-L2A-B01",
                 "S2-L2A-B02",
                 "S2-L2A-B03",
                 "S2-L2A-B04",
@@ -154,16 +11,163 @@
                 "S2-L2A-B06",
                 "S2-L2A-B07",
                 "S2-L2A-B08",
+                "S2-L2A-B09",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-B8A",
+                "S2-L2A-DISTANCE-TO-CLOUD",
+                "S2-L2A-SCL",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "properties": {
+                "ref_id": {
+                    "process_graph": {
+                        "eq1": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": "test_ref_id"
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "proj:epsg": {
+                    "process_graph": {
+                        "eq2": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": 32631
+                            },
+                            "result": true
+                        }
+                    }
+                }
+            },
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/worldcereal_sentinel_2_patch_extractions"
+        }
+    },
+    "filterbands1": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "data": {
+                "from_node": "loadstac1"
+            }
+        }
+    },
+    "applydimension1": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "filterbands1"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement1": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "label": "S2-L2A-SCL_DILATED_MASK"
+                        }
+                    },
+                    "neq1": {
+                        "process_id": "neq",
+                        "arguments": {
+                            "x": {
+                                "from_node": "arrayelement1"
+                            },
+                            "y": 1
+                        }
+                    },
+                    "if1": {
+                        "process_id": "if",
+                        "arguments": {
+                            "accept": {
+                                "from_parameter": "data"
+                            },
+                            "value": {
+                                "from_node": "neq1"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "aggregatetemporalperiod1": {
+        "process_id": "aggregate_temporal_period",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension1"
+            },
+            "dimension": "t",
+            "period": "month",
+            "reducer": {
+                "process_graph": {
+                    "median1": {
+                        "process_id": "median",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "filterbands2": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
                 "S2-L2A-B11",
                 "S2-L2A-B12"
-            ]
+            ],
+            "data": {
+                "from_node": "aggregatetemporalperiod1"
+            }
         }
     },
     "apply1": {
         "process_id": "apply",
         "arguments": {
             "data": {
-                "from_node": "renamelabels2"
+                "from_node": "filterbands2"
             },
             "process": {
                 "process_graph": {
@@ -184,176 +188,74 @@
             }
         }
     },
-    "aggregatetemporalperiod1": {
-        "process_id": "aggregate_temporal_period",
-        "arguments": {
-            "data": {
-                "from_node": "apply1"
-            },
-            "dimension": "t",
-            "period": "month",
-            "reducer": {
-                "process_graph": {
-                    "median1": {
-                        "process_id": "median",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            }
-                        },
-                        "result": true
-                    }
-                }
-            }
-        }
-    },
-    "apply2": {
-        "process_id": "apply",
-        "arguments": {
-            "data": {
-                "from_node": "aggregatetemporalperiod1"
-            },
-            "process": {
-                "process_graph": {
-                    "linearscalerange2": {
-                        "process_id": "linear_scale_range",
-                        "arguments": {
-                            "inputMax": 65534,
-                            "inputMin": 0,
-                            "outputMax": 65534,
-                            "outputMin": 0,
-                            "x": {
-                                "from_parameter": "x"
-                            }
-                        },
-                        "result": true
-                    }
-                }
-            }
-        }
-    },
-    "loadcollection3": {
-        "process_id": "load_collection",
+    "loadstac2": {
+        "process_id": "load_stac",
         "arguments": {
             "bands": [
-                "VH",
-                "VV"
+                "S1-SIGMA0-VH",
+                "S1-SIGMA0-VV"
             ],
-            "id": "SENTINEL1_GRD",
             "properties": {
-                "sat:orbit_state": {
+                "ref_id": {
                     "process_graph": {
-                        "eq1": {
+                        "eq3": {
                             "process_id": "eq",
                             "arguments": {
                                 "x": {
                                     "from_parameter": "value"
                                 },
-                                "y": "DESCENDING"
+                                "y": "test_ref_id"
                             },
                             "result": true
                         }
                     }
                 },
-                "polarisation": {
+                "proj:epsg": {
                     "process_graph": {
-                        "eq2": {
+                        "eq4": {
                             "process_id": "eq",
                             "arguments": {
                                 "x": {
                                     "from_parameter": "value"
                                 },
-                                "y": "VV&VH"
+                                "y": 32631
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "sat:orbit_state": {
+                    "process_graph": {
+                        "eq5": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": null
                             },
                             "result": true
                         }
                     }
                 }
             },
-            "spatial_extent": null,
             "temporal_extent": [
-                "2020-06-01",
-                "2021-05-31"
-            ]
-        }
-    },
-    "sarbackscatter1": {
-        "process_id": "sar_backscatter",
-        "arguments": {
-            "coefficient": "sigma0-ellipsoid",
-            "contributing_area": false,
-            "data": {
-                "from_node": "loadcollection3"
-            },
-            "elevation_model": "COPERNICUS_30",
-            "ellipsoid_incidence_angle": false,
-            "local_incidence_angle": false,
-            "mask": false,
-            "noise_removal": true
-        }
-    },
-    "resamplespatial2": {
-        "process_id": "resample_spatial",
-        "arguments": {
-            "align": "upper-left",
-            "data": {
-                "from_node": "sarbackscatter1"
-            },
-            "method": "near",
-            "projection": null,
-            "resolution": 20.0
-        }
-    },
-    "renamelabels3": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "resamplespatial2"
-            },
-            "dimension": "bands",
-            "source": [
-                "VH",
-                "VV"
+                "2020-01-01",
+                "2020-12-31"
             ],
-            "target": [
-                "S1-SIGMA0-VH",
-                "S1-SIGMA0-VV"
-            ]
+            "url": "https://stac.openeo.vito.be/collections/worldcereal_sentinel_1_patch_extractions"
         }
     },
-    "aggregatetemporalperiod2": {
-        "process_id": "aggregate_temporal_period",
-        "arguments": {
-            "data": {
-                "from_node": "renamelabels3"
-            },
-            "dimension": "t",
-            "period": "month",
-            "reducer": {
-                "process_graph": {
-                    "mean1": {
-                        "process_id": "mean",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            }
-                        },
-                        "result": true
-                    }
-                }
-            }
-        }
-    },
-    "applydimension1": {
+    "applydimension2": {
         "process_id": "apply_dimension",
         "arguments": {
             "data": {
-                "from_node": "aggregatetemporalperiod2"
+                "from_node": "loadstac2"
             },
             "dimension": "bands",
             "process": {
                 "process_graph": {
-                    "arrayelement1": {
+                    "arrayelement2": {
                         "process_id": "array_element",
                         "arguments": {
                             "data": {
@@ -367,21 +269,21 @@
                         "arguments": {
                             "base": 10,
                             "x": {
-                                "from_node": "arrayelement1"
+                                "from_node": "arrayelement2"
                             }
                         }
                     },
                     "multiply1": {
                         "process_id": "multiply",
                         "arguments": {
-                            "x": 10.0,
+                            "x": 20.0,
                             "y": {
                                 "from_node": "log1"
                             }
                         }
                     },
-                    "add1": {
-                        "process_id": "add",
+                    "subtract1": {
+                        "process_id": "subtract",
                         "arguments": {
                             "x": {
                                 "from_node": "multiply1"
@@ -393,9 +295,9 @@
                         "process_id": "divide",
                         "arguments": {
                             "x": {
-                                "from_node": "add1"
+                                "from_node": "subtract1"
                             },
-                            "y": 20.0
+                            "y": 10.0
                         }
                     },
                     "power1": {
@@ -407,7 +309,7 @@
                             }
                         }
                     },
-                    "arrayelement2": {
+                    "arrayelement3": {
                         "process_id": "array_element",
                         "arguments": {
                             "data": {
@@ -421,21 +323,21 @@
                         "arguments": {
                             "base": 10,
                             "x": {
-                                "from_node": "arrayelement2"
+                                "from_node": "arrayelement3"
                             }
                         }
                     },
                     "multiply2": {
                         "process_id": "multiply",
                         "arguments": {
-                            "x": 10.0,
+                            "x": 20.0,
                             "y": {
                                 "from_node": "log2"
                             }
                         }
                     },
-                    "add2": {
-                        "process_id": "add",
+                    "subtract2": {
+                        "process_id": "subtract",
                         "arguments": {
                             "x": {
                                 "from_node": "multiply2"
@@ -447,9 +349,9 @@
                         "process_id": "divide",
                         "arguments": {
                             "x": {
-                                "from_node": "add2"
+                                "from_node": "subtract2"
                             },
-                            "y": 20.0
+                            "y": 10.0
                         }
                     },
                     "power2": {
@@ -479,15 +381,173 @@
             }
         }
     },
-    "apply3": {
+    "aggregatetemporalperiod2": {
+        "process_id": "aggregate_temporal_period",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension2"
+            },
+            "dimension": "t",
+            "period": "month",
+            "reducer": {
+                "process_graph": {
+                    "mean1": {
+                        "process_id": "mean",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "applydimension3": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "aggregatetemporalperiod2"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement4": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 0
+                        }
+                    },
+                    "log3": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement4"
+                            }
+                        }
+                    },
+                    "multiply3": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 10.0,
+                            "y": {
+                                "from_node": "log3"
+                            }
+                        }
+                    },
+                    "add1": {
+                        "process_id": "add",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply3"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide3": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "add1"
+                            },
+                            "y": 20.0
+                        }
+                    },
+                    "power3": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide3"
+                            }
+                        }
+                    },
+                    "arrayelement5": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "index": 1
+                        }
+                    },
+                    "log4": {
+                        "process_id": "log",
+                        "arguments": {
+                            "base": 10,
+                            "x": {
+                                "from_node": "arrayelement5"
+                            }
+                        }
+                    },
+                    "multiply4": {
+                        "process_id": "multiply",
+                        "arguments": {
+                            "x": 10.0,
+                            "y": {
+                                "from_node": "log4"
+                            }
+                        }
+                    },
+                    "add2": {
+                        "process_id": "add",
+                        "arguments": {
+                            "x": {
+                                "from_node": "multiply4"
+                            },
+                            "y": 83.0
+                        }
+                    },
+                    "divide4": {
+                        "process_id": "divide",
+                        "arguments": {
+                            "x": {
+                                "from_node": "add2"
+                            },
+                            "y": 20.0
+                        }
+                    },
+                    "power4": {
+                        "process_id": "power",
+                        "arguments": {
+                            "base": 10,
+                            "p": {
+                                "from_node": "divide4"
+                            }
+                        }
+                    },
+                    "arraycreate2": {
+                        "process_id": "array_create",
+                        "arguments": {
+                            "data": [
+                                {
+                                    "from_node": "power3"
+                                },
+                                {
+                                    "from_node": "power4"
+                                }
+                            ]
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "apply2": {
         "process_id": "apply",
         "arguments": {
             "data": {
-                "from_node": "applydimension1"
+                "from_node": "applydimension3"
             },
             "process": {
                 "process_graph": {
-                    "linearscalerange3": {
+                    "linearscalerange2": {
                         "process_id": "linear_scale_range",
                         "arguments": {
                             "inputMax": 65534,
@@ -508,27 +568,77 @@
         "process_id": "merge_cubes",
         "arguments": {
             "cube1": {
-                "from_node": "apply2"
+                "from_node": "apply1"
             },
             "cube2": {
-                "from_node": "apply3"
+                "from_node": "apply2"
             }
         }
     },
-    "loadstac1": {
+    "loadstac3": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "temperature-mean",
+                "precipitation-flux"
+            ],
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
+        }
+    },
+    "resamplespatial1": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadstac3"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
+    "renamelabels1": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial1"
+            },
+            "dimension": "bands",
+            "target": [
+                "AGERA5-TMEAN",
+                "AGERA5-PRECIP"
+            ]
+        }
+    },
+    "mergecubes2": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "mergecubes1"
+            },
+            "cube2": {
+                "from_node": "renamelabels1"
+            }
+        }
+    },
+    "loadstac4": {
         "process_id": "load_stac",
         "arguments": {
             "bands": [
                 "Slope"
             ],
-            "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
+            "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
         }
     },
-    "renamelabels4": {
+    "renamelabels2": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "loadstac1"
+                "from_node": "loadstac4"
             },
             "dimension": "bands",
             "target": [
@@ -540,7 +650,7 @@
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
-                "from_node": "renamelabels4"
+                "from_node": "renamelabels2"
             },
             "dimension": "t",
             "reducer": {
@@ -558,7 +668,7 @@
             }
         }
     },
-    "loadcollection4": {
+    "loadcollection1": {
         "process_id": "load_collection",
         "arguments": {
             "bands": [
@@ -573,7 +683,7 @@
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
-                "from_node": "loadcollection4"
+                "from_node": "loadcollection1"
             },
             "dimension": "t",
             "reducer": {
@@ -591,7 +701,7 @@
             }
         }
     },
-    "renamelabels5": {
+    "renamelabels3": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
@@ -602,30 +712,18 @@
                 "DEM"
             ],
             "target": [
-                "COP-DEM"
-            ]
-        }
-    },
-    "renamelabels6": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "renamelabels5"
-            },
-            "dimension": "bands",
-            "target": [
                 "elevation"
             ]
         }
     },
-    "mergecubes2": {
+    "mergecubes3": {
         "process_id": "merge_cubes",
         "arguments": {
             "cube1": {
                 "from_node": "reducedimension1"
             },
             "cube2": {
-                "from_node": "renamelabels6"
+                "from_node": "renamelabels3"
             }
         }
     },
@@ -633,15 +731,15 @@
         "process_id": "resample_cube_spatial",
         "arguments": {
             "data": {
-                "from_node": "mergecubes2"
+                "from_node": "mergecubes3"
             },
             "method": "bilinear",
             "target": {
-                "from_node": "apply2"
+                "from_node": "apply1"
             }
         }
     },
-    "apply4": {
+    "apply3": {
         "process_id": "apply",
         "arguments": {
             "data": {
@@ -649,7 +747,7 @@
             },
             "process": {
                 "process_graph": {
-                    "linearscalerange4": {
+                    "linearscalerange3": {
                         "process_id": "linear_scale_range",
                         "arguments": {
                             "inputMax": 65534,
@@ -666,64 +764,14 @@
             }
         }
     },
-    "mergecubes3": {
-        "process_id": "merge_cubes",
-        "arguments": {
-            "cube1": {
-                "from_node": "mergecubes1"
-            },
-            "cube2": {
-                "from_node": "apply4"
-            }
-        }
-    },
-    "loadstac2": {
-        "process_id": "load_stac",
-        "arguments": {
-            "bands": [
-                "precipitation-flux",
-                "temperature-mean"
-            ],
-            "temporal_extent": [
-                "2020-06-01",
-                "2021-05-31"
-            ],
-            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
-        }
-    },
-    "renamelabels7": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "loadstac2"
-            },
-            "dimension": "bands",
-            "target": [
-                "AGERA5-PRECIP",
-                "AGERA5-TMEAN"
-            ]
-        }
-    },
-    "resamplecubespatial2": {
-        "process_id": "resample_cube_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "renamelabels7"
-            },
-            "method": "bilinear",
-            "target": {
-                "from_node": "apply2"
-            }
-        }
-    },
     "mergecubes4": {
         "process_id": "merge_cubes",
         "arguments": {
             "cube1": {
-                "from_node": "mergecubes3"
+                "from_node": "mergecubes2"
             },
             "cube2": {
-                "from_node": "resamplecubespatial2"
+                "from_node": "apply3"
             }
         },
         "result": true

@@ -25,7 +25,7 @@ DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
     "python-memory": "3000m",
     "executor-cores": "1",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
 }
 
 

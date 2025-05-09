@@ -1,12 +1,13 @@
 """Common utilities used by extraction scripts."""
 
 import logging
+import os
 from tempfile import NamedTemporaryFile
 
 import geojson
 import geopandas as gpd
-import openeo
 import pandas as pd
+import requests
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
 
@@ -74,7 +75,7 @@ def filter_extract_true(
 
 
 def upload_geoparquet_s3(
-    conn: openeo.Connection, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+    backend: str, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
 ) -> str:
     """Upload the given GeoDataFrame to s3 and return the URL of the
     uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
@@ -86,11 +87,48 @@ def upload_geoparquet_s3(
 
     targetpath = f"openeogfmap_dataframe_{collection}_{name}.parquet"
 
-    artifact_helper = OpenEOArtifactHelper.from_openeo_connection(conn)
+    artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
     normal_s3_uri = artifact_helper.upload_file(targetpath, temporary_file.name)
     presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)
 
     return presigned_uri
+
+
+def upload_geoparquet_artifactory(
+    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+) -> str:
+    """Upload the given GeoDataFrame to artifactory and return the URL of the
+    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
+    using custom CRS.
+    """
+    # Save the dataframe as geoparquet to upload it to artifactory
+    temporary_file = NamedTemporaryFile()
+    gdf.to_parquet(temporary_file.name)
+
+    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
+    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
+
+    if not artifactory_username or not artifactory_password:
+        raise ValueError(
+            "Artifactory credentials not found. Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD."
+        )
+
+    headers = {"Content-Type": "application/octet-stream"}
+
+    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
+
+    with open(temporary_file.name, "rb") as f:
+        response = requests.put(
+            upload_url,
+            headers=headers,
+            data=f,
+            auth=(artifactory_username, artifactory_password),
+            timeout=180,
+        )
+
+    response.raise_for_status()
+
+    return upload_url
 
 
 def get_job_nb_polygons(row: pd.Series) -> int:

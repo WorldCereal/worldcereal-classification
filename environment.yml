@@ -18,7 +18,7 @@ dependencies:
   - loguru=0.7.2
   - netcdf4
   - numpy<2.0.0
-  - openeo=0.31.0
+  - openeo=0.35.0
   - pip
   - pyarrow=16.1.0
   - pydantic=2.8.0
@@ -34,7 +34,7 @@ dependencies:
   - pip:
     - duckdb==1.1.3
     - h3==4.1.0
-    - openeo-gfmap==0.4.2
+    - openeo-gfmap==0.4.4
     - git+https://github.com/worldcereal/worldcereal-classification
     - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
 

@@ -19,13 +19,15 @@ from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import s1_area_per_orbitstate_vvvh
 from tqdm import tqdm
 
-from worldcereal.openeo.preprocessing import raw_datacube_S1
+from worldcereal.openeo.preprocessing import raw_datacube_S1, spatially_filter_cube
+from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     pipeline_log,  # isort: skip
-    upload_geoparquet_s3,  # isort: skip
+    # upload_geoparquet_s3,  # isort: skip
+    upload_geoparquet_artifactory,  # isort: skip
 )
 
 S1_GRD_CATALOGUE_BEGIN_DATE = datetime(2014, 10, 1)
@@ -34,7 +36,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S1 = {
     "executor-memory": "1800m",
     "python-memory": "1900m",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
 }
 
 
@@ -96,6 +98,9 @@ def create_job_dataframe_patch_s1(
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
 
+        # Subset on required attributes
+        job = job[RDM_DEFAULT_COLUMNS]
+
         variables = {
             "backend_name": backend.value,
             "out_prefix": "S1-SIGMA0-10m",
@@ -150,15 +155,18 @@ def create_job_patch_s1(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
-    spatial_extent_url = upload_geoparquet_s3(
-        connection, geometry_df, row.name, "SENTINEL1"
+    # spatial_extent_url = upload_geoparquet_s3(
+    #     provider, geometry_df, f"{row.s2_tile}_{row.name}", "SENTINEL1"
+    # )
+    spatial_extent_url = upload_geoparquet_artifactory(
+        geometry_df, f"{row.s2_tile}_{row.name}", collection="SENTINEL1"
     )
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
     backend_context = BackendContext(backend)
 
-    # Create the job to extract S2
+    # Create the job to extract S1
     cube = raw_datacube_S1(
         connection=connection,
         backend_context=backend_context,
@@ -170,6 +178,9 @@ def create_job_patch_s1(
         orbit_direction=orbit_state,
     )
     cube = compress_backscatter_uint16(backend_context, cube)
+
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Additional values to generate the BatcJob name
     s2_tile = row.s2_tile

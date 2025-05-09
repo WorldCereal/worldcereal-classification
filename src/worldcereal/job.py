@@ -135,6 +135,133 @@ def create_inference_process_graph(
         # disable_meteo=True,
     )
 
+    # Spatial filtering
+    inputs = inputs.filter_bbox(dict(spatial_extent))
+
+    # Construct the feature extraction and model inference pipeline
+    if product_type == WorldCerealProductType.CROPLAND:
+        classes = _cropland_map(
+            inputs,
+            temporal_extent,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
+        )
+
+    elif product_type == WorldCerealProductType.CROPTYPE:
+        if not isinstance(croptype_parameters, CropTypeParameters):
+            raise ValueError(
+                f"Please provide a valid `croptype_parameters` parameter."
+                f" Received: {croptype_parameters}"
+            )
+        # First compute cropland map
+        cropland_mask = _cropland_map(
+            inputs,
+            temporal_extent,
+            cropland_parameters=cropland_parameters,
+            postprocess_parameters=postprocess_parameters,
+        )
+
+        # Save final mask if required
+        if croptype_parameters.save_mask:
+            cropland_mask = cropland_mask.save_result(
+                format="GTiff",
+                options=dict(
+                    filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
+                ),
+            )
+
+        # To use it as a mask, we need to filter out the classification band
+        # Use the generic 'process' to avoid client-side errors on missing metadata
+        cropland_mask = cropland_mask.process(
+            process_id="filter_bands",
+            arguments=dict(
+                data=cropland_mask,
+                bands=["classification"],
+            ),
+        )
+        # cropland_mask = cropland_mask.filter_bands("classification")
+
+        # Generate crop type map
+        classes = _croptype_map(
+            inputs,
+            temporal_extent,
+            croptype_parameters=croptype_parameters,
+            cropland_mask=cropland_mask,
+            postprocess_parameters=postprocess_parameters,
+        )
+
+    return classes
+
+
+def create_inference_process_graph(
+    spatial_extent: BoundingBoxExtent,
+    temporal_extent: TemporalContext,
+    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
+    cropland_parameters: CropLandParameters = CropLandParameters(),
+    croptype_parameters: CropTypeParameters = CropTypeParameters(),
+    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
+    out_format: str = "GTiff",
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
+    tile_size: Optional[int] = 128,
+) -> openeo.DataCube:
+    """Wrapper function that creates the inference openEO process graph.
+
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    product_type : WorldCerealProductType, optional
+        product describer, by default WorldCerealProductType.CROPLAND
+    cropland_parameters: CropLandParameters
+        Parameters for the cropland product inference pipeline.
+    croptype_parameters: Optional[CropTypeParameters]
+        Parameters for the croptype product inference pipeline. Only required
+        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
+        will be ignored otherwise.
+    postprocess_parameters: PostprocessParameters
+        Parameters for the postprocessing pipeline. By default disabled.
+    out_format : str, optional
+        Output format, by default "GTiff"
+    backend_context : BackendContext
+        backend to run the job on, by default CDSE.
+    tile_size: int, optional
+        Tile size to use for the data loading in OpenEO, by default 128.
+
+    Returns
+    -------
+    openeo.DataCube
+        DataCube object representing the inference process graph.
+        This object can be used to execute the job on the OpenEO backend.
+        The result will be a DataCube with the classification results.
+
+    Raises
+    ------
+    ValueError
+        if the product is not supported
+    ValueError
+        if the out_format is not supported
+    """
+    if product_type not in WorldCerealProductType:
+        raise ValueError(f"Product {product_type.value} not supported.")
+
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {format} not supported.")
+
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+
+    # Preparing the input cube for inference
+    inputs = worldcereal_preprocessed_inputs(
+        connection=connection,
+        backend_context=backend_context,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        tile_size=tile_size,
+        # disable_meteo=True,
+    )
+
     # Explicit filtering again for bbox because of METEO low
     # resolution causing issues
     inputs = inputs.filter_bbox(dict(spatial_extent))
@@ -271,7 +398,7 @@ def generate_map(
         "executor-memory": "2g",
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
-        "soft-errors": "true",
+        "soft-errors": 0.1,
         "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
     }
     if job_options is not None:
@@ -369,14 +496,18 @@ def collect_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        validate_temporal_context=False,
     )
+
+    # Spatial filtering
+    inputs = inputs.filter_bbox(dict(spatial_extent))
 
     JOB_OPTIONS = {
         "driver-memory": "4g",
         "executor-memory": "1g",
         "executor-memoryOverhead": "1g",
-        "python-memory": "2g",
-        "soft-errors": "true",
+        "python-memory": "3g",
+        "soft-errors": 0.1,
     }
     if job_options is not None:
         JOB_OPTIONS.update(job_options)
