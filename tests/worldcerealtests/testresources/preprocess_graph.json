@@ -128,55 +128,11 @@
             }
         }
     },
-    "filterspatial1": {
-        "process_id": "filter_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "mask1"
-            },
-            "geometries": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            }
-        }
-    },
     "renamelabels2": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "filterspatial1"
+                "from_node": "mask1"
             },
             "dimension": "bands",
             "source": [
@@ -321,101 +277,13 @@
             ]
         }
     },
-    "filterspatial2": {
-        "process_id": "filter_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "loadcollection3"
-            },
-            "geometries": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            }
-        }
-    },
-    "filterspatial3": {
-        "process_id": "filter_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "filterspatial2"
-            },
-            "geometries": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            }
-        }
-    },
     "sarbackscatter1": {
         "process_id": "sar_backscatter",
         "arguments": {
             "coefficient": "sigma0-ellipsoid",
             "contributing_area": false,
             "data": {
-                "from_node": "filterspatial3"
+                "from_node": "loadcollection3"
             },
             "elevation_model": "COPERNICUS_30",
             "ellipsoid_incidence_angle": false,
@@ -701,55 +569,11 @@
             "temporal_extent": null
         }
     },
-    "filterspatial4": {
-        "process_id": "filter_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "loadcollection4"
-            },
-            "geometries": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [
-                                [
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ],
-                                    [
-                                        44.432274,
-                                        51.427238
-                                    ],
-                                    [
-                                        44.69808,
-                                        51.428224
-                                    ],
-                                    [
-                                        44.698802,
-                                        51.318344
-                                    ],
-                                    [
-                                        44.433631,
-                                        51.317362
-                                    ]
-                                ]
-                            ]
-                        },
-                        "properties": {}
-                    }
-                ]
-            }
-        }
-    },
     "reducedimension2": {
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
-                "from_node": "filterspatial4"
+                "from_node": "loadcollection4"
             },
             "dimension": "t",
             "reducer": {

@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 from openeo_gfmap import BoundingBoxExtent, FetchType
-from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
+from openeo_gfmap.backend import (
+    Backend,
+    BackendContext,
+    cdse_connection,
+    vito_connection,
+)
 from openeo_gfmap.temporal import TemporalContext
 
 from worldcereal.extract.patch_to_point_worldcereal import (
@@ -106,7 +111,7 @@ def test_worldcereal_preprocessed_inputs_from_patches_graph():
     temporal_extent = TemporalContext("2020-01-01", "2020-12-31")
 
     cube = worldcereal_preprocessed_inputs_from_patches(
-        connection=cdse_connection(),
+        connection=vito_connection(),
         temporal_extent=temporal_extent,
         ref_id="test_ref_id",
         epsg=32631,

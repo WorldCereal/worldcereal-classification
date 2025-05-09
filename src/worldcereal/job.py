@@ -143,8 +143,7 @@ def generate_map(
         # disable_meteo=True,
     )
 
-    # Explicit filtering again for bbox because of METEO low
-    # resolution causing issues
+    # Spatial filtering
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     # Construct the feature extraction and model inference pipeline
@@ -295,13 +294,17 @@ def collect_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        validate_temporal_context=False,
     )
+
+    # Spatial filtering
+    inputs = inputs.filter_bbox(dict(spatial_extent))
 
     JOB_OPTIONS = {
         "driver-memory": "4g",
         "executor-memory": "1g",
         "executor-memoryOverhead": "1g",
-        "python-memory": "2g",
+        "python-memory": "3g",
         "soft-errors": 0.1,
     }
     if job_options is not None:

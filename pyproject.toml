@@ -15,6 +15,9 @@ exclude = [
 path = "src/worldcereal/_version.py"
 pattern = "^__version__ = ['\"](?P<version>[^'\"]+)['\"]$"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "worldcereal"
 authors = [
@@ -26,8 +29,7 @@ authors = [
 description = "WorldCereal classification module"
 readme = "README.md"
 requires-python = ">=3.8"
-# dynamic = ["version"]
-version = "2.2.1.dev0"
+dynamic = ["version"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -42,7 +44,7 @@ dependencies = [
     "loguru>=0.7.2",  
     "netcdf4<=1.6.4",  
     "numpy<2.0.0",  
-    "openeo==0.31.0",  
+    "openeo==0.35.0",  
     "openeo-gfmap==0.4.4",  
     "pyarrow",  
     "pydantic==2.8.0",  
@@ -86,7 +88,6 @@ addopts = [
 
 [tool.isort]
 profile = "black"
-
 
 [tool.ruff]
 # line-length = 88
