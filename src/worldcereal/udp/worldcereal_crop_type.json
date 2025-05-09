@@ -803,7 +803,18 @@
             }
           },
           "sat:orbit_state": {
-            "from_parameter": "orbit_state"
+            "process_graph": {
+              "eq1": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": "ASCENDING"
+                },
+                "process_id": "eq",
+                "result": true
+              }
+            }
           }
         },
         "spatial_extent": {
