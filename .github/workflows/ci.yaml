@@ -16,7 +16,7 @@ jobs:
     - name: Set up python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.11
+        python-version: 3.9
         cache: 'pip'
     # - name: Install openEO-GFMAP from source
     #   run: |
@@ -38,8 +38,5 @@ jobs:
         OPENEO_AUTH_METHOD: client_credentials
         OPENEO_OIDC_DEVICE_CODE_MAX_POLL_TIME: 5
         OPENEO_AUTH_PROVIDER_ID_CDSE: CDSE
-        OPENEO_AUTH_PROVIDER_ID_VITO: terrascope
         OPENEO_AUTH_CLIENT_ID_CDSE: openeo-worldcereal-service-account
-        OPENEO_AUTH_CLIENT_ID_VITO: openeo-worldcereal-service-account
         OPENEO_AUTH_CLIENT_SECRET_CDSE: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_CDSE }}
-        OPENEO_AUTH_CLIENT_SECRET_VITO: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_TERRASCOPE }}

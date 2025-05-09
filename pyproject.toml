@@ -86,9 +86,14 @@ addopts = [
   "--import-mode=prepend",
 ]
 
+[tool.isort]
+profile = "black"
+
 [tool.ruff]
-line-length = 88
-extend-select = ["I"]  # Enable import sorting
+# line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F"]
+ignore = [
+  "E501",  # Ignore "line-too-long" issues, let black handle that.
+]
