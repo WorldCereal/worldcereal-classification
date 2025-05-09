@@ -429,7 +429,9 @@
             "runudf2": {
               "arguments": {
                 "context": {
-                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/tests/be_multiclass-test_custommodel.onnx"
+                  "classifier_url": {
+                    "from_parameter": "model_url"
+                  }
                 },
                 "data": {
                   "from_parameter": "data"
@@ -645,7 +647,9 @@
             "runudf6": {
               "arguments": {
                 "context": {
-                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/tests/be_multiclass-test_custommodel.onnx",
+                  "classifier_url": {
+                    "from_parameter": "model_url"
+                  },
                   "enable": true,
                   "keep_class_probs": true,
                   "kernel_size": 5,
