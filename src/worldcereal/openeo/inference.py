@@ -95,16 +95,12 @@ class CropClassifier(ModelInference):
         import numpy as np
 
         # Classes names to codes
-        lookup_table = self._parameters.get("lookup_table", None)
+        _, lut_sorted = self.load_and_prepare_model(self._parameters["classifier_url"])
 
-        if lookup_table is None:
+        if lut_sorted is None:
             raise ValueError(
                 "Lookup table is not defined. Please provide lookup_table in the model metadata."
             )
-
-        lut_sorted = {
-            k: v for k, v in sorted(lookup_table.items(), key=lambda item: item[1])
-        }
 
         if self.onnx_session is None:
             raise ValueError("Model has not been loaded. Please load a model first.")

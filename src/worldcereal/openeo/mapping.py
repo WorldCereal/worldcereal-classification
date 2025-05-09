@@ -17,7 +17,6 @@ from worldcereal.parameters import (
     PostprocessParameters,
     WorldCerealProductType,
 )
-from worldcereal.utils.models import load_model_lut
 
 
 def _cropland_map(
@@ -65,10 +64,6 @@ def _cropland_map(
         exclude=["classifier"]
     )
 
-    lookup_table = load_model_lut(
-        cropland_parameters.classifier_parameters.classifier_url
-    )
-    parameters.update({"lookup_table": lookup_table})
     classes = apply_model_inference(
         model_inference_class=cropland_parameters.classifier,
         cube=features,
@@ -96,7 +91,11 @@ def _cropland_map(
                     filename_prefix=f"{WorldCerealProductType.CROPLAND.value}-raw_{temporal_extent.start_date}_{temporal_extent.end_date}"
                 ),
             )
-        classes = _postprocess(classes, postprocess_parameters, lookup_table)
+        classes = _postprocess(
+            classes,
+            postprocess_parameters,
+            cropland_parameters.classifier_parameters.classifier_url,
+        )
 
     # Cast to uint8
     classes = compress_uint8(classes)
@@ -150,11 +149,6 @@ def _croptype_map(
         exclude=["classifier"]
     )
 
-    lookup_table = load_model_lut(
-        croptype_parameters.classifier_parameters.classifier_url
-    )
-    parameters.update({"lookup_table": lookup_table})
-
     classes = apply_model_inference(
         model_inference_class=croptype_parameters.classifier,
         cube=features,
@@ -189,7 +183,7 @@ def _croptype_map(
         classes = _postprocess(
             classes,
             postprocess_parameters,
-            lookup_table=lookup_table,
+            classifier_url=croptype_parameters.classifier_parameters.classifier_url,
         )
 
     # Cast to uint16
@@ -201,7 +195,7 @@ def _croptype_map(
 def _postprocess(
     classes: DataCube,
     postprocess_parameters: "PostprocessParameters",
-    lookup_table: Optional[dict],
+    classifier_url: Optional[str] = None,
 ) -> DataCube:
     """Method to postprocess the classes.
 
@@ -223,7 +217,7 @@ def _postprocess(
     # Note that this uses the `apply_model_inference` method even though
     # it is not truly model inference
     parameters = postprocess_parameters.model_dump(exclude=["postprocessor"])
-    parameters.update({"lookup_table": lookup_table})
+    parameters.update({"classifier_url": classifier_url})
 
     postprocessed_classes = apply_model_inference(
         model_inference_class=postprocess_parameters.postprocessor,
