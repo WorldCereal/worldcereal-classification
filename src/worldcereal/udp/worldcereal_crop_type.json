@@ -595,7 +595,9 @@
                   "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx",
                   "enable": true,
                   "keep_class_probs": true,
-                  "kernel_size": 5,
+                  "kernel_size": {
+                    "from_parameter": "postprocess_kernel_size"
+                  },
                   "method": {
                     "from_parameter": "postprocess_method"
                   },
@@ -654,7 +656,9 @@
                   },
                   "enable": true,
                   "keep_class_probs": true,
-                  "kernel_size": 5,
+                  "kernel_size": {
+                    "from_parameter": "postprocess_kernel_size"
+                  },
                   "method": {
                     "from_parameter": "postprocess_method"
                   },
@@ -1511,6 +1515,19 @@
       },
       "process_id": "save_result"
     },
+    "saveresult4": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply7"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "croptype-postprocessed"
+        }
+      },
+      "result": true
+    },
     "toscldilationmask1": {
       "arguments": {
         "data": {
@@ -1675,7 +1692,7 @@
     },
     {
       "name": "orbit_state",
-      "description": "The orbit state of the Sentinel-1 data. Can be either 'ASCENDING' or 'DESCENDING'.",
+      "description": "The orbit state of the Sentinel-1 data. Can be either 'ASCENDING' or 'DESCENDING'. Defaults to 'DESCENDING'.",
       "schema": {
         "type": "string",
         "enum": [
@@ -1688,7 +1705,7 @@
     },
     {
       "name": "postprocess_method",
-      "description": "The postprocessing method to be used. Can be either 'majority_vote' or 'smooth_probabilities'.",
+      "description": "The postprocessing method to be used. Can be either 'majority_vote' or 'smooth_probabilities'. Defaults to 'smooth_probabilities'.",
       "schema": {
         "type": "string",
         "enum": [
@@ -1697,6 +1714,23 @@
         ]
       },
       "default": "smooth_probabilities",
+      "optional": true
+    },
+    {
+      "name": "postprocess_kernel_size",
+      "description": "The kernel size to be used for the postprocessing method. Only used if the postprocess_method is 'majority_vote'. Must be an odd integer no greater than 25. Defaults to 5.",
+      "schema": {
+        "type": "integer",
+        "maximum": 25,
+        "allOf": [
+          {
+            "not": {
+              "multipleOf": 2
+            }
+          }
+        ]
+      },
+      "default": 5,
       "optional": true
     }
   ],
