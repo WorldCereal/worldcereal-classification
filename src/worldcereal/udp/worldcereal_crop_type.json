@@ -596,7 +596,9 @@
                   "enable": true,
                   "keep_class_probs": true,
                   "kernel_size": 5,
-                  "method": "majority_vote",
+                  "method": {
+                    "from_parameter": "postprocess_method"
+                  },
                   "save_intermediate": true
                 },
                 "data": {
@@ -653,7 +655,9 @@
                   "enable": true,
                   "keep_class_probs": true,
                   "kernel_size": 5,
-                  "method": "majority_vote",
+                  "method": {
+                    "from_parameter": "postprocess_method"
+                  },
                   "save_intermediate": true
                 },
                 "data": {
@@ -1671,7 +1675,7 @@
     },
     {
       "name": "orbit_state",
-      "description": "The orbit state of the Sentinel-1 data",
+      "description": "The orbit state of the Sentinel-1 data. Can be either 'ASCENDING' or 'DESCENDING'.",
       "schema": {
         "type": "string",
         "enum": [
@@ -1680,6 +1684,19 @@
         ]
       },
       "default": "DESCENDING",
+      "optional": true
+    },
+    {
+      "name": "postprocess_method",
+      "description": "The postprocessing method to be used. Can be either 'majority_vote' or 'smooth_probabilities'.",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "majority_vote",
+          "smooth_probabilities"
+        ]
+      },
+      "default": "smooth_probabilities",
       "optional": true
     }
   ],
