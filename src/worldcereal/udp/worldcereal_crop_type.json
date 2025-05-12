@@ -216,8 +216,7 @@
           }
         }
       },
-      "process_id": "apply",
-      "result": true
+      "process_id": "apply"
     },
     "applydimension1": {
       "arguments": {
