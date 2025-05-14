@@ -5,6 +5,7 @@ import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac_client
+from loguru import logger
 from openeo.processes import ProcessBuilder, eq, if_
 from openeo_gfmap import TemporalContext
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
@@ -15,6 +16,7 @@ from openeo_gfmap.preprocessing.sar import (
 from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.rdm_api import RdmInteraction
+from worldcereal.utils.refdata import gdf_to_points
 
 STAC_ENDPOINT_S1 = (
     "https://stac.openeo.vito.be/collections/worldcereal_sentinel_1_patch_extractions"
@@ -120,6 +122,7 @@ def get_label_points(
         collections=["worldcereal_sentinel_2_patch_extractions"], query=stac_query
     )
 
+    logger.info("Querying S1/S2 STAC collections ...")
     items_s1 = {
         item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
         for item in search_s1.items()
@@ -131,6 +134,7 @@ def get_label_points(
 
     # Find sample_ids which are present in both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
+    logger.info(f"Found {len(common_sample_ids)} common sample_ids in S1 and S2")
 
     # Items with the same sample_id will also have the same geometry
     polygons = [items_s1[sample_id] for sample_id in common_sample_ids]
@@ -139,15 +143,17 @@ def get_label_points(
 
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
-    # From the RDM API, we also want other 'collateral' geometries from different ref_ids.
+    # From the RDM API, we also want other 'collateral' geometries from the same ref_id.
     gdf = RdmInteraction().get_samples(
+        ref_ids=[row["ref_id"]],
         spatial_extent=multi_polygon,
         temporal_extent=temporal_extent,
         include_private=True,
         ground_truth_file=ground_truth_file,
     )
 
-    sampled_gdf = label_points_centroid(gdf=gdf, epsg=int(row["epsg"]))
+    sampled_gdf = gdf_to_points(gdf)
+    # sampled_gdf = label_points_centroid(gdf=gdf, epsg=int(row["epsg"]))
 
     return sampled_gdf
 
@@ -157,8 +163,9 @@ def create_job_patch_to_point_worldcereal(
     connection: openeo.Connection,
     provider,
     connection_provider,
-    executor_memory: str,
-    python_memory: str,
+    executor_memory: str = "2G",
+    python_memory: str = "3G",
+    period="month",
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -171,21 +178,30 @@ def create_job_patch_to_point_worldcereal(
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
     # Get preprocessed cube from patch extractions
+    logger.info(f"Creating cube with compositing window: {period}")
     cube = worldcereal_preprocessed_inputs_from_patches(
         connection,
         temporal_extent=temporal_extent,
         ref_id=row["ref_id"],
         epsg=int(row["epsg"]),
         s1_orbit_state=s1_orbit_state,
+        period=period,
     )
 
     # Do spatial aggregation
-    point_geometries = connection.load_url(url=row["geometry_url"], format="Parquet")
+    point_geometries = connection.load_url(
+        url=str(row["geometry_url"]), format="Parquet"
+    )
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
 
     job_options = {
-        "executor-memory": executor_memory,
-        "executor-memoryOverhead": python_memory,
+        "driver-memory": "12G",
+        "executor-cores": 2,
+        "executor-memory": "4G",
+        "executor-memoryOverhead": "2G",
+        "log_level": "info",
+        "max-executors": 300,
+        "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/optimize_reduction/geotrellis-extensions-optimize_reduction.jar",
     }
 
     return cube.create_job(
@@ -201,7 +217,10 @@ def worldcereal_preprocessed_inputs_from_patches(
     ref_id: str,
     epsg: int,
     s1_orbit_state: Optional[str] = None,
+    period: Optional[str] = "month",
 ):
+    assert period in ["month", "dekad"], "period must be either 'month' or 'dekad'"
+
     # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
@@ -221,7 +240,7 @@ def worldcereal_preprocessed_inputs_from_patches(
         bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
     )
     s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
-    s1 = mean_compositing(s1, period="month")
+    s1 = mean_compositing(s1, period=period)
     s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
 
     s2_raw = connection.load_stac(
@@ -240,11 +259,14 @@ def worldcereal_preprocessed_inputs_from_patches(
         return if_(mask_band != 1, input)
 
     s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask)
-    s2 = median_compositing(s2, period="month")
+    s2 = median_compositing(s2, period=period)
     s2 = s2.filter_bands(S2_BANDS_SELECTED[:-1])
     s2 = s2.linear_scale_range(0, 65534, 0, 65534)
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])
+    dem_raw = dem_raw.resample_spatial(
+        resolution=10.0, projection=epsg, method="bilinear"
+    )
     dem = dem_raw.min_time()
     dem = dem.rename_labels(dimension="bands", target=["elevation"], source=["DEM"])
 
@@ -252,6 +274,7 @@ def worldcereal_preprocessed_inputs_from_patches(
         STAC_ENDPOINT_SLOPE_TERRASCOPE,
         bands=["Slope"],
     ).rename_labels(dimension="bands", target=["slope"])
+    slope = slope.resample_spatial(resolution=10.0, projection=epsg, method="bilinear")
     # Client fix for CDSE, the openeo client might be unsynchronized with
     # the backend.
     if "t" not in slope.metadata.dimension_names():
@@ -259,14 +282,22 @@ def worldcereal_preprocessed_inputs_from_patches(
     slope = slope.min_time()
 
     copernicus = slope.merge_cubes(dem)
-    copernicus = copernicus.resample_cube_spatial(s2, method="bilinear")
     copernicus = copernicus.linear_scale_range(0, 65534, 0, 65534)
 
-    meteo_raw = connection.load_stac(
-        url=STAC_ENDPOINT_METEO_TERRASCOPE,
-        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        bands=["temperature-mean", "precipitation-flux"],
-    )
+    if period == "month":
+        # Load precomposited monthly meteo data
+        meteo_raw = connection.load_stac(
+            url=STAC_ENDPOINT_METEO_TERRASCOPE,
+            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            bands=["temperature-mean", "precipitation-flux"],
+        )
+    elif period == "dekad":
+        # Load precomposited dekadal meteo data
+        meteo_raw = connection.load_stac(
+            url="https://stac.openeo.vito.be/collections/agera5_dekad_terrascope",
+            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            bands=["temperature-mean", "precipitation-flux"],
+        )
 
     meteo = meteo_raw.resample_spatial(
         resolution=10.0, projection=epsg, method="bilinear"
