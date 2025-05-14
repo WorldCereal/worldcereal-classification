@@ -209,6 +209,10 @@ def post_job_action(parquet_file):
     ]
     gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
 
+    # Remove rows where S1 and S2 are completely nodata
+    cols = [c for c in gdf.columns if "S2" in c or "S1" in c]
+    gdf = gdf[~((gdf[cols] == 65535).sum(axis=1) == 12)]
+
     gdf.to_parquet(parquet_file, index=False)
 
 
@@ -331,6 +335,7 @@ def merge_individual_parquet_files(
         "S2-L2A-B06": np.uint16,
         "S2-L2A-B07": np.uint16,
         "S2-L2A-B08": np.uint16,
+        "S2-L2A-B8A": np.uint16,
         "S2-L2A-B11": np.uint16,
         "S2-L2A-B12": np.uint16,
         "S1-SIGMA0-VH": np.uint16,
@@ -415,7 +420,8 @@ def main(
         if period == "month"
         else root_folder / "MERGED_PARQUETS_10D"
     )
-    merged_file = merged_dir / f"{ref_id}.geoparquet"
+    pattern = "" if period == "month" else "_10D"
+    merged_file = merged_dir / f"{ref_id}{pattern}.geoparquet"
     merged_gdf.to_parquet(merged_file, index=False)
     logger.info(f"Merged parquet file saved to: {merged_file}")
 
@@ -427,12 +433,12 @@ if __name__ == "__main__":
         "/vitodata/worldcereal/tmp/kristof/EXTRACTIONS/WORLDCEREAL/PATCH_TO_POINT/"
     )
 
-    period = "dekad"
+    period = "month"
     ref_ids = [
-        # "2023_FRA_LPIS_POLY_110",
+        "2023_FRA_LPIS_POLY_110",
         # "2022_FRA_LPIS_POLY_110",
         # "2021_FRA_LPIS_POLY_110",
-        "2020_FRA_LPIS_POLY_110",
+        # "2020_FRA_LPIS_POLY_110",
         # "2021_KEN_COPERNICUS-GEOGLAM-LR_POINT_111"
     ]
     restart_failed = True
