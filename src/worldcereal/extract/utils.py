@@ -11,6 +11,8 @@ import requests
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
 
+from worldcereal.utils.upload import OpenEOArtifactHelper
+
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
 
@@ -72,6 +74,26 @@ def filter_extract_true(
     )
 
 
+def upload_geoparquet_s3(
+    backend: str, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+) -> str:
+    """Upload the given GeoDataFrame to s3 and return the URL of the
+    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
+    using custom CRS.
+    """
+    # Save the dataframe as geoparquet to upload it to artifactory
+    temporary_file = NamedTemporaryFile()
+    gdf.to_parquet(temporary_file.name)
+
+    targetpath = f"openeogfmap_dataframe_{collection}_{name}.parquet"
+
+    artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
+    normal_s3_uri = artifact_helper.upload_file(targetpath, temporary_file.name)
+    presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)
+
+    return presigned_uri
+
+
 def upload_geoparquet_artifactory(
     gdf: gpd.GeoDataFrame, name: str, collection: str = ""
 ) -> str:
@@ -93,7 +115,7 @@ def upload_geoparquet_artifactory(
 
     headers = {"Content-Type": "application/octet-stream"}
 
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}{name}.parquet"
+    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
 
     with open(temporary_file.name, "rb") as f:
         response = requests.put(

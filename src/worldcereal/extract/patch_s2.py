@@ -12,12 +12,14 @@ from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
 from openeo_gfmap.manager import _log
 from tqdm import tqdm
 
-from worldcereal.openeo.preprocessing import raw_datacube_S2
+from worldcereal.openeo.preprocessing import raw_datacube_S2, spatially_filter_cube
+from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     get_job_nb_polygons,  # isort: skip
     upload_geoparquet_artifactory,  # isort: skip
+    # upload_geoparquet_s3,  # isort: skip
 )  # isort: skip
 
 
@@ -32,7 +34,7 @@ DEFAULT_JOB_OPTIONS_PATCH_S2 = {
     "python-memory": "1900m",
     "executor-cores": "1",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
     "gdal-dataset-cache-size": 2,
     "gdal-cachemax": 120,
     "executor-threads-jvm": 1,
@@ -61,12 +63,16 @@ def create_job_dataframe_patch_s2(
         h3_l3_cell = job.h3_l3_cell.iloc[0]
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
+
+        # Subset on required attributes
+        job = job[RDM_DEFAULT_COLUMNS]
 
         variables = {
             "backend_name": backend.value,
@@ -90,7 +96,6 @@ def create_job_patch_s2(
     connection_provider,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
-
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -105,7 +110,12 @@ def create_job_patch_s2(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=320)
-    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
+    # spatial_extent_url = upload_geoparquet_s3(
+    #     provider, geometry_df, f"{row.s2_tile}_{row.name}", "SENTINEL2"
+    # )
+    spatial_extent_url = upload_geoparquet_artifactory(
+        geometry_df, f"{row.s2_tile}_{row.name}", collection="SENTINEL2"
+    )
 
     # Backend name and fetching type
     backend = Backend(row.backend_name)
@@ -134,14 +144,17 @@ def create_job_patch_s2(
     cube = raw_datacube_S2(
         connection,
         backend_context,
-        spatial_extent_url,
         temporal_context,
         bands_to_download,
         FetchType.POLYGON,
+        spatial_extent=spatial_extent_url,
         filter_tile=s2_tile,
         apply_mask_flag=False,
         additional_masks_flag=True,
     )
+
+    # Apply spatial filtering
+    cube = spatially_filter_cube(connection, cube, spatial_extent_url)
 
     # Increase the memory of the jobs depending on the number of polygons to extract
     number_polygons = get_job_nb_polygons(row)
@@ -154,7 +167,7 @@ def create_job_patch_s2(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_S2_{s2_tile}_{valid_time}",
+        title=f"Worldcereal_Patch-S2_Extraction_{s2_tile}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
         feature_id_property="sample_id",

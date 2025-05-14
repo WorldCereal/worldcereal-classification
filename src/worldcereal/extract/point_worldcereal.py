@@ -25,7 +25,7 @@ DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
     "python-memory": "3000m",
     "executor-cores": "1",
     "max-executors": 22,
-    "soft-errors": "true",
+    "soft-errors": 0.1,
 }
 
 
@@ -90,8 +90,9 @@ def create_job_dataframe_point_worldcereal(
         s2_tile = job.tile.iloc[0]
 
         # Convert dates to string format
-        start_date, end_date = start_date.strftime("%Y-%m-%d"), end_date.strftime(
-            "%Y-%m-%d"
+        start_date, end_date = (
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
         )
 
         # Set back the valid_time in the geometry as string

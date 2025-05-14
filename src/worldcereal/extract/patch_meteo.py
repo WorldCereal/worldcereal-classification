@@ -12,7 +12,7 @@ from openeo_gfmap import Backend, TemporalContext
 from worldcereal.extract.utils import (  # isort: skip
     buffer_geometry,  # isort: skip
     filter_extract_true,  # isort: skip
-    upload_geoparquet_artifactory,  # isort: skip
+    upload_geoparquet_s3,  # isort: skip
 )  # isort: skip
 
 
@@ -36,7 +36,6 @@ def create_job_patch_meteo(
     connection_provider,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> gpd.GeoDataFrame:
-
     start_date = row.start_date
     end_date = row.end_date
     temporal_context = TemporalContext(start_date, end_date)
@@ -51,7 +50,7 @@ def create_job_patch_meteo(
 
     # Performs a buffer of 64 px around the geometry
     geometry_df = buffer_geometry(geometry, distance_m=5)
-    spatial_extent_url = upload_geoparquet_artifactory(geometry_df, row.name)
+    spatial_extent_url = upload_geoparquet_s3(provider, geometry_df, row.name, "METEO")
 
     bands_to_download = ["temperature-mean", "precipitation-flux"]
 
@@ -82,7 +81,7 @@ def create_job_patch_meteo(
 
     return cube.create_job(
         out_format="NetCDF",
-        title=f"GFMAP_Extraction_AGERA5_{h3index}_{valid_time}",
+        title=f"WorldCereal_Patch-AGERA5_Extraction_{h3index}_{valid_time}",
         sample_by_feature=True,
         job_options=final_job_options,
     )
