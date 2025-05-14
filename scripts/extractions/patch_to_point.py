@@ -424,8 +424,7 @@ def main(
         if period == "month"
         else root_folder / "MERGED_PARQUETS_10D"
     )
-    pattern = "" if period == "month" else "_10D"
-    merged_file = merged_dir / f"{ref_id}{pattern}.geoparquet"
+    merged_file = merged_dir / f"{ref_id}.geoparquet"
     merged_gdf.to_parquet(merged_file, index=False)
     logger.info(f"Merged parquet file saved to: {merged_file}")
 
