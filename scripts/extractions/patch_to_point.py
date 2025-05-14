@@ -413,6 +413,10 @@ def main(
     # Merge all subparquets
     logger.info("Merging individual files ...")
     parquet_files = list(output_folder.rglob("*.geoparquet"))
+    if len(parquet_files) != len(job_df):
+        raise ValueError(
+            f"Number of parquet files ({len(parquet_files)}) does not match number of jobs ({len(job_df)})"
+        )
     logger.info(f"Found {len(parquet_files)} parquet files.")
     merged_gdf = merge_individual_parquet_files(parquet_files)
     merged_dir = (
