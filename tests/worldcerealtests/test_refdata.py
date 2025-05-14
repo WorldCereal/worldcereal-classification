@@ -116,3 +116,11 @@ def test_get_best_valid_time():
         .notna()
         .all()
     )
+
+
+def test_map_classes(WorldCerealExtractionsDF):
+    # Tests the automatic download of latest legend and default
+    # class mapping for prometheo finetuning
+    from worldcereal.utils.refdata import map_classes
+
+    map_classes(WorldCerealExtractionsDF)

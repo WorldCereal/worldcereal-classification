@@ -34,6 +34,107 @@ def get_class_mappings() -> Dict:
     return CLASS_MAPPINGS
 
 
+def get_legend() -> pd.DataFrame:
+    """Method to get the latest version of the WorldCereal legend.
+
+    Returns
+    -------
+    pd.DataFrame
+        the latest parsed version of the WorldCereal legend
+    """
+
+    artifactory_base_url = (
+        "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
+    )
+    crop_legend_url = (
+        artifactory_base_url + "legend/WorldCereal_LC_CT_legend_latest.csv"
+    )
+
+    crop_legend = pd.read_csv(crop_legend_url, header=0, sep=";")
+    crop_legend["ewoc_code"] = crop_legend["ewoc_code"].str.replace("-", "").astype(int)
+    crop_legend = crop_legend.ffill(axis=1)
+
+    return crop_legend
+
+
+def map_classes(
+    df: pd.DataFrame,
+    finetune_classes="CROPTYPE0",
+    class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
+    filter_classes=[0, 1000000000],
+) -> pd.DataFrame:
+    """
+    Maps the original classes in a DataFrame to fine-tuning classes based on predefined mappings.
+
+    This function takes a DataFrame containing 'ewoc_code' column and maps these codes to new classes
+    defined in `class_mappings` dictionary under the specified fine-tuning class set. It also handles
+    one-hot encoding for multi-class scenarios and creates a 'balancing_class' column based on
+    the WorldCereal crop legend (dynamically loaded) for potential class balancing.
+
+    Args:
+        df (pd.DataFrame):
+            Input DataFrame containing an 'ewoc_code' column with original class codes.
+        finetune_classes (str):
+            The set of fine-tuning classes to use from CLASS_MAPPINGS.
+            This should be one of the keys in CLASS_MAPPINGS.
+            Most popular maps: "LANDCOVER14", "CROPTYPE9", "CROPTYPE0", "CROPLAND2".
+            Defaults to "CROPLAND2".
+        class_mappings (dict, optional):
+            Dictionary containing the mapping of original class codes to new class labels.
+        filter_classes (list, optional):
+            List of class codes to exclude from the dataset.
+            Defaults to [0, 1000000000].
+
+    Returns:
+        pd.DataFrame: The processed DataFrame with added columns:
+            - 'finetune_class': The mapped class labels
+            - 'finetune_class_oh': One-hot encoded columns (for multi-class scenarios)
+            - 'balancing_class': Class labels for dataset balancing
+
+    Notes:
+        - Removes classes that are not present in the CLASS_MAPPINGS dictionary
+        - Adjusts total number of classes based on the actual presence of classes in the data
+        - For multi-class scenarios (>2 classes), creates one-hot encoded columns
+    """
+
+    df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
+
+    # Check if all classes are present in the mapping dictionary
+    existing_codes_list = set(df["ewoc_code"].astype(str).unique())
+    # Compute codes that are missing in the mapping dictionary
+    missing_codes = existing_codes_list - set(class_mappings[finetune_classes])
+    if missing_codes:
+        logger.warning(
+            f"Some classes are missing in the mapping dictionary and thus will be removed: {missing_codes}. "
+            f"A total of {(df.ewoc_code.astype(str).isin(missing_codes)).sum()} samples will be removed from the dataframe."
+        )
+        df = df.loc[~df["ewoc_code"].astype(str).isin(missing_codes)].copy()
+
+    df.loc[:, "finetune_class"] = df["ewoc_code"].map(
+        {int(k): v for k, v in class_mappings[finetune_classes].items()}
+    )
+
+    classes_list = list(set(class_mappings[finetune_classes].values()))
+    classes_list = [xx for xx in classes_list if xx in df["finetune_class"].unique()]
+    classes_list.sort()
+    # TO DO: add check whether all target classes are present in the dataset and have enough samples (more than a threshold)
+    # This is especially needed for the multiclass case and proper split into train/val/test sets
+    if len(classes_list) > 2:
+        # Convert to one-hot encoding
+        df.loc[:, "finetune_class_oh"] = df["finetune_class"]
+        df = pd.get_dummies(df, prefix="", prefix_sep="", columns=["finetune_class_oh"])
+
+    # Will be used for balancing if the flag is set
+    df.loc[:, "balancing_class"] = df["ewoc_code"].map(
+        get_legend().set_index("ewoc_code")["sampling_label"]
+    )
+
+    # one-shot copy to de‑fragment all those column insertions
+    df = df.copy()
+
+    return df
+
+
 def query_public_extractions(
     bbox_poly: Polygon,
     buffer: int = 250000,
