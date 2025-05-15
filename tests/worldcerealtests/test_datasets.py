@@ -79,12 +79,6 @@ class TestWorldCerealDataset(unittest.TestCase):
             "not_cropland",
         ]
 
-        # Create one-hot encoded columns for multiclass test
-        self.df["class_1"] = [1, 0, 0, 0, 0]
-        self.df["class_2"] = [0, 1, 0, 0, 0]
-        self.df["class_3"] = [0, 0, 1, 1, 0]
-        self.df["class_4"] = [0, 0, 0, 0, 1]
-
         # Initialize the datasets
         self.base_ds = WorldCerealDataset(self.df, num_timesteps=self.num_timesteps)
         self.binary_ds = WorldCerealLabelledDataset(
@@ -94,7 +88,7 @@ class TestWorldCerealDataset(unittest.TestCase):
             self.df,
             task_type="multiclass",
             num_outputs=4,
-            classes_list=["class_1", "class_2", "class_3", "class_4"],
+            classes_list=["cropland", "not_cropland", "other1", "other2"],
         )
         self.time_explicit_ds = WorldCerealLabelledDataset(
             self.df, task_type="binary", num_outputs=1, time_explicit=True
@@ -199,18 +193,13 @@ class TestWorldCerealDataset(unittest.TestCase):
     def test_multiclass_label(self):
         """Test multiclass labelled dataset returns correct labels."""
         item = self.multiclass_ds[0]
-        # First sample should have class_1 set to 1, others to 0
-        self.assertEqual(item.label[0, 0, 0, 0], 1)
-        self.assertEqual(item.label[0, 0, 0, 1], 0)
-        self.assertEqual(item.label[0, 0, 0, 2], 0)
-        self.assertEqual(item.label[0, 0, 0, 3], 0)
-
-        item = self.multiclass_ds[2]
-        # Third sample should have class_3 set to 1, others to 0
+        # First sample should have class index 0
         self.assertEqual(item.label[0, 0, 0, 0], 0)
-        self.assertEqual(item.label[0, 0, 0, 1], 0)
-        self.assertEqual(item.label[0, 0, 0, 2], 1)
-        self.assertEqual(item.label[0, 0, 0, 3], 0)
+
+        item = self.multiclass_ds[4]
+        # Fifth sample should have class index 1
+        self.assertEqual(item.label[0, 0, 0, 0], 1)
+
 
     def test_time_explicit_label(self):
         """Test time explicit labelled dataset returns correct label shape."""
