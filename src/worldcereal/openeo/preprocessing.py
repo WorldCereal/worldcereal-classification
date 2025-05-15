@@ -369,14 +369,14 @@ def precomposited_datacube_METEO(
         # Load precomposited monthly meteo data
         cube = connection.load_stac(
             url="https://stac.openeo.vito.be/collections/agera5_monthly",
-            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            temporal_extent=temporal_extent,
             bands=["precipitation-flux", "temperature-mean"],
         )
     elif compositing_window == "dekad":
         # Load precomposited dekadal meteo data
         cube = connection.load_stac(
             url="https://stac.openeo.vito.be/collections/agera5_dekad",
-            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            temporal_extent=temporal_extent,
             bands=["precipitation-flux", "temperature-mean"],
         )
 
