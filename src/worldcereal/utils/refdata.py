@@ -67,9 +67,9 @@ def map_classes(
     Maps the original classes in a DataFrame to fine-tuning classes based on predefined mappings.
 
     This function takes a DataFrame containing 'ewoc_code' column and maps these codes to new classes
-    defined in `class_mappings` dictionary under the specified fine-tuning class set. It also handles
-    one-hot encoding for multi-class scenarios and creates a 'balancing_class' column based on
-    the WorldCereal crop legend (dynamically loaded) for potential class balancing.
+    defined in `class_mappings` dictionary under the specified fine-tuning class set. It also
+    creates a 'balancing_class' column based on the WorldCereal crop legend (dynamically loaded)
+    for potential class balancing.
 
     Args:
         df (pd.DataFrame):
@@ -88,13 +88,10 @@ def map_classes(
     Returns:
         pd.DataFrame: The processed DataFrame with added columns:
             - 'finetune_class': The mapped class labels
-            - 'finetune_class_oh': One-hot encoded columns (for multi-class scenarios)
             - 'balancing_class': Class labels for dataset balancing
 
     Notes:
         - Removes classes that are not present in the CLASS_MAPPINGS dictionary
-        - Adjusts total number of classes based on the actual presence of classes in the data
-        - For multi-class scenarios (>2 classes), creates one-hot encoded columns
     """
 
     df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
@@ -114,23 +111,10 @@ def map_classes(
         {int(k): v for k, v in class_mappings[finetune_classes].items()}
     )
 
-    classes_list = list(set(class_mappings[finetune_classes].values()))
-    classes_list = [xx for xx in classes_list if xx in df["finetune_class"].unique()]
-    classes_list.sort()
-    # TO DO: add check whether all target classes are present in the dataset and have enough samples (more than a threshold)
-    # This is especially needed for the multiclass case and proper split into train/val/test sets
-    if len(classes_list) > 2:
-        # Convert to one-hot encoding
-        df.loc[:, "finetune_class_oh"] = df["finetune_class"]
-        df = pd.get_dummies(df, prefix="", prefix_sep="", columns=["finetune_class_oh"])
-
     # Will be used for balancing if the flag is set
     df.loc[:, "balancing_class"] = df["ewoc_code"].map(
         get_legend().set_index("ewoc_code")["sampling_label"]
     )
-
-    # one-shot copy to de‑fragment all those column insertions
-    df = df.copy()
 
     return df
 
