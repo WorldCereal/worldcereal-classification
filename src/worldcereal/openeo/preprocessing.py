@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import pandas as pd
 from geojson import GeoJSON
@@ -352,6 +352,7 @@ def raw_datacube_METEO(
 def precomposited_datacube_METEO(
     connection: Connection,
     temporal_extent: TemporalContext,
+    compositing_window: Literal["month", "dekad"] = "month",
 ) -> DataCube:
     """Extract the precipitation and temperature AGERA5 data from a
     pre-composited and pre-processed collection. The data is stored in the
@@ -364,12 +365,20 @@ def precomposited_datacube_METEO(
     """
     temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
 
-    # Monthly composited METEO data
-    cube = connection.load_stac(
-        "https://stac.openeo.vito.be/collections/agera5_monthly",
-        temporal_extent=temporal_extent,
-        bands=["precipitation-flux", "temperature-mean"],
-    )
+    if compositing_window == "month":
+        # Load precomposited monthly meteo data
+        cube = connection.load_stac(
+            url="https://stac.openeo.vito.be/collections/agera5_monthly",
+            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            bands=["precipitation-flux", "temperature-mean"],
+        )
+    elif compositing_window == "dekad":
+        # Load precomposited dekadal meteo data
+        cube = connection.load_stac(
+            url="https://stac.openeo.vito.be/collections/agera5_dekad",
+            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            bands=["precipitation-flux", "temperature-mean"],
+        )
 
     # cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
@@ -390,10 +399,17 @@ def worldcereal_preprocessed_inputs(
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
     s2_tile: Optional[str] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
         _validate_temporal_context(temporal_extent)
+
+    # See if requested compositing method is supported
+    assert compositing_window in [
+        "month",
+        "dekad",
+    ], 'Compositing window must be either "month" or "dekad"'
 
     # Extraction of S2 from GFMAP
     s2_data = raw_datacube_S2(
@@ -419,7 +435,7 @@ def worldcereal_preprocessed_inputs(
         tile_size=tile_size,
     )
 
-    s2_data = median_compositing(s2_data, period="month")
+    s2_data = median_compositing(s2_data, period=compositing_window)
 
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
@@ -449,7 +465,7 @@ def worldcereal_preprocessed_inputs(
         tile_size=tile_size,
     )
 
-    s1_data = mean_compositing(s1_data, period="month")
+    s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
     dem_data = raw_datacube_DEM(
@@ -471,6 +487,7 @@ def worldcereal_preprocessed_inputs(
         meteo_data = precomposited_datacube_METEO(
             connection=connection,
             temporal_extent=temporal_extent,
+            compositing_window=compositing_window,
         )
 
         # Explicitly resample meteo with bilinear interpolation

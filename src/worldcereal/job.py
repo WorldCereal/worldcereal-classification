@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
@@ -263,6 +263,7 @@ def collect_inputs(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -282,6 +283,9 @@ def collect_inputs(
         so it uses the OpenEO default setting.
     job_options: dict, optional
         Additional job options to pass to the OpenEO backend, by default None
+    compositing_window: Literal["month", "dekad"]
+        Compositing window to use for the data loading in OpenEO, by default
+        "month".
     """
 
     # Make a connection to the OpenEO backend
@@ -295,6 +299,7 @@ def collect_inputs(
         temporal_extent=temporal_extent,
         tile_size=tile_size,
         validate_temporal_context=False,
+        compositing_window=compositing_window,
     )
 
     # Spatial filtering
