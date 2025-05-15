@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from prometheo.datasets import WorldCerealLabelledDataset
 from prometheo.finetune import Hyperparams, run_finetuning
 from prometheo.models.presto import param_groups_lrd
 from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
@@ -18,6 +17,7 @@ from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from worldcereal.train.datasets import WorldCerealLabelledDataset
 from worldcereal.utils.refdata import split_df
 from worldcereal.utils.timeseries import process_parquet
 
