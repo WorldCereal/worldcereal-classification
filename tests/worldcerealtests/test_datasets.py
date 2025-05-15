@@ -292,12 +292,13 @@ class TestGetLabel(unittest.TestCase):
         self.df_bin_neg = pd.DataFrame([{"finetune_class": "not_cropland"}])
         self.df_multi = pd.DataFrame(
             [
-                {"finetune_class": "cropland", "c1": 1, "c2": 0, "c3": 0},
-                {"finetune_class": "cropland", "c1": 0, "c2": 1, "c3": 1},
+                {"finetune_class": "cropland"},
+                {"finetune_class": "shrubland"},
+                {"finetune_class": "trees"},
             ]
         )
         # common args
-        self.classes = ["c1", "c2", "c3"]
+        self.classes = ["cropland", "shrubland", "trees", "other"]
 
     def test_non_time_explicit_binary(self):
         # time_explicit=False → label only at t=0, shape T→1
@@ -385,14 +386,14 @@ class TestGetLabel(unittest.TestCase):
         lbl = ds.get_label(
             row, task_type="multiclass", classes_list=self.classes, valid_position=4
         )
-        self.assertEqual(lbl.shape, (1, 1, 5, 3))
+        self.assertEqual(lbl.shape, (1, 1, 5, 1))
         # only index 4 is set, others are NODATAVALUE
-        mask = lbl[0, 0, :, :]
+        mask = lbl[0, 0, :, 0]
         # check that all except row 4 are NODATAVALUE
         for t in [0, 1, 2, 3]:
             self.assertTrue((mask[t] == NODATAVALUE).all())
-        # at t=4, should match row["c1","c2","c3"] == [0,1,1]
-        self.assertListEqual(mask[4].tolist(), [0, 1, 1])
+        # at t=4, should match class index 1
+        self.assertEqual(mask[4], 1)
 
 
 if __name__ == "__main__":

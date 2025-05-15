@@ -311,10 +311,10 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
         label = np.full(
-            (1, 1, tsteps, self.num_outputs),
+            (1, 1, tsteps, 1),
             fill_value=NODATAVALUE,
             dtype=np.int32,
-        )  # [H, W, T or 1, num_outputs]
+        )  # [H, W, T or 1, 1]
 
         return label
 
@@ -411,9 +411,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         elif task_type == "multiclass":
             if not classes_list:
                 raise ValueError("classes_list should be provided for multiclass task")
-            label[0, 0, valid_idx, :] = np.array(
-                [int(row_d[col]) for col in classes_list]
-            )
+            label[0, 0, valid_idx, 0] = classes_list.index(row_d["finetune_class"])
 
         return label
 
