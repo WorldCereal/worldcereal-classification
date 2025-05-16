@@ -360,8 +360,9 @@ def get_training_dfs_from_parquet(
         parquet_files = parquet_files[:1]
         logger.warning("Debug mode is enabled.")
 
-    df_list = []
+    df = None
     for f in parquet_files:
+        logger.info(f"Processing {f}")
         _data = pd.read_parquet(f, engine="fastparquet")
         _data = _data[_data["sample_id"].notnull()]
         _data["ewoc_code"] = _data["ewoc_code"].astype(int)
@@ -373,8 +374,7 @@ def get_training_dfs_from_parquet(
 
         _data_pivot = process_parquet(_data, freq=timestep_freq)
         _data_pivot.reset_index(inplace=True)
-        df_list.append(_data_pivot)
-    df = pd.concat(df_list)
+        df = _data_pivot if df is None else pd.concat([df, _data_pivot])
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
