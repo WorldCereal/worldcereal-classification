@@ -855,6 +855,12 @@ def process_parquet(
     if freq == "10D":
         freq = "dekad"
 
+    # `feature_index` is an openEO spefic column we should remove to avoid
+    # it being treated as unique values which is not true after merging
+    # multiple parquet files
+    if "feature_index" in df.columns:
+        df = df.drop("feature_index", axis=1)
+
     # Validate input
     validator = DataFrameValidator()
     validator.validate_required_columns(df)
