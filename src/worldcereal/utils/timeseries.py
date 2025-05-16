@@ -39,6 +39,7 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B06": "OPTICAL-B06",
     "S2-L2A-B07": "OPTICAL-B07",
     "S2-L2A-B08": "OPTICAL-B08",
+    "S2-L2A-B8A": "OPTICAL-B8A",
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
     "valid_date": "valid_time",
