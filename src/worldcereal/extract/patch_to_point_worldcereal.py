@@ -205,7 +205,7 @@ def create_job_patch_to_point_worldcereal(
     }
 
     return cube.create_job(
-        title=f"WorldCereal patch-to-point extraction for ref_id: {row['ref_id']} and epsg: {row['epsg']}",
+        title=f"WorldCereal patch-to-point extraction for: {row['ref_id']} and epsg: {row['epsg']} (period: {period})",
         out_format="Parquet",
         job_options=job_options,
     )
