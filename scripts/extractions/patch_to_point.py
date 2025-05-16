@@ -119,7 +119,7 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         logger.info(f"Processing EPSG {row.epsg} for REF_ID {row.ref_id}")
 
         # Get the ground truth in the patches
-        # Note that we can work around RDM by specifically providing a ground truth file (not pushed yet)
+        # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
         gdf = get_label_points(row, ground_truth_file=row["ground_truth_file"])
         gdf["ref_id"] = (
@@ -209,9 +209,20 @@ def post_job_action(parquet_file):
     ]
     gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
 
-    # Remove rows where S1 and S2 are completely nodata
+    # Remove samples where S1 and S2 are completely nodata
     cols = [c for c in gdf.columns if "S2" in c or "S1" in c]
-    gdf = gdf[~((gdf[cols] == 65535).sum(axis=1) == 12)]
+    orig_sample_nr = len(gdf["sample_id"].unique())
+    nodata_rows = (gdf[cols] == 65535).all(axis=1)
+    all_nodata_per_sample = (
+        gdf.assign(nodata=nodata_rows).groupby("sample_id")["nodata"].all()
+    )
+    valid_sample_ids = all_nodata_per_sample[~all_nodata_per_sample].index
+    removed_samples = orig_sample_nr - len(valid_sample_ids)
+    if removed_samples > 0:
+        logger.warning(
+            f"Removed {removed_samples} samples with all S1 and S2 bands as nodata."
+        )
+        gdf = gdf[gdf["sample_id"].isin(valid_sample_ids)]
 
     gdf.to_parquet(parquet_file, index=False)
 
