@@ -190,6 +190,14 @@ def generate_map(
             postprocess_parameters=postprocess_parameters,
         )
 
+    # Save the final result
+    classes = classes.save_result(
+        format=out_format,
+        options=dict(
+            filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
+        ),
+    )
+
     # Submit the job
     JOB_OPTIONS = {
         "driver-memory": "4g",
@@ -204,11 +212,9 @@ def generate_map(
 
     # Execute the job
     job = classes.execute_batch(
-        out_format=out_format,
         job_options=JOB_OPTIONS,
         title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
-        filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
     )
 
     # Get look-up tables
