@@ -191,7 +191,7 @@ def generate_map(
         )
 
     # Save the final result
-    classes.save_result(
+    classes = classes.save_result(
         format=out_format,
         options=dict(
             filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
