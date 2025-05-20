@@ -39,7 +39,7 @@ class S3URI:
                 return S3URI(bucket, "/".join(without_prefix_parts[1:]))
         else:
             raise ValueError(
-                "Input {uri} is not a valid S3 URI should be of form s3://<bucket>/<key>"
+                f"Input {uri} is not a valid S3 URI should be of form s3://<bucket>/<key>"
             )
 
 
