@@ -45,7 +45,7 @@ def create_job_dataframe_patch_s2(
     backend: Backend,
     split_jobs: List[gpd.GeoDataFrame],
 ) -> pd.DataFrame:
-    """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
+    """Create a dataframe from the split jobs, containing all the necessary information to run the job."""
     rows = []
     for job in tqdm(split_jobs):
         # Compute the average in the valid date and make a buffer of 1.5 year around

@@ -42,7 +42,7 @@ S2_GRID = load_s2_grid()
 def buffer_geometry(
     geometries: geojson.FeatureCollection, distance_m: int = 320
 ) -> gpd.GeoDataFrame:
-    """For each geometry of the colleciton, perform a square buffer of 320
+    """For each geometry of the collection, perform a square buffer of 320
     meters on the centroid and return the GeoDataFrame. Before buffering,
     the centroid is clipped to the closest 20m multiplier in order to stay
     aligned with the Sentinel-1 pixel grid.
