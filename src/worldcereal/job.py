@@ -326,5 +326,5 @@ def collect_inputs(
         out_format="NetCDF",
         title="WorldCereal [collect_inputs] job",
         description="Job that collects inputs for WorldCereal inference",
-        job_options=job_options,
+        job_options=JOB_OPTIONS,
     )
