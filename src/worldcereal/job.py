@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 import openeo
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
@@ -189,6 +189,14 @@ def create_inference_process_graph(
             postprocess_parameters=postprocess_parameters,
         )
 
+    # Save the final result
+    classes = classes.save_result(
+        format=out_format,
+        options=dict(
+            filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
+        ),
+    )
+
     return classes
 
 
@@ -277,11 +285,9 @@ def generate_map(
 
     # Execute the job
     job = classes.execute_batch(
-        out_format=out_format,
         job_options=JOB_OPTIONS,
         title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
-        filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
     )
 
     # Get look-up tables
@@ -336,6 +342,7 @@ def collect_inputs(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -355,6 +362,9 @@ def collect_inputs(
         so it uses the OpenEO default setting.
     job_options: dict, optional
         Additional job options to pass to the OpenEO backend, by default None
+    compositing_window: Literal["month", "dekad"]
+        Compositing window to use for the data loading in OpenEO, by default
+        "month".
     """
 
     # Make a connection to the OpenEO backend
@@ -368,6 +378,7 @@ def collect_inputs(
         temporal_extent=temporal_extent,
         tile_size=tile_size,
         validate_temporal_context=False,
+        compositing_window=compositing_window,
     )
 
     # Spatial filtering
@@ -388,5 +399,5 @@ def collect_inputs(
         out_format="NetCDF",
         title="WorldCereal [collect_inputs] job",
         description="Job that collects inputs for WorldCereal inference",
-        job_options=job_options,
+        job_options=JOB_OPTIONS,
     )
