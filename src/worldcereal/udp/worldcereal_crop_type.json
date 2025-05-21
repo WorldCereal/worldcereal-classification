@@ -149,7 +149,7 @@
     "apply5": {
       "arguments": {
         "data": {
-          "from_node": "renamelabels12"
+          "from_node": "applyneighborhood5"
         },
         "process": {
           "process_graph": {
@@ -196,7 +196,7 @@
     "apply7": {
       "arguments": {
         "data": {
-          "from_node": "renamelabels13"
+          "from_node": "applyneighborhood6"
         },
         "process": {
           "process_graph": {
@@ -248,10 +248,10 @@
               "arguments": {
                 "data": [
                   {
-                    "from_node": "if1"
+                    "from_node": "power1"
                   },
                   {
-                    "from_node": "if2"
+                    "from_node": "power2"
                   }
                 ]
               },
@@ -268,24 +268,6 @@
               "process_id": "array_element"
             },
             "arrayelement2": {
-              "arguments": {
-                "data": {
-                  "from_parameter": "data"
-                },
-                "index": 0
-              },
-              "process_id": "array_element"
-            },
-            "arrayelement3": {
-              "arguments": {
-                "data": {
-                  "from_parameter": "data"
-                },
-                "index": 1
-              },
-              "process_id": "array_element"
-            },
-            "arrayelement4": {
               "arguments": {
                 "data": {
                   "from_parameter": "data"
@@ -312,46 +294,6 @@
               },
               "process_id": "divide"
             },
-            "if1": {
-              "arguments": {
-                "accept": 1,
-                "reject": {
-                  "from_node": "power1"
-                },
-                "value": {
-                  "from_node": "isnodata1"
-                }
-              },
-              "process_id": "if"
-            },
-            "if2": {
-              "arguments": {
-                "accept": 1,
-                "reject": {
-                  "from_node": "power2"
-                },
-                "value": {
-                  "from_node": "isnodata2"
-                }
-              },
-              "process_id": "if"
-            },
-            "isnodata1": {
-              "arguments": {
-                "x": {
-                  "from_node": "arrayelement2"
-                }
-              },
-              "process_id": "is_nodata"
-            },
-            "isnodata2": {
-              "arguments": {
-                "x": {
-                  "from_node": "arrayelement4"
-                }
-              },
-              "process_id": "is_nodata"
-            },
             "log1": {
               "arguments": {
                 "base": 10,
@@ -365,7 +307,7 @@
               "arguments": {
                 "base": 10,
                 "x": {
-                  "from_node": "arrayelement3"
+                  "from_node": "arrayelement2"
                 }
               },
               "process_id": "log"
@@ -488,34 +430,13 @@
                 "context": {
                   "classifier_url": {
                     "from_parameter": "model_url"
-                  },
-                  "lookup_table": {
-                    "alliums": 0,
-                    "beans": 1,
-                    "beet": 2,
-                    "brassica_oleracea_cabbage": 3,
-                    "carrots_daucus": 4,
-                    "cauliflower_broccoli": 5,
-                    "chicory_chicories": 6,
-                    "fibre_crops": 7,
-                    "leafy_stem_vegetables": 8,
-                    "maize": 9,
-                    "oilseed_crops": 10,
-                    "onion_shallot": 11,
-                    "other_temporary_crops": 12,
-                    "peas": 13,
-                    "potatoes": 14,
-                    "root_vegetables": 15,
-                    "spinach": 16,
-                    "unspecified_barley": 17,
-                    "unspecified_wheat": 18
                   }
                 },
                 "data": {
                   "from_parameter": "data"
                 },
                 "runtime": "Python",
-                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []  # Disable the dependencies from PIP install\n\n    def output_labels(self) -> list:\n        class_names = self._parameters[\"lookup_table\"].keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        lookup_table = self._parameters.get(\"lookup_table\", None)\n\n        if lookup_table is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the UDFs parameters.\"\n            )\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lookup_table[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in self._parameters[\"lookup_table\"].keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session = self.load_ort_session(classifier_url)\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport copy\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.metadata import CollectionMetadata\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n    \n    def _apply_metadata(self, metadata: CollectionMetadata, parameters: dict) -> CollectionMetadata:\n        \"\"\"Apply metadata to the output data. This method will be executed at the very end of the\n        process.\n        \"\"\"\n        # self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n\n        return metadata.rename_labels(\n            dimension=\"bands\", target=self.output_labels()\n        )\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_and_prepare_model(cls, model_url: str):\n        \"\"\"Method to be used instead the default GFMap load_ort_model function.\n        Loads the model, validates it and extracts LUT from the model metadata.\n\n\n        Parameters\n        ----------\n        model_url : str\n            Public URL to the ONNX classification model.\n        \"\"\"\n        # Load the model\n        response = requests.get(model_url, timeout=120)\n        model = ort.InferenceSession(response.content)\n\n        # Validate the model\n        metadata = model.get_modelmeta().custom_metadata_map\n\n        if \"class_params\" not in metadata:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        class_params = eval(metadata[\"class_params\"], {\"__builtins__\": None}, {})\n\n        if \"class_names\" not in class_params:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        if \"class_to_label\" not in class_params:\n            raise ValueError(\"Could not find class to labels in the model metadata.\")\n\n        # Load model LUT\n        lut = dict(zip(class_params[\"class_names\"], class_params[\"class_to_label\"]))\n        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n\n        return model, sorted_lut\n\n    def output_labels(self) -> list:\n        \"\"\"\n        Returns the output labels for the classification.\n\n        LUT needs to be explicitly sorted here as openEO does\n        not guarantee the order of a json object being preserved when decoding\n        a process graph in the backend.\n        \"\"\"\n        _, lut = self.load_and_prepare_model(self._parameters[\"classifier_url\"])\n        lut_sorted = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n        class_names = lut_sorted.keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n\n        LUT needs to be explicitly sorted here as openEO does\n        not guarantee the order of a json object being preserved when decoding\n        a process graph in the backend.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        # lookup_table = self._parameters.get(\"lookup_table\", None)\n        _, lut_sorted = self.load_and_prepare_model(self._parameters[\"classifier_url\"])\n\n        if lut_sorted is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the model metadata.\"\n            )\n\n        # lut_sorted = {\n        #     k: v for k, v in sorted(lookup_table.items(), key=lambda item: item[1])\n        # }\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lut_sorted[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in lut_sorted.keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session, self._parameters[\"lookup_table\"] = (\n            self.load_and_prepare_model(classifier_url)\n        )\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> UdfData:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = copy.deepcopy(udf_data.user_context)\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n\n\ndef apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    return model_inference._apply_metadata(metadata, parameters=copy.deepcopy(context))\n"
               },
               "process_id": "run_udf",
               "result": true
@@ -597,7 +518,7 @@
     "applyneighborhood4": {
       "arguments": {
         "data": {
-          "from_node": "renamelabels10"
+          "from_node": "renamelabels9"
         },
         "overlap": [
           {
@@ -616,17 +537,13 @@
             "runudf4": {
               "arguments": {
                 "context": {
-                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx",
-                  "lookup_table": {
-                    "cropland": 1,
-                    "other": 0
-                  }
+                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx"
                 },
                 "data": {
                   "from_parameter": "data"
                 },
                 "runtime": "Python",
-                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []  # Disable the dependencies from PIP install\n\n    def output_labels(self) -> list:\n        class_names = self._parameters[\"lookup_table\"].keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        lookup_table = self._parameters.get(\"lookup_table\", None)\n\n        if lookup_table is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the UDFs parameters.\"\n            )\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lookup_table[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in self._parameters[\"lookup_table\"].keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session = self.load_ort_session(classifier_url)\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport copy\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.metadata import CollectionMetadata\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n    \n    def _apply_metadata(self, metadata: CollectionMetadata, parameters: dict) -> CollectionMetadata:\n        \"\"\"Apply metadata to the output data. This method will be executed at the very end of the\n        process.\n        \"\"\"\n        # self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n\n        return metadata.rename_labels(\n            dimension=\"bands\", target=self.output_labels()\n        )\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass CropClassifier(ModelInference):\n    \"\"\"Binary or multi-class crop classifier using ONNX to load a catboost model.\n\n    The classifier use the embeddings computed from the Presto Feature\n    Extractor.\n\n    Interesting UDF parameters:\n    - classifier_url: A public URL to the ONNX classification model. Default is\n      the public Presto model.\n    - lookup_table: A dictionary mapping class names to class labels, ordered by\n      model probability output. This is required for the model to map the output\n      probabilities to class names.\n    \"\"\"\n\n    import numpy as np\n\n    def __init__(self):\n        super().__init__()\n\n        self.onnx_session = None\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_and_prepare_model(cls, model_url: str):\n        \"\"\"Method to be used instead the default GFMap load_ort_model function.\n        Loads the model, validates it and extracts LUT from the model metadata.\n\n\n        Parameters\n        ----------\n        model_url : str\n            Public URL to the ONNX classification model.\n        \"\"\"\n        # Load the model\n        response = requests.get(model_url, timeout=120)\n        model = ort.InferenceSession(response.content)\n\n        # Validate the model\n        metadata = model.get_modelmeta().custom_metadata_map\n\n        if \"class_params\" not in metadata:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        class_params = eval(metadata[\"class_params\"], {\"__builtins__\": None}, {})\n\n        if \"class_names\" not in class_params:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        if \"class_to_label\" not in class_params:\n            raise ValueError(\"Could not find class to labels in the model metadata.\")\n\n        # Load model LUT\n        lut = dict(zip(class_params[\"class_names\"], class_params[\"class_to_label\"]))\n        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n\n        return model, sorted_lut\n\n    def output_labels(self) -> list:\n        \"\"\"\n        Returns the output labels for the classification.\n\n        LUT needs to be explicitly sorted here as openEO does\n        not guarantee the order of a json object being preserved when decoding\n        a process graph in the backend.\n        \"\"\"\n        _, lut = self.load_and_prepare_model(self._parameters[\"classifier_url\"])\n        lut_sorted = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n        class_names = lut_sorted.keys()\n\n        return [\"classification\", \"probability\"] + [\n            f\"probability_{name}\" for name in class_names\n        ]\n\n    def predict(self, features: np.ndarray) -> np.ndarray:\n        \"\"\"\n        Predicts labels using the provided features array.\n\n        LUT needs to be explicitly sorted here as openEO does\n        not guarantee the order of a json object being preserved when decoding\n        a process graph in the backend.\n        \"\"\"\n        import numpy as np\n\n        # Classes names to codes\n        # lookup_table = self._parameters.get(\"lookup_table\", None)\n        _, lut_sorted = self.load_and_prepare_model(self._parameters[\"classifier_url\"])\n\n        if lut_sorted is None:\n            raise ValueError(\n                \"Lookup table is not defined. Please provide lookup_table in the model metadata.\"\n            )\n\n        # lut_sorted = {\n        #     k: v for k, v in sorted(lookup_table.items(), key=lambda item: item[1])\n        # }\n\n        if self.onnx_session is None:\n            raise ValueError(\"Model has not been loaded. Please load a model first.\")\n\n        # Prepare input data for ONNX model\n        outputs = self.onnx_session.run(None, {\"features\": features})\n\n        # Extract classes as INTs and probability of winning class values\n        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)\n        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)\n        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):\n            labels[i] = lut_sorted[label]\n            probabilities[i] = int(round(prob[label] * 100))\n\n        # Extract per class probabilities\n        output_probabilities = []\n        for output_px in outputs[1]:\n            output_probabilities.append(\n                [output_px[label] for label in lut_sorted.keys()]\n            )\n\n        output_probabilities = (\n            (np.array(output_probabilities) * 100).round().astype(np.uint8)\n        )\n\n        return np.hstack(\n            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]\n        ).transpose()\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n        self.logger.info(f'Loading classifier model from \"{classifier_url}\"')\n\n        # shape and indices for output (\"xy\", \"bands\")\n        x_coords, y_coords = inarr.x.values, inarr.y.values\n        inarr = inarr.transpose(\"bands\", \"x\", \"y\").stack(xy=[\"x\", \"y\"]).transpose()\n\n        self.onnx_session, self._parameters[\"lookup_table\"] = (\n            self.load_and_prepare_model(classifier_url)\n        )\n\n        # Run catboost classification\n        self.logger.info(\"Catboost classification with input shape: %s\", inarr.shape)\n        classification = self.predict(inarr.values)\n        self.logger.info(\"Classification done with shape: %s\", inarr.shape)\n\n        output_labels = self.output_labels()\n\n        classification_da = xr.DataArray(\n            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),\n            dims=[\"bands\", \"x\", \"y\"],\n            coords={\n                \"bands\": output_labels,\n                \"x\": x_coords,\n                \"y\": y_coords,\n            },\n        )\n\n        return classification_da\n\n\ndef apply_udf_data(udf_data: UdfData) -> UdfData:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = copy.deepcopy(udf_data.user_context)\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n\n\ndef apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:\n    model_inference_class = CropClassifier\n\n    model_inference = model_inference_class()\n\n    return model_inference._apply_metadata(metadata, parameters=copy.deepcopy(context))\n"
               },
               "process_id": "run_udf",
               "result": true
@@ -655,7 +572,7 @@
     "applyneighborhood5": {
       "arguments": {
         "data": {
-          "from_node": "reducedimension4"
+          "from_node": "saveresult1"
         },
         "overlap": [
           {
@@ -674,21 +591,22 @@
             "runudf5": {
               "arguments": {
                 "context": {
+                  "classifier_url": "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx",
                   "enable": true,
-                  "keep_class_probs": false,
-                  "kernel_size": 5,
-                  "lookup_table": {
-                    "cropland": 1,
-                    "other": 0
+                  "keep_class_probs": true,
+                  "kernel_size": {
+                    "from_parameter": "postprocess_kernel_size"
                   },
-                  "method": "smooth_probabilities",
-                  "save_intermediate": false
+                  "method": {
+                    "from_parameter": "postprocess_method"
+                  },
+                  "save_intermediate": true
                 },
                 "data": {
                   "from_parameter": "data"
                 },
                 "runtime": "Python",
-                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\"\n                for name in self._parameters[\"lookup_table\"].keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport copy\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.metadata import CollectionMetadata\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n    \n    def _apply_metadata(self, metadata: CollectionMetadata, parameters: dict) -> CollectionMetadata:\n        \"\"\"Apply metadata to the output data. This method will be executed at the very end of the\n        process.\n        \"\"\"\n        # self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n\n        return metadata.rename_labels(\n            dimension=\"bands\", target=self.output_labels()\n        )\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            lut = self.lut_from_url(self._parameters[\"classifier_url\"])\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\" for name in lut.keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def lut_from_url(cls, model_url: str) -> dict:\n        \"\"\"Method to extract lookup table from model URL.\n        Loads the model, validates it and extracts LUT from the model metadata.\n\n        Parameters\n        ----------\n        model_url : str\n            Public URL to the ONNX classification model.\n        \"\"\"\n\n        # Load the model\n        response = requests.get(model_url, timeout=120)\n        model = ort.InferenceSession(response.content)\n\n        # Validate the model\n        metadata = model.get_modelmeta().custom_metadata_map\n\n        if \"class_params\" not in metadata:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        class_params = eval(metadata[\"class_params\"], {\"__builtins__\": None}, {})\n\n        if \"class_names\" not in class_params:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        if \"class_to_label\" not in class_params:\n            raise ValueError(\"Could not find class to labels in the model metadata.\")\n\n        # Load model LUT\n        lut = dict(zip(class_params[\"class_names\"], class_params[\"class_to_label\"]))\n        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n\n        return sorted_lut\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n\n        self._parameters[\"lookup_table\"] = self.lut_from_url(classifier_url)\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> UdfData:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = copy.deepcopy(udf_data.user_context)\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n\n\ndef apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    return model_inference._apply_metadata(metadata, parameters=copy.deepcopy(context))\n"
               },
               "process_id": "run_udf",
               "result": true
@@ -713,7 +631,7 @@
     "applyneighborhood6": {
       "arguments": {
         "data": {
-          "from_node": "mask2"
+          "from_node": "saveresult3"
         },
         "overlap": [
           {
@@ -732,38 +650,24 @@
             "runudf6": {
               "arguments": {
                 "context": {
-                  "enable": true,
-                  "keep_class_probs": false,
-                  "kernel_size": 5,
-                  "lookup_table": {
-                    "alliums": 0,
-                    "beans": 1,
-                    "beet": 2,
-                    "brassica_oleracea_cabbage": 3,
-                    "carrots_daucus": 4,
-                    "cauliflower_broccoli": 5,
-                    "chicory_chicories": 6,
-                    "fibre_crops": 7,
-                    "leafy_stem_vegetables": 8,
-                    "maize": 9,
-                    "oilseed_crops": 10,
-                    "onion_shallot": 11,
-                    "other_temporary_crops": 12,
-                    "peas": 13,
-                    "potatoes": 14,
-                    "root_vegetables": 15,
-                    "spinach": 16,
-                    "unspecified_barley": 17,
-                    "unspecified_wheat": 18
+                  "classifier_url": {
+                    "from_parameter": "model_url"
                   },
-                  "method": "smooth_probabilities",
-                  "save_intermediate": false
+                  "enable": true,
+                  "keep_class_probs": true,
+                  "kernel_size": {
+                    "from_parameter": "postprocess_kernel_size"
+                  },
+                  "method": {
+                    "from_parameter": "postprocess_method"
+                  },
+                  "save_intermediate": true
                 },
                 "data": {
                   "from_parameter": "data"
                 },
                 "runtime": "Python",
-                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\"\n                for name in self._parameters[\"lookup_table\"].keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> XarrayDataCube:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = udf_data.user_context\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n"
+                "udf": "# /// script\n# dependencies = []\n# ///\n\nimport copy\nimport functools\nimport inspect\nimport logging\nimport re\nimport shutil\nimport sys\nimport urllib.request\nfrom abc import ABC, abstractmethod\nfrom pathlib import Path\nimport numpy as np\nimport openeo\nimport requests\nimport xarray as xr\nfrom openeo.metadata import CollectionMetadata\nfrom openeo.udf import XarrayDataCube\nfrom openeo.udf import inspect as udf_inspect\nfrom openeo.udf.udf_data import UdfData\nsys.path.insert(0, \"onnx_deps\")\nimport onnxruntime as ort  # noqa: E402\n\nEPSG_HARMONIZED_NAME = \"GEO-EPSG\"\n\nclass ModelInference(ABC):\n    \"\"\"Base class for all model inference UDFs. It provides some common\n    methods and attributes to be used by other model inference classes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        \"\"\"\n        Initializes the PrestoFeatureExtractor object, starting a logger.\n        \"\"\"\n        logging.basicConfig(level=logging.INFO)\n        self.logger = logging.getLogger(self.__class__.__name__)\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def extract_dependencies(cls, base_url: str, dependency_name: str) -> str:\n        \"\"\"Extract the dependencies from the given URL. Unpacking a zip\n        file in the current working directory and return the path to the\n        unpacked directory.\n\n        Parameters:\n        - base_url: The base public URL where the dependencies are stored.\n        - dependency_name: The name of the dependency file to download. This\n            parameter is added to `base_url` as a download path to the .zip\n            archive\n        Returns:\n        - The absolute path to the extracted dependencies directory, to be added\n            to the python path with the `sys.path.append` method.\n        \"\"\"\n\n        # Generate absolute path for the dependencies folder\n        dependencies_dir = Path.cwd() / \"dependencies\"\n\n        # Create the directory if it doesn't exist\n        dependencies_dir.mkdir(exist_ok=True, parents=True)\n\n        # Download and extract the model file\n        modelfile_url = f\"{base_url}/{dependency_name}\"\n        modelfile, _ = urllib.request.urlretrieve(\n            modelfile_url, filename=dependencies_dir / Path(modelfile_url).name\n        )\n        shutil.unpack_archive(modelfile, extract_dir=dependencies_dir)\n\n        # Add the model directory to system path if it's not already there\n        abs_path = str(\n            dependencies_dir / Path(modelfile_url).name.split(\".zip\")[0]\n        )  # NOQA\n\n        return abs_path\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def load_ort_session(cls, model_url: str):\n        \"\"\"Loads an onnx session from a publicly available URL. The URL must be a direct\n        download link to the ONNX session file.\n        The `lru_cache` decorator avoids loading multiple time the model within the same worker.\n        \"\"\"\n        # Two minutes timeout to download the model\n        response = requests.get(model_url, timeout=120)\n        model = response.content\n\n        return ort.InferenceSession(model)\n\n    def apply_ml(\n        self, tensor: np.ndarray, session: ort.InferenceSession, input_name: str\n    ) -> np.ndarray:\n        \"\"\"Applies the machine learning model to the input data as a tensor.\n\n        Parameters\n        ----------\n        tensor: np.ndarray\n            The input data with shape (bands, instance). If the input data is a tile (bands, y, x),\n            then the y, x dimension must be flattened before being applied in this function.\n        session: ort.InferenceSession\n            The ONNX Session object, loaded from the `load_ort_session` class method.\n        input_name: str\n            The name of the input tensor in the ONNX session. Depends on how is the ONNX serialized\n            model generated. For example, CatBoost models have their input tensor named as\n            features: https://catboost.ai/en/docs/concepts/apply-onnx-ml\n        \"\"\"\n        return session.run(None, {input_name: tensor})[0]\n\n    def _common_preparations(\n        self, inarr: xr.DataArray, parameters: dict\n    ) -> xr.DataArray:\n        \"\"\"Common preparations for all inference models. This method will be\n        executed at the very beginning of the process.\n        \"\"\"\n        self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n        return inarr\n\n    def _execute(self, cube: XarrayDataCube, parameters: dict) -> XarrayDataCube:\n        arr = cube.get_array().transpose(\"bands\", \"y\", \"x\")\n        arr = self._common_preparations(arr, parameters)\n        arr = self.execute(arr).transpose(\"bands\", \"y\", \"x\")\n        return XarrayDataCube(arr)\n    \n    def _apply_metadata(self, metadata: CollectionMetadata, parameters: dict) -> CollectionMetadata:\n        \"\"\"Apply metadata to the output data. This method will be executed at the very end of the\n        process.\n        \"\"\"\n        # self._epsg = parameters.pop(EPSG_HARMONIZED_NAME)\n        self._parameters = parameters\n\n        return metadata.rename_labels(\n            dimension=\"bands\", target=self.output_labels()\n        )\n\n    @property\n    def epsg(self) -> int:\n        \"\"\"EPSG code of the input data.\"\"\"\n        return self._epsg\n\n    def dependencies(self) -> list:\n        \"\"\"Returns the additional dependencies such as wheels or zip files.\n        Dependencies should be returned as a list of string, which will set-up at the top of the\n        generated UDF. More information can be found at:\n        https://open-eo.github.io/openeo-python-client/udf.html#standard-for-declaring-python-udf-dependencies\n        \"\"\"\n        self.logger.warning(\n            \"Only onnx is defined as dependency. If you wish to add \"\n            \"dependencies to your model inference, override the \"\n            \"`dependencies` method in your class.\"\n        )\n        return [\"onnxruntime\"]\n\n    @abstractmethod\n    def output_labels(self) -> list:\n        \"\"\"Returns the labels of the output data.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"output_labels property.\"\n        )\n\n    @abstractmethod\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n        \"\"\"Executes the model inference.\"\"\"\n        raise NotImplementedError(\n            \"ModelInference is a base abstract class, please implement the \"\n            \"execute method.\"\n        )\n\n\nclass PostProcessor(ModelInference):\n    \"\"\"Perform post-processing from the model outputs. Expects an input cube\n    with 2 + N bands, where N is the number of classes. The first band is the\n    prediction value, the second class is the max probability and the rest are\n    the per-class probabilities.\n\n    Interesting UDF parameters:\n    lookup_table: Optional[dict]\n        A lookup table to map the class names to class labels, ordered by model output.\n    \"\"\"\n\n    EXCLUDED_VALUES = [254, 255, 65535]\n    NODATA = 255\n\n    def output_labels(self) -> list:\n        if self._parameters.get(\"keep_class_probs\", False):\n            lut = self.lut_from_url(self._parameters[\"classifier_url\"])\n            return [\"classification\", \"probability\"] + [\n                f\"probability_{name}\" for name in lut.keys()\n            ]\n        return [\"classification\", \"probability\"]\n\n    def dependencies(self) -> list:\n        return []\n\n    @classmethod\n    @functools.lru_cache(maxsize=6)\n    def lut_from_url(cls, model_url: str) -> dict:\n        \"\"\"Method to extract lookup table from model URL.\n        Loads the model, validates it and extracts LUT from the model metadata.\n\n        Parameters\n        ----------\n        model_url : str\n            Public URL to the ONNX classification model.\n        \"\"\"\n\n        # Load the model\n        response = requests.get(model_url, timeout=120)\n        model = ort.InferenceSession(response.content)\n\n        # Validate the model\n        metadata = model.get_modelmeta().custom_metadata_map\n\n        if \"class_params\" not in metadata:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        class_params = eval(metadata[\"class_params\"], {\"__builtins__\": None}, {})\n\n        if \"class_names\" not in class_params:\n            raise ValueError(\"Could not find class names in the model metadata.\")\n\n        if \"class_to_label\" not in class_params:\n            raise ValueError(\"Could not find class to labels in the model metadata.\")\n\n        # Load model LUT\n        lut = dict(zip(class_params[\"class_names\"], class_params[\"class_to_label\"]))\n        sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}\n\n        return sorted_lut\n\n    @classmethod\n    def majority_vote(\n        cls,\n        base_labels: xr.DataArray,\n        max_probabilities: xr.DataArray,\n        kernel_size: int,\n    ) -> xr.DataArray:\n        \"\"\"Majority vote is performed using a sliding local kernel.\n        For each pixel, the voting of a final class is done by counting\n        neighbours values.\n        Pixels that have one of the specified excluded values are\n        excluded in the voting process and are unchanged.\n\n        The prediction probabilities are reevaluated by taking, for each pixel,\n        the average of probabilities of the neighbors that belong to the winning class.\n        (For example, if a pixel was voted to class 2 and there are three\n        neighbors of that class, then the new probability is the sum of the\n        old probabilities of each pixels divided by 3)\n\n        Parameters\n        ----------\n        base_labels : xr.DataArray\n            The original predicted classification labels.\n        max_probabilities : xr.DataArray\n            The original probabilities of the winning class (ranging between 0 and 100).\n        kernel_size : int\n            The size of the kernel used for the neighbour around the pixel.\n\n        Returns\n        -------\n        xr.DataArray\n            The cleaned classification labels and associated probabilities.\n        \"\"\"\n\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        prediction = base_labels.values\n        probability = max_probabilities.values\n\n        # As the probabilities are in integers between 0 and 100,\n        # we use uint16 matrices to store the vote scores\n        assert (\n            kernel_size <= 25\n        ), f\"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown\"\n\n        # Build a class mapping, so classes are converted to indexes and vice-versa\n        unique_values = set(np.unique(prediction))\n        unique_values = sorted(unique_values - set(cls.EXCLUDED_VALUES))  # type: ignore\n        index_value_lut = [(k, v) for k, v in enumerate(unique_values)]\n\n        counts = np.zeros(\n            shape=(*prediction.shape, len(unique_values)), dtype=np.uint16\n        )\n        probabilities = np.zeros(\n            shape=(*probability.shape, len(unique_values)), dtype=np.uint16\n        )\n\n        # Iterates for each classes\n        for cls_idx, cls_value in index_value_lut:\n            # Take the binary mask of the interest class, and multiply by the probabilities\n            class_mask = ((prediction == cls_value) * probability).astype(np.uint16)\n\n            # Set to 0 the class scores where the label is excluded\n            for excluded_value in cls.EXCLUDED_VALUES:\n                class_mask[prediction == excluded_value] = 0\n\n            # Binary class mask, used to count HOW MANY neighbours pixels are used for this class\n            binary_class_mask = (class_mask > 0).astype(np.uint16)\n\n            # Creates the kernel\n            kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)\n\n            # Counts around the window the sum of probabilities for that given class\n            counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode=\"same\")\n\n            # Counts the number of neighbors pixels that voted for that given class\n            class_voters = convolve2d(binary_class_mask, kernel, mode=\"same\")\n            # Remove the 0 values because might create divide by 0 issues\n            class_voters[class_voters == 0] = 1\n\n            probabilities[:, :, cls_idx] = np.divide(\n                counts[:, :, cls_idx], class_voters\n            )\n\n        # Initializes output array\n        aggregated_predictions = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n        # Initializes probabilities output array\n        aggregated_probabilities = np.zeros(\n            shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16\n        )\n\n        if len(unique_values) > 0:\n            # Takes the indices that have the biggest scores\n            aggregated_predictions_indices = np.argmax(counts, axis=2)\n\n            # Get the new probabilities of the predictions\n            aggregated_probabilities = np.take_along_axis(\n                probabilities,\n                aggregated_predictions_indices.reshape(\n                    *aggregated_predictions_indices.shape, 1\n                ),\n                axis=2,\n            ).squeeze()\n\n            # Check which pixels have a counts value equal to 0\n            no_score_mask = np.sum(counts, axis=2) == 0\n\n            # convert back to values from indices\n            for cls_idx, cls_value in index_value_lut:\n                aggregated_predictions[aggregated_predictions_indices == cls_idx] = (\n                    cls_value\n                )\n                aggregated_predictions = aggregated_predictions.astype(np.uint16)\n\n            aggregated_predictions[no_score_mask] = cls.NODATA\n            aggregated_probabilities[no_score_mask] = cls.NODATA\n\n        # Setting excluded values back to their original values\n        for excluded_value in cls.EXCLUDED_VALUES:\n            aggregated_predictions[prediction == excluded_value] = excluded_value\n            aggregated_probabilities[prediction == excluded_value] = excluded_value\n\n        return xr.DataArray(\n            np.stack((aggregated_predictions, aggregated_probabilities)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    @classmethod\n    def smooth_probabilities(\n        cls, base_labels: xr.DataArray, class_probabilities: xr.DataArray\n    ) -> xr.DataArray:\n        \"\"\"Performs gaussian smoothing on the class probabilities. Requires the\n        base labels to keep the pixels that are excluded away from smoothing.\n        \"\"\"\n        import numpy as np\n        from scipy.signal import convolve2d\n\n        base_labels_vals = base_labels.values\n        probabilities_vals = class_probabilities.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)\n\n        for class_idx in range(probabilities_vals.shape[0]):\n            probabilities_vals[class_idx] = (\n                convolve2d(\n                    probabilities_vals[class_idx],\n                    conv_kernel,\n                    mode=\"same\",\n                    boundary=\"symm\",\n                )\n                / conv_kernel.sum()\n            )\n            probabilities_vals[class_idx][excluded_mask] = 0\n\n        # Sum of probabilities should be 1, cast to uint16\n        probabilities_vals = np.round(\n            probabilities_vals / probabilities_vals.sum(axis=0) * 100.0\n        ).astype(\"uint16\")\n\n        return xr.DataArray(\n            probabilities_vals,\n            coords=class_probabilities.coords,\n            dims=class_probabilities.dims,\n        )\n\n    @classmethod\n    def reclassify(\n        cls,\n        base_labels: xr.DataArray,\n        base_max_probs: xr.DataArray,\n        probabilities: xr.DataArray,\n    ) -> xr.DataArray:\n        import numpy as np\n\n        base_labels_vals = base_labels.values\n        base_max_probs_vals = base_max_probs.values\n\n        excluded_mask = np.in1d(\n            base_labels_vals.reshape(-1),\n            cls.EXCLUDED_VALUES,\n        ).reshape(*base_labels_vals.shape)\n\n        new_labels_vals = np.argmax(probabilities.values, axis=0)\n        new_max_probs_vals = np.max(probabilities.values, axis=0)\n\n        new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]\n        new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]\n\n        return xr.DataArray(\n            np.stack((new_labels_vals, new_max_probs_vals)),\n            dims=[\"bands\", \"y\", \"x\"],\n            coords={\n                \"bands\": [\"classification\", \"probability\"],\n                \"y\": base_labels.y,\n                \"x\": base_labels.x,\n            },\n        )\n\n    def execute(self, inarr: xr.DataArray) -> xr.DataArray:\n\n        if \"classifier_url\" not in self._parameters:\n            raise ValueError('Missing required parameter \"classifier_url\"')\n        classifier_url = self._parameters.get(\"classifier_url\")\n\n        self._parameters[\"lookup_table\"] = self.lut_from_url(classifier_url)\n\n        if self._parameters.get(\"method\") == \"smooth_probabilities\":\n            # Cast to float for more accurate gaussian smoothing\n            class_probabilities = (\n                inarr.isel(bands=slice(2, None)).astype(\"float32\") / 100.0\n            )\n\n            # Peform probability smoothing\n            class_probabilities = PostProcessor.smooth_probabilities(\n                inarr.sel(bands=\"classification\"), class_probabilities\n            )\n\n            # Reclassify\n            new_labels = PostProcessor.reclassify(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                class_probabilities,\n            )\n\n            # Re-apply labels\n            lookup_table = self._parameters.get(\"lookup_table\")\n            class_labels = list(lookup_table.values())\n            # create a final labels array with same dimensions as new_labels\n            final_labels = xr.full_like(new_labels, fill_value=float(\"nan\"))\n            for idx, label in enumerate(class_labels):\n                final_labels.loc[{\"bands\": \"classification\"}] = xr.where(\n                    new_labels.sel(bands=\"classification\") == idx,\n                    label,\n                    final_labels.sel(bands=\"classification\"),\n                )\n            new_labels.sel(bands=\"classification\").values = final_labels.sel(\n                bands=\"classification\"\n            ).values\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        elif self._parameters.get(\"method\") == \"majority_vote\":\n\n            kernel_size = self._parameters.get(\"kernel_size\")\n\n            new_labels = PostProcessor.majority_vote(\n                inarr.sel(bands=\"classification\"),\n                inarr.sel(bands=\"probability\"),\n                kernel_size=kernel_size,\n            )\n\n            # Append the per-class probabalities if required\n            if self._parameters.get(\"keep_class_probs\", False):\n                class_probabilities = inarr.isel(bands=slice(2, None))\n                new_labels = xr.concat([new_labels, class_probabilities], dim=\"bands\")\n\n        else:\n            raise ValueError(\n                f\"Unknown post-processing method: {self._parameters.get('method')}\"\n            )\n\n        return new_labels\n\n\ndef apply_udf_data(udf_data: UdfData) -> UdfData:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    # User-defined, model inference class initialized here\n    cube = udf_data.datacube_list[0]\n    parameters = copy.deepcopy(udf_data.user_context)\n\n    proj = udf_data.proj\n    if proj is not None:\n        proj = proj.get(\"EPSG\")\n\n    parameters[EPSG_HARMONIZED_NAME] = proj\n\n    cube = model_inference._execute(cube, parameters=parameters)\n\n    udf_data.datacube_list = [cube]\n\n    return udf_data\n\n\ndef apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:\n    model_inference_class = PostProcessor\n\n    model_inference = model_inference_class()\n\n    return model_inference._apply_metadata(metadata, parameters=copy.deepcopy(context))\n"
               },
               "process_id": "run_udf",
               "result": true
@@ -791,7 +695,7 @@
           "classification"
         ],
         "data": {
-          "from_node": "saveresult1"
+          "from_node": "saveresult2"
         }
       },
       "process_id": "filter_bands"
@@ -904,6 +808,22 @@
                 "result": true
               }
             }
+          },
+          "sat:orbit_state": {
+            "process_graph": {
+              "eq1": {
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": {
+                    "from_parameter": "orbit_state"
+                  }
+                },
+                "process_id": "eq",
+                "result": true
+              }
+            }
           }
         },
         "spatial_extent": {
@@ -933,9 +853,6 @@
         "bands": [
           "Slope"
         ],
-        "spatial_extent": {
-          "from_parameter": "spatial_extent"
-        },
         "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
       },
       "process_id": "load_stac"
@@ -946,9 +863,6 @@
           "precipitation-flux",
           "temperature-mean"
         ],
-        "spatial_extent": {
-          "from_parameter": "spatial_extent"
-        },
         "temporal_extent": {
           "from_parameter": "temporal_extent"
         },
@@ -1070,7 +984,7 @@
     "reducedimension3": {
       "arguments": {
         "data": {
-          "from_node": "renamelabels9"
+          "from_node": "applyneighborhood2"
         },
         "dimension": "t",
         "reducer": {
@@ -1092,7 +1006,7 @@
     "reducedimension4": {
       "arguments": {
         "data": {
-          "from_node": "renamelabels11"
+          "from_node": "applyneighborhood4"
         },
         "dimension": "t",
         "reducer": {
@@ -1119,186 +1033,6 @@
         "dimension": "bands",
         "target": [
           "S2-L2A-SCL_DILATED_MASK"
-        ]
-      },
-      "process_id": "rename_labels"
-    },
-    "renamelabels10": {
-      "arguments": {
-        "data": {
-          "from_node": "applyneighborhood3"
-        },
-        "dimension": "bands",
-        "target": [
-          "presto_ft_0",
-          "presto_ft_1",
-          "presto_ft_2",
-          "presto_ft_3",
-          "presto_ft_4",
-          "presto_ft_5",
-          "presto_ft_6",
-          "presto_ft_7",
-          "presto_ft_8",
-          "presto_ft_9",
-          "presto_ft_10",
-          "presto_ft_11",
-          "presto_ft_12",
-          "presto_ft_13",
-          "presto_ft_14",
-          "presto_ft_15",
-          "presto_ft_16",
-          "presto_ft_17",
-          "presto_ft_18",
-          "presto_ft_19",
-          "presto_ft_20",
-          "presto_ft_21",
-          "presto_ft_22",
-          "presto_ft_23",
-          "presto_ft_24",
-          "presto_ft_25",
-          "presto_ft_26",
-          "presto_ft_27",
-          "presto_ft_28",
-          "presto_ft_29",
-          "presto_ft_30",
-          "presto_ft_31",
-          "presto_ft_32",
-          "presto_ft_33",
-          "presto_ft_34",
-          "presto_ft_35",
-          "presto_ft_36",
-          "presto_ft_37",
-          "presto_ft_38",
-          "presto_ft_39",
-          "presto_ft_40",
-          "presto_ft_41",
-          "presto_ft_42",
-          "presto_ft_43",
-          "presto_ft_44",
-          "presto_ft_45",
-          "presto_ft_46",
-          "presto_ft_47",
-          "presto_ft_48",
-          "presto_ft_49",
-          "presto_ft_50",
-          "presto_ft_51",
-          "presto_ft_52",
-          "presto_ft_53",
-          "presto_ft_54",
-          "presto_ft_55",
-          "presto_ft_56",
-          "presto_ft_57",
-          "presto_ft_58",
-          "presto_ft_59",
-          "presto_ft_60",
-          "presto_ft_61",
-          "presto_ft_62",
-          "presto_ft_63",
-          "presto_ft_64",
-          "presto_ft_65",
-          "presto_ft_66",
-          "presto_ft_67",
-          "presto_ft_68",
-          "presto_ft_69",
-          "presto_ft_70",
-          "presto_ft_71",
-          "presto_ft_72",
-          "presto_ft_73",
-          "presto_ft_74",
-          "presto_ft_75",
-          "presto_ft_76",
-          "presto_ft_77",
-          "presto_ft_78",
-          "presto_ft_79",
-          "presto_ft_80",
-          "presto_ft_81",
-          "presto_ft_82",
-          "presto_ft_83",
-          "presto_ft_84",
-          "presto_ft_85",
-          "presto_ft_86",
-          "presto_ft_87",
-          "presto_ft_88",
-          "presto_ft_89",
-          "presto_ft_90",
-          "presto_ft_91",
-          "presto_ft_92",
-          "presto_ft_93",
-          "presto_ft_94",
-          "presto_ft_95",
-          "presto_ft_96",
-          "presto_ft_97",
-          "presto_ft_98",
-          "presto_ft_99",
-          "presto_ft_100",
-          "presto_ft_101",
-          "presto_ft_102",
-          "presto_ft_103",
-          "presto_ft_104",
-          "presto_ft_105",
-          "presto_ft_106",
-          "presto_ft_107",
-          "presto_ft_108",
-          "presto_ft_109",
-          "presto_ft_110",
-          "presto_ft_111",
-          "presto_ft_112",
-          "presto_ft_113",
-          "presto_ft_114",
-          "presto_ft_115",
-          "presto_ft_116",
-          "presto_ft_117",
-          "presto_ft_118",
-          "presto_ft_119",
-          "presto_ft_120",
-          "presto_ft_121",
-          "presto_ft_122",
-          "presto_ft_123",
-          "presto_ft_124",
-          "presto_ft_125",
-          "presto_ft_126",
-          "presto_ft_127"
-        ]
-      },
-      "process_id": "rename_labels"
-    },
-    "renamelabels11": {
-      "arguments": {
-        "data": {
-          "from_node": "applyneighborhood4"
-        },
-        "dimension": "bands",
-        "target": [
-          "classification",
-          "probability",
-          "probability_other",
-          "probability_cropland"
-        ]
-      },
-      "process_id": "rename_labels"
-    },
-    "renamelabels12": {
-      "arguments": {
-        "data": {
-          "from_node": "applyneighborhood5"
-        },
-        "dimension": "bands",
-        "target": [
-          "classification",
-          "probability"
-        ]
-      },
-      "process_id": "rename_labels"
-    },
-    "renamelabels13": {
-      "arguments": {
-        "data": {
-          "from_node": "applyneighborhood6"
-        },
-        "dimension": "bands",
-        "target": [
-          "classification",
-          "probability"
         ]
       },
       "process_id": "rename_labels"
@@ -1545,31 +1279,138 @@
     "renamelabels9": {
       "arguments": {
         "data": {
-          "from_node": "applyneighborhood2"
+          "from_node": "applyneighborhood3"
         },
         "dimension": "bands",
         "target": [
-          "classification",
-          "probability",
-          "probability_alliums",
-          "probability_beans",
-          "probability_beet",
-          "probability_brassica_oleracea_cabbage",
-          "probability_carrots_daucus",
-          "probability_cauliflower_broccoli",
-          "probability_chicory_chicories",
-          "probability_fibre_crops",
-          "probability_leafy_stem_vegetables",
-          "probability_maize",
-          "probability_oilseed_crops",
-          "probability_onion_shallot",
-          "probability_other_temporary_crops",
-          "probability_peas",
-          "probability_potatoes",
-          "probability_root_vegetables",
-          "probability_spinach",
-          "probability_unspecified_barley",
-          "probability_unspecified_wheat"
+          "presto_ft_0",
+          "presto_ft_1",
+          "presto_ft_2",
+          "presto_ft_3",
+          "presto_ft_4",
+          "presto_ft_5",
+          "presto_ft_6",
+          "presto_ft_7",
+          "presto_ft_8",
+          "presto_ft_9",
+          "presto_ft_10",
+          "presto_ft_11",
+          "presto_ft_12",
+          "presto_ft_13",
+          "presto_ft_14",
+          "presto_ft_15",
+          "presto_ft_16",
+          "presto_ft_17",
+          "presto_ft_18",
+          "presto_ft_19",
+          "presto_ft_20",
+          "presto_ft_21",
+          "presto_ft_22",
+          "presto_ft_23",
+          "presto_ft_24",
+          "presto_ft_25",
+          "presto_ft_26",
+          "presto_ft_27",
+          "presto_ft_28",
+          "presto_ft_29",
+          "presto_ft_30",
+          "presto_ft_31",
+          "presto_ft_32",
+          "presto_ft_33",
+          "presto_ft_34",
+          "presto_ft_35",
+          "presto_ft_36",
+          "presto_ft_37",
+          "presto_ft_38",
+          "presto_ft_39",
+          "presto_ft_40",
+          "presto_ft_41",
+          "presto_ft_42",
+          "presto_ft_43",
+          "presto_ft_44",
+          "presto_ft_45",
+          "presto_ft_46",
+          "presto_ft_47",
+          "presto_ft_48",
+          "presto_ft_49",
+          "presto_ft_50",
+          "presto_ft_51",
+          "presto_ft_52",
+          "presto_ft_53",
+          "presto_ft_54",
+          "presto_ft_55",
+          "presto_ft_56",
+          "presto_ft_57",
+          "presto_ft_58",
+          "presto_ft_59",
+          "presto_ft_60",
+          "presto_ft_61",
+          "presto_ft_62",
+          "presto_ft_63",
+          "presto_ft_64",
+          "presto_ft_65",
+          "presto_ft_66",
+          "presto_ft_67",
+          "presto_ft_68",
+          "presto_ft_69",
+          "presto_ft_70",
+          "presto_ft_71",
+          "presto_ft_72",
+          "presto_ft_73",
+          "presto_ft_74",
+          "presto_ft_75",
+          "presto_ft_76",
+          "presto_ft_77",
+          "presto_ft_78",
+          "presto_ft_79",
+          "presto_ft_80",
+          "presto_ft_81",
+          "presto_ft_82",
+          "presto_ft_83",
+          "presto_ft_84",
+          "presto_ft_85",
+          "presto_ft_86",
+          "presto_ft_87",
+          "presto_ft_88",
+          "presto_ft_89",
+          "presto_ft_90",
+          "presto_ft_91",
+          "presto_ft_92",
+          "presto_ft_93",
+          "presto_ft_94",
+          "presto_ft_95",
+          "presto_ft_96",
+          "presto_ft_97",
+          "presto_ft_98",
+          "presto_ft_99",
+          "presto_ft_100",
+          "presto_ft_101",
+          "presto_ft_102",
+          "presto_ft_103",
+          "presto_ft_104",
+          "presto_ft_105",
+          "presto_ft_106",
+          "presto_ft_107",
+          "presto_ft_108",
+          "presto_ft_109",
+          "presto_ft_110",
+          "presto_ft_111",
+          "presto_ft_112",
+          "presto_ft_113",
+          "presto_ft_114",
+          "presto_ft_115",
+          "presto_ft_116",
+          "presto_ft_117",
+          "presto_ft_118",
+          "presto_ft_119",
+          "presto_ft_120",
+          "presto_ft_121",
+          "presto_ft_122",
+          "presto_ft_123",
+          "presto_ft_124",
+          "presto_ft_125",
+          "presto_ft_126",
+          "presto_ft_127"
         ]
       },
       "process_id": "rename_labels"
@@ -1637,57 +1478,53 @@
       },
       "process_id": "sar_backscatter"
     },
-    "resamplespatial3": {
-      "process_id": "resample_spatial",
-      "arguments": {
-        "align": "upper-left",
-        "data": {
-          "from_node": "apply5"
-        },
-        "method": "near",
-        "projection": {
-          "from_parameter": "projection"
-        },
-        "resolution": 0
-      }
-    },
     "saveresult1": {
       "arguments": {
         "data": {
-          "from_node": "resamplespatial3"
+          "from_node": "reducedimension4"
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "worldcereal-cropland-type"
+          "filename_prefix": "cropland-raw"
         }
       },
       "process_id": "save_result"
     },
-    "resamplespatial4": {
-      "process_id": "resample_spatial",
-      "arguments": {
-        "align": "upper-left",
-        "data": {
-          "from_node": "apply7"
-        },
-        "method": "near",
-        "projection": {
-          "from_parameter": "projection"
-        },
-        "resolution": 0
-      }
-    },
     "saveresult2": {
       "arguments": {
         "data": {
-          "from_node": "resamplespatial4"
+          "from_node": "apply5"
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "worldcereal-cropland-type-postprocessed"
+          "filename_prefix": "cropland-postprocessed"
         }
       },
+      "process_id": "save_result"
+    },
+    "saveresult3": {
+      "arguments": {
+        "data": {
+          "from_node": "mask2"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "croptype-raw"
+        }
+      },
+      "process_id": "save_result"
+    },
+    "saveresult4": {
       "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply7"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": "croptype-postprocessed"
+        }
+      },
       "result": true
     },
     "toscldilationmask1": {
@@ -1850,6 +1687,49 @@
         "type": "string"
       },
       "default": null,
+      "optional": true
+    },
+    {
+      "name": "orbit_state",
+      "description": "The orbit state of the Sentinel-1 data. Can be either 'ASCENDING' or 'DESCENDING'. Defaults to 'DESCENDING'.",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "ASCENDING",
+          "DESCENDING"
+        ]
+      },
+      "default": "DESCENDING",
+      "optional": true
+    },
+    {
+      "name": "postprocess_method",
+      "description": "The postprocessing method to be used. Can be either 'majority_vote' or 'smooth_probabilities'. Defaults to 'smooth_probabilities'.",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "majority_vote",
+          "smooth_probabilities"
+        ]
+      },
+      "default": "smooth_probabilities",
+      "optional": true
+    },
+    {
+      "name": "postprocess_kernel_size",
+      "description": "The kernel size to be used for the postprocessing method. Only used if the postprocess_method is 'majority_vote'. Must be an odd integer no greater than 25. Defaults to 5.",
+      "schema": {
+        "type": "integer",
+        "maximum": 25,
+        "allOf": [
+          {
+            "not": {
+              "multipleOf": 2
+            }
+          }
+        ]
+      },
+      "default": 5,
       "optional": true
     }
   ],
