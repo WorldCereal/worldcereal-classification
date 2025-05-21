@@ -1858,7 +1858,6 @@
     "executor-memory": "2g",
     "executor-memoryOverhead": "1g",
     "python-memory": "3g",
-    "image-name": "python311",
     "soft-errors": 0.1,
     "udf-dependency-archives": [
       "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/openeo_311_onnx_torch.zip#onnx_deps"
