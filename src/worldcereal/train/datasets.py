@@ -163,17 +163,21 @@ class WorldCerealDataset(Dataset):
                 )  # max_center_point included
 
         return center_point
+    
+    def _get_timestamps(self, row: Dict, timestep_positions: List[int]) -> np.ndarray:
+        """
+        Generate an array of dates based on the specified compositing window.
+        """
+        # adjust start date depending on the compositing window
+        start_date = get_correct_date(row["start_date"], self.timestep_freq)
 
-    def _get_timestamps(self, row_d: Dict, timestep_positions: List[int]) -> np.ndarray:
-        start_date = datetime.strptime(row_d["start_date"], "%Y-%m-%d")
-        end_date = datetime.strptime(row_d["end_date"], "%Y-%m-%d")
-
-        if self.timestep_freq == "month":
-            days, months, years = get_monthly_timestamp_components(start_date, end_date)
-        elif self.timestep_freq == "dekad":
-            days, months, years = get_dekad_timestamp_components(start_date, end_date)
+        # Generate date vector depending on the compositing window
+        if self.timestep_freq == "dekad":
+            days, months, years = get_dekadal_dates(start_date, self.num_timesteps)
+        elif self.timestep_freq == "month":
+            days, months, years = get_monthly_dates(start_date, self.num_timesteps)
         else:
-            raise NotImplementedError()
+            raise ValueError(f"Unknown compositing window: {self.timestep_freq}")
 
         return np.stack(
             [
@@ -183,7 +187,8 @@ class WorldCerealDataset(Dataset):
             ],
             axis=1,
         )
-
+        
+        
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
         # Get latlons
         latlon = np.array([row_d["lat"], row_d["lon"]], dtype=np.float32)
@@ -416,147 +421,61 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return label
 
 
-def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndarray:
-    """Helper function to generate a sequence of months between start_date and end_date.
-    This is much faster than using a pd.date_range().
-
-    Parameters
-    ----------
-    start_date : datetime
-        start of the sequence
-    end_date : datetime
-        end of the sequence
-
-    Returns
-    -------
-    array contaning the sequence of months
-
+def get_correct_date(dt_in: str, timestep_freq: Literal["month", "dekad"]) -> np.datetime64:
     """
-    start = np.datetime64(start_date, "M")  # Truncate to month start
-    end = np.datetime64(end_date, "M")  # Truncate to month start
-    timestamps = np.arange(start, end + 1, dtype="datetime64[M]")
-
-    return timestamps
-
-
-def get_monthly_timestamp_components(
-    start_date: datetime, end_date: datetime
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Helper function to generate day/month/year components for
-    a sequence of months between start_date and end_date.
-
-    Parameters
-    ----------
-    start_date : datetime
-        start of the sequence
-    end_date : datetime
-        end of the sequence
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray]
-        tuple of day, month, year components for monthly sequence
+    Determine the correct date based on the input date and compositing window.
     """
+    # Extract year, month, and day
+    year = np.datetime64(dt_in, "D").astype("object").year
+    month = np.datetime64(dt_in, "D").astype("object").month
+    day = np.datetime64(dt_in, "D").astype("object").day
 
-    timestamps = generate_month_sequence(start_date, end_date)
-    years = timestamps.astype("datetime64[Y]").astype(int) + 1970
-    months = timestamps.astype("datetime64[M]").astype(int) % 12 + 1
-    days = np.ones_like(years)  # All days are 1 for "MS" frequency
-
-    return days, months, years
-
-
-def get_dekad_timestamp_components(start_date, end_date):
-    timestamps = np.array(
-        [_dekad_startdate_from_date(t) for t in _dekad_timestamps(start_date, end_date)]
-    )
-    years = np.array([t.year for t in timestamps])
-    months = np.array([t.month for t in timestamps])
-    days = np.array([t.day for t in timestamps])
-
-    return days, months, years
-
-
-def _dekad_timestamps(begin, end):
-    """Creates a temporal sequence on a dekadal basis.
-    Returns end date for each dekad.
-    Based on: https://pytesmo.readthedocs.io/en/7.1/_modules/pytesmo/timedate/dekad.html  # NOQA
-
-    Parameters
-    ----------
-    begin : datetime
-        Datetime index start date.
-    end : datetime, optional
-        Datetime index end date, set to current date if None.
-
-    Returns
-    -------
-    dtindex : pandas.DatetimeIndex
-        Dekadal datetime index.
-    """
-
-    import calendar
-
-    daterange = generate_month_sequence(begin, end)
-
-    dates = []
-
-    for i, dat in enumerate(daterange):
-        year, month = int(str(dat)[:4]), int(str(dat)[5:7])
-        lday = calendar.monthrange(year, month)[1]
-        if i == 0 and begin.day > 1:
-            if begin.day < 11:
-                if daterange.size == 1:
-                    if end.day < 11:
-                        dekads = [10]
-                    elif end.day >= 11 and end.day < 21:
-                        dekads = [10, 20]
-                    else:
-                        dekads = [10, 20, lday]
-                else:
-                    dekads = [10, 20, lday]
-            elif begin.day >= 11 and begin.day < 21:
-                if daterange.size == 1:
-                    if end.day < 21:
-                        dekads = [20]
-                    else:
-                        dekads = [20, lday]
-                else:
-                    dekads = [20, lday]
-            else:
-                dekads = [lday]
-        elif i == (len(daterange) - 1) and end.day < 21:
-            if end.day < 11:
-                dekads = [10]
-            else:
-                dekads = [10, 20]
+    if timestep_freq == "dekad":
+        if day <= 10:
+            correct_date = np.datetime64(f"{year}-{month:02d}-01")
+        elif 11 <= day <= 20:
+            correct_date = np.datetime64(f"{year}-{month:02d}-11")
         else:
-            dekads = [10, 20, lday]
+            correct_date = np.datetime64(f"{year}-{month:02d}-21")
+    elif timestep_freq == "month":
+        correct_date = np.datetime64(f"{year}-{month:02d}-01")
+    else:
+        raise ValueError(f"Unknown compositing window: {timestep_freq}")
 
-        for j in dekads:
-            dates.append(datetime(year, month, j))
-
-    return dates
+    return correct_date
 
 
-def _dekad_startdate_from_date(dt_in):
-    """
-    dekadal startdate that a date falls in
-    Based on: https://pytesmo.readthedocs.io/en/7.1/_modules/pytesmo/timedate/dekad.html  # NOQA
+def get_dekadal_dates(start_date: np.datetime64, num_timesteps: int = 12) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-    Parameters
-    ----------
-    run_dt: datetime.datetime
+    # Extract year, month, and day
+    year = start_date.astype("object").year
+    month = start_date.astype("object").month
+    day = start_date.astype("object").day
 
-    Returns
-    -------
-    startdate: datetime.datetime
-        startdate of dekad
-    """
-    if dt_in.day <= 10:
-        startdate = datetime(dt_in.year, dt_in.month, 1, 0, 0, 0)
-    if dt_in.day >= 11 and dt_in.day <= 20:
-        startdate = datetime(dt_in.year, dt_in.month, 11, 0, 0, 0)
-    if dt_in.day >= 21:
-        startdate = datetime(dt_in.year, dt_in.month, 21, 0, 0, 0)
-    return startdate
+    days, months, years = [day], [month], [year]
+    while len(days) < num_timesteps:
+        if day < 21:
+            day += 10
+        else:
+            month = month + 1 if month < 12 else 1
+            year = year + 1 if month == 1 else year
+            day = 1
+        days.append(day)
+        months.append(month)
+        years.append(year)
+    return np.array(days), np.array(months), np.array(years)
+
+
+def get_monthly_dates(start_date: str, num_timesteps: int = 12) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # truncate to month precision
+    start_month = np.datetime64(start_date, "M")
+    # generate date vector based on the number of timesteps
+    date_vector = start_month + np.arange(
+        num_timesteps, dtype="timedelta64[M]"
+    )
+
+    # generate day, month and year vectors with numpy operations
+    days = np.ones(num_timesteps, dtype=int)
+    months = (date_vector.astype("datetime64[M]").astype(int) % 12) + 1
+    years = (date_vector.astype("datetime64[Y]").astype(int)) + 1970
+    return days, months, years

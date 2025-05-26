@@ -8,9 +8,9 @@ from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, 
 from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
-    generate_month_sequence,
-    get_dekad_timestamp_components,
-    get_monthly_timestamp_components,
+    get_correct_date,
+    get_dekadal_dates,
+    get_monthly_dates,
 )
 
 
@@ -220,25 +220,25 @@ class TestTimeUtilities(unittest.TestCase):
     def test_generate_month_sequence(self):
         """Test generating a sequence of months."""
         start_date = datetime(2021, 1, 1)
-        end_date = datetime(2021, 12, 31)
 
-        sequence = generate_month_sequence(start_date, end_date)
+        start_date = get_correct_date(start_date, timestep_freq="month")
+        days, months, years = get_monthly_dates(start_date, num_timesteps=12)
 
         # Should have 12 months
-        self.assertEqual(len(sequence), 12)
-
+        self.assertEqual(len(months), 12)
+        
         # First should be January 2021
-        self.assertEqual(str(sequence[0])[:7], "2021-01")
-
+        self.assertEqual(f"{years[0]}-{months[0]}", "2021-1")
+        
         # Last should be December 2021
-        self.assertEqual(str(sequence[-1])[:7], "2021-12")
+        self.assertEqual(f"{years[-1]}-{months[-1]}", "2021-12")
 
     def test_get_monthly_timestamp_components(self):
         """Test getting month timestamp components."""
         start_date = datetime(2021, 1, 1)
-        end_date = datetime(2021, 12, 31)
 
-        days, months, years = get_monthly_timestamp_components(start_date, end_date)
+        start_date = get_correct_date(start_date, timestep_freq="month")
+        days, months, years = get_monthly_dates(start_date, num_timesteps=12)
 
         # Should have 12 months
         self.assertEqual(len(days), 12)
@@ -257,9 +257,9 @@ class TestTimeUtilities(unittest.TestCase):
     def test_get_dekad_timestamp_components(self):
         """Test getting dekad timestamp components."""
         start_date = datetime(2021, 1, 1)
-        end_date = datetime(2021, 1, 31)
-
-        days, months, years = get_dekad_timestamp_components(start_date, end_date)
+        
+        start_date = get_correct_date(start_date, timestep_freq="dekad")
+        days, months, years = get_dekadal_dates(start_date, num_timesteps=3)
 
         # Should have 3 dekads per month
         self.assertEqual(len(days), 3)
