@@ -171,9 +171,6 @@ class WorldCerealDataset(Dataset):
         start_date = np.datetime64(row["start_date"], "D")
         end_date = np.datetime64(row["end_date"], "D")
 
-        start_date = align_to_composite_window(start_date, self.timestep_freq)
-        end_date = align_to_composite_window(end_date, self.timestep_freq)
-
         # Generate date vector depending on the compositing window
         if self.timestep_freq == "dekad":
             days, months, years = get_dekad_timestamp_components(start_date, end_date)
@@ -473,14 +470,14 @@ def get_dekad_timestamp_components(
     start_date: np.datetime64, end_date: np.datetime64
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Generate dekad (10-day period) timestamp components (day, month, year) starting from a given date.
+    Generate dekad (10-day period) timestamp components (day, month, year) between a start and end date.
 
     Parameters
     ----------
     start_date : np.datetime64
         The starting date from which to generate dekad timestamps.
-    num_timesteps : int, optional
-        The number of dekad timestamps to generate (default is 12).
+    end_date : np.datetime64
+        The ending date up to which dekad timestamps are generated (inclusive).
 
     Returns
     -------
@@ -491,6 +488,10 @@ def get_dekad_timestamp_components(
     years : np.ndarray
         Array of year components for each dekad timestamp.
     """
+    
+    # Align start and end dates to the dekad window
+    start_date = align_to_composite_window(start_date, "dekad")
+    end_date = align_to_composite_window(end_date, "dekad")
 
     # Extract year, month, and day
     year = start_date.astype("object").year
@@ -519,14 +520,14 @@ def get_monthly_timestamp_components(
     start_date: np.datetime64, end_date: np.datetime64
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Generate monthly timestamp components (day, month, year) starting from a given date.
+    Generate monthly timestamp components (day, month, year) between a start and end date.
 
     Parameters
     ----------
     start_date : np.datetime64
         The starting date from which to generate month timestamps.
-    num_timesteps : int, optional
-        The number of month timestamps to generate (default is 12).
+    end_date : np.datetime64
+        The ending date up to which to generate month timestamps.
 
     Returns
     -------
@@ -537,8 +538,11 @@ def get_monthly_timestamp_components(
     years : np.ndarray
         Array of year components for each month timestamp.
     """
-
-    # truncate to month precision
+    
+    # Align start and end dates to the first day of the month
+    start_date = align_to_composite_window(start_date, "month")
+    end_date = align_to_composite_window(end_date, "month")
+        
     # Truncate to month precision (year and month only, day is dropped)
     start_month = np.datetime64(start_date, "M")
     end_month = np.datetime64(end_date, "M")

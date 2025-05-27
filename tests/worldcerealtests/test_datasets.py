@@ -515,10 +515,6 @@ class TestTimeUtilities(unittest.TestCase):
         start_date = np.datetime64("2021-01-03", "D")
         end_date = np.datetime64("2021-12-24", "D")
 
-        # make sure that start and end dates are month-aligned
-        start_date = align_to_composite_window(start_date, timestep_freq="month")
-        end_date = align_to_composite_window(end_date, timestep_freq="month")
-
         days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
         # Should have 12 months
@@ -534,10 +530,6 @@ class TestTimeUtilities(unittest.TestCase):
         """Test getting month timestamp components."""
         start_date = np.datetime64("2021-01-03", "D")
         end_date = np.datetime64("2021-12-24", "D")
-
-        # make sure that start and end dates are month-aligned
-        start_date = align_to_composite_window(start_date, timestep_freq="month")
-        end_date = align_to_composite_window(end_date, timestep_freq="month")
 
         days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
@@ -559,10 +551,6 @@ class TestTimeUtilities(unittest.TestCase):
         """Test getting dekad timestamp components."""
         start_date = np.datetime64("2021-01-03", "D")
         end_date = np.datetime64("2021-01-24", "D")
-
-        # make sure that start and end dates are dekad-aligned
-        start_date = align_to_composite_window(start_date, timestep_freq="dekad")
-        end_date = align_to_composite_window(end_date, timestep_freq="dekad")
 
         days, months, years = get_dekad_timestamp_components(start_date, end_date)
 
