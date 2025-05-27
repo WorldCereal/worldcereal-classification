@@ -9,8 +9,8 @@ from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
     get_correct_date,
-    get_dekadal_dates,
-    get_monthly_dates,
+    get_dekad_timestamp_components,
+    get_monthly_timestamp_components,
 )
 
 
@@ -219,10 +219,14 @@ class TestWorldCerealDataset(unittest.TestCase):
 class TestTimeUtilities(unittest.TestCase):
     def test_generate_month_sequence(self):
         """Test generating a sequence of months."""
-        start_date = datetime(2021, 1, 1)
-
+        start_date = np.datetime64("2021-01-03", "D")
+        end_date = np.datetime64("2021-12-24", "D")
+        
+        # make sure that start and end dates are month-aligned
         start_date = get_correct_date(start_date, timestep_freq="month")
-        days, months, years = get_monthly_dates(start_date, num_timesteps=12)
+        end_date = get_correct_date(end_date, timestep_freq="month")
+        
+        days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
         # Should have 12 months
         self.assertEqual(len(months), 12)
@@ -235,10 +239,14 @@ class TestTimeUtilities(unittest.TestCase):
 
     def test_get_monthly_timestamp_components(self):
         """Test getting month timestamp components."""
-        start_date = datetime(2021, 1, 1)
-
+        start_date = np.datetime64("2021-01-03", "D")
+        end_date = np.datetime64("2021-12-24", "D")
+        
+        # make sure that start and end dates are month-aligned
         start_date = get_correct_date(start_date, timestep_freq="month")
-        days, months, years = get_monthly_dates(start_date, num_timesteps=12)
+        end_date = get_correct_date(end_date, timestep_freq="month")
+        
+        days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
         # Should have 12 months
         self.assertEqual(len(days), 12)
@@ -256,10 +264,14 @@ class TestTimeUtilities(unittest.TestCase):
 
     def test_get_dekad_timestamp_components(self):
         """Test getting dekad timestamp components."""
-        start_date = datetime(2021, 1, 1)
+        start_date = np.datetime64("2021-01-03", "D")
+        end_date = np.datetime64("2021-01-24", "D")
         
+        # make sure that start and end dates are dekad-aligned
         start_date = get_correct_date(start_date, timestep_freq="dekad")
-        days, months, years = get_dekadal_dates(start_date, num_timesteps=3)
+        end_date = get_correct_date(end_date, timestep_freq="dekad")
+        
+        days, months, years = get_dekad_timestamp_components(start_date, end_date)
 
         # Should have 3 dekads per month
         self.assertEqual(len(days), 3)
