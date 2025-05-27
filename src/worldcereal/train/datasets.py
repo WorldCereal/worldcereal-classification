@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -38,7 +37,7 @@ class WorldCerealDataset(Dataset):
         self,
         dataframe: pd.DataFrame,
         num_timesteps: int = 12,
-        timestep_freq: str = "month",
+        timestep_freq: Literal["month", "dekad"] = "month",
         task_type: Literal["ssl", "binary", "multiclass"] = "ssl",
         num_outputs: Optional[int] = None,
         augment: bool = False,
@@ -123,7 +122,7 @@ class WorldCerealDataset(Dataset):
         """Helper method to decide on the center point based on which to
         extract the timesteps."""
 
-        if not augment:
+        if not augment or available_timesteps == self.num_timesteps:
             #  check if the valid position is too close to the start_date and force shifting it
             if valid_position < self.num_timesteps // 2:
                 center_point = self.num_timesteps // 2
@@ -163,7 +162,7 @@ class WorldCerealDataset(Dataset):
                 )  # max_center_point included
 
         return center_point
-    
+
     def _get_timestamps(self, row: Dict, timestep_positions: List[int]) -> np.ndarray:
         """
         Generate an array of dates based on the specified compositing window.
@@ -171,10 +170,10 @@ class WorldCerealDataset(Dataset):
         # adjust start date depending on the compositing window
         start_date = np.datetime64(row["start_date"], "D")
         end_date = np.datetime64(row["end_date"], "D")
-        
-        start_date = get_correct_date(start_date, self.timestep_freq)
-        end_date = get_correct_date(end_date, self.timestep_freq)
-        
+
+        start_date = align_to_composite_window(start_date, self.timestep_freq)
+        end_date = align_to_composite_window(end_date, self.timestep_freq)
+
         # Generate date vector depending on the compositing window
         if self.timestep_freq == "dekad":
             days, months, years = get_dekad_timestamp_components(start_date, end_date)
@@ -191,8 +190,7 @@ class WorldCerealDataset(Dataset):
             ],
             axis=1,
         )
-        
-        
+
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
         # Get latlons
         latlon = np.array([row_d["lat"], row_d["lon"]], dtype=np.float32)
@@ -425,16 +423,18 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return label
 
 
-def get_correct_date(dt_in: np.datetime64, timestep_freq: Literal["month", "dekad"]) -> np.datetime64:
+def align_to_composite_window(
+    dt_in: np.datetime64, timestep_freq: Literal["month", "dekad"]
+) -> np.datetime64:
     """
-    Determine the correct date based on the input date and compositing window. 
-    
+    Determine the composite window start date based on the input date and compositing window.
+
     Parameters
     ----------
     dt_in : np.datetime64
         Input date string in a format compatible with numpy.datetime64 (e.g., 'YYYY-MM-DD').
     timestep_freq : Literal["month", "dekad"]
-        The compositing window to use for determining the correct date. 
+        The compositing window to use for determining the correct date.
         - "month": Returns the first day of the month.
         - "dekad": Returns the first day of the dekad (1st, 11th, or 21st of the month).
 
@@ -469,7 +469,9 @@ def get_correct_date(dt_in: np.datetime64, timestep_freq: Literal["month", "deka
     return correct_date
 
 
-def get_dekad_timestamp_components(start_date: np.datetime64, end_date: np.datetime64) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def get_dekad_timestamp_components(
+    start_date: np.datetime64, end_date: np.datetime64
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate dekad (10-day period) timestamp components (day, month, year) starting from a given date.
 
@@ -490,16 +492,15 @@ def get_dekad_timestamp_components(start_date: np.datetime64, end_date: np.datet
         Array of year components for each dekad timestamp.
     """
 
-
     # Extract year, month, and day
     year = start_date.astype("object").year
     month = start_date.astype("object").month
     day = start_date.astype("object").day
-    
+
     year_end = end_date.astype("object").year
     month_end = end_date.astype("object").month
     day_end = end_date.astype("object").day
-    
+
     days, months, years = [day], [month], [year]
     while f"{year}-{month}-{day}" != f"{year_end}-{month_end}-{day_end}":
         if day < 21:
@@ -514,7 +515,9 @@ def get_dekad_timestamp_components(start_date: np.datetime64, end_date: np.datet
     return np.array(days), np.array(months), np.array(years)
 
 
-def get_monthly_timestamp_components(start_date: np.datetime64, end_date: np.datetime64) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def get_monthly_timestamp_components(
+    start_date: np.datetime64, end_date: np.datetime64
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate monthly timestamp components (day, month, year) starting from a given date.
 
@@ -534,17 +537,15 @@ def get_monthly_timestamp_components(start_date: np.datetime64, end_date: np.dat
     years : np.ndarray
         Array of year components for each month timestamp.
     """
-    
+
     # truncate to month precision
     # Truncate to month precision (year and month only, day is dropped)
     start_month = np.datetime64(start_date, "M")
     end_month = np.datetime64(end_date, "M")
     num_timesteps = (end_month - start_month).astype(int) + 1
-    
+
     # generate date vector based on the number of timesteps
-    date_vector = start_month + np.arange(
-        num_timesteps, dtype="timedelta64[M]"
-    )
+    date_vector = start_month + np.arange(num_timesteps, dtype="timedelta64[M]")
 
     # generate day, month and year vectors with numpy operations
     days = np.ones(len(date_vector), dtype=int)

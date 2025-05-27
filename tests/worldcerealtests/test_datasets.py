@@ -7,7 +7,7 @@ from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, 
 from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
-    get_correct_date,
+    align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
 )
@@ -516,8 +516,8 @@ class TestTimeUtilities(unittest.TestCase):
         end_date = np.datetime64("2021-12-24", "D")
 
         # make sure that start and end dates are month-aligned
-        start_date = get_correct_date(start_date, timestep_freq="month")
-        end_date = get_correct_date(end_date, timestep_freq="month")
+        start_date = align_to_composite_window(start_date, timestep_freq="month")
+        end_date = align_to_composite_window(end_date, timestep_freq="month")
 
         days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
@@ -536,8 +536,8 @@ class TestTimeUtilities(unittest.TestCase):
         end_date = np.datetime64("2021-12-24", "D")
 
         # make sure that start and end dates are month-aligned
-        start_date = get_correct_date(start_date, timestep_freq="month")
-        end_date = get_correct_date(end_date, timestep_freq="month")
+        start_date = align_to_composite_window(start_date, timestep_freq="month")
+        end_date = align_to_composite_window(end_date, timestep_freq="month")
 
         days, months, years = get_monthly_timestamp_components(start_date, end_date)
 
@@ -561,8 +561,8 @@ class TestTimeUtilities(unittest.TestCase):
         end_date = np.datetime64("2021-01-24", "D")
 
         # make sure that start and end dates are dekad-aligned
-        start_date = get_correct_date(start_date, timestep_freq="dekad")
-        end_date = get_correct_date(end_date, timestep_freq="dekad")
+        start_date = align_to_composite_window(start_date, timestep_freq="dekad")
+        end_date = align_to_composite_window(end_date, timestep_freq="dekad")
 
         days, months, years = get_dekad_timestamp_components(start_date, end_date)
 
