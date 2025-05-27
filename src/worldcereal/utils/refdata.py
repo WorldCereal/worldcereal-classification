@@ -352,10 +352,9 @@ AND ewoc_code > 1100000000
 AND ewoc_code IN ({ct_list_str})
 """
 
-    main_query = ""
+    main_query = "SET TimeZone = 'UTC';\n"
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SET TimeZone = 'UTC';
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{tpath}')
 {spatial_query_part}

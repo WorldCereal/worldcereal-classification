@@ -146,12 +146,13 @@ def doy_to_date_after(doy: int, after_date: datetime.datetime):
     """
 
     year = after_date.year
-    doy_date = pd.to_datetime(f"{year}-01-01") + pd.Timedelta(days=doy)
+    # DOY is 1-based so day 1 should correspond to January 1st
+    doy_date = pd.to_datetime(f"{year}-01-01") + pd.Timedelta(days=doy - 1)
 
     if doy_date >= after_date:
         pass
     else:
-        doy_date = pd.to_datetime(f"{year+1}-01-01") + pd.Timedelta(days=doy)
+        doy_date = pd.to_datetime(f"{year+1}-01-01") + pd.Timedelta(days=doy - 1)
 
     doy_date = doy_date.strftime("%Y-%m-%d")
     # logger.info(f'Inferred date from DOY: {doy_date}')

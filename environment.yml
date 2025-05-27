@@ -34,7 +34,7 @@ dependencies:
   - pip:
     - duckdb==1.1.3
     - h3==4.1.0
-    - openeo-gfmap==0.4.4
+    - openeo-gfmap==0.4.5
     - git+https://github.com/worldcereal/worldcereal-classification
     - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
     - git+https://github.com/WorldCereal/prometheo

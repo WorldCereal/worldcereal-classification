@@ -73,7 +73,7 @@ def generate_output_path_point_worldcereal(
 def create_job_dataframe_point_worldcereal(
     backend: Backend, split_jobs: List[gpd.GeoDataFrame]
 ) -> pd.DataFrame:
-    """Create a dataframe from the split jobs, containg all the necessary information to run the job."""
+    """Create a dataframe from the split jobs, containing all the necessary information to run the job."""
     rows = []
     for job in tqdm(split_jobs):
         min_time = job.valid_time.min()

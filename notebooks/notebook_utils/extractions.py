@@ -214,6 +214,10 @@ def get_band_statistics(
         DataFrame containing the band statistics
     """
 
+    # Check if the extractions dataframe is empty
+    if extractions_gdf.empty:
+        raise ValueError("The extractions dataframe is empty.")
+
     # Get the band statistics
     band_stats = {}
     for sensor, bands in BANDS.items():
@@ -286,6 +290,10 @@ def visualize_timeseries(
     -------
     None
     """
+
+    # Check if the extractions dataframe is empty
+    if extractions_gdf.empty:
+        raise ValueError("The extractions dataframe is empty.")
 
     # Check whether we have a valid band name
     supported_bands = [
