@@ -7,6 +7,7 @@ from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, 
 from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
+    align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
 )
@@ -509,21 +510,27 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
 
 
 class TestTimeUtilities(unittest.TestCase):
-    def test_generate_month_sequence(self):
-        """Test generating a sequence of months."""
+    def test_align_to_composite_window(self):
+        """Test aligning dates to composite window."""
+        # Test with dekad frequency
         start_date = np.datetime64("2021-01-03", "D")
-        end_date = np.datetime64("2021-12-24", "D")
-
-        days, months, years = get_monthly_timestamp_components(start_date, end_date)
-
-        # Should have 12 months
-        self.assertEqual(len(months), 12)
-
-        # First should be January 2021
-        self.assertEqual(f"{years[0]}-{months[0]}", "2021-1")
-
-        # Last should be December 2021
-        self.assertEqual(f"{years[-1]}-{months[-1]}", "2021-12")
+        end_date = np.datetime64("2021-01-24", "D")
+        aligned_start = align_to_composite_window(start_date, "dekad")
+        aligned_end = align_to_composite_window(end_date, "dekad")
+        
+        # Should align to first dekad of January
+        self.assertEqual(aligned_start, np.datetime64("2021-01-01", "D"))
+        self.assertEqual(aligned_end, np.datetime64("2021-01-21", "D"))
+        
+        # Test with monthly frequency
+        start_date = np.datetime64("2021-01-15", "D")
+        end_date = np.datetime64("2021-02-10", "D")
+        aligned_start = align_to_composite_window(start_date, "month")
+        aligned_end = align_to_composite_window(end_date, "month")
+        
+        # Should align to first day of month
+        self.assertEqual(aligned_start, np.datetime64("2021-01-01", "D"))
+        self.assertEqual(aligned_end, np.datetime64("2021-02-01", "D"))
 
     def test_get_monthly_timestamp_components(self):
         """Test getting month timestamp components."""
