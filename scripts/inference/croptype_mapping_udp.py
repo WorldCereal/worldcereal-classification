@@ -27,15 +27,27 @@ spatial_extent = {
 
 # Temporal extent needs to consist of exactly twelve months,
 # always starting first day of the month and ending last day of the month.
+# Ideally, the season of interest should be nicely centered within the selected twelve months period.
 temporal_extent = ["2018-11-01", "2019-10-30"]
 
 # Provide the link to your custom model
+# The model should be in ONNX format and publicly accessible.
 model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/tests/be_multiclass-test_custommodel.onnx"
 
-# Optional parameters
-orbit_state = "ASCENDING"  # optional parameter, default is "DESCENDING"
-postprocess_method = "smooth_probabilities"  # optional parameter, available choices are "majority_vote" and "smooth_probabilities". Default is "smooth_probabilities"
-postprocess_kernel_size = 5  # optional parameter,  default is 5 (only used if postprocess_method is "majority_vote")
+# Sentinel-1 orbit state, either "ASCENDING" or "DESCENDING".
+# In the future, this setting will be automatically determined by the system based on the regional extent.
+# For now, the user needs to explicitly specify the orbit state based on the most dominant orbit state in the region of interest.
+# The user can be guided to the global map available here: https://docs.sentinel-hub.com/api/latest/data/sentinel-1-grd/
+# to make this decision.
+orbit_state = "ASCENDING"  # system's default is "DESCENDING"
+
+## OPTIONAL PARAMETERS
+# Post-processing method, available choices are "majority_vote" and "smooth_probabilities".
+# System's default is "smooth_probabilities", but we prefer "majority_vote" for this example.
+postprocess_method = "majority_vote"
+# If the postprocess_method is set to "majority_vote", the user can specify the kernel size.
+# The system's default is 5
+postprocess_kernel_size = 5
 
 ###### END OF USER INPUTS ######
 
