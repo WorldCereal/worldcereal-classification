@@ -7,7 +7,6 @@ from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, 
 from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
-    align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
 )
