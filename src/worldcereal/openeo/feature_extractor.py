@@ -21,8 +21,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     import functools
 
     PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl"
-    # BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
-    # DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
         "S2-L2A-B02": "B2",
@@ -276,6 +274,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
         self.logger.info(f'Loading Presto wheel from "{presto_wheel_url}"')
 
+        ignore_dependencies = self._parameters.get("ignore_dependencies", False)
+        if ignore_dependencies:
+            self.logger.info(
+                "`ignore_dependencies` flag is set to True. Make sure that "
+                "Presto and its dependencies are available on the runtime "
+                "environment"
+            )
+
         # The below is required to avoid flipping of the result
         # when running on OpenEO backend!
         inarr = inarr.transpose("bands", "t", "x", "y")
@@ -300,12 +306,14 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
                 )
             inarr.attrs["valid_date"] = inarr.t.values[6]
 
-        # Unzip the Presto dependencies on the backend
-        self.logger.info("Unpacking presto wheel")
-        deps_dir = self.unpack_presto_wheel(presto_wheel_url)
+        if not ignore_dependencies:
 
-        self.logger.info("Appending dependencies")
-        sys.path.append(str(deps_dir))
+            # Unzip the Presto dependencies on the backend
+            self.logger.info("Unpacking presto wheel")
+            deps_dir = self.unpack_presto_wheel(presto_wheel_url)
+
+            self.logger.info("Appending dependencies")
+            sys.path.append(str(deps_dir))
 
         from presto.inference import (  # pylint: disable=import-outside-toplevel
             get_presto_features,
