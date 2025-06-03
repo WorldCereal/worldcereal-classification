@@ -23,7 +23,7 @@ from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 
 
-class EnhancedMultiBackendJobManager(MultiBackendJobManager):
+class PatchToPointJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row):
         logger.info(f"Job {job.job_id} completed")
         output_file = generate_output_path_point_worldcereal(self._root_dir, 0, row)
@@ -413,7 +413,7 @@ def main(
 
     logger.debug(job_df)
 
-    manager = EnhancedMultiBackendJobManager(root_dir=output_folder)
+    manager = PatchToPointJobManager(root_dir=output_folder)
     manager.add_backend("terrascope", connection=connection, parallel_jobs=1)
     manager.run_jobs(
         df=job_df,
