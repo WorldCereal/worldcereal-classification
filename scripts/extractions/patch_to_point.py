@@ -168,8 +168,8 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         # Reset index for certain openEO compatibility
         gdf = gdf.reset_index(drop=True)
 
-        # Upload the geoparquet file to S3
-        logger.info("Deploying geoparquet file to S3 ...")
+        # Upload the geoparquet file to Artifactory
+        logger.info("Deploying geoparquet file to Artifactory ...")
         # url = upload_geoparquet_s3("cdse", gdf, ref_id, collection=f"{row.epsg}")
         url = upload_geoparquet_artifactory(gdf, ref_id, collection=f"{row.epsg}")
 
