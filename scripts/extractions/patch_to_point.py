@@ -312,7 +312,7 @@ def merge_individual_parquet_files(
     missing_attrs = gdf["start_date"].isnull()
     if missing_attrs.sum() > 0.25 * len(gdf):
         error_msg = (
-            "More than half of the rows have missing attributes. "
+            r"More than 25% of the rows have missing attributes. "
             "Please check extractions! No merged parquet will be generated."
         )
         logger.error(error_msg)
