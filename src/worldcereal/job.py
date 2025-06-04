@@ -20,7 +20,8 @@ from worldcereal.parameters import (
 )
 from worldcereal.utils.models import load_model_lut
 
-ONNX_DEPS_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/openeo/onnx_dependencies_1.16.3.zip"
+ONNX_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/onnx_deps_python311.zip"
+FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip"
 
 
 class WorldCerealProduct(TypedDict):
@@ -278,7 +279,11 @@ def generate_map(
         "executor-memoryOverhead": "1g",
         "python-memory": "3g",
         "soft-errors": 0.1,
-        "udf-dependency-archives": [f"{ONNX_DEPS_URL}#onnx_deps"],
+        "image-name": "python311",
+        "udf-dependency-archives": [
+            f"{ONNX_DEPS_URL}#onnx_deps",
+            f"{FEATURE_DEPS_URL}#feature_deps",
+        ],
     }
     if job_options is not None:
         JOB_OPTIONS.update(job_options)
