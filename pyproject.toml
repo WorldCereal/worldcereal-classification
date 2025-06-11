@@ -36,7 +36,8 @@ classifiers = [
 ]
 dependencies = [
     "boto3==1.35.0",
-    "cftime",  
+    "cftime",
+    "einops",
     "geojson",  
     "geopandas",  
     "h3==4.1.0",  
