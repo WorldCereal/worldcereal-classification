@@ -24,15 +24,9 @@ jobs:
     #     cd openeo-gfmap
     #     pip install .
     #     cd ..
-    - name: Install Presto from source
-      run: |
-        git clone -b croptype https://github.com/WorldCereal/presto-worldcereal.git
-        cd presto-worldcereal
-        pip install .
-        cd ..
     - name: Install Prometheo from source
       run: |
-        git clone https://github.com/WorldCereal/prometheo.git
+        git clone -b infer https://github.com/WorldCereal/prometheo.git
         cd prometheo
         pip install .
         cd ..
