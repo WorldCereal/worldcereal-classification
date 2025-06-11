@@ -1,7 +1,11 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import xarray as xr
+from prometheo.models import Presto
+from prometheo.models.presto.wrapper import load_presto_weights
 from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, S2_BANDS
 
 from worldcereal.train.datasets import (
@@ -10,6 +14,7 @@ from worldcereal.train.datasets import (
     align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
+    run_model_inference,
 )
 
 
@@ -517,17 +522,17 @@ class TestTimeUtilities(unittest.TestCase):
         end_date = np.datetime64("2021-01-24", "D")
         aligned_start = align_to_composite_window(start_date, "dekad")
         aligned_end = align_to_composite_window(end_date, "dekad")
-        
+
         # Should align to first dekad of January
         self.assertEqual(aligned_start, np.datetime64("2021-01-01", "D"))
         self.assertEqual(aligned_end, np.datetime64("2021-01-21", "D"))
-        
+
         # Test with monthly frequency
         start_date = np.datetime64("2021-01-15", "D")
         end_date = np.datetime64("2021-02-10", "D")
         aligned_start = align_to_composite_window(start_date, "month")
         aligned_end = align_to_composite_window(end_date, "month")
-        
+
         # Should align to first day of month
         self.assertEqual(aligned_start, np.datetime64("2021-01-01", "D"))
         self.assertEqual(aligned_end, np.datetime64("2021-02-01", "D"))
@@ -682,6 +687,49 @@ class TestGetLabel(unittest.TestCase):
             self.assertTrue((mask[t] == NODATAVALUE).all())
         # at t=4, should match class index 1
         self.assertEqual(mask[4], 1)
+
+
+class TestInference(unittest.TestCase):
+    def test_run_model_inference(self):
+        """Test the run_model_inference function. Based on reference features
+        generated using the following code at commit 4028b4f :
+
+        arr = xr.open_dataarray(data_dir / "test_inference_array.nc")
+        model_url = str(data_dir / "finetuned_presto_model.pt")
+                presto_features = run_model_inference(
+                    arr, model_url, batch_size=512, epsg=32631
+                )
+        presto_features.to_netcdf(data_dir / "test_presto_inference_features.nc")
+
+        """
+        data_dir = Path(__file__).parent / "testresources"
+        arr = xr.open_dataarray(data_dir / "test_inference_array.nc")
+
+        # Load a pretrained Presto model
+        model_url = str(data_dir / "finetuned_presto_model.pt")
+        presto_model = Presto()
+        presto_model = load_presto_weights(presto_model, model_url)
+
+        presto_features = run_model_inference(
+            arr, presto_model, batch_size=512, epsg=32631
+        )
+
+        # Uncomment to regenerate ref features
+        # presto_features.to_netcdf(data_dir / "test_presto_inference_features.nc")
+
+        # Load ref features
+        ref_presto_features = xr.open_dataarray(
+            data_dir / "test_presto_inference_features.nc"
+        )
+
+        xr.testing.assert_allclose(
+            presto_features,
+            ref_presto_features,
+            rtol=1e-04,
+            atol=1e-04,
+        )
+
+        assert presto_features.dims == ref_presto_features.dims
 
 
 if __name__ == "__main__":

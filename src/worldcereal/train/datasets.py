@@ -2,6 +2,10 @@ from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import xarray as xr
+from einops import rearrange
+from prometheo.infer import extract_features_from_model
+from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import (
     DEM_BANDS,
     METEO_BANDS,
@@ -10,6 +14,8 @@ from prometheo.predictors import (
     S2_BANDS,
     Predictors,
 )
+from pyproj import Transformer
+from torch import nn
 from torch.utils.data import Dataset
 
 
@@ -420,6 +426,156 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return label
 
 
+def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
+    def _get_timestamps() -> np.ndarray:
+        timestamps = arr.t.values
+        years = timestamps.astype("datetime64[Y]").astype(int) + 1970
+        months = timestamps.astype("datetime64[M]").astype(int) % 12 + 1
+        days = timestamps.astype("datetime64[D]").astype("datetime64[M]")
+        days = (timestamps - days).astype(int) + 1
+
+        components = np.stack(
+            [
+                days,
+                months,
+                years,
+            ],
+            axis=1,
+        )
+
+        return components[None, ...]  # Add batch dimension
+
+    def _initialize_eo_inputs():
+        num_timesteps = arr.t.size
+        h, w = arr.y.size, arr.x.size
+        s1 = np.full(
+            (1, h, w, num_timesteps, len(S1_BANDS)),
+            fill_value=NODATAVALUE,
+            dtype=np.float32,
+        )  # [B, H, W, T, len(S1_BANDS)]
+        s2 = np.full(
+            (1, h, w, num_timesteps, len(S2_BANDS)),
+            fill_value=NODATAVALUE,
+            dtype=np.float32,
+        )  # [B, H, W, T, len(S2_BANDS)]
+        meteo = np.full(
+            (1, num_timesteps, len(METEO_BANDS)),
+            fill_value=NODATAVALUE,
+            dtype=np.float32,
+        )  # [B, T, len(METEO_BANDS)]
+        dem = np.full(
+            (1, h, w, len(DEM_BANDS)), fill_value=NODATAVALUE, dtype=np.float32
+        )  # [B, H, W, len(DEM_BANDS)]
+
+        return s1, s2, meteo, dem
+
+    # TODO: remove temporary band renaming due to old data file
+    arr["bands"] = arr.bands.where(arr.bands != "temperature_2m", "temperature")
+    arr["bands"] = arr.bands.where(arr.bands != "total_precipitation", "precipitation")
+
+    # Initialize EO inputs
+    s1, s2, meteo, dem = _initialize_eo_inputs()
+
+    # Fill EO inputs
+    for band in S2_BANDS + S1_BANDS + METEO_BANDS + DEM_BANDS:
+        if band not in arr.bands.values:
+            print(f"Band {band} not found in the input data, skipping.")
+            continue  # skip bands that are not present in the data
+        values = arr.sel(bands=band).values
+        idx_valid = values != NODATAVALUE
+        if band in S2_BANDS:
+            s2[..., S2_BANDS.index(band)] = rearrange(
+                values, "t x y -> 1 y x t"
+            )  # TODO check if this is correct
+        elif band in S1_BANDS:
+            # convert to dB
+            idx_valid = idx_valid & (values > 0)
+            values[idx_valid] = 20 * np.log10(values[idx_valid]) - 83
+            s1[..., S1_BANDS.index(band)] = rearrange(values, "t x y -> 1 y x t")
+        elif band == "precipitation":
+            # scaling, and AgERA5 is in mm, prometheo convention expects m
+            values[idx_valid] = values[idx_valid] / (100 * 1000.0)
+            meteo[..., METEO_BANDS.index(band)] = rearrange(values[:, 0, 0], "t -> 1 t")
+        elif band == "temperature":
+            # remove scaling
+            values[idx_valid] = values[idx_valid] / 100
+            meteo[..., METEO_BANDS.index(band)] = rearrange(values[:, 0, 0], "t -> 1 t")
+        elif band in DEM_BANDS:
+            values = values[0]  # dem is not temporal
+            dem[..., DEM_BANDS.index(band)] = rearrange(values, "x y -> 1 y x")
+        else:
+            raise ValueError(f"Unknown band {band}")
+
+    # Extract the latlons
+    # EPSG:4326 is the supported crs for presto
+    transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    x, y = np.meshgrid(arr.x, arr.y)
+    lon, lat = transformer.transform(x, y)
+
+    predictors_dict = {
+        "s1": s1,
+        "s2": s2,
+        "meteo": meteo,
+        "latlon": rearrange(
+            np.stack([lat, lon]), "c x y -> 1 y x c"
+        ),  # TODO make explicit once #36 is tackled
+        "dem": dem,
+        "timestamps": _get_timestamps(),
+    }
+
+    return Predictors(**predictors_dict)
+
+
+def generate_predictor(x: pd.DataFrame | xr.DataArray, epsg: int) -> Predictors:
+    if isinstance(x, xr.DataArray):
+        return _predictor_from_xarray(x, epsg)
+    raise NotImplementedError
+
+
+def run_model_inference(
+    inarr: pd.DataFrame | xr.DataArray,
+    model: nn.Module,  # Wrapper
+    epsg: int = 4326,
+    batch_size: int = 8192,
+) -> np.ndarray | xr.DataArray:
+    """
+    Runs a forward pass of the model on the input data
+
+    Args:
+        inarr (xr.DataArray or pd.DataFrame): Input data as xarray DataArray or pandas DataFrame.
+        model (nn.Module): A Prometheo compatible (wrapper) model.
+        epsg (int) : EPSG code describing the coordinates.
+        batch_size (int): Batch size to be used for Presto inference.
+
+    Returns:
+        xr.DataArray or np.ndarray: Model output as xarray DataArray or numpy ndarray.
+    """
+
+    predictor = generate_predictor(inarr, epsg)
+    # fixing the pooling method to keep the function signature the same
+    # as in presto-worldcereal but this could be an input argument too
+    features = (
+        extract_features_from_model(model, predictor, batch_size, PoolingMethods.GLOBAL)
+        .cpu()
+        .numpy()
+    )
+
+    # todo - return the output tensors to the right shape, either xarray or df
+    if isinstance(inarr, pd.DataFrame):
+        return features
+    else:
+        features = rearrange(
+            features, "1 y x 1 c -> x y c", x=len(inarr.x), y=len(inarr.y)
+        )
+        features_da = xr.DataArray(
+            features,
+            dims=["x", "y", "bands"],
+            coords={"x": inarr.x, "y": inarr.y},
+        )
+
+        return features_da
+
+
 def align_to_composite_window(
     dt_in: np.datetime64, timestep_freq: Literal["month", "dekad"]
 ) -> np.datetime64:
@@ -488,7 +644,7 @@ def get_dekad_timestamp_components(
     years : np.ndarray
         Array of year components for each dekad timestamp.
     """
-    
+
     # Align start and end dates to the dekad window
     start_date = align_to_composite_window(start_date, "dekad")
     end_date = align_to_composite_window(end_date, "dekad")
@@ -538,11 +694,11 @@ def get_monthly_timestamp_components(
     years : np.ndarray
         Array of year components for each month timestamp.
     """
-    
+
     # Align start and end dates to the first day of the month
     start_date = align_to_composite_window(start_date, "month")
     end_date = align_to_composite_window(end_date, "month")
-        
+
     # Truncate to month precision (year and month only, day is dropped)
     start_month = np.datetime64(start_date, "M")
     end_month = np.datetime64(end_date, "M")
