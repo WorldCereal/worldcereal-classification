@@ -25,7 +25,7 @@ PROMETHEO_URL="https://github.com/WorldCereal/prometheo.git"
 
 su - jenkins -c "cd $dir && \
   source venv310/bin/activate && \
-  git clone -b infer $PROMETHEO_URL && \
+  git clone -b inference $PROMETHEO_URL && \
   cd presto-worldcereal || { echo 'Directory not found! Exiting...'; exit 1; } && \
   pip install .
 "

@@ -26,7 +26,7 @@ jobs:
     #     cd ..
     - name: Install Prometheo from source
       run: |
-        git clone -b infer https://github.com/WorldCereal/prometheo.git
+        git clone -b inference https://github.com/WorldCereal/prometheo.git
         cd prometheo
         pip install .
         cd ..
