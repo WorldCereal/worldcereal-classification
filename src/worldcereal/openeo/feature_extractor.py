@@ -2,11 +2,9 @@
 
 from typing import Callable
 
-import torch
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
-from torch import nn
 
 from worldcereal.train.datasets import run_model_inference
 
@@ -25,6 +23,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     """
 
     import functools
+
+    import torch
 
     PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.1-py3-none-any.whl"
 
@@ -46,7 +46,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     }
 
     @functools.lru_cache(maxsize=6)
-    def unpack_prometheo_wheel(self, wheel_url: str):
+    @classmethod
+    def unpack_prometheo_wheel(cls, wheel_url: str):
         import urllib.request
         import zipfile
         from pathlib import Path
@@ -63,7 +64,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         return destination_dir
 
     @functools.lru_cache(maxsize=6)
-    def compile_encoder(presto_encoder: nn.Module) -> Callable:
+    @classmethod
+    def compile_encoder(cls, presto_encoder: torch.nn.Module) -> Callable:
         """Helper function that compiles the encoder of a Presto model
         and performs a warm-up on dummy data. The lru_cache decorator
         ensures caching on compute nodes to be able to actually benefit
@@ -75,6 +77,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             Encoder part of Presto model to compile
 
         """
+
+        import torch
 
         presto_encoder = torch.compile(presto_encoder)  # type: ignore
 
