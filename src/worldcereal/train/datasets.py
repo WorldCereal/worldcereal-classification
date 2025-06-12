@@ -481,7 +481,7 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
         if band not in arr.bands.values:
             print(f"Band {band} not found in the input data, skipping.")
             continue  # skip bands that are not present in the data
-        values = arr.sel(bands=band).values
+        values = arr.sel(bands=band).values.astype(np.float32)
         idx_valid = values != NODATAVALUE
         if band in S2_BANDS:
             s2[..., S2_BANDS.index(band)] = rearrange(
