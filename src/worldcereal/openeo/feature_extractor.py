@@ -1,8 +1,14 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
+from typing import Callable
+
+import torch
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
+from torch import nn
+
+from worldcereal.train.datasets import run_model_inference
 
 
 class PrestoFeatureExtractor(PatchFeatureExtractor):
@@ -20,7 +26,7 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
     import functools
 
-    PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl"
+    PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.1-py3-none-any.whl"
 
     GFMAP_BAND_MAPPING = {
         "S2-L2A-B02": "B2",
@@ -40,12 +46,12 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     }
 
     @functools.lru_cache(maxsize=6)
-    def unpack_presto_wheel(self, wheel_url: str):
+    def unpack_prometheo_wheel(self, wheel_url: str):
         import urllib.request
         import zipfile
         from pathlib import Path
 
-        destination_dir = Path.cwd() / "dependencies" / "presto"
+        destination_dir = Path.cwd() / "dependencies" / "prometheo"
         destination_dir.mkdir(exist_ok=True, parents=True)
 
         # Downloads the wheel file
@@ -55,6 +61,31 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         with zipfile.ZipFile(modelfile, "r") as zip_ref:
             zip_ref.extractall(destination_dir)
         return destination_dir
+
+    @functools.lru_cache(maxsize=6)
+    def compile_encoder(presto_encoder: nn.Module) -> Callable:
+        """Helper function that compiles the encoder of a Presto model
+        and performs a warm-up on dummy data. The lru_cache decorator
+        ensures caching on compute nodes to be able to actually benefit
+        from the compilation process.
+
+        Parameters
+        ----------
+        presto_encoder : nn.Module
+            Encoder part of Presto model to compile
+
+        """
+
+        presto_encoder = torch.compile(presto_encoder)  # type: ignore
+
+        for _ in range(3):
+            presto_encoder(
+                torch.rand((1, 12, 17)),
+                torch.ones((1, 12)).long(),
+                torch.rand(1, 2),
+            )
+
+        return presto_encoder
 
     def output_labels(self) -> list:
         """Returns the output labels from this UDF, which is the output labels
@@ -271,8 +302,10 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             raise ValueError('Missing required parameter "presto_model_url"')
         presto_model_url = self._parameters.get("presto_model_url")
         self.logger.info(f'Loading Presto model from "{presto_model_url}"')
-        presto_wheel_url = self._parameters.get("presto_wheel_url", self.PRESTO_WHL_URL)
-        self.logger.info(f'Loading Presto wheel from "{presto_wheel_url}"')
+        prometheo_wheel_url = self._parameters.get(
+            "prometheo_wheel_url", self.PROMETHEO_WHL_URL
+        )
+        self.logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
 
         ignore_dependencies = self._parameters.get("ignore_dependencies", False)
         if ignore_dependencies:
@@ -295,29 +328,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         # Handle NaN values in Presto compatible way
         inarr = inarr.fillna(65535)
 
-        # Add valid_date attribute to the input array if we need it and
-        # it's not there. For now we take center timestamp in this case.
-        use_valid_date_token = self._parameters.get("use_valid_date_token", False)
-        if "valid_date" not in inarr.attrs:
-            if use_valid_date_token:
-                # Only log warning if we will use the valid_date token
-                self.logger.warning(
-                    "No `valid_date` attribute found in input array. Taking center timestamp."
-                )
-            inarr.attrs["valid_date"] = inarr.t.values[6]
-
         if not ignore_dependencies:
-
             # Unzip the Presto dependencies on the backend
-            self.logger.info("Unpacking presto wheel")
-            deps_dir = self.unpack_presto_wheel(presto_wheel_url)
+            self.logger.info("Unpacking prometheo wheel")
+            deps_dir = self.unpack_prometheo_wheel(prometheo_wheel_url)
 
             self.logger.info("Appending dependencies")
             sys.path.append(str(deps_dir))
-
-        from presto.inference import (  # pylint: disable=import-outside-toplevel
-            get_presto_features,
-        )
 
         if "slope" not in inarr.bands:
             # If 'slope' is not present we need to compute it here
@@ -332,14 +349,25 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         compile_presto = self._parameters.get("compile_presto", False)
         self.logger.info(f"Compile presto: {compile_presto}")
 
+        self.logger.info("Loading Presto model for inference")
+
+        from prometheo.models import Presto
+        from prometheo.models.presto.wrapper import load_presto_weights
+
+        presto_model = Presto()
+        presto_model = load_presto_weights(presto_model, presto_model_url)
+
         self.logger.info("Extracting presto features")
-        features = get_presto_features(
+        # Check if we have the expected 12 timesteps
+        if len(inarr.t) != 12:
+            raise ValueError(
+                f"Can only run Presto on 12 timesteps, got: {len(inarr.t)}"
+            )
+        features = run_model_inference(
             inarr,
-            presto_model_url,
-            self.epsg,
-            use_valid_date_token=use_valid_date_token,
+            presto_model,
+            epsg=self.epsg,
             batch_size=batch_size,
-            compile=compile_presto,
         )
         return features
 

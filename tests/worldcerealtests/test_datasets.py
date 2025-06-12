@@ -692,7 +692,7 @@ class TestGetLabel(unittest.TestCase):
 class TestInference(unittest.TestCase):
     def test_run_model_inference(self):
         """Test the run_model_inference function. Based on reference features
-        generated using the following code at commit 4028b4f :
+        generated using the following code:
 
         arr = xr.open_dataarray(data_dir / "test_inference_array.nc")
         model_url = str(data_dir / "finetuned_presto_model.pt")

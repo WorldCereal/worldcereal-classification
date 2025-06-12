@@ -67,7 +67,6 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
             EPSG_HARMONIZED_NAME: 32631,
             "ignore_dependencies": True,
             "compile_presto": False,
-            "use_valid_date_token": True,
             "presto_model_url": CropTypeParameters().feature_parameters.presto_model_url,
         },
     )
