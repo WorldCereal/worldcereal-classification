@@ -516,9 +516,7 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
         "s1": s1,
         "s2": s2,
         "meteo": meteo,
-        "latlon": rearrange(
-            np.stack([lat, lon]), "c x y -> 1 y x c"
-        ),  # TODO make explicit once #36 is tackled
+        "latlon": rearrange(np.stack([lat, lon]), "c x y -> 1 y x c"),
         "dem": dem,
         "timestamps": _get_timestamps(),
     }
@@ -526,18 +524,18 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     return Predictors(**predictors_dict)
 
 
-def generate_predictor(x: pd.DataFrame | xr.DataArray, epsg: int) -> Predictors:
+def generate_predictor(x: Union[pd.DataFrame, xr.DataArray], epsg: int) -> Predictors:
     if isinstance(x, xr.DataArray):
         return _predictor_from_xarray(x, epsg)
     raise NotImplementedError
 
 
 def run_model_inference(
-    inarr: pd.DataFrame | xr.DataArray,
+    inarr: Union[pd.DataFrame, xr.DataArray],
     model: nn.Module,  # Wrapper
     epsg: int = 4326,
     batch_size: int = 8192,
-) -> np.ndarray | xr.DataArray:
+) -> Union[np.ndarray, xr.DataArray]:
     """
     Runs a forward pass of the model on the input data
 
