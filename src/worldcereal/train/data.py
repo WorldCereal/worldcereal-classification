@@ -85,7 +85,7 @@ def get_training_df(
 
     # Iterate through dataloader to consume all samples
     for predictors, attrs in tqdm(dl):
-        # Compute Presto embeddings; only feed valid date as token if valid_date_as_token is True
+        # Compute Presto embeddings
         with torch.no_grad():
             encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
 
