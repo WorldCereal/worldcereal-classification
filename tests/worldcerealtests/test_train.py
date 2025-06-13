@@ -1,11 +1,13 @@
 import numpy as np
 import pandas as pd
-from presto.presto import Presto
+from prometheo.models import Presto
+from prometheo.models.presto.wrapper import load_presto_weights
 from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters
 from worldcereal.train.data import (
     WorldCerealTrainingDataset,
+    collate_fn,
     get_training_df,
     get_training_dfs_from_parquet,
 )
@@ -17,29 +19,18 @@ def test_worldcerealtraindataset(WorldCerealExtractionsDF):
 
     df = WorldCerealExtractionsDF.reset_index()
 
-    ds = WorldCerealTrainingDataset(
-        df,
-        task_type="cropland",
-        augment=True,
-        mask_ratio=0.25,
-        repeats=2,
-    )
-
-    # Check if number of samples matches repeats
-    assert len(ds) == 2 * len(df)
+    ds = WorldCerealTrainingDataset(df, task_type="binary", augment=True)
 
     # Check if data loading works
-    dl = DataLoader(ds, batch_size=2, shuffle=True)
+    dl = DataLoader(ds, batch_size=2, shuffle=True, collate_fn=collate_fn)
 
-    for x, y, dw, latlons, month, valid_month, variable_mask, attrs in dl:
-        assert x.shape == (2, 12, 17)
-        assert y.shape == (2,)
-        assert dw.shape == (2, 12)
-        assert dw.unique().numpy()[0] == 9
-        assert latlons.shape == (2, 2)
-        assert month.shape == (2,)
-        assert valid_month.shape == (2,)
-        assert variable_mask.shape == x.shape
+    for predictors, attrs in dl:
+        assert predictors.s1.shape == (2, 1, 1, 12, 2)
+        assert predictors.s2.shape == (2, 1, 1, 12, 13)
+        assert predictors.meteo.shape == (2, 12, 2)
+        assert predictors.latlon.shape == (2, 1, 1, 2)
+        assert predictors.dem.shape == (2, 1, 1, 2)
+        assert predictors.timestamps.shape == (2, 12, 3)
         assert isinstance(attrs, dict)
         break
 
@@ -53,7 +44,8 @@ def test_get_trainingdf(WorldCerealExtractionsDF):
     ds = WorldCerealTrainingDataset(df)
 
     presto_url = CropLandParameters().feature_parameters.presto_model_url
-    presto_model = Presto.load_pretrained(presto_url, from_url=True, strict=False)
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_url)
 
     training_df = get_training_df(ds, presto_model, batch_size=256)
 

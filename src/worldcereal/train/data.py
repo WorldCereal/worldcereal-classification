@@ -5,17 +5,18 @@ import pandas as pd
 import torch
 from loguru import logger
 from prometheo.models import Presto
+from prometheo.predictors import Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
-from worldcereal.train.datasets import WorldCerealLabelledDataset
+from worldcereal.train.datasets import WorldCerealDataset
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
 
 
-class WorldCerealTrainingDataset(WorldCerealLabelledDataset):
+class WorldCerealTrainingDataset(WorldCerealDataset):
     def __getitem__(self, idx):
         # Get the sample
         sample = super().__getitem__(idx)
@@ -26,12 +27,19 @@ class WorldCerealTrainingDataset(WorldCerealLabelledDataset):
             "lon",
             "ref_id",
             "sample_id",
-            "finetune_class",
+            "downstream_class",
         ]
 
         attrs = [attr for attr in attrs if attr in row.index]
 
         return sample, row[attrs].to_dict()
+
+
+def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
+    # we assume that the same values are consistently None
+    collated_dict = default_collate([i.as_dict(ignore_nones=True) for i, _ in batch])
+    collated_attrs = default_collate([attrs for _, attrs in batch])
+    return Predictors(**collated_dict), collated_attrs
 
 
 def get_training_df(
@@ -59,16 +67,6 @@ def get_training_df(
     pd.DataFrame
         training dataframe that can be used for training downstream classifier
     """
-
-    from prometheo.predictors import Predictors
-
-    def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
-        # we assume that the same values are consistently None
-        collated_dict = default_collate(
-            [i.as_dict(ignore_nones=True) for i, _ in batch]
-        )
-        collated_attrs = default_collate([attrs for _, attrs in batch])
-        return Predictors(**collated_dict), collated_attrs
 
     # Make sure model is in eval mode and moved to the correct device
     presto_model.eval().to(device)

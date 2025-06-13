@@ -167,7 +167,7 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertEqual(inputs["s2"].shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
         self.assertEqual(inputs["meteo"].shape, (self.num_timesteps, len(METEO_BANDS)))
         self.assertEqual(inputs["dem"].shape, (1, 1, len(DEM_BANDS)))
-        self.assertEqual(inputs["latlon"].shape, (2,))
+        self.assertEqual(inputs["latlon"].shape, (1, 1, 2))
         self.assertEqual(inputs["timestamps"].shape, (self.num_timesteps, 3))
 
         # Check data has been filled in (not all NODATAVALUE)
@@ -411,7 +411,7 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
         self.assertEqual(inputs["s2"].shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
         self.assertEqual(inputs["meteo"].shape, (self.num_timesteps, len(METEO_BANDS)))
         self.assertEqual(inputs["dem"].shape, (1, 1, len(DEM_BANDS)))
-        self.assertEqual(inputs["latlon"].shape, (2,))
+        self.assertEqual(inputs["latlon"].shape, (1, 1, 2))
         self.assertEqual(inputs["timestamps"].shape, (self.num_timesteps, 3))
 
         # Check data has been filled in (not all NODATAVALUE)

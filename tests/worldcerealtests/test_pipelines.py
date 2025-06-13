@@ -85,7 +85,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     assert training_df.shape == (238, 246)
 
     # We keep original ewoc_code for this test
-    training_df["finetune_class"] = training_df["ewoc_code"]
+    training_df["downstream_class"] = training_df["ewoc_code"]
 
     # Compute presto embeddings
     presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
@@ -97,12 +97,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
 
     # Initialize dataset
     df = training_df.reset_index()
-    ds = WorldCerealTrainingDataset(
-        df,
-        task_type="multiclass",
-        augment=True,
-        classes_list=training_df["finetune_class"].unique().tolist(),
-    )
+    ds = WorldCerealTrainingDataset(df, task_type="multiclass", augment=True)
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
@@ -117,7 +112,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         df,
         test_size=0.2,
         random_state=3,
-        stratify=df["finetune_class"],
+        stratify=df["downstream_class"],
     )
 
     eval_metric = "MultiClass"
@@ -127,21 +122,22 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     class_weights = np.round(
         compute_class_weight(
             class_weight="balanced",
-            classes=np.unique(samples_train["finetune_class"]),
-            y=samples_train["finetune_class"],
+            classes=np.unique(samples_train["downstream_class"]),
+            y=samples_train["downstream_class"],
         ),
         3,
     )
     class_weights = {
-        k: v for k, v in zip(np.unique(samples_train["finetune_class"]), class_weights)
+        k: v
+        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
     }
     logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(samples_train["finetune_class"]),))
-    sample_weights_val = np.ones((len(samples_test["finetune_class"]),))
+    sample_weights = np.ones((len(samples_train["downstream_class"]),))
+    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
     for k, v in class_weights.items():
-        sample_weights[samples_train["finetune_class"] == k] = v
-        sample_weights_val[samples_test["finetune_class"] == k] = v
+        sample_weights[samples_train["downstream_class"] == k] = v
+        sample_weights_val[samples_test["downstream_class"] == k] = v
     samples_train["weight"] = sample_weights
     samples_test["weight"] = sample_weights_val
 
@@ -154,19 +150,19 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         eval_metric=eval_metric,
         random_state=3,
         verbose=25,
-        class_names=np.unique(samples_train["finetune_class"]),
+        class_names=np.unique(samples_train["downstream_class"]),
     )
 
     # Setup dataset Pool
     bands = [f"presto_ft_{i}" for i in range(128)]
     calibration_data = Pool(
         data=samples_train[bands],
-        label=samples_train["finetune_class"],
+        label=samples_train["downstream_class"],
         weight=samples_train["weight"],
     )
     eval_data = Pool(
         data=samples_test[bands],
-        label=samples_test["finetune_class"],
+        label=samples_test["downstream_class"],
         weight=samples_test["weight"],
     )
 
