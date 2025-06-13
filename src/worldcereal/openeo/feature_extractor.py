@@ -1,12 +1,8 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
-from typing import Callable
-
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
-
-from worldcereal.train.datasets import run_model_inference
 
 
 class PrestoFeatureExtractor(PatchFeatureExtractor):
@@ -23,8 +19,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     """
 
     import functools
-
-    import torch
 
     PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.1-py3-none-any.whl"
 
@@ -45,8 +39,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
         "AGERA5-PRECIP": "total_precipitation",
     }
 
-    @functools.lru_cache(maxsize=6)
     @classmethod
+    @functools.lru_cache(maxsize=6)
     def unpack_prometheo_wheel(cls, wheel_url: str):
         import urllib.request
         import zipfile
@@ -63,9 +57,9 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
             zip_ref.extractall(destination_dir)
         return destination_dir
 
-    @functools.lru_cache(maxsize=6)
     @classmethod
-    def compile_encoder(cls, presto_encoder: torch.nn.Module) -> Callable:
+    @functools.lru_cache(maxsize=6)
+    def compile_encoder(cls, presto_encoder):
         """Helper function that compiles the encoder of a Presto model
         and performs a warm-up on dummy data. The lru_cache decorator
         ensures caching on compute nodes to be able to actually benefit
@@ -355,6 +349,8 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
 
         self.logger.info("Loading Presto model for inference")
 
+        # TODO: try to take run_model_inference from worldcereal
+        from prometheo.datasets.worldcereal import run_model_inference
         from prometheo.models import Presto
         from prometheo.models.presto.wrapper import load_presto_weights
 
