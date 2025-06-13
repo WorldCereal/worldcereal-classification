@@ -3,7 +3,8 @@ import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
-from presto.presto import Presto
+from prometheo.models import Presto
+from prometheo.models.presto.wrapper import load_presto_weights
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -84,35 +85,29 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     assert training_df.shape == (238, 246)
 
     # We keep original ewoc_code for this test
-    training_df["downstream_class"] = training_df["ewoc_code"]
+    training_df["finetune_class"] = training_df["ewoc_code"]
 
     # Compute presto embeddings
     presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto.load_pretrained(
-        presto_model_url,
-        from_url=True,
-        strict=False,
-        valid_month_as_token=True,
-    )
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_model_url)
 
     # Initialize dataset
     df = training_df.reset_index()
     ds = WorldCerealTrainingDataset(
         df,
-        task_type="croptype",
+        task_type="multiclass",
         augment=True,
-        mask_ratio=0.30,
-        repeats=1,
+        classes_list=training_df["finetune_class"].unique().tolist(),
     )
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
         presto_model,
         batch_size=256,
-        valid_date_as_token=True,
     )
     logger.info("Presto embeddings computed.")
 
@@ -122,7 +117,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         df,
         test_size=0.2,
         random_state=3,
-        stratify=df["downstream_class"],
+        stratify=df["finetune_class"],
     )
 
     eval_metric = "MultiClass"
@@ -132,22 +127,21 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     class_weights = np.round(
         compute_class_weight(
             class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
+            classes=np.unique(samples_train["finetune_class"]),
+            y=samples_train["finetune_class"],
         ),
         3,
     )
     class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+        k: v for k, v in zip(np.unique(samples_train["finetune_class"]), class_weights)
     }
     logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(samples_train["downstream_class"]),))
-    sample_weights_val = np.ones((len(samples_test["downstream_class"]),))
+    sample_weights = np.ones((len(samples_train["finetune_class"]),))
+    sample_weights_val = np.ones((len(samples_test["finetune_class"]),))
     for k, v in class_weights.items():
-        sample_weights[samples_train["downstream_class"] == k] = v
-        sample_weights_val[samples_test["downstream_class"] == k] = v
+        sample_weights[samples_train["finetune_class"] == k] = v
+        sample_weights_val[samples_test["finetune_class"] == k] = v
     samples_train["weight"] = sample_weights
     samples_test["weight"] = sample_weights_val
 
@@ -160,19 +154,19 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         eval_metric=eval_metric,
         random_state=3,
         verbose=25,
-        class_names=np.unique(samples_train["downstream_class"]),
+        class_names=np.unique(samples_train["finetune_class"]),
     )
 
     # Setup dataset Pool
     bands = [f"presto_ft_{i}" for i in range(128)]
     calibration_data = Pool(
         data=samples_train[bands],
-        label=samples_train["downstream_class"],
+        label=samples_train["finetune_class"],
         weight=samples_train["weight"],
     )
     eval_data = Pool(
         data=samples_test[bands],
-        label=samples_test["downstream_class"],
+        label=samples_test["finetune_class"],
         weight=samples_test["weight"],
     )
 
