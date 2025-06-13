@@ -195,8 +195,10 @@ class WorldCerealDataset(Dataset):
         )
 
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
-        # Get latlons
-        latlon = np.array([row_d["lat"], row_d["lon"]], dtype=np.float32)
+        # Get latlons which need to have spatial dims
+        latlon = np.reshape(
+            np.array([row_d["lat"], row_d["lon"]], dtype=np.float32), (1, 1, 2)
+        )
 
         # Get timestamps belonging to each timestep
         timestamps = self._get_timestamps(row_d, timestep_positions)
