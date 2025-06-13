@@ -3,7 +3,7 @@ from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 import xarray as xr
-from einops import rearrange
+from einops import rearrange, repeat
 from prometheo.infer import extract_features_from_model
 from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import (
@@ -511,14 +511,15 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
     x, y = np.meshgrid(arr.x, arr.y)
     lon, lat = transformer.transform(x, y)
+    latlon = rearrange(np.stack([lat, lon]), "c x y ->  y x c")
 
     predictors_dict = {
-        "s1": s1,
-        "s2": s2,
-        "meteo": meteo,
-        "latlon": rearrange(np.stack([lat, lon]), "c x y -> 1 y x c"),
-        "dem": dem,
-        "timestamps": _get_timestamps(),
+        "s1": rearrange(s1, "1 h w t c -> (h w) 1 1 t c"),
+        "s2": rearrange(s2, "1 h w t c -> (h w) 1 1 t c"),
+        "meteo": repeat(meteo, "1 t c -> b t c", b=x.size),
+        "latlon": rearrange(latlon, "h w c ->  (h w) 1 1 c"),
+        "dem": rearrange(dem, "1 h w c -> (h w) 1 1 c"),
+        "timestamps": repeat(_get_timestamps(), "1 t d -> b t d", b=x.size),
     }
 
     return Predictors(**predictors_dict)
@@ -563,7 +564,7 @@ def run_model_inference(
         return features
     else:
         features = rearrange(
-            features, "1 y x 1 c -> x y c", x=len(inarr.x), y=len(inarr.y)
+            features, "(y x) 1 1 1 c -> x y c", x=len(inarr.x), y=len(inarr.y)
         )
         features_da = xr.DataArray(
             features,
