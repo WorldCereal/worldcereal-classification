@@ -13,9 +13,6 @@ from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 def embeddings_from_parquet_file(
     parquet_file: Union[str, Path],
     pretrained_model: Presto,
-    sample_repeats: int = 1,
-    mask_ratio: float = 0.0,
-    valid_date_as_token: bool = False,
     exclude_meteo: bool = False,
 ) -> pd.DataFrame:
     """Method to compute Presto embeddings from a parquet file of preprocessed inputs
@@ -26,12 +23,6 @@ def embeddings_from_parquet_file(
         parquet file to read data from
     pretrained_model : Presto
         Presto model to use for computing embeddings
-    sample_repeats : int, optional
-        number of augmented sample repeats, by default 1
-    mask_ratio : float, optional
-        mask ratio to apply, by default 0.0
-    valid_date_as_token : bool, optional
-        feed valid date as a token to Presto, by default False
     exclude_meteo : bool, optional
         if True, meteo will be masked during embedding computation, by default False
 
@@ -65,13 +56,7 @@ def embeddings_from_parquet_file(
 
     # Create dataset and dataloader
     logger.info("Making data loader ...")
-    ds = WorldCerealTrainingDataset(
-        df,
-        task_type="cropland",
-        augment=True,
-        mask_ratio=mask_ratio,
-        repeats=sample_repeats,
-    )
+    ds = WorldCerealTrainingDataset(df, task_type="binary", augment=True)
 
     if len(ds) == 0:
         logger.warning("No valid samples in dataset: returning None")
@@ -81,7 +66,6 @@ def embeddings_from_parquet_file(
         ds,
         pretrained_model,
         batch_size=2048,
-        valid_date_as_token=valid_date_as_token,
         num_workers=4,
     )
 
@@ -92,17 +76,8 @@ def main(
     presto_model,
     sc=None,
     debug=False,
-    sample_repeats: int = 1,
-    mask_ratio: float = 0.0,
-    valid_date_as_token: bool = False,
     exclude_meteo: bool = False,
 ):
-
-    logger.info(
-        f"Starting embedding computation with augmentation (sample_repeats: {sample_repeats}, mask_ratio: {mask_ratio})"
-    )
-    logger.info(f"Valid date as token: {valid_date_as_token}")
-
     # List parquet files
     parquet_files = glob.glob(str(infile) + "/**/*.parquet", recursive=True)
 
@@ -112,7 +87,8 @@ def main(
     # Load model
     logger.info("Loading model ...")
     pretrained_model = Presto.load_pretrained(
-        model_path=presto_model, strict=False, valid_month_as_token=valid_date_as_token
+        model_path=presto_model,
+        strict=False,
     )
 
     if sc is not None:
@@ -123,9 +99,6 @@ def main(
                 lambda x: embeddings_from_parquet_file(
                     x,
                     pretrained_model,
-                    sample_repeats,
-                    mask_ratio,
-                    valid_date_as_token,
                     exclude_meteo,
                 )
             )
@@ -139,9 +112,6 @@ def main(
                 embeddings_from_parquet_file(
                     parquet_file,
                     pretrained_model,
-                    sample_repeats,
-                    mask_ratio,
-                    valid_date_as_token,
                     exclude_meteo,
                 )
             )
@@ -169,8 +139,6 @@ if __name__ == "__main__":
     localspark = False
     debug = False
     exclude_meteo = False
-    sample_repeats = 1
-    valid_date_as_token = False
     presto_dir = Path("/vitodata/worldcereal/presto/finetuning")
     presto_model = (
         presto_dir
@@ -206,7 +174,5 @@ if __name__ == "__main__":
         presto_model,
         sc=sc,
         debug=debug,
-        sample_repeats=sample_repeats,
-        valid_date_as_token=valid_date_as_token,
         exclude_meteo=exclude_meteo,
     )
