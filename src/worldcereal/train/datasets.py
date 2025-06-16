@@ -333,7 +333,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
     def get_label(
         self,
         row_d: Dict,
-        task_type: str = "binary",
+        task_type: Literal["binary", "multiclass"] = "binary",
         classes_list: Optional[List] = None,
         valid_position: Optional[
             Union[int, Sequence[int]]
