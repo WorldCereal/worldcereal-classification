@@ -74,9 +74,11 @@ def create_inference_process_graph(
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
     postprocess_parameters: PostprocessParameters = PostprocessParameters(),
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
+    target_epsg: Optional[int] = None,
 ) -> openeo.DataCube:
     """Wrapper function that creates the inference openEO process graph.
 
@@ -96,12 +98,18 @@ def create_inference_process_graph(
         will be ignored otherwise.
     postprocess_parameters: PostprocessParameters
         Parameters for the postprocessing pipeline. By default disabled.
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]]
+        Sentinel-1 orbit state to use for the inference. If not provided,
+        the orbit state will be dynamically determined based on the spatial extent.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
         backend to run the job on, by default CDSE.
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128.
+    target_epsg: Optional[int] = None
+        EPSG code to use for the output products. If not provided, the
+        default EPSG will be used.
 
     Returns
     -------
@@ -133,6 +141,8 @@ def create_inference_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         tile_size=tile_size,
+        s1_orbit_state=s1_orbit_state,
+        target_epsg=target_epsg,
         # disable_meteo=True,
     )
 
@@ -214,6 +224,7 @@ def generate_map(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
+    target_epsg: Optional[int] = None,
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -243,6 +254,9 @@ def generate_map(
         Tile size to use for the data loading in OpenEO, by default 128.
     job_options: dict, optional
         Additional job options to pass to the OpenEO backend, by default None
+    target_epsg: Optional[int] = None
+        EPSG code to use for the output products. If not provided, the
+        default EPSG will be used.
 
     Returns
     -------
@@ -267,6 +281,7 @@ def generate_map(
         out_format=out_format,
         backend_context=backend_context,
         tile_size=tile_size,
+        target_epsg=target_epsg,
     )
 
     if output_dir is not None:
