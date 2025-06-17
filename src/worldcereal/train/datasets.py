@@ -1,9 +1,11 @@
-from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
+from collections import Counter
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from einops import rearrange, repeat
+from loguru import logger
 from prometheo.infer import extract_features_from_model
 from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import (
@@ -17,6 +19,51 @@ from prometheo.predictors import (
 from pyproj import Transformer
 from torch import nn
 from torch.utils.data import Dataset
+
+
+def get_class_weights(
+    labels: np.ndarray[Any],
+    method: str = "balanced",  # 'balanced', 'log', or 'none'
+    clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
+    normalize: bool = True,
+) -> Dict[int, float]:
+    """
+    Compute class weights for classification tasks.
+
+    Args:
+        labels: list of integer class labels.
+        method: 'balanced' (scikit-learn style), or 'log' (log-scaled), or 'none'.
+        clip_range: tuple (min, max) to clip weights.
+        normalize: whether to rescale weights to mean = 1.
+
+    Returns:
+        class_weights_dict: dict mapping class index → weight
+    """
+    counts = Counter(labels)
+    classes = sorted(counts.keys())
+    total_samples = sum(counts.values())
+    num_classes = len(classes)
+    freq = np.array([counts[c] for c in classes], dtype=np.float32)
+
+    if method == "balanced":
+        weights = total_samples / (num_classes * freq)
+    elif method == "log":
+        inv_freq = 1.0 / freq
+        weights = np.log1p(inv_freq / np.mean(inv_freq))
+    elif method == "none":
+        weights = np.ones_like(freq)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    if clip_range:
+        logger.info(f"Clipping weights to range {clip_range}")
+        weights = np.clip(weights, clip_range[0], clip_range[1])
+
+    if normalize:
+        logger.info("Renormalizing weights to mean = 1")
+        weights = weights / weights.mean()
+
+    return dict(zip(classes, weights))
 
 
 class WorldCerealDataset(Dataset):
