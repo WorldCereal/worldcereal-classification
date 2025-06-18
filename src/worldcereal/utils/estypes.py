@@ -41,8 +41,8 @@ class BaseWorldCerealType(ABC):
         self.pipelines_status = pipelines_status
         self.properties = properties or {}
 
-    @abstractmethod
     @property
+    @abstractmethod
     def product_type(self) -> str:
         pass
 
@@ -104,12 +104,14 @@ class BaseWorldCerealType(ABC):
         """
         TODO: Delete the doc on elasticsearch
         """
+        pass
 
     def set_pipeline_status(self, pipeline: str, status: str):
         """
         TODO: set processing status of a pipeline
         TODO: make Enum for statuses
         """
+        pass
 
     @staticmethod
     def get_es_instance():
@@ -231,6 +233,9 @@ class WordCerealTrainingData(BaseWorldCerealType):
         """
 
         geoparquet_file = Path(geoparquet_file)
+        if not geoparquet_file.is_file():
+            raise FileNotFoundError(f"geoparquet file not found: {geoparquet_file}")
+
         _id = f"TD_{geoparquet_file.stem}_{version}"
 
         if cls.get_by_id(_id) is not None and not allow_update:
