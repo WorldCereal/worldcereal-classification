@@ -1,3 +1,4 @@
+import argparse
 import json
 from functools import partial
 from pathlib import Path
@@ -41,6 +42,26 @@ class PatchToPointJobManager(MultiBackendJobManager):
 
 
 def create_job_dataframe(ref_id, ground_truth_file=None):
+    """
+    Create a job dataframe for patch-to-point extractions.
+
+    This function queries the STAC catalog to retrieve unique EPSG codes and temporal extents
+    for the given `ref_id`. It also identifies ground truth samples and prepares the job
+    dataframe for further processing.
+
+    Parameters
+    ----------
+    ref_id : str
+        Reference ID for the extraction.
+    ground_truth_file : str, optional
+        Path to a ground truth file. If not provided, the function queries RDM for ground truth.
+
+    Returns
+    -------
+    pd.DataFrame
+        A dataframe containing job configurations for each EPSG zone.
+    """
+
     client = pystac_client.Client.open("https://stac.openeo.vito.be/")
 
     stac_query = {
@@ -185,6 +206,22 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
 
 
 def post_job_action(parquet_file):
+    """
+    Perform post-processing on the extracted parquet file.
+
+    This function cleans and validates the extracted data, removes invalid samples,
+    and ensures the data conforms to the required schema.
+
+    Parameters
+    ----------
+    parquet_file : str or Path
+        Path to the parquet file to be processed.
+
+    Returns
+    -------
+    None
+    """
+
     logger.info(f"Running post-job action for: {parquet_file}")
     gdf = gpd.read_parquet(parquet_file)
 
@@ -290,25 +327,24 @@ def generate_output_path_point_worldcereal(
     row: pd.Series,
     asset_id: Optional[str] = None,
 ) -> Path:
-    """Method to generate the output path for the point extractions.
+    """
+    Generate the output path for point extractions.
 
     Parameters
     ----------
     root_folder : Path
-        root folder where the output parquet file will be saved
+        Root folder where the output parquet file will be saved.
     geometry_index : int
-        For point extractions, only one asset (a geoparquet file) is generated per job.
-        Therefore geometry_index is always 0. It has to be included in the function signature
-        to be compatible with the GFMapJobManager
+        Index of the geometry. Always 0 for point extractions.
     row : pd.Series
-        the current job row from the GFMapJobManager
+        The current job row from the job manager.
     asset_id : str, optional
-        Needed for compatibility with GFMapJobManager but not used.
+        Asset ID for compatibility with the job manager. Not used.
 
     Returns
     -------
     Path
-        output path for the point extractions parquet file
+        Path to the output parquet file.
     """
 
     epsg = row.epsg
@@ -327,11 +363,12 @@ def generate_output_path_point_worldcereal(
 def merge_individual_parquet_files(
     parquet_files: List[Union[Path, str]],
 ) -> gpd.GeoDataFrame:
-    """Merge individual parquet files into a single GeoDataFrame.
+    """
+    Merge individual parquet files into a single GeoDataFrame.
 
     Parameters
     ----------
-    parquet_files : List[Union[Path, str]]
+    parquet_files : list of Union[Path, str]
         List of paths to individual parquet files.
 
     Returns
@@ -342,8 +379,7 @@ def merge_individual_parquet_files(
     Raises
     ------
     ValueError
-        Raised if more than 25% of the rows have missing attributes.
-
+        If more than 25% of the rows have missing attributes.
     """
 
     seen_ids: set[str] = set()
@@ -394,6 +430,29 @@ def main(
     period="month",
     restart_failed=False,
 ):
+    """
+    Main function to orchestrate patch-to-point extractions.
+
+    Parameters
+    ----------
+    connection : openeo.Connection
+        OpenEO connection object.
+    ref_id : str
+        Reference ID for the extraction.
+    ground_truth_file : str
+        Path to the ground truth file.
+    root_folder : Path
+        Root folder for storing extraction outputs.
+    period : str, optional
+        Period for extractions, either 'month' or 'dekad'. Default is 'month'.
+    restart_failed : bool, optional
+        Whether to restart failed jobs. Default is False.
+
+    Returns
+    -------
+    None
+    """
+
     assert period in ["month", "dekad"], "Period must be either 'month' or 'dekad'."
 
     # Ref_id output folder
@@ -451,19 +510,41 @@ def main(
 
 
 if __name__ == "__main__":
-    root_folder = Path(
-        "/vitodata/worldcereal/tmp/kristof/EXTRACTIONS/WORLDCEREAL/PATCH_TO_POINT/"
+    parser = argparse.ArgumentParser(
+        description="Run patch-to-point extractions for WorldCereal."
+    )
+    parser.add_argument(
+        "--root-folder",
+        type=str,
+        required=True,
+        help="Root folder for storing extraction outputs.",
+    )
+    parser.add_argument(
+        "--period",
+        type=str,
+        choices=["month", "dekad"],
+        default="month",
+        help="Period for extractions, either 'month' or 'dekad'. Default is 'month'.",
+    )
+    parser.add_argument(
+        "--ref-ids",
+        type=str,
+        nargs="+",
+        required=True,
+        help="List of ref_ids to process.",
+    )
+    parser.add_argument(
+        "--restart-failed",
+        action="store_true",
+        help="Restart failed jobs if the job tracking file exists.",
     )
 
-    period = "month"
-    ref_ids = [
-        "2021_MEX_CIMMYT-1_POLY_111",
-        "2020_MEX_CIMMYT-1_POLY_111",
-        "2023_MEX_CIMMYT-1_POLY_111",
-        # "2022_MEX_CIMMYT-1_POLY_111",  # still incomplete
-        "2019_MEX_CIMMYT-1_POLY_111",
-    ]
-    restart_failed = True
+    args = parser.parse_args()
+
+    root_folder = Path(args.root_folder)
+    period = args.period
+    ref_ids = args.ref_ids
+    restart_failed = args.restart_failed
 
     logger.info("Starting patch to point extractions ...")
     logger.info(f"Root folder: {root_folder}")
