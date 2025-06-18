@@ -201,7 +201,6 @@ def create_job_patch_to_point_worldcereal(
         "executor-memoryOverhead": "2G",
         "log_level": "info",
         "max-executors": 300,
-        "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/optimize_reduction/geotrellis-extensions-optimize_reduction.jar",
     }
 
     return cube.create_job(
