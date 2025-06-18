@@ -325,7 +325,7 @@ def create_inference_job(
     connection: openeo.Connection,
     provider: str,
     connection_provider: str,
-    epsg: int = 4326,
+    epsg: Optional[int] = 4326,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPTYPE,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
@@ -368,7 +368,7 @@ def create_inference_job(
         best orbit will be dynamically derived from the catalogue.
     target_epsg : Optional[int], optional
         EPSG code to reproject the data to. If not provided, the data will be
-        left in the original coordinate reference system (UTM)
+        left in the original coordinate reference system (UTM).
     job_options : Optional[dict], optional
         Additional job options to pass to the OpenEO backend, by default None
 
@@ -610,7 +610,6 @@ def run_largescale_inference(
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
     postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
-    grid_epsg: int = 4326,
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
@@ -640,8 +639,6 @@ def run_largescale_inference(
         Parameters for postprocessing the inference results.
     backend_context : BackendContext
         Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
-    grid_epsg : int
-        EPSG code of the production grid's coordinate reference system. Defaults to 4326.
     target_epsg : Optional[int]
         EPSG code for the target coordinate reference system.
         If None, no reprojection will be performed.
@@ -679,11 +676,13 @@ def run_largescale_inference(
         logger.info("Job tracking file does not exist, creating new jobs.")
 
         if isinstance(production_grid, Path):
-            production_gdf = gpd.read_parquet(production_grid).to_crs(epsg=grid_epsg)
+            production_gdf = gpd.read_parquet(production_grid)
         elif isinstance(production_grid, gpd.GeoDataFrame):
-            production_gdf = production_grid.to_crs(epsg=grid_epsg)
+            production_gdf = production_grid
         else:
             raise ValueError("production_grid must be a Path or a GeoDataFrame.")
+        if target_epsg is not None:
+            production_gdf = production_gdf.to_crs(epsg=target_epsg)
 
         REQUIRED_ATTRIBUTES = ["start_date", "end_date", "geometry", "tile_name"]
         for attr in REQUIRED_ATTRIBUTES:
@@ -706,7 +705,7 @@ def run_largescale_inference(
         df=job_df,
         start_job=partial(
             create_inference_job,
-            epsg=grid_epsg,
+            epsg=target_epsg,
             product_type=product_type,
             cropland_parameters=cropland_parameters,
             croptype_parameters=croptype_parameters,

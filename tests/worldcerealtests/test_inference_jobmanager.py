@@ -82,7 +82,6 @@ def test_create_inference_job_logic():
             connection=mock_connection,
             provider="dummy_provider",
             connection_provider="dummy_connection_provider",
-            epsg=4326,
             product_type=WorldCerealProductType.CROPTYPE,
             cropland_parameters=CropLandParameters(),
             croptype_parameters=CropTypeParameters(),
