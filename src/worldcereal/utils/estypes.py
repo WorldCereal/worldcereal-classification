@@ -195,7 +195,9 @@ class WordCerealTrainingData(BaseWorldCerealType):
         self.properties["gp_entries"] = entries
 
     @classmethod
-    def from_geoparquet(cls, geoparquet_file: Union[str, Path], version: str, allow_update=False):
+    def from_geoparquet(cls, geoparquet_file: Union[str, Path],
+                        version: str,
+                        allow_update=False) -> "WordCerealTrainingData":
         """
         Create an instance from a GeoParquet file.
 
@@ -217,6 +219,15 @@ class WordCerealTrainingData(BaseWorldCerealType):
         ------
         ValueError
             If an instance with the generated ID already exists and `allow_update` is False.
+
+        Examples
+        --------
+        # Ingest a new geoparquet in the ElasticSearch index
+        >>> from worldcereal.utils.estypes import WordCerealTrainingData
+        >>> gp_file = '/vitodata/worldcereal/data/RDM/2025_MAR_UM6P_POLY_111/harmonized/'
+        >>>           '2025_MAR_UM6P_POLY_111.geoparquet'
+        >>> td = WordCerealTrainingData.from_geoparquet(gp_file, version="v001")
+        >>> td.update()
         """
 
         geoparquet_file = Path(geoparquet_file)
@@ -232,10 +243,12 @@ class WordCerealTrainingData(BaseWorldCerealType):
         geoms = gdf.geometry.values
         combined: BaseGeometry = mapping(unary_union(geoms))
 
+        # Set properties
         properties = dict()
         properties['filepath'] = str(geoparquet_file)
         properties['gp_entries'] = gdf.to_dict(orient="records")
 
+        # Make instance.
         return cls(
             _id=_id,
             creation_date=datetime.now(),

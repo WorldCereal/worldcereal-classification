@@ -1,34 +1,11 @@
 import argparse
 from pathlib import Path
-
-import geopandas as gpd
-from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
-from shapely.geometry import mapping
-
-
-# class GeoparquetFile:
-#     def __init__(self, geoparquet_file: Path):
-#         self.geoparquet_file = geoparquet_file
-#         self.gdf = None
-#
-#         self._read()
-#
-#     def _read(self):
-#         self.gdf = gpd.read_parquet(self.geoparquet_file)
-#
-#     def to_dict(self) -> dict:
-#         return self.gdf.to_dict(orient='records')
-#
-#     def combine_geometries(self) -> BaseGeometry:
-#         geoms = self.gdf.geometry.values
-#         combined: BaseGeometry = unary_union(geoms)
-#         return combined
+from worldcereal.utils.estypes import WordCerealTrainingData
 
 
 def main(geoparquet_file: Path):
-    # TODO : use util.esttypes
-
+    td = WordCerealTrainingData.from_geoparquet(geoparquet_file)
+    td.update()
 
 if __name__ == "__main__":
 
