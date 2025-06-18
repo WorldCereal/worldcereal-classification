@@ -332,7 +332,7 @@ def create_inference_job(
     postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     target_epsg: Optional[int] = None,
-    job_options: Optional[dict] = INFERENCE_JOB_OPTIONS,
+    job_options: Optional[dict] = None,
 ) -> BatchJob:
     """Create an OpenEO batch job for WorldCereal inference.
 
@@ -370,7 +370,7 @@ def create_inference_job(
         EPSG code to reproject the data to. If not provided, the data will be
         left in the original coordinate reference system (UTM)
     job_options : Optional[dict], optional
-        Additional job options to pass to the OpenEO backend, by default INFERENCE_JOB_OPTIONS
+        Additional job options to pass to the OpenEO backend, by default None
 
     Returns
     -------
@@ -378,8 +378,14 @@ def create_inference_job(
         Batch job created on openEO backend.
     """
 
+    # Get temporal and spatial extents from the row
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
     spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=epsg)
+
+    # Update default job options with the provided ones
+    inference_job_options = deepcopy(INFERENCE_JOB_OPTIONS)
+    if job_options is not None:
+        inference_job_options.update(job_options)
 
     inference_result = create_inference_process_graph(
         spatial_extent=spatial_extent,
@@ -396,7 +402,7 @@ def create_inference_job(
     return inference_result.create_job(
         title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
-        job_options=job_options,
+        job_options=inference_job_options,
     )
 
 
@@ -607,7 +613,7 @@ def run_largescale_inference(
     grid_epsg: int = 4326,
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    job_options: dict = INFERENCE_JOB_OPTIONS,
+    job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
 ):
     """
@@ -643,8 +649,7 @@ def run_largescale_inference(
         Sentinel-1 orbit state to use ('ASCENDING' or 'DESCENDING')
         If None, no specific orbit state is enforced.
     job_options : Optional[dict]
-        Additional options for configuring the inference jobs.
-        Defaults to INFERENCE_JOB_OPTIONS.
+        Additional options for configuring the inference jobs. Defaults to None.
     parallel_jobs : int
         Number of parallel jobs to manage on the backend. Defaults to 2. Note that load
         balancing does not guarantee that all jobs will run in parallel.
@@ -658,11 +663,6 @@ def run_largescale_inference(
     AssertionError:
         If the production grid does not contain the required attributes.
     """
-
-    # Update default job options with the provided ones
-    inference_job_options = deepcopy(INFERENCE_JOB_OPTIONS)
-    if job_options is not None:
-        inference_job_options.update(job_options)
 
     # Setup output directory
     if output_dir is not None:
@@ -713,6 +713,7 @@ def run_largescale_inference(
             postprocess_parameters=postprocess_parameters,
             s1_orbit_state=s1_orbit_state,
             target_epsg=target_epsg,
+            job_options=job_options,
         ),
         job_db=job_tracking_csv,
     )
