@@ -129,6 +129,11 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         if gdf.empty:
             logger.warning(f"No samples found for {row.epsg} and {row.ref_id}")
             continue
+        if len(gdf) == 1:
+            logger.warning(
+                f"Only one sample found for {row.epsg} and {row.ref_id}, which is currently not supported. Skipping job."
+            )
+            continue
         else:
             logger.info(f"Found {len(gdf)} samples for {row.epsg} and {row.ref_id}")
 
@@ -452,11 +457,11 @@ if __name__ == "__main__":
 
     period = "month"
     ref_ids = [
-        "2023_FRA_LPIS_POLY_110",
-        # "2022_FRA_LPIS_POLY_110",
-        # "2021_FRA_LPIS_POLY_110",
-        # "2020_FRA_LPIS_POLY_110",
-        # "2021_KEN_COPERNICUS-GEOGLAM-LR_POINT_111"
+        "2021_MEX_CIMMYT-1_POLY_111",
+        "2020_MEX_CIMMYT-1_POLY_111",
+        "2023_MEX_CIMMYT-1_POLY_111",
+        # "2022_MEX_CIMMYT-1_POLY_111",  # still incomplete
+        "2019_MEX_CIMMYT-1_POLY_111",
     ]
     restart_failed = True
 
