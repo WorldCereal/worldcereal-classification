@@ -18,14 +18,14 @@ import shutil
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Dict, Literal, Optional, Union
+from typing import Callable, Dict, Literal, Optional, Union
 
 import geopandas as gpd
 import openeo
 import pandas as pd
 from loguru import logger
 from openeo import BatchJob
-from openeo.extra.job_management import MultiBackendJobManager
+from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
@@ -325,7 +325,6 @@ def create_inference_job(
     connection: openeo.Connection,
     provider: str,
     connection_provider: str,
-    epsg: Optional[int] = 4326,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPTYPE,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
@@ -345,14 +344,14 @@ def create_inference_job(
         - end_date: str, end date of the temporal extent
         - geometry: shapely.geometry, geometry of the spatial extent
         - tile_name: str, name of the tile
+        - epsg: int, EPSG code of the spatial extent
+        - bounds_tiling_epsg: str, bounds of the spatial extent in EPSG coordinates
     connection : openeo.Connection
         openEO connection to the backend
     provider : str
         unused but required for compatibility with MultiBackendJobManager
     connection_provider : str
-        unused but required for compatibility with MultiBackendJobManager
-    epsg : int, optional
-        EPSG code for the spatial extent of the job, by default 4326
+        unused but required for compatibility with MultiBackendJobManager6
     product_type : WorldCerealProductType, optional
         Type of the WorldCereal product to generate, by default WorldCerealProductType.CROPTYPE
     croptype_parameters :  Optional[CropTypeParameters], optional
@@ -368,7 +367,7 @@ def create_inference_job(
         best orbit will be dynamically derived from the catalogue.
     target_epsg : Optional[int], optional
         EPSG code to reproject the data to. If not provided, the data will be
-        left in the original coordinate reference system (UTM).
+        left in the original epsg as mentioned in the row.
     job_options : Optional[dict], optional
         Additional job options to pass to the OpenEO backend, by default None
 
@@ -380,7 +379,15 @@ def create_inference_job(
 
     # Get temporal and spatial extents from the row
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
-    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=epsg)
+    epsg = int(row.epsg)
+    bounds = [float(b) for b in row.bounds_tiling_epsg.split(";")]
+    spatial_extent = BoundingBoxExtent(
+        west=bounds[0], south=bounds[1], east=bounds[2], north=bounds[3], epsg=epsg
+    )
+
+    if target_epsg is None:
+        # If no target EPSG is provided, use the EPSG from the row
+        target_epsg = epsg
 
     # Update default job options with the provided ones
     inference_job_options = deepcopy(INFERENCE_JOB_OPTIONS)
@@ -400,7 +407,7 @@ def create_inference_job(
 
     # Submit the job
     return inference_result.create_job(
-        title=f"WorldCereal [{product_type.value}] job",
+        title=f"WorldCereal [{product_type.value}] job_{row.tile_name}",
         description="Job that performs end-to-end WorldCereal inference",
         job_options=inference_job_options,
     )
@@ -626,7 +633,7 @@ def run_largescale_inference(
     production_grid : Union[Path, gpd.GeoDataFrame]
         Path to the production grid file in Parquet format or a GeoDataFrame.
         The grid must contain the required attributes: 'start_date', 'end_date',
-        'geometry', and 'tile_name'.
+        'geometry' (in EPSG:4326), 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
     output_dir : Union[Path, str]
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
@@ -654,6 +661,90 @@ def run_largescale_inference(
     Returns
     -------
     None
+    """
+
+    job_manager, job_db, start_job = prepare_largescale_inference(
+        production_grid=production_grid,
+        output_dir=output_dir,
+        product_type=product_type,
+        cropland_parameters=cropland_parameters,
+        croptype_parameters=croptype_parameters,
+        postprocess_parameters=postprocess_parameters,
+        backend_context=backend_context,
+        target_epsg=target_epsg,
+        s1_orbit_state=s1_orbit_state,
+        job_options=job_options,
+        parallel_jobs=parallel_jobs,
+    )
+
+    job_df = job_db.df
+    job_tracking_csv = job_db.path
+
+    # Run the jobs
+    job_manager.run_jobs(
+        df=job_df,
+        start_job=start_job,
+        job_db=job_tracking_csv,
+    )
+
+    logger.info("Job manager finished.")
+
+
+def prepare_largescale_inference(
+    production_grid: Union[Path, gpd.GeoDataFrame],
+    output_dir: Union[Path, str],
+    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
+    cropland_parameters: CropLandParameters = CropLandParameters(),
+    croptype_parameters: CropTypeParameters = CropTypeParameters(),
+    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
+    target_epsg: Optional[int] = None,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+    job_options: Optional[dict] = None,
+    parallel_jobs: int = 2,
+) -> tuple[InferenceJobManager, CsvJobDatabase, Callable]:
+    """
+    Prepare large-scale inference jobs on the OpenEO backend.
+    This function sets up the job manager, creates job tracking information,
+    and defines the job creation function for WorldCereal inference jobs.
+
+    Parameters
+    ----------
+    production_grid : Union[Path, gpd.GeoDataFrame]
+        Path to the production grid file in Parquet format or a GeoDataFrame.
+        The grid must contain the required attributes: 'start_date', 'end_date',
+        'geometry' (in EPSG:4326), 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
+    output_dir : Union[Path, str]
+        Directory where output files and job tracking information will be stored.
+    product_type : WorldCerealProductType
+        Type of product to generate. Defaults to WorldCerealProductType.CROPLAND.
+    cropland_parameters : CropLandParameters
+        Parameters for cropland inference.
+    croptype_parameters : CropTypeParameters
+        Parameters for crop type inference.
+    postprocess_parameters : PostprocessParameters
+        Parameters for postprocessing the inference results.
+    backend_context : BackendContext
+        Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
+    target_epsg : Optional[int]
+        EPSG code for the target coordinate reference system.
+        If None, no reprojection will be performed.
+    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]]
+        Sentinel-1 orbit state to use ('ASCENDING' or 'DESCENDING')
+        If None, no specific orbit state is enforced.
+    job_options : Optional[dict]
+        Additional options for configuring the inference jobs. Defaults to None.
+    parallel_jobs : int
+        Number of parallel jobs to manage on the backend. Defaults to 2. Note that load
+        balancing does not guarantee that all jobs will run in parallel.
+
+    Returns
+    -------
+    tuple[InferenceJobManager, CsvJobDatabase, callable]
+        A tuple containing:
+        - InferenceJobManager: The job manager for handling inference jobs.
+        - CsvJobDatabase: The job database for tracking job information.
+        - callable: A function to create individual inference jobs.
 
     Raises
     -------
@@ -666,32 +757,6 @@ def run_largescale_inference(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Configure job tracking CSV file
-    job_tracking_csv = output_dir / "job_tracking.csv"
-
-    if job_tracking_csv.is_file():
-        logger.info("Job tracking file already exists, skipping job creation.")
-        job_df = pd.read_csv(job_tracking_csv)
-    else:
-        logger.info("Job tracking file does not exist, creating new jobs.")
-
-        if isinstance(production_grid, Path):
-            production_gdf = gpd.read_parquet(production_grid)
-        elif isinstance(production_grid, gpd.GeoDataFrame):
-            production_gdf = production_grid
-        else:
-            raise ValueError("production_grid must be a Path or a GeoDataFrame.")
-        if target_epsg is not None:
-            production_gdf = production_gdf.to_crs(epsg=target_epsg)
-
-        REQUIRED_ATTRIBUTES = ["start_date", "end_date", "geometry", "tile_name"]
-        for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
-
-        job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
-
     # Make a connection to the OpenEO backend
     connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
@@ -700,21 +765,61 @@ def run_largescale_inference(
     manager = InferenceJobManager(root_dir=output_dir)
     manager.add_backend("cdse", connection=connection, parallel_jobs=parallel_jobs)
 
-    # Run the jobs
-    manager.run_jobs(
-        df=job_df,
-        start_job=partial(
-            create_inference_job,
-            epsg=target_epsg,
-            product_type=product_type,
-            cropland_parameters=cropland_parameters,
-            croptype_parameters=croptype_parameters,
-            postprocess_parameters=postprocess_parameters,
-            s1_orbit_state=s1_orbit_state,
-            target_epsg=target_epsg,
-            job_options=job_options,
-        ),
-        job_db=job_tracking_csv,
+    # Configure job tracking CSV file
+    job_tracking_csv = output_dir / "job_tracking.csv"
+
+    job_db = CsvJobDatabase(path=job_tracking_csv)
+    if not job_db.exists():
+
+        logger.info("Job tracking file does not exist, creating new jobs.")
+
+        if isinstance(production_grid, Path):
+            production_gdf = gpd.read_parquet(production_grid)
+        elif isinstance(production_grid, gpd.GeoDataFrame):
+            production_gdf = production_grid
+        else:
+            raise ValueError("production_grid must be a Path or a GeoDataFrame.")
+
+        REQUIRED_ATTRIBUTES = [
+            "start_date",
+            "end_date",
+            "geometry",
+            "tile_name",
+            "epsg",
+            "bounds_tiling_epsg",
+        ]
+        for attr in REQUIRED_ATTRIBUTES:
+            assert (
+                attr in production_gdf.columns
+            ), f"The production grid must contain a '{attr}' column."
+
+        job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
+
+        df = manager._normalize_df(job_df)
+        # Save the job tracking DataFrame to the job database
+        job_db.persist(df)
+
+    else:
+        logger.info("Job tracking file already exists, skipping job creation.")
+
+    # Define the job creation function
+    start_job = partial(
+        create_inference_job,
+        product_type=product_type,
+        cropland_parameters=cropland_parameters,
+        croptype_parameters=croptype_parameters,
+        postprocess_parameters=postprocess_parameters,
+        s1_orbit_state=s1_orbit_state,
+        job_options=job_options,
+        target_epsg=target_epsg,
     )
 
-    logger.info("Job manager finished.")
+    # Check if there are jobs to run
+    if job_db.df.empty:
+        logger.warning("No jobs to run. The job tracking CSV is empty.")
+        raise ValueError(
+            "No jobs to run. The job tracking CSV is empty. "
+            "Please check the production grid and ensure it contains valid data."
+        )
+
+    return manager, job_db, start_job
