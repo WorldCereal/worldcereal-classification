@@ -1,4 +1,5 @@
 import copy
+import glob
 import time
 from multiprocessing import Event, Process, Queue
 from pathlib import Path
@@ -8,10 +9,12 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import rasterio
 from IPython.display import display
 from ipywidgets import Output
 from loguru import logger
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
+from rasterio.merge import merge
 from shapely import wkt
 from shapely.geometry import box
 
@@ -471,3 +474,49 @@ def monitor_production_process(proc, queue, stop_event):
             raise result
     else:
         print("⚠️ No result returned. The process may have been killed or crashed.")
+
+
+def merge_maps(outdir: Path, product="croptype") -> Path:
+    """Merge all maps in the output directory into a single .tif file."""
+
+    if not outdir.exists():
+        raise FileNotFoundError(f"Output directory {outdir} does not exist.")
+
+    # Find all .tif files in the output directory
+    tifs = glob.glob(str(outdir / "*" / f"{product}_*.tif"))
+    if len(tifs) == 0:
+        raise FileNotFoundError(
+            "No tif files found in the output directory matching your product."
+        )
+
+    # Open the files with rasterio
+    src_files_to_mosaic = [rasterio.open(fp) for fp in tifs]
+
+    # Merge the rasters
+    mosaic, out_trans = merge(src_files_to_mosaic)
+
+    # Use metadata from one of the input files and update
+    out_meta = src_files_to_mosaic[0].meta.copy()
+    out_meta.update(
+        {
+            "driver": "GTiff",
+            "height": mosaic.shape[1],
+            "width": mosaic.shape[2],
+            "transform": out_trans,
+            "compress": "lzw",  # Optional: add compression
+        }
+    )
+
+    # Write to output
+    outfile = outdir / f"{product}_merged.tif"
+    with rasterio.open(outfile, "w", **out_meta) as dest:
+        dest.write(mosaic)
+        # Preserve band descriptions (if any)
+        src_band_descriptions = [
+            src_files_to_mosaic[0].descriptions[i] for i in range(out_meta["count"])
+        ]
+        for idx, desc in enumerate(src_band_descriptions, start=1):
+            if desc:
+                dest.set_band_description(idx, desc)
+
+    return outfile
