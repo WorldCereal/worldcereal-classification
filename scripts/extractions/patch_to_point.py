@@ -202,6 +202,9 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         # Get sample points from RDM
         job_df.loc[ix, "geometry_url"] = url
 
+    # Remove rows without geometry URL as indication for jobs to skip
+    job_df = job_df[job_df["geometry_url"].notna()]
+
     return job_df
 
 
