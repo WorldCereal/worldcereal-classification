@@ -150,21 +150,18 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         if gdf.empty:
             logger.warning(f"No samples found for {row.epsg} and {row.ref_id}")
             continue
-        if len(gdf) == 1:
-            logger.warning(
-                f"Only one sample found for {row.epsg} and {row.ref_id}, which is currently not supported. Skipping job."
-            )
-            continue
         else:
             logger.info(f"Found {len(gdf)} samples for {row.epsg} and {row.ref_id}")
 
         # Keep essential attributes only
         gdf = gdf[RDM_DEFAULT_COLUMNS]
 
-        # Determine S1 orbit
+        # Determine S1 orbit; very small buffer to cover cases with < 3 samples
         job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
             BackendContext(Backend.CDSE),
-            BoundingBoxExtent(*gdf.to_crs(epsg=4326).total_bounds),
+            BoundingBoxExtent(
+                *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
+            ),
             TemporalContext(row.start_date, row.end_date),
         )
 
@@ -462,7 +459,7 @@ def main(
     output_folder = (
         root_folder / ref_id if period == "month" else root_folder / f"{ref_id}_10D"
     )
-    output_folder.mkdir(exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     job_tracking_csv = output_folder / "job_tracking.csv"
 
