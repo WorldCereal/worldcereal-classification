@@ -13,7 +13,7 @@ from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import MultiBackendJobManager
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
-from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
+from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 from pandas.core.dtypes.dtypes import CategoricalDtype
 
 from worldcereal.extract.patch_to_point_worldcereal import (
@@ -157,13 +157,20 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         gdf = gdf[RDM_DEFAULT_COLUMNS]
 
         # Determine S1 orbit; very small buffer to cover cases with < 3 samples
-        job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
-            BackendContext(Backend.CDSE),
-            BoundingBoxExtent(
-                *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
-            ),
-            TemporalContext(row.start_date, row.end_date),
-        )
+        try:
+            job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
+                BackendContext(Backend.CDSE),
+                BoundingBoxExtent(
+                    *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
+                ),
+                TemporalContext(row.start_date, row.end_date),
+            )
+        except UncoveredS1Exception:
+            logger.warning(
+                f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
+                "This will result in no S1 data being extracted."
+            )
+            job_df.loc[ix, "orbit_state"] = "DESCENDING"  # Just a placeholder
 
         # Determine S2 tiles
         logger.info("Finding S2 tiles ...")
