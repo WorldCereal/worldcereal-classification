@@ -51,6 +51,7 @@ INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
     "executor-memoryOverhead": "1g",
+    "max-executors": 10,
     "python-memory": "3g",
     "soft-errors": 0.1,
     "image-name": "python311",
