@@ -759,9 +759,8 @@ def setup_inference_job_manager(
     """
 
     # Setup output directory
-    if output_dir is not None:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Make a connection to the OpenEO backend
     backend = backend_context.backend
