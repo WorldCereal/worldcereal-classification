@@ -633,7 +633,7 @@ def run_largescale_inference(
     production_grid : Union[Path, gpd.GeoDataFrame]
         Path to the production grid file in Parquet format or a GeoDataFrame.
         The grid must contain the required attributes: 'start_date', 'end_date',
-        'geometry' (in EPSG:4326), 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
+        'geometry', 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
     output_dir : Union[Path, str]
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
@@ -713,7 +713,7 @@ def prepare_largescale_inference(
     production_grid : Union[Path, gpd.GeoDataFrame]
         Path to the production grid file in Parquet format or a GeoDataFrame.
         The grid must contain the required attributes: 'start_date', 'end_date',
-        'geometry' (in EPSG:4326), 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
+        'geometry', 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
     output_dir : Union[Path, str]
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
