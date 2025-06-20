@@ -758,12 +758,15 @@ def prepare_largescale_inference(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     # Make a connection to the OpenEO backend
-    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+    backend = backend_context.backend
+    connection = BACKEND_CONNECTIONS[backend]()
 
     # Setup the job manager
     logger.info("Setting up the job manager.")
     manager = InferenceJobManager(root_dir=output_dir)
-    manager.add_backend("cdse", connection=connection, parallel_jobs=parallel_jobs)
+    manager.add_backend(
+        backend.value, connection=connection, parallel_jobs=parallel_jobs
+    )
 
     # Configure job tracking CSV file
     job_tracking_csv = output_dir / "job_tracking.csv"
