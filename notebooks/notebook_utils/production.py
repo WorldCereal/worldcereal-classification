@@ -223,6 +223,7 @@ def create_production_grid(
     start_date,
     end_date,
     resolution: int = 20,
+    tiling_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """Create a production grid for the given extent.
 
@@ -233,6 +234,9 @@ def create_production_grid(
         Must be in WGS84 (EPSG:4326) coordinate reference system.
     resolution : int, optional
         The resolution of the grid in meters, by default 20.
+    tiling_crs : Optional[str], optional
+        The coordinate reference system to use for tiling.
+        If None, the best local UTM CRS will be derived.
 
     Returns
     -------
@@ -278,8 +282,14 @@ def create_production_grid(
         # Splitting bbox into smaller tiles, specified by the resolution
         tile_name = f"tile_{split['zone']}{split['hemisphere']}"
         grid_dfs.append(
-            create_tiling_grid(split, basename=tile_name, grid_size_m=resolution * 1000)
+            create_tiling_grid(
+                split,
+                basename=tile_name,
+                grid_size_m=resolution * 1000,
+                tiling_crs=tiling_crs,
+            )
         )
+
     # Concatenate all the grids into a single GeoDataFrame
     grid = gpd.GeoDataFrame(pd.concat(grid_dfs, ignore_index=True))
     # Add metadata columns
@@ -296,6 +306,7 @@ def run_map_production(
     temporal_extent: TemporalContext,
     output_dir: Path,
     tile_resolution: int = 20,
+    tiling_crs: Optional[str] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
@@ -320,6 +331,9 @@ def run_map_production(
         The directory where the output files will be saved.
     tile_resolution : int, optional
         The resolution of the tiles in kilometers, by default 20.
+    tiling_crs : Optional[str], optional
+        The coordinate reference system to use for tiling.
+        If None, the best local UTM CRS will be derived.
     product_type : WorldCerealProductType, optional
         The type of product to produce, by default WorldCerealProductType.CROPLAND
     cropland_parameters : CropLandParameters, optional
@@ -369,6 +383,7 @@ def run_map_production(
             temporal_extent.start_date,
             temporal_extent.end_date,
             resolution=tile_resolution,
+            tiling_crs=tiling_crs,
         )
         production_grid.to_file(grid_file, driver="GPKG")
 
