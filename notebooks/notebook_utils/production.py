@@ -572,3 +572,25 @@ def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataF
     )
     bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=extent.epsg)
     bbox_gdf.to_file(outfile, driver="GPKG")
+
+
+def gdf_to_bbox_extent(gdf: gpd.GeoDataFrame) -> BoundingBoxExtent:
+    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent."""
+    if len(gdf) != 1:
+        raise ValueError("GeoDataFrame must contain exactly one geometry.")
+
+    if gdf.crs is None:
+        raise ValueError("GeoDataFrame must have a defined CRS.")
+
+    geom = gdf.geometry.iloc[0]
+    if not geom.is_valid:
+        raise ValueError("Geometry is not valid.")
+
+    bounds = geom.bounds
+    return BoundingBoxExtent(
+        west=bounds[0],
+        south=bounds[1],
+        east=bounds[2],
+        north=bounds[3],
+        epsg=gdf.crs.to_epsg(),
+    )
