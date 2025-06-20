@@ -175,7 +175,7 @@ def create_tiling_grid(
     Returns
     -------
     GeoDataFrame
-        Grid tiles as polygons, with 'tile_name', 'epsg', and 'bounds_tiling_epsg' columns.
+        Grid tiles as polygons, with 'tile_name', 'epsg', and 'bounds_epsg' columns.
     """
     # Validate input bbox
     if not {"west", "south", "east", "north", "crs"}.issubset(bbox):
@@ -213,7 +213,7 @@ def create_tiling_grid(
     grid["epsg"] = (
         int(tiling_crs.split(":")[1]) if tiling_crs.startswith("EPSG:") else None
     )
-    grid["bounds_tiling_epsg"] = bounds_tiling
+    grid["bounds_epsg"] = bounds_tiling
 
     return grid
 

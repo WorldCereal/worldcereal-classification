@@ -345,7 +345,7 @@ def create_inference_job(
         - geometry: shapely.geometry, geometry of the spatial extent
         - tile_name: str, name of the tile
         - epsg: int, EPSG code of the spatial extent
-        - bounds_tiling_epsg: str, bounds of the spatial extent in EPSG coordinates
+        - bounds_epsg: str, bounds of the spatial extent in EPSG coordinates
     connection : openeo.Connection
         openEO connection to the backend
     provider : str
@@ -380,7 +380,7 @@ def create_inference_job(
     # Get temporal and spatial extents from the row
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
     epsg = int(row.epsg)
-    bounds = [float(b) for b in row.bounds_tiling_epsg.split(";")]
+    bounds = [float(b) for b in row.bounds_epsg.split(";")]
     spatial_extent = BoundingBoxExtent(
         west=bounds[0], south=bounds[1], east=bounds[2], north=bounds[3], epsg=epsg
     )
@@ -633,7 +633,7 @@ def run_largescale_inference(
     production_grid : Union[Path, gpd.GeoDataFrame]
         Path to the production grid file in Parquet format or a GeoDataFrame.
         The grid must contain the required attributes: 'start_date', 'end_date',
-        'geometry', 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
+        'geometry', 'tile_name', 'epsg' and 'bounds_epsg'.
     output_dir : Union[Path, str]
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
@@ -713,7 +713,7 @@ def prepare_largescale_inference(
     production_grid : Union[Path, gpd.GeoDataFrame]
         Path to the production grid file in Parquet format or a GeoDataFrame.
         The grid must contain the required attributes: 'start_date', 'end_date',
-        'geometry', 'tile_name', 'epsg' and 'bounds_tiling_epsg'.
+        'geometry', 'tile_name', 'epsg' and 'bounds_epsg'.
     output_dir : Union[Path, str]
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
@@ -789,7 +789,7 @@ def prepare_largescale_inference(
             "geometry",
             "tile_name",
             "epsg",
-            "bounds_tiling_epsg",
+            "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
             assert (
