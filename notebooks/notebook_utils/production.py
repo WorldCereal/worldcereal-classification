@@ -201,7 +201,8 @@ def create_tiling_grid(
         for y in y_coords
     ]
     # convert coordinates to string for writing to GeoDataFrame
-    bounds_tiling = [";".join([str(c) for c in coords]) for coords in coordinates]
+    bounds_tiling = [repr(coords) for coords in coordinates]
+
     # Create geometries for each tile
     geometries_tiling = [box(*coords) for coords in coordinates]
 
@@ -220,8 +221,7 @@ def create_tiling_grid(
 
 def create_production_grid(
     spatial_extent: BoundingBoxExtent,
-    start_date: str,
-    end_date: str,
+    temporal_extent: TemporalContext,
     resolution: int = 20,
     tiling_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
@@ -232,10 +232,10 @@ def create_production_grid(
     spatial_extent : BoundingBoxExtent
         The extent for which to create the production grid.
         Must be in WGS84 (EPSG:4326) coordinate reference system.
-    start_date : str
-        The start date for the production grid, in ISO format (YYYY-MM-DD).
-    end_date : str
-        The end date for the production grid, in ISO format (YYYY-MM-DD).
+    temporal_extent : TemporalContext
+        The temporal extent for the production grid.
+        Must have 'start_date' and 'end_date' attributes.
+        These will be added to the grid as metadata.
     resolution : int, optional
         The resolution of the grid in meters, by default 20.
     tiling_crs : Optional[str], optional
@@ -262,7 +262,7 @@ def create_production_grid(
             spatial_extent.east,
             spatial_extent.north,
         )
-        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=spatial_extent.crs)
+        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=spatial_extent.epsg)
         bbox_gdf = bbox_gdf.to_crs("EPSG:4326")
         spatial_extent = BoundingBoxExtent(
             west=bbox_gdf.total_bounds[0],
@@ -297,8 +297,8 @@ def create_production_grid(
     # Concatenate all the grids into a single GeoDataFrame
     grid = gpd.GeoDataFrame(pd.concat(grid_dfs, ignore_index=True))
     # Add metadata columns
-    grid["start_date"] = start_date
-    grid["end_date"] = end_date
+    grid["start_date"] = temporal_extent.start_date
+    grid["end_date"] = temporal_extent.end_date
 
     logger.info(f"Created production grid with {len(grid)} tiles.")
 
@@ -384,8 +384,7 @@ def run_map_production(
         logger.info("Creating new production grid.")
         production_grid = create_production_grid(
             spatial_extent,
-            temporal_extent.start_date,
-            temporal_extent.end_date,
+            temporal_extent,
             resolution=tile_resolution,
             tiling_crs=tiling_crs,
         )

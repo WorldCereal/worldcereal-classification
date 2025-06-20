@@ -345,7 +345,9 @@ def create_inference_job(
         - geometry: shapely.geometry, geometry of the spatial extent
         - tile_name: str, name of the tile
         - epsg: int, EPSG code of the spatial extent
-        - bounds_epsg: str, bounds of the spatial extent in EPSG coordinates
+        - bounds_epsg: str representation of tuple,
+                        bounds of the spatial extent in CRS as
+                        specified by epsg attribute
     connection : openeo.Connection
         openEO connection to the backend
     provider : str
@@ -380,7 +382,7 @@ def create_inference_job(
     # Get temporal and spatial extents from the row
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
     epsg = int(row.epsg)
-    bounds = [float(b) for b in row.bounds_epsg.split(";")]
+    bounds = eval(row.bounds_epsg)
     spatial_extent = BoundingBoxExtent(
         west=bounds[0], south=bounds[1], east=bounds[2], north=bounds[3], epsg=epsg
     )
