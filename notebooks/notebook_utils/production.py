@@ -220,8 +220,8 @@ def create_tiling_grid(
 
 def create_production_grid(
     spatial_extent: BoundingBoxExtent,
-    start_date,
-    end_date,
+    start_date: str,
+    end_date: str,
     resolution: int = 20,
     tiling_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
@@ -232,6 +232,10 @@ def create_production_grid(
     spatial_extent : BoundingBoxExtent
         The extent for which to create the production grid.
         Must be in WGS84 (EPSG:4326) coordinate reference system.
+    start_date : str
+        The start date for the production grid, in ISO format (YYYY-MM-DD).
+    end_date : str
+        The end date for the production grid, in ISO format (YYYY-MM-DD).
     resolution : int, optional
         The resolution of the grid in meters, by default 20.
     tiling_crs : Optional[str], optional
