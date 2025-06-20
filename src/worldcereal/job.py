@@ -10,6 +10,10 @@ Possible entry points for inference in this module:
 - `run_largescale_inference`: This function utilizes a job manager to
     orchestrate and execute multiple inference jobs automatically, enabling
     efficient large-scale processing.
+- `prepare_largescale_inference`: This function prepares the job manager
+    and job database for large-scale inference jobs. It sets up the necessary
+    infrastructure to manage and track jobs in a notebook environment.
+    Used in the WorldCereal demo notebooks.
 
 """
 
