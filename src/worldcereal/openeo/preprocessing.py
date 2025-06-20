@@ -400,6 +400,7 @@ def worldcereal_preprocessed_inputs(
     tile_size: Optional[int] = None,
     s2_tile: Optional[str] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -435,6 +436,9 @@ def worldcereal_preprocessed_inputs(
         tile_size=tile_size,
     )
 
+    if target_epsg is not None:
+        s2_data = s2_data.resample_spatial(projection=target_epsg, resolution=10.0)
+
     s2_data = median_compositing(s2_data, period=compositing_window)
 
     # Cast to uint16
@@ -464,6 +468,9 @@ def worldcereal_preprocessed_inputs(
         orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
         tile_size=tile_size,
     )
+
+    if target_epsg is not None:
+        s1_data = s1_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
     s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)

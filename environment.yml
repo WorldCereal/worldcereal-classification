@@ -27,7 +27,7 @@ dependencies:
   - rasterio=1.3.10
   - rioxarray=0.15.5
   - scikit-image=0.22.0
-  - scikit-learn=1.5.0
+  - scikit-learn=1.6.1
   - scipy
   - shapely=2.0.4
   - tqdm
@@ -36,5 +36,5 @@ dependencies:
     - h3==4.1.0
     - openeo-gfmap==0.4.6
     - git+https://github.com/worldcereal/worldcereal-classification
-    - git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
+    - git+https://github.com/WorldCereal/prometheo
 
