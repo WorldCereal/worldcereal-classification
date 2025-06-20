@@ -18,7 +18,7 @@ from rasterio.merge import merge
 from shapely import wkt
 from shapely.geometry import box
 
-from worldcereal.job import prepare_largescale_inference
+from worldcereal.job import setup_inference_job_manager
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
@@ -391,7 +391,7 @@ def run_map_production(
         production_grid.to_file(grid_file, driver="GPKG")
 
     # Prepare the job manager and job database
-    job_manager, job_db, start_job = prepare_largescale_inference(
+    job_manager, job_db, start_job = setup_inference_job_manager(
         production_grid,
         output_dir,
         product_type=product_type,

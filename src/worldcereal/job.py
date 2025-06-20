@@ -10,7 +10,7 @@ Possible entry points for inference in this module:
 - `run_largescale_inference`: This function utilizes a job manager to
     orchestrate and execute multiple inference jobs automatically, enabling
     efficient large-scale processing.
-- `prepare_largescale_inference`: This function prepares the job manager
+- `setup_inference_job_manager`: This function prepares the job manager
     and job database for large-scale inference jobs. It sets up the necessary
     infrastructure to manage and track jobs in a notebook environment.
     Used in the WorldCereal demo notebooks.
@@ -669,7 +669,7 @@ def run_largescale_inference(
     None
     """
 
-    job_manager, job_db, start_job = prepare_largescale_inference(
+    job_manager, job_db, start_job = setup_inference_job_manager(
         production_grid=production_grid,
         output_dir=output_dir,
         product_type=product_type,
@@ -696,7 +696,7 @@ def run_largescale_inference(
     logger.info("Job manager finished.")
 
 
-def prepare_largescale_inference(
+def setup_inference_job_manager(
     production_grid: Union[Path, gpd.GeoDataFrame],
     output_dir: Union[Path, str],
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
