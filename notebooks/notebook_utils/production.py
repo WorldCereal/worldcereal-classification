@@ -242,6 +242,28 @@ def create_production_grid(
 
     # TODO: make sure the tiling grid is in line with the Sentinel 20 m grid
 
+    # Ensure the spatial extent is in WGS84 (EPSG:4326)
+    if not spatial_extent.epsg == 4326:
+        logger.info(
+            '"Spatial extent is not in WGS84 (EPSG:4326). Reprojecting to WGS84.")'
+        )
+        # Convert to geometry and reproject to WGS84
+        bbox_geom = box(
+            spatial_extent.west,
+            spatial_extent.south,
+            spatial_extent.east,
+            spatial_extent.north,
+        )
+        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=spatial_extent.crs)
+        bbox_gdf = bbox_gdf.to_crs("EPSG:4326")
+        spatial_extent = BoundingBoxExtent(
+            west=bbox_gdf.total_bounds[0],
+            south=bbox_gdf.total_bounds[1],
+            east=bbox_gdf.total_bounds[2],
+            north=bbox_gdf.total_bounds[3],
+            epsg=4326,
+        )
+
     # We first split the bounding box by UTM zones
     bbox_splits = split_bbox_by_utm_and_hemisphere(
         spatial_extent.west,
@@ -332,12 +354,7 @@ def run_map_production(
         If the spatial extent is not in WGS84 (EPSG:4326) coordinate reference system.
     """
 
-    # Validate input parameters
-    if not spatial_extent.epsg == 4326:
-        raise ValueError(
-            "Spatial extent must be in WGS84 (EPSG:4326) coordinate reference system."
-        )
-
+    # Create output directory if it does not exist
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Create production grid according to tile resolution and spatial extent
