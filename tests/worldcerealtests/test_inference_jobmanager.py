@@ -28,6 +28,8 @@ def test_run_largescale_inference_with_geodataframe():
         "end_date": ["2023-12-31"],
         "geometry": [box(0, 0, 1, 1)],
         "tile_name": ["tile_1"],
+        "epsg": [4326],
+        "bounds_epsg": ["(0, 0, 1, 1)"],
     }
     production_gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
 
@@ -35,13 +37,15 @@ def test_run_largescale_inference_with_geodataframe():
     product_type = WorldCerealProductType.CROPLAND
     cropland_parameters = CropLandParameters()
 
-    # Mock dependencies to avoid actual backend calls
-    with patch("worldcereal.job.InferenceJobManager") as mock_job_manager_class:
-        # Mock the job manager
-        mock_job_manager = MagicMock()
-        mock_job_manager_class.return_value = mock_job_manager
+    mock_job_manager = MagicMock()
+    mock_job_db = MagicMock()
+    mock_job_db.df.empty = False
+    mock_start_job = MagicMock()
 
-        # Call the method
+    # Patch setup_inference_job_manager to avoid actual backend calls
+    with patch("worldcereal.job.setup_inference_job_manager") as mock_setup:
+        mock_setup.return_value = (mock_job_manager, mock_job_db, mock_start_job)
+
         run_largescale_inference(
             production_grid=production_gdf,
             output_dir=output_dir,
@@ -65,6 +69,8 @@ def test_create_inference_job_logic():
             "end_date": "2023-12-31",
             "geometry": box(0, 0, 1, 1),
             "tile_name": "tile_1",
+            "epsg": [4326],
+            "bounds_epsg": ["(0, 0, 1, 1)"],
         }
     )
 
