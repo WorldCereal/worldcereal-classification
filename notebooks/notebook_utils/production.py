@@ -555,3 +555,20 @@ def merge_maps(outdir: Path, product="croptype") -> Path:
                 dest.set_band_description(idx, desc)
 
     return outfile
+
+
+def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataFrame:
+    """Save drawn bounding box to a geodataframe and save it."""
+
+    # create output directory if it does not exist
+    outfile.parent.mkdir(exist_ok=True, parents=True)
+
+    # convert to a GeoDataFrame
+    bbox_geom = box(
+        extent.west,
+        extent.south,
+        extent.east,
+        extent.north,
+    )
+    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=extent.epsg)
+    bbox_gdf.to_file(outfile, driver="GPKG")
