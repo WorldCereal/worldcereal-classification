@@ -3,6 +3,7 @@ import copy
 import logging
 import random
 from pathlib import Path
+from typing import Optional
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -230,7 +231,12 @@ def scale_rgb(color):
     return tuple(c / 255 for c in color[:3])
 
 
-def visualize_product(path: Path, product: str, lut: dict, write: bool = False):
+def visualize_product(
+    path: Path,
+    product: str,
+    lut: Optional[dict] = None,
+    write: bool = False,
+):
     """
     Visualize a WorldCereal map product using matplotlib.
 
@@ -242,10 +248,33 @@ def visualize_product(path: Path, product: str, lut: dict, write: bool = False):
         Name of the product to visualize.
     lut : dict, optional
         Lookup table for product classes, if available.
+        If None, we assume the default cropland LUT.
     write : bool, optional
         If True, write the classification and probability rasters with colormap to disk.
         Default is False.
     """
+
+    if product not in ["cropland", "croptype", "cropland-raw", "croptype-raw"]:
+        raise ValueError(
+            f"Product {product} is not supported. Supported products are: "
+            "'cropland', 'croptype', 'cropland-raw', 'croptype-raw'."
+        )
+    if product not in ["cropland", "cropland-raw"]:
+        if lut is None:
+            raise ValueError(
+                f"Look-up table is required for product {product}. "
+                "Please provide a valid LUT."
+            )
+    else:
+        if lut is None:
+            logger.info(
+                f"No LUT provided for product {product}. "
+                "Using default LUT for cropland products."
+            )
+            lut = {
+                "no_cropland": 0,
+                "cropland": 1,
+            }
 
     # Adjust LUT for crop type product
     if product.startswith("croptype"):
