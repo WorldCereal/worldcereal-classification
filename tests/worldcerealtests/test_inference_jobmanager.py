@@ -69,8 +69,8 @@ def test_create_inference_job_logic():
             "end_date": "2023-12-31",
             "geometry": box(0, 0, 1, 1),
             "tile_name": "tile_1",
-            "epsg": [4326],
-            "bounds_epsg": ["(0, 0, 1, 1)"],
+            "epsg": 4326,
+            "bounds_epsg": "(0, 0, 1, 1)",
         }
     )
 
@@ -97,7 +97,6 @@ def test_create_inference_job_logic():
             job_options=None,
         )
 
-        # Assertions to ensure the logic is executed correctly
         mock_create_graph.assert_called_once_with(
             spatial_extent=BoundingBoxExtent(*(0, 0, 1, 1), epsg=4326),
             temporal_extent=TemporalContext("2023-01-01", "2023-12-31"),
@@ -106,10 +105,10 @@ def test_create_inference_job_logic():
             cropland_parameters=CropLandParameters(),
             postprocess_parameters=None,
             s1_orbit_state=None,
-            target_epsg=None,
+            target_epsg=4326,
         )
         mock_data_cube.create_job.assert_called_once_with(
-            title="WorldCereal [croptype] job",
+            title="WorldCereal [croptype] job_tile_1",
             description="Job that performs end-to-end WorldCereal inference",
             job_options=INFERENCE_JOB_OPTIONS,
         )
