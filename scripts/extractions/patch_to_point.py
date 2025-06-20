@@ -550,7 +550,7 @@ if __name__ == "__main__":
     logger.info(f"Root folder: {root_folder}")
     logger.info(f"Period: {period}")
 
-    connection = openeo.connect("openeo-dev.vito.be").authenticate_oidc()
+    connection = openeo.connect("openeo.vito.be").authenticate_oidc()
 
     for ref_id in ref_ids:
         logger.info(f"Processing ref_id: {ref_id}")
