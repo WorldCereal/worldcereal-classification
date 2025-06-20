@@ -134,10 +134,18 @@ def get_label_points(
 
     # Find sample_ids which are present in both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
-    logger.info(f"Found {len(common_sample_ids)} common sample_ids in S1 and S2")
+
+    if len(common_sample_ids) > 0:
+        logger.info(f"Found {len(common_sample_ids)} common sample_ids in S1 and S2")
+    else:
+        logger.warning(
+            f"No common sample_ids found in S1 and S2 for ref_id: {row['ref_id']} and "
+            f"epsg: {row['epsg']}, reverting to S2 only."
+        )
+        common_sample_ids = set(items_s2.keys())
 
     # Items with the same sample_id will also have the same geometry
-    polygons = [items_s1[sample_id] for sample_id in common_sample_ids]
+    polygons = [items_s2[sample_id] for sample_id in common_sample_ids]
 
     multi_polygon = MultiPolygon(polygons)
 
@@ -238,6 +246,7 @@ def worldcereal_preprocessed_inputs_from_patches(
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
     )
+    s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
     s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
     s1 = mean_compositing(s1, period=period)
     s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
