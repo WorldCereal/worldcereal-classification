@@ -195,6 +195,9 @@
                 "S1-SIGMA0-VH",
                 "S1-SIGMA0-VV"
             ],
+            "featureflags": {
+                "allow_empty_cube": true
+            },
             "properties": {
                 "ref_id": {
                     "process_graph": {
