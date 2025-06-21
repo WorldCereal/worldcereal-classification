@@ -3,7 +3,7 @@ import glob
 import time
 from multiprocessing import Event, Process, Queue
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -575,8 +575,31 @@ def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataF
     bbox_gdf.to_file(outfile, driver="GPKG")
 
 
-def gdf_to_bbox_extent(gdf: gpd.GeoDataFrame) -> BoundingBoxExtent:
-    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent."""
+def gdf_to_bbox_extent(gdf: Union[gpd.GeoDataFrame, Path]) -> BoundingBoxExtent:
+    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent.
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame or Path
+        A GeoDataFrame with a single geometry or a file path to a GeoDataFrame.
+        The GeoDataFrame must have a defined CRS and contain exactly one geometry.
+    Returns
+    -------
+    BoundingBoxExtent
+        An instance of BoundingBoxExtent with the bounds of the geometry and its EPSG code.
+    Raises
+    ------
+    TypeError
+        If the input is not a GeoDataFrame or a file path to a GeoDataFrame.
+    ValueError
+        If the GeoDataFrame does not have a defined CRS or contains more than one geometry.
+    """
+
+    if isinstance(gdf, Path):
+        gdf = gpd.read_file(gdf)
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise TypeError(
+            "Input must be a GeoDataFrame or a file path to a GeoDataFrame."
+        )
     if len(gdf) != 1:
         raise ValueError("GeoDataFrame must contain exactly one geometry.")
 
