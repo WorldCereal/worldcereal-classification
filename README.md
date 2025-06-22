@@ -55,7 +55,7 @@ Next, install the package locally:
 - for Pip: `pip install .[train,notebooks]`
 
 ## Usage Example
-In it's most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
+In its most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
 
 ```python
 from openeo_gfmap import BoundingBoxExtent, TemporalContext

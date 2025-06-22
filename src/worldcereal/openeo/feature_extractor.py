@@ -21,8 +21,6 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     import functools
 
     PRESTO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/presto_worldcereal-0.1.6-py3-none-any.whl"
-    BASE_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies"  # NOQA
-    DEPENDENCY_NAME = "worldcereal_deps.zip"
 
     GFMAP_BAND_MAPPING = {
         "S2-L2A-B02": "B2",
@@ -42,10 +40,13 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
     }
 
     @functools.lru_cache(maxsize=6)
-    def unpack_presto_wheel(self, wheel_url: str, destination_dir: str) -> str:
+    def unpack_presto_wheel(self, wheel_url: str):
         import urllib.request
         import zipfile
         from pathlib import Path
+
+        destination_dir = Path.cwd() / "dependencies" / "presto"
+        destination_dir.mkdir(exist_ok=True, parents=True)
 
         # Downloads the wheel file
         modelfile, _ = urllib.request.urlretrieve(
@@ -305,12 +306,11 @@ class PrestoFeatureExtractor(PatchFeatureExtractor):
                 )
             inarr.attrs["valid_date"] = inarr.t.values[6]
 
-        # Unzip de dependencies on the backend
         if not ignore_dependencies:
-            self.logger.info("Unzipping dependencies")
-            deps_dir = self.extract_dependencies(self.BASE_URL, self.DEPENDENCY_NAME)
+
+            # Unzip the Presto dependencies on the backend
             self.logger.info("Unpacking presto wheel")
-            deps_dir = self.unpack_presto_wheel(presto_wheel_url, deps_dir)
+            deps_dir = self.unpack_presto_wheel(presto_wheel_url)
 
             self.logger.info("Appending dependencies")
             sys.path.append(str(deps_dir))

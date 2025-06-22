@@ -45,7 +45,7 @@ dependencies = [
     "netcdf4<=1.6.4",  
     "numpy<2.0.0",  
     "openeo==0.35.0",  
-    "openeo-gfmap==0.4.4",  
+    "openeo-gfmap==0.4.6",  
     "pyarrow",  
     "pydantic==2.8.0",  
     "rioxarray>=0.13.0",  
@@ -75,7 +75,8 @@ train = [
 ]
 notebooks = [
   "ipywidgets==8.1.3",
-  "leafmap==0.35.1"
+  "ipyleaflet==0.19.2",
+  "plotly==5.24.1"
 ]
 
 [tool.pytest.ini_options]

@@ -14,7 +14,7 @@ class date_slider:
     The processing period will always start the first day of a month and end the last day of a month.
     """
 
-    def __init__(self, start_date=datetime(2018, 1, 1), end_date=datetime(2024, 12, 1)):
+    def __init__(self, start_date=datetime(2017, 1, 1), end_date=datetime(2025, 5, 1)):
 
         # Define the slider
         dates = pd.date_range(start_date, end_date, freq="MS")
@@ -30,7 +30,7 @@ class date_slider:
                 "handle_color": "dodgerblue",
             },
             layout=widgets.Layout(
-                width="600px",
+                width="700px",
                 margin="0 0 0 10px",
             ),
             readout=False,
@@ -64,7 +64,7 @@ class date_slider:
         .widget-container {
             padding-left: 10px; /* Add 20px margin on left and right */
             box-sizing: border-box; /* Include padding in width */
-            width: 600px; /* Fixed width for consistent alignment */
+            width: 700px; /* Fixed width for consistent alignment */
             margin: 0 auto; /* Center align the container */
             position: relative;
         }
@@ -127,7 +127,7 @@ class date_slider:
         slider_with_ticks = widgets.VBox(
             [self.interval_slider, tick_marks_and_labels],
             layout=widgets.Layout(
-                width="640px", align_items="center", justify_content="center"
+                width="740px", align_items="center", justify_content="center"
             ),
         )
 
@@ -150,7 +150,7 @@ class date_slider:
                 self.html_text,
             ],
             layout=widgets.Layout(
-                align_items="center", justify_content="center", width="650px"
+                align_items="center", justify_content="center", width="750px"
             ),
         )
 

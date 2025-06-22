@@ -426,7 +426,6 @@ class RdmInteraction:
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""
-                SET TimeZone = 'UTC';
                 SELECT {columns_str}, ST_AsWKB(ST_Intersection(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))) AS wkb_geometry, '{ref_id}' AS ref_id
                 FROM read_parquet('{url}')
                 WHERE ST_Intersects(ST_MakeValid(ST_Simplify(geometry, 0.000001)), ST_Simplify(ST_GeomFromText('{str(geometry)}'), 0.000001))
@@ -547,6 +546,7 @@ class RdmInteraction:
         con = duckdb.connect()
         con.execute("INSTALL spatial;")
         con.execute("LOAD spatial;")
+        con.execute("SET TimeZone='UTC';")
 
         df = con.execute(query).fetch_df()
 
