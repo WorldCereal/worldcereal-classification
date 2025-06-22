@@ -72,10 +72,13 @@ def plot_job_status(status_df, color_dict, center, zoom=12):
         status_plot["status"].map(color_dict).fillna(color_dict[None])
     )
 
+    # Convert the entire GeoDataFrame to a FeatureCollection
+    geojson = status_plot.set_index("id").__geo_interface__
+
     fig = px.choropleth_mapbox(
         status_plot,
-        geojson=status_plot.geometry.__geo_interface__,
-        locations=status_plot["tile_name"],
+        geojson=geojson,
+        locations="id",
         color="status",
         color_discrete_map=color_dict,
         mapbox_style="carto-positron",
