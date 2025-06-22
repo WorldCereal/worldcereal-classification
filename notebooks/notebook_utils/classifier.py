@@ -1,11 +1,16 @@
 from typing import List, Optional, Tuple, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from presto.utils import DEFAULT_SEED
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    classification_report,
+    confusion_matrix,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -112,6 +117,7 @@ def train_classifier(
     training_dataframe: pd.DataFrame,
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
+    show_confusion_matrix: bool = False,
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
     """Method to train a custom CatBoostClassifier on a training dataframe.
 
@@ -123,6 +129,8 @@ def train_classifier(
         class names to use, by default None
     balance_classes : bool, optional
         if True, class weights are used during training to balance the classes, by default False
+    show_confusion_matrix : bool, optional
+        if True, the confusion matrix is shown, by default False
 
     Returns
     -------
@@ -221,6 +229,34 @@ def train_classifier(
     pred = custom_downstream_model.predict(samples_test[bands]).flatten()
 
     report = classification_report(samples_test["downstream_class"], pred)
-    confuson_matrix = confusion_matrix(samples_test["downstream_class"], pred)
+    cm = confusion_matrix(samples_test["downstream_class"], pred)
 
-    return custom_downstream_model, report, confuson_matrix
+    if show_confusion_matrix:
+        labels = np.sort(training_dataframe["downstream_class"].unique())
+
+        # normalize CM
+        row_sums = cm.sum(axis=1, keepdims=True)
+        cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
+
+        font_size = 18
+        fig, ax = plt.subplots(figsize=(12, 10))
+        disp = ConfusionMatrixDisplay(
+            confusion_matrix=cm_normalized, display_labels=labels
+        )
+        disp.plot(
+            ax=ax,
+            cmap="Blues",
+            colorbar=True,
+            values_format=".2f",
+            xticks_rotation="vertical",
+        )
+        for text in ax.texts:
+            text.set_fontsize(font_size - 8)
+
+        ax.set_xlabel("Predicted label", fontsize=font_size - 4)
+        ax.set_ylabel("True label", fontsize=font_size - 4)
+        ax.tick_params(axis="both", which="major", labelsize=font_size - 4)
+        plt.tight_layout()
+        plt.show()
+
+    return custom_downstream_model, report, cm

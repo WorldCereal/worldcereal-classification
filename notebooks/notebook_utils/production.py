@@ -3,7 +3,7 @@ import glob
 import time
 from multiprocessing import Event, Process, Queue
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -72,10 +72,13 @@ def plot_job_status(status_df, color_dict, center, zoom=12):
         status_plot["status"].map(color_dict).fillna(color_dict[None])
     )
 
+    # Convert the entire GeoDataFrame to a FeatureCollection
+    geojson = status_plot.set_index("id").__geo_interface__
+
     fig = px.choropleth_mapbox(
         status_plot,
-        geojson=status_plot.geometry.__geo_interface__,
-        locations=status_plot.index,
+        geojson=geojson,
+        locations="id",
         color="status",
         color_discrete_map=color_dict,
         mapbox_style="carto-positron",
@@ -524,35 +527,36 @@ def merge_maps(outdir: Path, product="croptype") -> Path:
             "No tif files found in the output directory matching your product."
         )
 
-    # Open the files with rasterio
-    src_files_to_mosaic = [rasterio.open(fp) for fp in tifs]
+    with rasterio.Env(CPL_LOG="ERROR"):
+        # Open the files with rasterio
+        src_files_to_mosaic = [rasterio.open(fp) for fp in tifs]
 
-    # Merge the rasters
-    mosaic, out_trans = merge(src_files_to_mosaic)
+        # Merge the rasters
+        mosaic, out_trans = merge(src_files_to_mosaic)
 
-    # Use metadata from one of the input files and update
-    out_meta = src_files_to_mosaic[0].meta.copy()
-    out_meta.update(
-        {
-            "driver": "GTiff",
-            "height": mosaic.shape[1],
-            "width": mosaic.shape[2],
-            "transform": out_trans,
-            "compress": "lzw",  # Optional: add compression
-        }
-    )
+        # Use metadata from one of the input files and update
+        out_meta = src_files_to_mosaic[0].meta.copy()
+        out_meta.update(
+            {
+                "driver": "GTiff",
+                "height": mosaic.shape[1],
+                "width": mosaic.shape[2],
+                "transform": out_trans,
+                "compress": "lzw",  # Optional: add compression
+            }
+        )
 
-    # Write to output
-    outfile = outdir / f"{product}_merged.tif"
-    with rasterio.open(outfile, "w", **out_meta) as dest:
-        dest.write(mosaic)
-        # Preserve band descriptions (if any)
-        src_band_descriptions = [
-            src_files_to_mosaic[0].descriptions[i] for i in range(out_meta["count"])
-        ]
-        for idx, desc in enumerate(src_band_descriptions, start=1):
-            if desc:
-                dest.set_band_description(idx, desc)
+        # Write to output
+        outfile = outdir / f"{product}_merged.tif"
+        with rasterio.open(outfile, "w", **out_meta) as dest:
+            dest.write(mosaic)
+            # Preserve band descriptions (if any)
+            src_band_descriptions = [
+                src_files_to_mosaic[0].descriptions[i] for i in range(out_meta["count"])
+            ]
+            for idx, desc in enumerate(src_band_descriptions, start=1):
+                if desc:
+                    dest.set_band_description(idx, desc)
 
     return outfile
 
@@ -574,8 +578,31 @@ def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataF
     bbox_gdf.to_file(outfile, driver="GPKG")
 
 
-def gdf_to_bbox_extent(gdf: gpd.GeoDataFrame) -> BoundingBoxExtent:
-    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent."""
+def gdf_to_bbox_extent(gdf: Union[gpd.GeoDataFrame, Path]) -> BoundingBoxExtent:
+    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent.
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame or Path
+        A GeoDataFrame with a single geometry or a file path to a GeoDataFrame.
+        The GeoDataFrame must have a defined CRS and contain exactly one geometry.
+    Returns
+    -------
+    BoundingBoxExtent
+        An instance of BoundingBoxExtent with the bounds of the geometry and its EPSG code.
+    Raises
+    ------
+    TypeError
+        If the input is not a GeoDataFrame or a file path to a GeoDataFrame.
+    ValueError
+        If the GeoDataFrame does not have a defined CRS or contains more than one geometry.
+    """
+
+    if isinstance(gdf, Path):
+        gdf = gpd.read_file(gdf)
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise TypeError(
+            "Input must be a GeoDataFrame or a file path to a GeoDataFrame."
+        )
     if len(gdf) != 1:
         raise ValueError("GeoDataFrame must contain exactly one geometry.")
 
