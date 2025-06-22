@@ -40,7 +40,7 @@ JOB_STATUS_COLORS = {
 }
 
 
-def plot_job_status(status_df, color_dict, center, zoom=12):
+def plot_job_status(status_df, color_dict, center, zoom=10):
     """Plot the job status on a map using Plotly Express.
 
     Parameters
@@ -73,12 +73,12 @@ def plot_job_status(status_df, color_dict, center, zoom=12):
     )
 
     # Convert the entire GeoDataFrame to a FeatureCollection
-    geojson = status_plot.set_index("id").__geo_interface__
+    geojson = status_plot.set_index("tile_name").__geo_interface__
 
     fig = px.choropleth_mapbox(
         status_plot,
         geojson=geojson,
-        locations="id",
+        locations="tile_name",
         color="status",
         color_discrete_map=color_dict,
         mapbox_style="carto-positron",
@@ -87,7 +87,7 @@ def plot_job_status(status_df, color_dict, center, zoom=12):
         title="Job Status Overview",
     )
     fig.update_geos(fitbounds="locations")
-    fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+    fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0})
 
     return fig
 
