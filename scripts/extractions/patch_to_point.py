@@ -91,9 +91,9 @@ def create_job_dataframe(ref_id, ground_truth_file=None):
         elif epsg != 4038:
             current_start_date = pd.to_datetime(item.properties["start_date"])
             current_end_date = pd.to_datetime(item.properties["end_date"])
-            if current_start_date > epsg_codes[epsg]["start_date"]:
+            if current_start_date < epsg_codes[epsg]["start_date"]:
                 epsg_codes[epsg]["start_date"] = current_start_date
-            if current_end_date < epsg_codes[epsg]["end_date"]:
+            if current_end_date > epsg_codes[epsg]["end_date"]:
                 epsg_codes[epsg]["end_date"] = current_end_date
 
     # Initialize job dataframe for patch to point
