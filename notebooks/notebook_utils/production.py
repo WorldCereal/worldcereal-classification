@@ -14,7 +14,9 @@ from IPython.display import display
 from ipywidgets import Output
 from loguru import logger
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
+from rasterio.io import MemoryFile
 from rasterio.merge import merge
+from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely import wkt
 from shapely.geometry import box
 
@@ -527,22 +529,54 @@ def merge_maps(outdir: Path, product="croptype") -> Path:
             "No tif files found in the output directory matching your product."
         )
 
-    with rasterio.Env(CPL_LOG="ERROR"):
-        # Open the files with rasterio
-        src_files_to_mosaic = [rasterio.open(fp) for fp in tifs]
+    reprojected_tifs = []
 
-        # Merge the rasters
-        mosaic, out_trans = merge(src_files_to_mosaic)
+    with rasterio.Env(CPL_LOG="ERROR"):
+        for tif in tifs:
+            # reproject to EPSG:3857 if not already in that CRS
+            with rasterio.open(tif) as src:
+                dst_crs = "EPSG:3857"
+                transform, width, height = calculate_default_transform(
+                    src.crs, dst_crs, src.width, src.height, *src.bounds
+                )
+
+                kwargs = src.meta.copy()
+                kwargs.update(
+                    {
+                        "crs": dst_crs,
+                        "transform": transform,
+                        "width": width,
+                        "height": height,
+                    }
+                )
+
+                memfile = MemoryFile()
+                with memfile.open(**kwargs) as dst:
+                    for i in range(1, src.count + 1):
+                        reproject(
+                            source=rasterio.band(src, i),
+                            destination=rasterio.band(dst, i),
+                            src_transform=src.transform,
+                            src_crs=src.crs,
+                            dst_transform=transform,
+                            dst_crs=dst_crs,
+                            resampling=Resampling.nearest,
+                        )
+                    dst.descriptions = src.descriptions
+                reprojected_tifs.append(memfile.open())
+
+        # Merge all reprojected rasters
+        mosaic, out_trans = merge(reprojected_tifs)
 
         # Use metadata from one of the input files and update
-        out_meta = src_files_to_mosaic[0].meta.copy()
+        out_meta = reprojected_tifs[0].meta.copy()
         out_meta.update(
             {
                 "driver": "GTiff",
                 "height": mosaic.shape[1],
                 "width": mosaic.shape[2],
                 "transform": out_trans,
-                "compress": "lzw",  # Optional: add compression
+                "compress": "lzw",
             }
         )
 
@@ -551,10 +585,7 @@ def merge_maps(outdir: Path, product="croptype") -> Path:
         with rasterio.open(outfile, "w", **out_meta) as dest:
             dest.write(mosaic)
             # Preserve band descriptions (if any)
-            src_band_descriptions = [
-                src_files_to_mosaic[0].descriptions[i] for i in range(out_meta["count"])
-            ]
-            for idx, desc in enumerate(src_band_descriptions, start=1):
+            for idx, desc in enumerate(reprojected_tifs[0].descriptions, start=1):
                 if desc:
                     dest.set_band_description(idx, desc)
 
