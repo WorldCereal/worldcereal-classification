@@ -96,7 +96,7 @@ def prepare_training_dataframe(
     ds = WorldCerealTrainingDataset(
         df,
         task_type=task_type,
-        augment=True,
+        augment=augment,
         mask_ratio=mask_ratio,
         repeats=repeats,
     )
