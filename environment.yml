@@ -14,7 +14,6 @@ dependencies:
   - h5netcdf=1.3.0
   - geopandas=0.14.4
   - h5py=3.11.0
-  - leafmap=0.35.1
   - loguru=0.7.2
   - netcdf4
   - numpy<2.0.0
