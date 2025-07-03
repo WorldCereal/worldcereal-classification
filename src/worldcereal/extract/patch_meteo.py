@@ -59,7 +59,7 @@ def create_job_patch_meteo(
         temporal_extent=[temporal_context.start_date, temporal_context.end_date],
         bands=bands_to_download,
     )
-    filter_geometry = connection.load_url(spatial_extent_url, format="parquet")
+    filter_geometry = connection.load_url(spatial_extent_url, format="Parquet")
     cube = cube.filter_spatial(filter_geometry)
     cube.rename_labels(
         dimension="bands",
