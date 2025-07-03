@@ -9,7 +9,7 @@ import openeo
 import pandas as pd
 from loguru import logger
 from openeo import BatchJob
-from openeo.extra.job_management import MultiBackendJobManager
+from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
 
 from worldcereal.extract.patch_to_point_worldcereal import (
     create_job_dataframe_patch_to_point_worldcereal,
@@ -139,32 +139,31 @@ def main(
     )
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    job_tracking_csv = output_folder / "job_tracking.csv"
+    job_tracking_path = output_folder / "job_tracking.csv"
+    job_db = CsvJobDatabase(path=job_tracking_path)
 
-    if job_tracking_csv.is_file():
-        logger.info("Job tracking file already exists, skipping job creation.")
-        job_df = pd.read_csv(job_tracking_csv)
-    else:
+    if job_db.exists():
+        logger.info(f"Job tracking file found at {job_tracking_path}.")
+        if restart_failed:
+            logger.info("Resetting failed jobs.")
+            job_df = job_db.read()
+            job_df.loc[
+                job_df["status"].isin(["error", "postprocessing-error"]), "status"
+            ] = "not_started"
+            job_db.persist(job_df)
+
+    if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
             ref_id, ground_truth_file
         )
-
-    if restart_failed and job_tracking_csv.is_file():
-        logger.info("Resetting failed jobs.")
-        job_df.loc[
-            job_df["status"].isin(["error", "postprocessing-error"]), "status"
-        ] = "not_started"
-        job_df.to_csv(job_tracking_csv, index=False)
-
-    logger.debug(job_df)
+        job_db.initialize_from_df(job_df)
 
     manager = PatchToPointJobManager(root_dir=output_folder)
     manager.add_backend("terrascope", connection=connection, parallel_jobs=1)
     manager.run_jobs(
-        df=job_df,
         start_job=partial(create_job_patch_to_point_worldcereal, period=period),
-        job_db=job_tracking_csv,
+        job_db=job_db,
     )
 
     # Merge all subparquets
