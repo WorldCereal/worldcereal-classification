@@ -32,6 +32,43 @@ DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
 }
 
 
+REQUIRED_ATTRIBUTES = {
+    "feature_index": np.int64,
+    "sample_id": str,
+    "timestamp": "datetime64[ns]",
+    "S2-L2A-B02": np.uint16,
+    "S2-L2A-B03": np.uint16,
+    "S2-L2A-B04": np.uint16,
+    "S2-L2A-B05": np.uint16,
+    "S2-L2A-B06": np.uint16,
+    "S2-L2A-B07": np.uint16,
+    "S2-L2A-B08": np.uint16,
+    "S2-L2A-B8A": np.uint16,
+    "S2-L2A-B11": np.uint16,
+    "S2-L2A-B12": np.uint16,
+    "S1-SIGMA0-VH": np.uint16,
+    "S1-SIGMA0-VV": np.uint16,
+    "slope": np.uint16,
+    "elevation": np.uint16,
+    "AGERA5-PRECIP": np.uint16,
+    "AGERA5-TMEAN": np.uint16,
+    "lon": np.float64,
+    "lat": np.float64,
+    "geometry": "geometry",
+    "tile": str,
+    "h3_l3_cell": str,
+    "start_date": str,
+    "end_date": str,
+    "year": np.int64,
+    "valid_time": str,
+    "ewoc_code": np.int64,
+    "irrigation_status": np.int64,
+    "quality_score_lc": np.int64,
+    "quality_score_ct": np.int64,
+    "extract": np.int64,
+}
+
+
 def generate_output_path_point_worldcereal(
     root_folder: Path,
     geometry_index: int,
@@ -240,44 +277,11 @@ def post_job_action_point_worldcereal(
         # Make sure we remove the timezone information from the timestamp
         gdf["timestamp"] = gdf["timestamp"].dt.tz_localize(None)
 
-        required_attributes = {
-            "feature_index": np.int64,
-            "sample_id": str,
-            "ref_id": CategoricalDtype(categories=[ref_id], ordered=False),
-            "timestamp": "datetime64[ns]",
-            "S2-L2A-B02": np.uint16,
-            "S2-L2A-B03": np.uint16,
-            "S2-L2A-B04": np.uint16,
-            "S2-L2A-B05": np.uint16,
-            "S2-L2A-B06": np.uint16,
-            "S2-L2A-B07": np.uint16,
-            "S2-L2A-B08": np.uint16,
-            "S2-L2A-B8A": np.uint16,
-            "S2-L2A-B11": np.uint16,
-            "S2-L2A-B12": np.uint16,
-            "S1-SIGMA0-VH": np.uint16,
-            "S1-SIGMA0-VV": np.uint16,
-            "slope": np.uint16,
-            "elevation": np.uint16,
-            "AGERA5-PRECIP": np.uint16,
-            "AGERA5-TMEAN": np.uint16,
-            "lon": np.float64,
-            "lat": np.float64,
-            "geometry": "geometry",
-            "tile": str,
-            "h3_l3_cell": str,
-            "start_date": str,
-            "end_date": str,
-            "year": np.int64,
-            "valid_time": str,
-            "ewoc_code": np.int64,
-            "irrigation_status": np.int64,
-            "quality_score_lc": np.int64,
-            "quality_score_ct": np.int64,
-            "extract": np.int64,
-        }
-
         # Select required attributes and cast to dtypes
+        required_attributes = copy.deepcopy(REQUIRED_ATTRIBUTES)
+        required_attributes["ref_id"] = CategoricalDtype(
+            categories=[ref_id], ordered=False
+        )
         gdf = gdf[required_attributes.keys()]
         gdf = gdf.astype(required_attributes)
 
