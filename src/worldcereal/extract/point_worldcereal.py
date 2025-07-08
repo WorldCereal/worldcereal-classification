@@ -8,10 +8,13 @@ from typing import Dict, List, Optional, Union
 import duckdb
 import geojson
 import geopandas as gpd
+import numpy as np
 import openeo
 import pandas as pd
 import pystac
+from loguru import logger
 from openeo_gfmap import Backend, BackendContext, FetchType, TemporalContext
+from pandas.core.dtypes.dtypes import CategoricalDtype
 from tqdm import tqdm
 
 from worldcereal.extract.utils import get_job_nb_polygons, pipeline_log
@@ -26,6 +29,43 @@ DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
     "executor-cores": "1",
     "max-executors": 22,
     "soft-errors": 0.1,
+}
+
+
+REQUIRED_ATTRIBUTES = {
+    "feature_index": np.int64,
+    "sample_id": str,
+    "timestamp": "datetime64[ns]",
+    "S2-L2A-B02": np.uint16,
+    "S2-L2A-B03": np.uint16,
+    "S2-L2A-B04": np.uint16,
+    "S2-L2A-B05": np.uint16,
+    "S2-L2A-B06": np.uint16,
+    "S2-L2A-B07": np.uint16,
+    "S2-L2A-B08": np.uint16,
+    "S2-L2A-B8A": np.uint16,
+    "S2-L2A-B11": np.uint16,
+    "S2-L2A-B12": np.uint16,
+    "S1-SIGMA0-VH": np.uint16,
+    "S1-SIGMA0-VV": np.uint16,
+    "slope": np.uint16,
+    "elevation": np.uint16,
+    "AGERA5-PRECIP": np.uint16,
+    "AGERA5-TMEAN": np.uint16,
+    "lon": np.float64,
+    "lat": np.float64,
+    "geometry": "geometry",
+    "tile": str,
+    "h3_l3_cell": str,
+    "start_date": str,
+    "end_date": str,
+    "year": np.int64,
+    "valid_time": str,
+    "ewoc_code": np.int64,
+    "irrigation_status": np.int64,
+    "quality_score_lc": np.int64,
+    "quality_score_ct": np.int64,
+    "extract": np.int64,
 }
 
 
@@ -199,6 +239,7 @@ def post_job_action_point_worldcereal(
             "S2-L2A-B06",
             "S2-L2A-B07",
             "S2-L2A-B08",
+            "S2-L2A-B8A",
             "S2-L2A-B11",
             "S2-L2A-B12",
             "S1-SIGMA0-VH",
@@ -209,6 +250,40 @@ def post_job_action_point_worldcereal(
             "AGERA5-TMEAN",
         ]
         gdf[bands] = gdf[bands].fillna(65535).astype("uint16")
+
+        # Remove samples where S1 and S2 are completely nodata
+        cols = [c for c in gdf.columns if "S2" in c or "S1" in c]
+        orig_sample_nr = len(gdf["sample_id"].unique())
+        nodata_rows = (gdf[cols] == 65535).all(axis=1)
+        all_nodata_per_sample = (
+            gdf.assign(nodata=nodata_rows).groupby("sample_id")["nodata"].all()
+        )
+        valid_sample_ids = all_nodata_per_sample[~all_nodata_per_sample].index
+        removed_samples = orig_sample_nr - len(valid_sample_ids)
+        if removed_samples > 0:
+            logger.warning(
+                f"Removed {removed_samples} samples with all S1 and S2 bands as nodata."
+            )
+            gdf = gdf[gdf["sample_id"].isin(valid_sample_ids)]
+
+        # Do some checks and perform corrections
+        assert (
+            len(gdf["ref_id"].unique()) == 1
+        ), f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
+        ref_id = gdf["ref_id"][0]
+        year = int(ref_id.split("_")[0])
+        gdf["year"] = year
+
+        # Make sure we remove the timezone information from the timestamp
+        gdf["timestamp"] = gdf["timestamp"].dt.tz_localize(None)
+
+        # Select required attributes and cast to dtypes
+        required_attributes = copy.deepcopy(REQUIRED_ATTRIBUTES)
+        required_attributes["ref_id"] = CategoricalDtype(
+            categories=[ref_id], ordered=False
+        )
+        gdf = gdf[required_attributes.keys()]
+        gdf = gdf.astype(required_attributes)
 
         gdf.to_parquet(item_asset_path, index=False)
 

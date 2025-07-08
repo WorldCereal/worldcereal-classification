@@ -411,6 +411,18 @@ class RdmInteraction:
         else:
             geometry = spatial_extent
 
+        # Inward buffer of the patches
+        buffer = -20
+        logger.info(f"Buffering patch extents by {buffer} meters")
+        gdf = gpd.GeoDataFrame(geometry=[geometry], crs="EPSG:4326")
+        utm_crs = gdf.estimate_utm_crs()
+        gdf_utm = gdf.to_crs(utm_crs)
+        gdf_utm["geometry"] = gdf_utm.buffer(
+            buffer, cap_style=3
+        )  # cap_style=3 makes square corners
+        gdf = gdf_utm.to_crs("EPSG:4326")
+        geometry = gdf.geometry.values[0]
+
         for i, url in enumerate(urls):
             ref_id = str(url).split("/")[-2]
             query = f"""

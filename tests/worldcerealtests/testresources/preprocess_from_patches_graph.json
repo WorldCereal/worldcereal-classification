@@ -195,6 +195,9 @@
                 "S1-SIGMA0-VH",
                 "S1-SIGMA0-VV"
             ],
+            "featureflags": {
+                "allow_empty_cube": true
+            },
             "properties": {
                 "ref_id": {
                     "process_graph": {
@@ -646,11 +649,23 @@
             ]
         }
     },
+    "resamplespatial2": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "renamelabels2"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
     "reducedimension1": {
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
-                "from_node": "renamelabels2"
+                "from_node": "resamplespatial2"
             },
             "dimension": "t",
             "reducer": {
@@ -679,11 +694,23 @@
             "temporal_extent": null
         }
     },
+    "resamplespatial3": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadcollection1"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
     "reducedimension2": {
         "process_id": "reduce_dimension",
         "arguments": {
             "data": {
-                "from_node": "loadcollection1"
+                "from_node": "resamplespatial3"
             },
             "dimension": "t",
             "reducer": {
@@ -727,23 +754,11 @@
             }
         }
     },
-    "resamplecubespatial1": {
-        "process_id": "resample_cube_spatial",
-        "arguments": {
-            "data": {
-                "from_node": "mergecubes3"
-            },
-            "method": "bilinear",
-            "target": {
-                "from_node": "apply1"
-            }
-        }
-    },
     "apply3": {
         "process_id": "apply",
         "arguments": {
             "data": {
-                "from_node": "resamplecubespatial1"
+                "from_node": "mergecubes3"
             },
             "process": {
                 "process_graph": {
