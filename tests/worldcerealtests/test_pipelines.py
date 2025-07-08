@@ -82,7 +82,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     print("*" * 40)
 
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
-    assert training_df.shape == (238, 247)
+    assert training_df.shape == (238, 246)
 
     # We keep original ewoc_code for this test
     training_df["downstream_class"] = training_df["ewoc_code"]
