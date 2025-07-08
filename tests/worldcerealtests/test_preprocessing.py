@@ -79,6 +79,34 @@ def test_worldcereal_preprocessed_inputs_graph(SpatialExtent):
         assert expected == cube.flat_graph()
 
 
+def test_worldcereal_preprocessed_inputs_bap_graph(SpatialExtent):
+    """Test the worldcereal_preprocessed_inputs function with BAP compositing.
+    This is based on constructing the openEO graph for the job
+    that would run, without actually running it."""
+
+    temporal_extent = TemporalContext("2020-06-01", "2021-05-31")
+
+    cube = worldcereal_preprocessed_inputs(
+        connection=cdse_connection(),
+        backend_context=BackendContext(Backend.CDSE),
+        spatial_extent=SpatialExtent,
+        temporal_extent=temporal_extent,
+        fetch_type=FetchType.POLYGON,
+        s2_compositing_method="BAP",
+    )
+
+    # Ref file with processing graph
+    ref_graph = basedir / "testresources" / "preprocess_graph_BAP.json"
+
+    # uncomment to save current graph to the ref file
+    with open(ref_graph, "w") as f:
+        f.write(json.dumps(cube.flat_graph(), indent=4))
+
+    with open(ref_graph, "r") as f:
+        expected = json.load(f)
+        assert expected == cube.flat_graph()
+
+
 def test_worldcereal_preprocessed_inputs_graph_withslope():
     """This version has fetchtype.TILE and should include slope."""
 

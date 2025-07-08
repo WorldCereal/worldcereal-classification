@@ -106,6 +106,47 @@ def select_best_s1_orbit_direction(
     return orbit_direction
 
 
+def bap_compositing(
+    cube: DataCube,
+    spatial_extent: Union[GeoJSON, BoundingBoxExtent, str],
+    period: Union[str, list],
+) -> DataCube:
+    """Perfrom BAP compositing on the given datacube."""
+    from .utils_bap import (
+        aggregate_BAP_scores,
+        calculate_cloud_coverage_score,
+        calculate_date_score,
+        create_rank_mask,
+    )
+
+    if period != "month":
+        raise NotImplementedError(
+            "BAP compositing is currently only implemented for monthly periods."
+        )
+
+    cloud_mask = cube.band("S2-L2A-SCL_DILATED_MASK").add_dimension(
+        name="bands", label="score", type="bands"
+    )
+    scl = cube.band("S2-L2A-SCL").add_dimension(name="bands", label="SCL", type="bands")
+    coverage_score = calculate_cloud_coverage_score(cloud_mask, spatial_extent, scl)
+    date_score = calculate_date_score(scl)
+    dtc_score = cube.band("S2-L2A-DISTANCE-TO-CLOUD")
+
+    weights = [1, 0.8, 0.5]
+    score = aggregate_BAP_scores(dtc_score, date_score, coverage_score, weights)
+    score = score.mask(scl.band("SCL") == 0)
+
+    rank_mask = create_rank_mask(score)
+    cube = cube.mask(rank_mask)
+
+    if isinstance(period, str):
+        return cube.aggregate_temporal_period(
+            period=period, reducer="first", dimension="t"
+        )
+    elif isinstance(period, list):
+        return cube.aggregate_temporal(intervals=period, reducer="first", dimension="t")
+
+
 def raw_datacube_S2(
     connection: Connection,
     backend_context: BackendContext,
@@ -401,6 +442,7 @@ def worldcereal_preprocessed_inputs(
     s2_tile: Optional[str] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     target_epsg: Optional[int] = None,
+    s2_compositing_method: Literal["median", "BAP"] = "median",
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -412,34 +454,47 @@ def worldcereal_preprocessed_inputs(
         "dekad",
     ], 'Compositing window must be either "month" or "dekad"'
 
+    assert s2_compositing_method in [
+        "median",
+        "BAP",
+    ], 'S2 compositing method should be either "median" or "BAP"'
+
     # Extraction of S2 from GFMAP
+    s2_bands = [
+        "S2-L2A-B02",
+        "S2-L2A-B03",
+        "S2-L2A-B04",
+        "S2-L2A-B05",
+        "S2-L2A-B06",
+        "S2-L2A-B07",
+        "S2-L2A-B08",
+        "S2-L2A-B8A",
+        "S2-L2A-B11",
+        "S2-L2A-B12",
+    ]
     s2_data = raw_datacube_S2(
         connection=connection,
         backend_context=backend_context,
         temporal_extent=temporal_extent,
-        bands=[
-            "S2-L2A-B02",
-            "S2-L2A-B03",
-            "S2-L2A-B04",
-            "S2-L2A-B05",
-            "S2-L2A-B06",
-            "S2-L2A-B07",
-            "S2-L2A-B08",
-            "S2-L2A-B11",
-            "S2-L2A-B12",
-        ],
+        bands=s2_bands + ["S2-L2A-SCL"] if s2_compositing_method == "BAP" else s2_bands,
         fetch_type=fetch_type,
         filter_tile=s2_tile,
-        distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
-        additional_masks_flag=False,
-        apply_mask_flag=True,
+        distance_to_cloud_flag=False if s2_compositing_method == "median" else True,
+        additional_masks_flag=False if s2_compositing_method == "median" else True,
+        apply_mask_flag=True if s2_compositing_method == "median" else False,
         tile_size=tile_size,
     )
 
     if target_epsg is not None:
         s2_data = s2_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
-    s2_data = median_compositing(s2_data, period=compositing_window)
+    if s2_compositing_method == "median":
+        s2_data = median_compositing(s2_data, period=compositing_window)
+    else:
+        # BAP compositing
+        s2_data = bap_compositing(
+            s2_data, spatial_extent=spatial_extent, period=compositing_window
+        ).filter_bands(s2_bands)
 
     # Cast to uint16
     s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
