@@ -11,6 +11,8 @@ from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
 
+from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
+
 
 def query_public_extractions(
     bbox_poly: Polygon,
@@ -294,7 +296,9 @@ def month_diff(month1: int, month2: int) -> int:
     return (month2 - month1) % 12
 
 
-def get_best_valid_time(row: pd.Series):
+def get_best_valid_time(
+    row: pd.Series, buffer: int, num_timesteps: int
+) -> Union[pd.Timestamp, float]:
     """
     Determines the best valid time for a given row of data based on specified shift constraints.
 
@@ -312,32 +316,31 @@ def get_best_valid_time(row: pd.Series):
         - end_date: The end date of the allowed period
         - valid_month_shift_forward: Number of months to shift forward
         - valid_month_shift_backward: Number of months to shift backward
+    buffer : int
+        Buffer in months to apply when aligning available extractions with user-defined temporal extent.
+        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period.
+    num_timesteps : int
+        The number of timesteps accepted by the model.
+        This is used to define the middle of the user-defined period.
 
     Returns
     -------
     datetime or np.nan
         The best valid time after applying shifts, or np.nan if no valid time can be found.
         If both forward and backward shifts are valid, the choice depends on the relative
-        magnitude of the shifts compared to MIN_EDGE_BUFFER.
-
-    Notes
-    -----
-    The function uses MIN_EDGE_BUFFER and NUM_TIMESTEPS constants imported from
-    worldcereal.utils.timeseries to determine valid periods and time windows.
+        magnitude of the shifts compared to buffer.
     """
 
-    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
-
     def is_within_period(proposed_date, start_date, end_date):
-        return (proposed_date - pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date) & (
-            proposed_date + pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
+        return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
+            proposed_date + pd.DateOffset(months=buffer) <= end_date
         )
 
     def check_shift(proposed_date, valid_time, start_date, end_date):
         proposed_start_date = proposed_date - pd.DateOffset(
-            months=(NUM_TIMESTEPS // 2 - 1)
+            months=(num_timesteps // 2 - 1)
         )
-        proposed_end_date = proposed_date + pd.DateOffset(months=(NUM_TIMESTEPS // 2))
+        proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
         return (
             is_within_period(proposed_date, start_date, end_date)
             & (valid_time >= proposed_start_date)
@@ -372,7 +375,7 @@ def get_best_valid_time(row: pd.Series):
         return (
             proposed_valid_time_bwd
             if (row["valid_month_shift_backward"] - row["valid_month_shift_forward"])
-            <= MIN_EDGE_BUFFER
+            <= buffer
             else proposed_valid_time_fwd
         )
 
@@ -381,6 +384,7 @@ def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
     freq: Literal["month", "dekad"] = "month",
+    buffer: int = MIN_EDGE_BUFFER,
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a dataframe of extracted samples to align with a specified temporal context and frequency.
@@ -399,6 +403,9 @@ def process_extractions_df(
         within this temporal extent will be removed. Default is None (no temporal filtering).
     freq : Literal["month", "dekad"], default "month"
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
+    buffer : int, default MIN_EDGE_BUFFER (2)
+        Buffer in months to apply when aligning available extractions with user-defined temporal extent.
+        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period.
 
     Returns
     -------
@@ -488,7 +495,10 @@ def process_extractions_df(
             axis=1,
         )
         sample_dates["proposed_valid_time"] = sample_dates.apply(
-            lambda xx: get_best_valid_time(xx), axis=1
+            get_best_valid_time,
+            axis=1,
+            buffer=buffer,
+            num_timesteps=NUM_TIMESTEPS,
         )
 
         # remove invalid samples
