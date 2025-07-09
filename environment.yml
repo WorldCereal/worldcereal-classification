@@ -30,6 +30,7 @@ dependencies:
   - scipy
   - shapely=2.0.4
   - tqdm
+  - voila
   - pip:
     - duckdb==1.1.3
     - h3==4.1.0
