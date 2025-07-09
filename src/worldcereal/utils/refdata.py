@@ -28,7 +28,7 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with importlib.resources.open_text(croptype_mappings, "croptype_classes.json") as f:  # type: ignore
+    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
         CLASS_MAPPINGS = json.load(f)
 
     return CLASS_MAPPINGS
