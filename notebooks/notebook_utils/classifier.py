@@ -117,7 +117,7 @@ def train_classifier(
     training_dataframe: pd.DataFrame,
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
-    show_confusion_matrix: bool = False,
+    show_confusion_matrix: str = "relative",
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
     """Method to train a custom CatBoostClassifier on a training dataframe.
 
@@ -129,8 +129,11 @@ def train_classifier(
         class names to use, by default None
     balance_classes : bool, optional
         if True, class weights are used during training to balance the classes, by default False
-    show_confusion_matrix : bool, optional
-        if True, the confusion matrix is shown, by default False
+    show_confusion_matrix : str, optional
+        if 'absolute', the confusion matrix is shown as absolute values,
+        if 'relative', the confusion matrix is shown as relative values,
+        if 'none', no confusion matrix is shown,
+        by default 'relative'
 
     Returns
     -------
@@ -231,12 +234,15 @@ def train_classifier(
     report = classification_report(samples_test["downstream_class"], pred)
     cm = confusion_matrix(samples_test["downstream_class"], pred)
 
-    if show_confusion_matrix:
+    if show_confusion_matrix in ["absolute", "relative"]:
         labels = np.sort(training_dataframe["downstream_class"].unique())
 
-        # normalize CM
-        row_sums = cm.sum(axis=1, keepdims=True)
-        cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
+        if show_confusion_matrix == "relative":
+            # normalize CM
+            row_sums = cm.sum(axis=1, keepdims=True)
+            cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
+        else:
+            cm_normalized = cm
 
         font_size = 18
         fig, ax = plt.subplots(figsize=(12, 10))
@@ -256,6 +262,7 @@ def train_classifier(
         ax.set_xlabel("Predicted label", fontsize=font_size - 4)
         ax.set_ylabel("True label", fontsize=font_size - 4)
         ax.tick_params(axis="both", which="major", labelsize=font_size - 4)
+        fig.suptitle(f"Confusion Matrix ({show_confusion_matrix.capitalize()})")
         plt.tight_layout()
         plt.show()
 
