@@ -82,9 +82,22 @@ def plot_worldcereal_seasons(
     for name, dates in seasons.items():
         sos, eos = dates
 
+        # Calculate the center date of the season
+        # Handle year-crossing seasons
+        if sos > eos:  # Season crosses year boundary
+            # Add one year to end date for calculation
+            eos_adjusted = eos.replace(year=eos.year + 1)
+            center_date = sos + (eos_adjusted - sos) / 2
+            # If center falls in next year, adjust back
+            if center_date.year > sos.year:
+                center_date = center_date.replace(year=center_date.year - 1)
+        else:
+            center_date = sos + (eos - sos) / 2
+
         # get start and end month (decimals) for plotting
         start = get_month_decimal(sos)
         end = get_month_decimal(eos)
+        center = get_month_decimal(center_date)
 
         # add rectangle to plot
         if start < end:
@@ -99,7 +112,6 @@ def plot_worldcereal_seasons(
 
         # add labels to plot
         label_start = sos.strftime("%B %d")
-        label_end = eos.strftime("%B %d")
         plt.text(
             start - 0.2,
             idx + 0.65,
@@ -109,6 +121,7 @@ def plot_worldcereal_seasons(
             ha="left",
             va="center",
         )
+        label_end = eos.strftime("%B %d")
         plt.text(
             end + 0.2,
             idx + 0.65,
@@ -117,6 +130,17 @@ def plot_worldcereal_seasons(
             color="darkred",
             ha="right",
             va="center",
+        )
+        label_center = center_date.strftime("%B")
+        plt.text(
+            center,
+            idx + 1.3,
+            f"Center: {label_center}",
+            fontsize=8,
+            color="grey",
+            ha="center",
+            va="center",
+            weight="bold",
         )
 
         idx += 1
