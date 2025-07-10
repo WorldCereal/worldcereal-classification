@@ -14,11 +14,23 @@ class date_slider:
     The processing period will always start the first day of a month and end the last day of a month.
     """
 
-    def __init__(self, start_date=datetime(2017, 1, 1), end_date=datetime(2025, 5, 1)):
+    def __init__(
+        self,
+        start_date=datetime(2017, 1, 1),
+        end_date=datetime(2025, 5, 1),
+        show_year=True,
+        display_interval=4,
+        title="Select processing period:",
+    ):
+
+        self.show_year = show_year
 
         # Define the slider
         dates = pd.date_range(start_date, end_date, freq="MS")
-        options = [(date.strftime("%b %Y"), date) for date in dates]
+        if show_year:
+            options = [(date.strftime("%b %Y"), date) for date in dates]
+        else:
+            options = [(date.strftime("%b"), date) for date in dates]
         self.interval_slider = widgets.SelectionRangeSlider(
             options=options,
             index=(0, 11),  # Default to a 11-month interval
@@ -37,17 +49,34 @@ class date_slider:
         )
 
         # Define the HTML text widget for the selected range and focus time
-        initial_range = [
-            (pd.to_datetime(start_date)).strftime("%d %b %Y"),
-            (
-                pd.to_datetime(start_date)
-                + pd.DateOffset(months=12)
-                - timedelta(days=1)
-            ).strftime("%d %b %Y"),
-        ]
-        initial_focus_time = (
-            pd.to_datetime(start_date) + pd.DateOffset(months=6)
-        ).strftime("%b %Y")
+        if show_year:
+            initial_range = [
+                (pd.to_datetime(start_date)).strftime("%d %b %Y"),
+                (
+                    pd.to_datetime(start_date)
+                    + pd.DateOffset(months=12)
+                    - timedelta(days=1)
+                ).strftime("%d %b %Y"),
+            ]
+            initial_focus_time = (
+                pd.to_datetime(start_date) + pd.DateOffset(months=6)
+            ).strftime("%b %Y")
+        else:
+            # If not showing year, we only show the month
+            start_date = pd.to_datetime(start_date).replace(day=1)
+            initial_range = [
+                (pd.to_datetime(start_date)).strftime("%d %b"),
+                (
+                    pd.to_datetime(start_date)
+                    + pd.DateOffset(months=12)
+                    - timedelta(days=1)
+                ).strftime("%d %b"),
+            ]
+            initial_focus_time = (
+                pd.to_datetime(start_date) + pd.DateOffset(months=6)
+            ).strftime("%b")
+
+        # Create the HTML text widget to display the selected range and focus time
         self.html_text = widgets.HTML(
             value=f"<b>Selected range:</b> {initial_range[0]} - {initial_range[1]}<br><b>Season center:</b> {initial_focus_time}",
             placeholder="HTML placeholder",
@@ -97,17 +126,23 @@ class date_slider:
         """
 
         # # Generate ticks
+        frequency = f"{display_interval}MS"
         tick_dates = pd.date_range(
-            start_date, pd.to_datetime(end_date) + pd.DateOffset(months=1), freq="4MS"
+            start_date,
+            pd.to_datetime(end_date) + pd.DateOffset(months=1),
+            freq=frequency,
         )
-        tick_labels = [date.strftime("%b %Y") for date in tick_dates]
+        if show_year:
+            tick_labels = [date.strftime("%b %Y") for date in tick_dates]
+        else:
+            tick_labels = [date.strftime("%b ") for date in tick_dates]
         n_labels = len(tick_labels)
         ticks_html = ""
         for i, label in enumerate(tick_labels):
             position = (i / (n_labels - 1)) * 100  # Position as a percentage
             ticks_html += f"""
             <div class="tick-mark" style="left: {position}%; ">|</div>
-            <div class="tick-label" style="left: {position}%; ">{label.split()[0]}<br>{label.split()[1]}</div>
+            <div class="tick-label" style="left: {position}%; ">{label.split(" ")[0]}<br>{label.split(" ")[1]}</div>
             """
 
         # HTML container for tick marks and labels
@@ -133,10 +168,10 @@ class date_slider:
 
         # Add description widget
         descr_widget = widgets.HTML(
-            value="""
+            value=f"""
             <div style='text-align: center;'>
                 <div style='font-size: 20px; font-weight: bold;'>
-                    Position the slider to select your processing period:
+                    {title}
                 </div>
             </div>
             """
@@ -168,16 +203,26 @@ class date_slider:
             self.interval_slider.value = (start, end)
 
         # update the HTML text underneath the slider
-        range = [
-            (pd.to_datetime(start)).strftime("%d %b %Y"),
-            (
-                pd.to_datetime(start) + pd.DateOffset(months=12) - timedelta(days=1)
-            ).strftime("%d %b %Y"),
-        ]
-        focus_time = (start + pd.DateOffset(months=6)).strftime("%b %Y")
+        if self.show_year:
+            range = [
+                (pd.to_datetime(start)).strftime("%d %b %Y"),
+                (
+                    pd.to_datetime(start) + pd.DateOffset(months=12) - timedelta(days=1)
+                ).strftime("%d %b %Y"),
+            ]
+            focus_time = (start + pd.DateOffset(months=6)).strftime("%b %Y")
+        else:
+            range = [
+                (pd.to_datetime(start)).strftime("%d %b"),
+                (
+                    pd.to_datetime(start) + pd.DateOffset(months=12) - timedelta(days=1)
+                ).strftime("%d %b"),
+            ]
+            focus_time = (start + pd.DateOffset(months=6)).strftime("%b")
+        # Update the HTML text widget with the selected range and focus time
         self.html_text.value = f"<b>Selected range:</b> {range[0]} - {range[1]}<br><b>Season center:</b> {focus_time}"
 
-    def get_processing_period(self):
+    def get_selected_dates(self):
 
         start = pd.to_datetime(self.interval_slider.value[0])
         end = start + pd.DateOffset(months=12) - timedelta(days=1)
@@ -187,3 +232,30 @@ class date_slider:
         logger.info(f"Selected processing period: {start} to {end}")
 
         return TemporalContext(start, end)
+
+
+class season_slider(date_slider):
+    """Class that provides a slider for selecting a season.
+    The season is fixed in length, amounting to one year.
+    The season will always start the first day of a month and end the last day of a month.
+
+    Differences with date_slider:
+    -  we only show two years, starting from june and ending in june
+    -  we don't show a year label in the slider, only the month
+    """
+
+    def __init__(self):
+
+        # Set the start and end dates for the slider
+        # The slider will cover a period from June 2017 to June 2019
+        start_date = pd.to_datetime(("2017-07-01"))
+        end_date = pd.to_datetime(("2019-05-01"))
+
+        # Call the parent class constructor
+        super().__init__(
+            start_date=start_date,
+            end_date=end_date,
+            show_year=False,
+            display_interval=1,
+            title="Select season:",
+        )
