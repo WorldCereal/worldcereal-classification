@@ -125,6 +125,8 @@ class CropTypeParameters(BaseModel):
     classifier_parameters : ClassifierParameters
         Parameters for the classifier UDF. Will be serialized into a dictionnary
         and passed in the process graph.
+    mask_cropland : bool (default=True)
+        Whether or not to mask the cropland pixels before running crop type inference.
     save_mask : bool (default=False)
         Whether or not to save the cropland mask as an intermediate result.
     """
@@ -142,6 +144,7 @@ class CropTypeParameters(BaseModel):
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"  # NOQA
     )
+    mask_cropland: bool = Field(default=True)
     save_mask: bool = Field(default=False)
 
     @model_validator(mode="after")
@@ -155,6 +158,14 @@ class CropTypeParameters(BaseModel):
             raise ValidationError(
                 f"Classifier must be a subclass of ModelInference, got {self.classifier}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def check_mask_parameters(self):
+        """Validates the mask-related parameters."""
+        if not self.mask_cropland and self.save_mask:
+            raise ValidationError("Cannot save mask if mask_cropland is disabled.")
+        return self
 
 
 class PostprocessParameters(BaseModel):
