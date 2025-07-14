@@ -557,9 +557,7 @@ def clean_hierarchy_keys(hierarchy):
     return recursive_update_key(hierarchy)
 
 
-def apply_croptypepicker_to_df(
-    df, croptypepicker, other_label: str = "other_temporary_crops"
-):
+def apply_croptypepicker_to_df(df, croptypepicker, other_label: str = "other"):
     """Apply the selected crop types from the CropTypePicker to a DataFrame of samples
     Parameters
     ----------
@@ -569,7 +567,7 @@ def apply_croptypepicker_to_df(
         CropTypePicker object containing the selected crop types.
     other_label : str, optional
         Label to assign to samples that do not belong to the selected crop types.
-        By default "other_temporary_crops".
+        By default "other".
 
     Returns
     -------
@@ -590,7 +588,7 @@ def apply_croptypepicker_to_df(
     # Apply the mapping to the ewoc_code column
     df["downstream_class"] = df["ewoc_code"].map(label_mapping)
 
-    # Excluded crop types are assigned to "other_temporary_crops" class
-    df.loc[excluded.index, "downstream_class"] = "other_temporary_crops"
+    # Excluded crop types are assigned to "other" class
+    df.loc[excluded.index, "downstream_class"] = "other"
 
     return df
