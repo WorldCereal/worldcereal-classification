@@ -332,8 +332,8 @@ def get_best_valid_time(
     """
 
     def is_within_period(proposed_date, start_date, end_date):
-        return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
-            proposed_date + pd.DateOffset(months=buffer) <= end_date
+        return (proposed_date - pd.DateOffset(months=buffer) > start_date) & (
+            proposed_date + pd.DateOffset(months=buffer) < end_date
         )
 
     def check_shift(proposed_date, valid_time, start_date, end_date, buffer):
@@ -343,8 +343,8 @@ def get_best_valid_time(
         proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
         return (
             is_within_period(proposed_date, start_date, end_date)
-            & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
-            & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
+            & ((valid_time - pd.DateOffset(months=buffer)) > proposed_start_date)
+            & ((valid_time + pd.DateOffset(months=buffer)) < proposed_end_date)
         )
 
     valid_time = row["valid_time"]
