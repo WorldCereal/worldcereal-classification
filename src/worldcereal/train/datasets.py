@@ -429,12 +429,18 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                     seq: List[int] = valid_position.astype(int).tolist()
                 else:
                     seq = [int(x) for x in valid_position]
-                # one global jitter shift
-                if self.label_jitter > 0:
+                # Apply either jittering or label_window, but not both
+                if self.label_jitter > 0 and self.label_window > 0:
+                    apply_jitter = np.random.choice([True, False])
+                else:
+                    apply_jitter = self.label_jitter > 0
+
+                if apply_jitter:
+                    # one global jitter shift
                     shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
                     seq = [int(np.clip(p + shift, 0, T - 1)) for p in seq]
-                # one contiguous window around the min→max of seq
-                if self.label_window > 0:
+                elif self.label_window > 0:
+                    # one contiguous window around the min→max of seq
                     mn = min(seq)
                     mx = max(seq)
                     start = max(0, mn - self.label_window)
