@@ -18,7 +18,7 @@ from prometheo.predictors import (
 )
 from pyproj import Transformer
 from torch import nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, WeightedRandomSampler
 
 
 def get_class_weights(
@@ -479,6 +479,47 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             label[0, 0, valid_idx, 0] = classes_list.index(row_d["finetune_class"])
 
         return label
+
+    def get_balanced_sampler(
+        self,
+        method: str = "balanced",
+        clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
+        normalize: bool = True,
+        generator: Optional[Any] = None,
+        sampling_class: str = "finetune_class",
+    ) -> "WeightedRandomSampler":
+        """
+        Build a WeightedRandomSampler so that rare classes (from `balancing_class`)
+        are upsampled and common classes downsampled.
+        max_upsample:
+            maximum upsampling factor for the rarest class (e.g. 10 means
+            no class will be sampled >10× more than its frequency).
+        sampling_class:
+            column name in the dataframe to use for balancing.
+            Default is `finetune_class`, which is the class label
+            used in the training. `balancing_class` can be used as well.
+        """
+        # extract the sampling class (strings or ints)
+        bc_vals = self.dataframe[sampling_class].values
+
+        logger.info("Computing class weights ...")
+        class_weights = get_class_weights(
+            bc_vals, method, clip_range=clip_range, normalize=normalize
+        )
+        logger.info(f"Class weights: {class_weights}")
+
+        # per‐sample weight
+        sample_weights = np.ones_like(bc_vals).astype(np.float32)
+        for k, v in class_weights.items():
+            sample_weights[bc_vals == k] = v
+
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+            generator=generator,
+        )
+        return sampler
 
 
 def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
