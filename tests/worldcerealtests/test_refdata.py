@@ -22,6 +22,7 @@ def test_query_public_extractions():
 
 
 def test_get_best_valid_time():
+    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
     def process_test_case(test_case: pd.Series) -> pd.DataFrame:
         test_case_res = []
         for processing_period_middle_month in range(1, 13):
@@ -35,7 +36,7 @@ def test_get_best_valid_time():
                 test_case["true_valid_time_month"],
                 test_case["proposed_valid_time_month"],
             )
-            proposed_valid_time = get_best_valid_time(test_case)
+            proposed_valid_time = get_best_valid_time(test_case, buffer=MIN_EDGE_BUFFER, num_timesteps=NUM_TIMESTEPS)
             test_case_res.append([processing_period_middle_month, proposed_valid_time])
         return pd.DataFrame(
             test_case_res, columns=["proposed_valid_month", "resulting_valid_time"]
