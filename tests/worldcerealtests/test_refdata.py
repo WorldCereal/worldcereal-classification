@@ -75,14 +75,14 @@ def test_get_best_valid_time():
     # Asserts are valid for default MIN_EDGE_BUFFER and NUM_TIMESTEPS values
     # Assertions for test case 1
     assert (
-        test_case1_res[test_case1_res["proposed_valid_month"].isin([1, 2, 11, 12])][
-            "resulting_valid_time"
-        ]
+        test_case1_res[
+            test_case1_res["proposed_valid_month"].isin([1, 2, 3, 9, 10, 11, 12])
+        ]["resulting_valid_time"]
         .isna()
         .all()
     )
     assert (
-        test_case1_res[test_case1_res["proposed_valid_month"].isin(range(3, 11))][
+        test_case1_res[test_case1_res["proposed_valid_month"].isin(range(4, 9))][
             "resulting_valid_time"
         ]
         .notna()
@@ -91,14 +91,14 @@ def test_get_best_valid_time():
 
     # Assertions for test case 2
     assert (
-        test_case2_res[test_case2_res["proposed_valid_month"].isin([1, 2, 3, 11, 12])][
+        test_case2_res[~test_case2_res["proposed_valid_month"].isin([7, 8, 9])][
             "resulting_valid_time"
         ]
         .isna()
         .all()
     )
     assert (
-        test_case2_res[test_case2_res["proposed_valid_month"].isin(range(4, 11))][
+        test_case2_res[test_case2_res["proposed_valid_month"].isin([7, 8, 9])][
             "resulting_valid_time"
         ]
         .notna()
@@ -107,14 +107,14 @@ def test_get_best_valid_time():
 
     # Assertions for test case 3
     assert (
-        test_case3_res[
-            test_case3_res["proposed_valid_month"].isin([1, 2, 9, 10, 11, 12])
-        ]["resulting_valid_time"]
+        test_case3_res[~test_case3_res["proposed_valid_month"].isin([4, 5])][
+            "resulting_valid_time"
+        ]
         .isna()
         .all()
     )
     assert (
-        test_case3_res[test_case3_res["proposed_valid_month"].isin(range(3, 9))][
+        test_case3_res[test_case3_res["proposed_valid_month"].isin([4, 5])][
             "resulting_valid_time"
         ]
         .notna()
