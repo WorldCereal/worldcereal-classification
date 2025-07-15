@@ -378,6 +378,7 @@ def get_best_valid_time(
             <= buffer
             else proposed_valid_time_fwd
         )
+    return np.nan
 
 
 def process_extractions_df(
