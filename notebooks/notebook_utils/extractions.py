@@ -10,6 +10,7 @@ from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
 
+from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import (
     gdf_to_points,
@@ -19,13 +20,6 @@ from worldcereal.utils.refdata import (
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
-
-BANDS = {
-    "S2-L2A": ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B11", "B12"],
-    "S1-SIGMA0": ["VV", "VH"],
-    "DEM": ["slope", "elevation"],
-    "AGERA5": ["PRECIP", "TMEAN"],
-}
 
 NODATAVALUE = 65535
 
@@ -142,7 +136,7 @@ def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
     array = array.astype(np.float32)
 
     # No scaling for DEM bands
-    if bandname in BANDS["DEM"]:
+    if bandname in WORLDCEREAL_BANDS["DEM"]:
         pass
     # Divide by 10000 for S2 bands
     elif bandname.startswith("S2-L2A"):
@@ -220,12 +214,8 @@ def get_band_statistics(
 
     # Get the band statistics
     band_stats = {}
-    for sensor, bands in BANDS.items():
-        for band in bands:
-            if sensor == "DEM":
-                bandname = band
-            else:
-                bandname = f"{sensor}-{band}"
+    for source, bands in WORLDCEREAL_BANDS.items():
+        for bandname in bands:
             if bandname in extractions_gdf.columns:
                 # count percentage of nodata values
                 nodata_count = (extractions_gdf[bandname] == NODATAVALUE).sum()
@@ -297,7 +287,7 @@ def visualize_timeseries(
 
     # Check whether we have a valid band name
     supported_bands = [
-        f"{k}-{value}" for k, values in BANDS.items() for value in values
+        value for k, values in WORLDCEREAL_BANDS.items() for value in values
     ]
     supported_bands.append("NDVI")
     if band not in supported_bands:
