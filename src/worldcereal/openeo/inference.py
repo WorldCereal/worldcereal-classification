@@ -155,8 +155,13 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     arr = execute(
         inarr=arr,
         parameters=parameters,
-    )
-    return XarrayDataCube(arr)
+    ).transpose("bands", "y", "x")
+
+    cube = XarrayDataCube(arr)
+
+    udf_data.datacube_list = [cube]
+
+    return udf_data
 
 
 # Change band names, since the target labels are parameterized in the UDF
