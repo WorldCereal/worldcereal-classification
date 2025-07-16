@@ -102,6 +102,28 @@ def get_training_df(
     return final_df
 
 
+def remove_small_classes(df, min_samples_per_split=5):
+    # Remove classes with too few samples for stratification
+    # For stratified split, each class must have at least 2 samples for test split, and at least 2 for val split.
+    # By default we'll use a minimum of 5 per class for safety.
+
+    class_counts = df["finetune_class"].value_counts()
+    minor_classes = class_counts[class_counts < min_samples_per_split].index.tolist()
+    if minor_classes:
+        logger.warning(
+            f"The following classes have fewer than {min_samples_per_split} samples and will be removed for stratified splitting: {minor_classes}. "
+            f"Samples removed: {df[df['finetune_class'].isin(minor_classes)].shape[0]}"
+        )
+        df = df[~df["finetune_class"].isin(minor_classes)].copy()
+        # After removal, check again for any classes with too few samples
+        class_counts = df["finetune_class"].value_counts()
+        if (class_counts < min_samples_per_split).any():
+            logger.error(
+                "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
+            )
+    return df
+
+
 def get_training_dfs_from_parquet(
     parquet_files: Union[Union[Path, str], List[Union[Path, str]]],
     timestep_freq: Literal["month", "dekad"] = "month",
@@ -175,23 +197,7 @@ def get_training_dfs_from_parquet(
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
     # Remove classes with too few samples for stratification
-    # For stratified split, each class must have at least 2 samples for test split, and at least 2 for val split.
-    # We'll use a minimum of 5 per class for safety.
-    min_samples_per_split = 5
-    class_counts = df["finetune_class"].value_counts()
-    minor_classes = class_counts[class_counts < min_samples_per_split].index.tolist()
-    if minor_classes:
-        logger.warning(
-            f"The following classes have fewer than {min_samples_per_split} samples and will be removed for stratified splitting: {minor_classes}. "
-            f"Samples removed: {df[df['finetune_class'].isin(minor_classes)].shape[0]}"
-        )
-        df = df[~df["finetune_class"].isin(minor_classes)].copy()
-        # After removal, check again for any classes with too few samples
-        class_counts = df["finetune_class"].value_counts()
-        if (class_counts < min_samples_per_split).any():
-            logger.error(
-                "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
-            )
+    df = remove_small_classes(df)
 
     if val_samples_file is not None:
         logger.info(f"Controlled train/test split based on: {val_samples_file}")
@@ -208,11 +214,30 @@ def get_training_dfs_from_parquet(
         )
 
     # train_df, val_df = split_df(train_df, val_size=0.2)
+    # Remove classes with too few samples for stratification, now on trainval_df
+    trainval_df = remove_small_classes(trainval_df)
     train_df, val_df = train_test_split(
         trainval_df,
         test_size=0.2,
         random_state=42,
         stratify=trainval_df["finetune_class"],
     )
+
+    if val_samples_file:
+        # With controlled validation set it's possible that either
+        # the validation set has unique classes not present in training
+        # So we need to remove those classes in its totality
+        train_classes = set(train_df["finetune_class"].unique())
+        val_classes = set(val_df["finetune_class"].unique())
+        test_classes = set(test_df["finetune_class"].unique())
+        nontrainval_classes = test_classes - (train_classes | val_classes)
+
+        test_df = test_df[~test_df["finetune_class"].isin(nontrainval_classes)]
+
+        if len(nontrainval_classes) > 0:
+            logger.warning(
+                "Removed classes from test set because they "
+                f"do not occur train/val: {nontrainval_classes}"
+            )
 
     return train_df, val_df, test_df
