@@ -25,6 +25,7 @@ def main(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
+    check_existing_extractions: bool = False,
     image_name: Optional[str] = None,
     organization_id: Optional[int] = None,
 ) -> None:
@@ -62,6 +63,9 @@ def main(
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
+    check_existing_extractions : bool, optional
+        Check existing extractions in the STAC API before creating a job_dataframe,
+        by default False
     image_name : str, optional
         Specific openEO image name to use for the jobs, by default None
     organization_id : int, optional
@@ -106,7 +110,7 @@ def main(
         extract_value=extract_value,
         backend=backend,
         write_stac_api=write_stac_api,
-        check_existing_extractions=False,
+        check_existing_extractions=check_existing_extractions,
     )
 
     return
@@ -213,6 +217,7 @@ if __name__ == "__main__":
         extract_value=args.extract_value,
         backend=Backend.CDSE,
         write_stac_api=args.write_stac_api,
+        check_existing_extractions=args.check_existing_extractions,
         image_name=args.image_name,
         organization_id=args.organization_id,
     )
