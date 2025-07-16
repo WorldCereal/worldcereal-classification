@@ -281,11 +281,11 @@ def generate_output_path_patch(
 
 
 def load_dataframe(
-    df_path: Path, 
-    extract_value: int = 0, 
+    df_path: Path,
+    extract_value: int = 0,
     check_existing: bool = False,
     collection: Optional[ExtractionCollection] = None,
-    ) -> gpd.GeoDataFrame:
+) -> gpd.GeoDataFrame:
     """
     Load the input dataframe from the given path.
     Optionally filter the dataframe based on the `extract_value` and check
@@ -308,23 +308,25 @@ def load_dataframe(
         if collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
             ref_id = str(df_path).split("/")[-1].split(".")[0]
             pipeline_log.info(
-                "Checking existing samples in STAC API for ref_id %s, collection %s.", ref_id, collection
+                "Checking existing samples in STAC API for ref_id %s, collection %s.",
+                ref_id,
+                collection,
             )
             client = pystac_client.Client.open(STAC_ROOT_URL)
             samples_list = []
             stac_query = {"ref_id": {"eq": ref_id}}
-            
+
             if collection == "PATCH_SENTINEL1":
                 STAC_COLLECTION = "worldcereal_sentinel_1_patch_extractions"
             elif collection == "PATCH_SENTINEL2":
                 STAC_COLLECTION = "worldcereal_sentinel_2_patch_extractions"
             else:
-                raise ValueError(f"Collection {collection} is not supported for STAC check.")
-            
+                raise ValueError(
+                    f"Collection {collection} is not supported for STAC check."
+                )
+
             stac_search = client.search(
-                collections=[STAC_COLLECTION],
-                query=stac_query,
-                max_items=None
+                collections=[STAC_COLLECTION], query=stac_query, max_items=None
             )
             for item in stac_search.items():
                 sample_id = item.properties.get("sample_id")
@@ -339,7 +341,9 @@ def load_dataframe(
                 )
             else:
                 # should it be softer somehow and just continue to the next dataset if available?..
-                raise Exception(f"All samples already exist in STAC API for ref_id {ref_id}, collection {collection}. No samples to extract. Exiting.")
+                raise Exception(
+                    f"All samples already exist in STAC API for ref_id {ref_id}, collection {collection}. No samples to extract. Exiting."
+                )
         else:
             pipeline_log.warning(
                 "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL1 collections. ",
@@ -747,11 +751,11 @@ def _prepare_extraction_jobs(
     else:
         # Load the input dataframe and build the job dataframe
         samples_gdf = load_dataframe(
-            samples_df_path, 
-            extract_value, 
-            check_existing=check_existing_extractions, 
-            collection=collection
-            )
+            samples_df_path,
+            extract_value,
+            check_existing=check_existing_extractions,
+            collection=collection,
+        )
         samples_gdf["ref_id"] = ref_id
         pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
