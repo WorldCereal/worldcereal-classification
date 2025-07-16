@@ -12,7 +12,7 @@ from worldcereal.utils.refdata import (
 )
 
 LANDCOVER_KEY = "LANDCOVER10"
-CROPTYPE_KEY = "CROPTYPE26"
+CROPTYPE_KEY = "CROPTYPE27"
 
 
 def test_query_public_extractions():

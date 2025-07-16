@@ -18,7 +18,7 @@ from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
 LANDCOVER_KEY = "LANDCOVER10"
-CROPTYPE_KEY = "CROPTYPE26"
+CROPTYPE_KEY = "CROPTYPE27"
 
 
 class TestPrepareTrainingDatasets(unittest.TestCase):

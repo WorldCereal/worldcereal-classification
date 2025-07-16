@@ -13,6 +13,8 @@ from worldcereal.train.data import (
 )
 from worldcereal.utils.refdata import get_class_mappings
 
+LANDCOVER_KEY = "LANDCOVER10"
+
 
 def test_worldcerealtraindataset(WorldCerealExtractionsDF):
     """Test creation of WorldCerealTrainingDataset and data loading"""
@@ -59,7 +61,7 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
     # Use the actual prepare_training_df function with real data
     train_df, val_df, test_df = get_training_dfs_from_parquet(
         WorldCerealPrivateExtractionsPath,
-        finetune_classes="CROPLAND2",
+        finetune_classes=LANDCOVER_KEY,
         class_mappings=get_class_mappings(),
         debug=True,  # Use debug mode to limit processing time
     )
@@ -82,7 +84,7 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
 
     # Check that finetune_class values match expected CROPLAND2 classes
     assert all(
-        c in ["temporary_crops", "not_temporary_crops"]
+        c in ["temporary_crops", "grasslands"]
         for c in train_df["finetune_class"].unique()
     )
 
