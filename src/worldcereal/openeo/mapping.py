@@ -4,7 +4,9 @@ sub-module.
 """
 
 from typing import Optional
+from pathlib import Path
 
+import openeo
 from openeo import DataCube
 from openeo_gfmap import TemporalContext
 from openeo_gfmap.features.feature_extractor import apply_feature_extractor
@@ -60,14 +62,12 @@ def _cropland_map(
     )
 
     # Run model inference on features
-    parameters = cropland_parameters.classifier_parameters.model_dump(
-        exclude=["classifier"]
-    )
+    parameters = cropland_parameters.classifier_parameters.model_dump()
 
-    classes = apply_model_inference(
-        model_inference_class=cropland_parameters.classifier,
-        cube=features,
-        parameters=parameters,
+    udf = openeo.UDF.from_file(path=Path(__file__).resolve().parent / "inference.py", context=parameters)
+
+    classes = features.apply_neighborhood(
+        process=udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
@@ -145,14 +145,12 @@ def _croptype_map(
     )
 
     # Run model inference on features
-    parameters = croptype_parameters.classifier_parameters.model_dump(
-        exclude=["classifier"]
-    )
+    parameters = croptype_parameters.classifier_parameters.model_dump()
 
-    classes = apply_model_inference(
-        model_inference_class=croptype_parameters.classifier,
-        cube=features,
-        parameters=parameters,
+    udf = openeo.UDF.from_file(path=Path(__file__).resolve().parent / "inference.py", context=parameters)
+
+    classes = features.apply_neighborhood(
+        process=udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},

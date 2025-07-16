@@ -6,7 +6,6 @@ from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CropClassifier
 from worldcereal.openeo.postprocess import PostProcessor
 
 
@@ -83,7 +82,7 @@ class CropLandParameters(BaseModel):
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
         compile_presto=False,
     )
-    classifier: Type[ModelInference] = Field(default=CropClassifier)
+    # classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx"  # NOQA
     )
@@ -95,10 +94,10 @@ class CropLandParameters(BaseModel):
             raise ValidationError(
                 f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
             )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
+        # if not issubclass(self.classifier, ModelInference):
+        #     raise ValidationError(
+        #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+        #     )
 
 
 class CropTypeParameters(BaseModel):
@@ -135,7 +134,7 @@ class CropTypeParameters(BaseModel):
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
         compile_presto=False,
     )
-    classifier: Type[ModelInference] = Field(default=CropClassifier)
+    # classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"
     )
@@ -149,10 +148,10 @@ class CropTypeParameters(BaseModel):
             raise ValidationError(
                 f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
             )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
+        # if not issubclass(self.classifier, ModelInference):
+        #     raise ValidationError(
+        #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+        #     )
         return self
 
     @model_validator(mode="after")
