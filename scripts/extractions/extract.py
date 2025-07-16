@@ -106,6 +106,7 @@ def main(
         extract_value=extract_value,
         backend=backend,
         write_stac_api=write_stac_api,
+        check_existing_extractions=False,
     )
 
     return
@@ -176,6 +177,12 @@ if __name__ == "__main__":
         type=bool,
         default=False,
         help="Flag to write S1 and S2 patch extraction results to STAC API or not.",
+    )
+    parser.add_argument(
+        "--check_existing_extractions",
+        type=bool,
+        default=False,
+        help="Check existing extractions in the STAC API before creating a job_dataframe.",
     )
     parser.add_argument(
         "--image_name",
