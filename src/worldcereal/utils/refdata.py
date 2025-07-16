@@ -95,14 +95,21 @@ def map_classes(
     """
 
     df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
+    legend = get_legend().set_index("ewoc_code")
 
     # Check if all classes are present in the mapping dictionary
     existing_codes_list = set(df["ewoc_code"].astype(str).unique())
     # Compute codes that are missing in the mapping dictionary
     missing_codes = existing_codes_list - set(class_mappings[finetune_classes])
     if missing_codes:
+        missing_classes_count = {}
+        for code in list(missing_codes):
+            class_name = legend.loc[int(code)]["label_full"]
+            class_count = (df["ewoc_code"] == int(code)).sum()
+            missing_classes_count[f"{code} - {class_name}"] = class_count
+
         logger.warning(
-            f"Some classes are missing in the mapping dictionary and thus will be removed: {missing_codes}. "
+            f"Some classes are missing in the mapping dictionary and thus will be removed: {missing_classes_count}. "
             f"A total of {(df.ewoc_code.astype(str).isin(missing_codes)).sum()} samples will be removed from the dataframe."
         )
         df = df.loc[~df["ewoc_code"].astype(str).isin(missing_codes)].copy()
@@ -112,9 +119,7 @@ def map_classes(
     )
 
     # Will be used for balancing if the flag is set
-    df.loc[:, "balancing_class"] = df["ewoc_code"].map(
-        get_legend().set_index("ewoc_code")["sampling_label"]
-    )
+    df.loc[:, "balancing_class"] = df["ewoc_code"].map(legend["sampling_label"])
 
     return df
 
