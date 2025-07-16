@@ -17,6 +17,8 @@ from worldcereal.train.finetuning_utils import (
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
+LANDCOVER_KEY = "LANDCOVER10"
+CROPTYPE_KEY = "CROPTYPE26"
 
 
 class TestPrepareTrainingDatasets(unittest.TestCase):
@@ -41,7 +43,7 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
         self.train_df_binary, self.val_df_binary, self.test_df_binary = (
             get_training_dfs_from_parquet(
                 parquet_files,
-                finetune_classes="CROPLAND2",
+                finetune_classes=LANDCOVER_KEY,
                 class_mappings=CLASS_MAPPINGS,
                 debug=True,  # Limit processing for faster tests
             )
@@ -51,15 +53,15 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
         self.train_df_multiclass, self.val_df_multiclass, self.test_df_multiclass = (
             get_training_dfs_from_parquet(
                 parquet_files,
-                finetune_classes="CROPTYPE9",
+                finetune_classes=CROPTYPE_KEY,
                 class_mappings=CLASS_MAPPINGS,
                 debug=True,
             )
         )
 
         # Get the classes lists from the real mappings
-        self.binary_classes = list(set(CLASS_MAPPINGS["CROPLAND2"].values()))
-        self.multiclass_classes = list(set(CLASS_MAPPINGS["CROPTYPE9"].values()))
+        self.binary_classes = list(set(CLASS_MAPPINGS[LANDCOVER_KEY].values()))
+        self.multiclass_classes = list(set(CLASS_MAPPINGS[CROPTYPE_KEY].values()))
 
         # Filter multiclass classes to only those present in our data
         self.multiclass_classes = [
@@ -296,7 +298,7 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
         # Load real data in debug mode (limited number of files)
         _, _, test_df = get_training_dfs_from_parquet(
             parquet_files,
-            finetune_classes="CROPLAND2",
+            finetune_classes=LANDCOVER_KEY,
             class_mappings=CLASS_MAPPINGS,
             debug=True,
         )
@@ -304,7 +306,7 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
         self.test_df = test_df.head(3) if len(test_df) >= 3 else test_df
 
         # Get the binary classes from CROPLAND2
-        self.classes_list = list(set(CLASS_MAPPINGS["CROPLAND2"].values()))
+        self.classes_list = list(set(CLASS_MAPPINGS[LANDCOVER_KEY].values()))
 
         # Create datasets for testing
         self.binary_ds = WorldCerealLabelledDataset(
@@ -314,13 +316,13 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
         # For multiclass, use CROPTYPE9
         multiclass_df, _, _ = get_training_dfs_from_parquet(
             parquet_files,
-            finetune_classes="CROPTYPE9",
+            finetune_classes=CROPTYPE_KEY,
             class_mappings=CLASS_MAPPINGS,
             debug=True,
         )
         self.multiclass_df = multiclass_df.sample(20)
 
-        self.multiclass_classes = list(set(CLASS_MAPPINGS["CROPTYPE9"].values()))
+        self.multiclass_classes = list(set(CLASS_MAPPINGS[CROPTYPE_KEY].values()))
         # Filter to only classes that exist in our data
         self.multiclass_classes = [
             c

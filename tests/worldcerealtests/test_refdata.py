@@ -11,6 +11,9 @@ from worldcereal.utils.refdata import (
     query_public_extractions,
 )
 
+LANDCOVER_KEY = "LANDCOVER10"
+CROPTYPE_KEY = "CROPTYPE26"
+
 
 def test_query_public_extractions():
     """Unittest for querying public extractions."""
@@ -127,7 +130,7 @@ def test_map_classes(WorldCerealExtractionsDF):
     # class mapping for prometheo finetuning
     from worldcereal.utils.refdata import map_classes
 
-    map_classes(WorldCerealExtractionsDF)
+    map_classes(WorldCerealExtractionsDF, finetune_classes=CROPTYPE_KEY)
 
 
 class TestMapClasses(unittest.TestCase):
@@ -155,7 +158,7 @@ class TestMapClasses(unittest.TestCase):
     def test_map_classes_binary(self):
         """Test mapping classes in binary classification scenario."""
         # Use the real CROPLAND2 mapping which has binary classes (temporary_crops/not_temporary_crops)
-        result_df = map_classes(self.df, finetune_classes="CROPLAND2")
+        result_df = map_classes(self.df, finetune_classes=LANDCOVER_KEY)
 
         # Check that filter classes were removed
         self.assertEqual(len(result_df), 5)
@@ -164,8 +167,8 @@ class TestMapClasses(unittest.TestCase):
         self.assertEqual(result_df.iloc[0]["finetune_class"], "temporary_crops")
         self.assertEqual(result_df.iloc[1]["finetune_class"], "temporary_crops")
         self.assertEqual(result_df.iloc[2]["finetune_class"], "temporary_crops")
-        self.assertEqual(result_df.iloc[3]["finetune_class"], "not_temporary_crops")
-        self.assertEqual(result_df.iloc[4]["finetune_class"], "not_temporary_crops")
+        self.assertEqual(result_df.iloc[3]["finetune_class"], "grasslands")
+        self.assertEqual(result_df.iloc[4]["finetune_class"], "bare_sparsely_vegetated")
 
         # No one-hot columns should be created for binary case
         self.assertFalse(
@@ -181,15 +184,15 @@ class TestMapClasses(unittest.TestCase):
 
     def test_map_classes_multiclass(self):
         """Test mapping classes in multiclass scenario."""
-        result_df = map_classes(self.df, finetune_classes="CROPTYPE9")
+        result_df = map_classes(self.df, finetune_classes=CROPTYPE_KEY)
 
         # Check that filter classes were removed
         self.assertEqual(len(result_df), 3)
 
         # Check that classes match the expected ones
         for i, ewoc_code in enumerate([1101060000, 1101010000, 1106000032]):
-            if str(ewoc_code) in get_class_mappings()["CROPTYPE9"]:
-                expected_class = get_class_mappings()["CROPTYPE9"][str(ewoc_code)]
+            if str(ewoc_code) in get_class_mappings()[CROPTYPE_KEY]:
+                expected_class = get_class_mappings()[CROPTYPE_KEY][str(ewoc_code)]
                 self.assertEqual(result_df.iloc[i]["finetune_class"], expected_class)
 
     def test_map_classes_missing_codes(self):
@@ -200,7 +203,7 @@ class TestMapClasses(unittest.TestCase):
         df_with_missing.loc[len(df_with_missing)] = [missing_code, 45.8, 5.8]
 
         # Process the dataframe and check what happens
-        result_df = map_classes(df_with_missing, finetune_classes="CROPTYPE0")
+        result_df = map_classes(df_with_missing, finetune_classes=CROPTYPE_KEY)
 
         # Check that rows with missing codes were removed
         self.assertTrue(missing_code not in result_df["ewoc_code"].values)
