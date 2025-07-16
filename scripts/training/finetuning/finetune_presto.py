@@ -191,11 +191,7 @@ def main(args):
         num_workers=num_workers,
     )
     parameters = param_groups_lrd(model)
-    # Seems that higher learning rate together with sceduler converges more effectively
-    # TO DO: double-check and formalize this finding
-    # optimizer = AdamW(parameters, lr=hyperparams.lr)
     optimizer = AdamW(parameters, lr=1e-4)
-    # optimizer = AdamW(parameters, lr=0.01)
     scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
     # Setup dataloaders
