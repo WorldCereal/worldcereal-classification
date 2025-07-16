@@ -1,201 +1,104 @@
-from glob import glob
+#!/usr/bin/env python3
+import argparse
+from datetime import datetime
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Union
+from typing import Literal
 
-import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 from loguru import logger
 from prometheo.finetune import Hyperparams, run_finetuning
+from prometheo.models import Presto
 from prometheo.models.presto import param_groups_lrd
-from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
 from prometheo.predictors import NODATAVALUE
-from prometheo.utils import initialize_logging
-from sklearn.metrics import classification_report
+from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch import nn
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from worldcereal.train.datasets import WorldCerealLabelledDataset
-from worldcereal.utils.refdata import split_df
-from worldcereal.utils.timeseries import process_parquet
+# from worldcereal_in_season.datasets import MaskingStrategy
+from worldcereal.train.data import get_training_dfs_from_parquet
+from worldcereal.train.finetuning_utils import (
+    evaluate_finetuned_model,
+    prepare_training_datasets,
+)
+from worldcereal.utils.refdata import get_class_mappings
+
+CLASS_MAPPINGS = get_class_mappings()
 
 
-def prepare_training_df(
-    parquet_file: Union[Path, str],
-    val_samples_file: Optional[Union[Path, str]] = None,
-    debug: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    logger.info("Reading dataset")
-    files = sorted(glob(f"{parquet_file}/**/*.parquet"))
-
-    if debug:
-        logger.warning("Debug mode is enabled. Max 3 files will be read.")
-        files = files[:3]
-
-    df_list = []
-    for f in tqdm(files):
-        _data = pd.read_parquet(f, engine="fastparquet")
-        _ref_id = f.split("/")[-2].split("=")[-1]
-        _data["ref_id"] = _ref_id
-        _data_pivot = process_parquet(_data, freq="month")
-        _data_pivot.reset_index(inplace=True)
-        df_list.append(_data_pivot)
-    df = pd.concat(df_list)
-    df = df.fillna(NODATAVALUE)
-    del df_list
-
-    if val_samples_file is not None:
-        logger.info(f"Controlled train/test split based on: {val_samples_file}")
-        val_samples_df = pd.read_csv(val_samples_file)
-        train_df, test_df = split_df(
-            df, val_sample_ids=val_samples_df.sample_id.tolist()
+def get_parquet_file_list(timestep_freq: Literal["month", "dekad"] = "month"):
+    if timestep_freq == "month":
+        parquet_files = list(
+            Path(
+                "/projects/TAP/worldcereal/data/WORLDCEREAL_ALL_EXTRACTIONS/worldcereal_all_extractions.parquet"
+            ).rglob("*.parquet")
+        )
+    elif timestep_freq == "dekad":
+        raise NotImplementedError(
+            "Dekad parquet files are not yet implemented. Please use 'month' timestep frequency."
         )
     else:
-        logger.info("Random train/test split ...")
-        train_df, test_df = split_df(df, val_size=0.2)
-    train_df, val_df = split_df(train_df, val_size=0.2)
-
-    return train_df, val_df, test_df
-
-
-def prepare_training_datasets(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    augment: bool = True,
-    time_explicit: bool = False,
-) -> Tuple[
-    WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
-]:
-    train_ds = WorldCerealLabelledDataset(
-        train_df,
-        task_type="binary",
-        num_outputs=1,
-        time_explicit=time_explicit,
-        augment=augment,
-    )
-    val_ds = WorldCerealLabelledDataset(
-        val_df,
-        task_type="binary",
-        num_outputs=1,
-        time_explicit=time_explicit,
-        augment=False,
-    )
-    test_ds = WorldCerealLabelledDataset(
-        test_df,
-        task_type="binary",
-        num_outputs=1,
-        time_explicit=time_explicit,
-        augment=False,
-    )
-    return train_ds, val_ds, test_ds
-
-
-def evaluate_finetuned_model(
-    finetuned_model: PretrainedPrestoWrapper,
-    test_ds: WorldCerealLabelledDataset,
-    num_workers: int,
-    batch_size: int,
-    task_type: Literal["cropland", "croptype"] = "cropland",
-):
-    assert task_type in ["cropland", "croptype"]
-
-    # Put model in eval mode
-    finetuned_model.eval()
-
-    # Construct the dataloader
-    val_dl = DataLoader(
-        test_ds,
-        batch_size=batch_size,
-        shuffle=False,  # keep as False!
-        num_workers=num_workers,
-    )
-    assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
-
-    # Run the model on the test set
-    all_preds, all_targets = [], []
-
-    for batch in val_dl:
-        with torch.no_grad():
-            preds = finetuned_model(batch)
-
-            # Presto head does not contain an activation. Need to apply it here.
-            if task_type == "cropland":
-                preds = nn.functional.sigmoid(preds).cpu().numpy()
-            else:
-                preds = nn.functional.softmax(preds, dim=-1).cpu().numpy()
-
-            # Flatten predictions and targets
-            preds = preds.flatten()
-            targets = batch.label.float().numpy().flatten()
-
-            all_preds.append(preds)
-            all_targets.append(targets)
-
-    all_preds = np.concatenate(all_preds)
-    all_targets = np.concatenate(all_targets)
-
-    if task_type == "cropland":
-        # metrics_agg = "binary"
-        croptype_list = ["not_crop", "crop"]
-        all_targets = np.array(
-            ["crop" if xx > 0.5 else "not_crop" for xx in all_targets]
+        raise ValueError(
+            f"timestep_freq {timestep_freq} is not supported. Supported values are 'month' and 'dekad'."
         )
-        all_preds = np.array(["crop" if xx > 0.5 else "not_crop" for xx in all_preds])
-    else:
-        # metrics_agg = "macro"
-        raise NotImplementedError("Croptype evaluation not implemented yet")
 
-    results = classification_report(
-        all_targets,
-        all_preds,
-        labels=croptype_list,
-        output_dict=True,
-        zero_division=0,
-    )
-
-    results_df = pd.DataFrame(results).transpose().reset_index()
-    results_df.columns = pd.Index(
-        ["class", "precision", "recall", "f1-score", "support"]
-    )
-
-    return results_df
+    return parquet_files
 
 
-if __name__ == "__main__":
+def main(args):
+    """Main function to run the finetuning process."""
     # ------------------------------------------
     # Parameter settings (can become argparser)
     # ------------------------------------------
 
-    # Path to the training data
-    parquet_file = "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/worldcereal_all_extractions.parquet"
-    val_samples_file = "/home/vito/vtrichtk/git/worldcereal-classification/scripts/training/finetuning/cropland_random_generalization_test_split_samples.csv"
-    # val_samples_file = None  # If None, random split is used
+    experiment_tag = args.experiment_tag
+    timestep_freq = args.timestep_freq  # "month" or "dekad"
 
-    # Experiment settings
-    experiment_name = "presto-prometheo-cropland-finetune-run-1"
-    output_dir = "./presto-prometheo-cropland-finetune-run-1"
-    debug = False
-    augment = True
-    time_explicit = False
-    # balance = True  # Not implemented yet in the dataset
-    # train_masking = 0.25  # Not implemented yet in the dataset
-    # task_type = "cropland" # Not implemented yet in the dataset
-    # finetune_classes = "CROPTYPE0"  # Not implemented yet in the dataset
+    # Path to the training data
+    parquet_files = get_parquet_file_list(timestep_freq)
+    val_samples_file = args.val_samples_file  # If None, random split is used
+
+    # Most popular maps: LANDCOVER14, CROPTYPE9, CROPTYPE0, CROPLAND2
+    finetune_classes = args.finetune_classes
+    augment = args.augment
+    time_explicit = args.time_explicit
+    debug = args.debug
+    use_balancing = args.use_balancing  # If True, use class balancing for training
+
+    # ± timesteps to jitter true label pos, for time_explicit only; will only be set for training
+    label_jitter = args.label_jitter
+
+    # ± timesteps to expand around label pos (true or moved), for time_explicit only; will only be set for training
+    label_window = args.label_window
+
+    # # In-season masking parameters
+    # masking_strategy_train = args.masking_strategy_train
+    # masking_strategy_val = args.masking_strategy_val
+
+    # Experiment signature
+    timestamp_ind = datetime.now().strftime("%Y%m%d%H%M")
+
+    # # Update experiment name to include masking info
+    # if masking_strategy_train.mode == "random":
+    #     masking_info = f"random-masked-from-{masking_strategy_train.from_position}"
+    # elif masking_strategy_train.mode == "fixed":
+    #     masking_info = f"masked-from-{masking_strategy_train.from_position}"
+    # else:
+    #     masking_info = "no-masking"
+
+    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-{finetune_classes}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-run={timestamp_ind}"
+    output_dir = f"/projects/worldcereal/models/{experiment_name}"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Training parameters
-    pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96_corrected-mask.pt"
+    pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 100
-    batch_size = 512
-    patience = 5
-    num_workers = 16
+    batch_size = 1024
+    patience = 6
+    num_workers = 8
 
     # ------------------------------------------
-
-    # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Setup logging
     initialize_logging(
@@ -205,25 +108,80 @@ if __name__ == "__main__":
     )
 
     # Get the train/val/test dataframes
-    train_df, val_df, test_df = prepare_training_df(
-        parquet_file, val_samples_file, debug=debug
+    train_df, val_df, test_df = get_training_dfs_from_parquet(
+        parquet_files,
+        timestep_freq=timestep_freq,
+        finetune_classes=finetune_classes,
+        class_mappings=CLASS_MAPPINGS,
+        val_samples_file=val_samples_file,
+        debug=debug,
     )
 
-    # Construct training and validation datasets
+    logger.warning("Still applying a patch here ...")
+    train_df = train_df[train_df["available_timesteps"] >= 12]
+    val_df = val_df[val_df["available_timesteps"] >= 12]
+    test_df = test_df[test_df["available_timesteps"] >= 12]
+
+    train_df.to_parquet(Path(output_dir) / "train_df.parquet")
+    val_df.to_parquet(Path(output_dir) / "val_df.parquet")
+    test_df.to_parquet(Path(output_dir) / "test_df.parquet")
+
+    classes_list = list(sorted(set(CLASS_MAPPINGS[finetune_classes].values())))
+    classes_list = [
+        xx for xx in classes_list if xx in train_df["finetune_class"].unique()
+    ]
+    logger.info(f"classes_list: {classes_list}")
+    num_classes = train_df["finetune_class"].nunique()
+    if num_classes == 2:
+        task_type = "binary"
+        num_outputs = 1
+    elif num_classes > 2:
+        task_type = "multiclass"
+        num_outputs = num_classes
+    else:
+        raise ValueError(
+            f"Number of classes {num_classes} is not supported. "
+            f"Dataset contains the following classes: {train_df.finetune_class.unique()}."
+        )
+
+    # Use type casting to specify to mypy that task_type is a valid Literal value
+    task_type_literal: Literal["binary", "multiclass"] = task_type  # type: ignore
+
+    # Construct training and validation datasets with masking parameters
     train_ds, val_ds, test_ds = prepare_training_datasets(
-        train_df, val_df, test_df, augment=augment, time_explicit=time_explicit
+        train_df,
+        val_df,
+        test_df,
+        num_timesteps=12 if timestep_freq == "month" else 36,
+        timestep_freq=timestep_freq,
+        augment=augment,
+        time_explicit=time_explicit,
+        task_type=task_type_literal,
+        num_outputs=num_outputs,
+        classes_list=classes_list,
+        # masking_strategy_train=masking_strategy_train,
+        # masking_strategy_val=masking_strategy_val,
+        label_jitter=label_jitter,
+        label_window=label_window,
     )
 
     # Construct the finetuning model based on the pretrained model
-    model = PretrainedPrestoWrapper(
-        num_outputs=1,
+    model = Presto(
+        num_outputs=num_outputs,
         regression=False,
         pretrained_model_path=pretrained_model_path,
-    )
+    ).to(device)
 
-    # Define the loss function: with logits because no activation on output layer
-    # is applied in Presto.
-    loss_fn = nn.BCEWithLogitsLoss()
+    # Define the loss function based on the task type
+    if task_type == "binary":
+        loss_fn = nn.BCEWithLogitsLoss()
+    elif task_type == "multiclass":
+        loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+    else:
+        raise ValueError(
+            f"Task type {task_type} is not supported. "
+            f"Supported task types are 'binary' and 'multiclass'."
+        )
 
     # Set the parameters
     hyperparams = Hyperparams(
@@ -233,15 +191,46 @@ if __name__ == "__main__":
         num_workers=num_workers,
     )
     parameters = param_groups_lrd(model)
-    optimizer = AdamW(parameters, lr=hyperparams.lr)
+    # Seems that higher learning rate together with sceduler converges more effectively
+    # TO DO: double-check and formalize this finding
+    # optimizer = AdamW(parameters, lr=hyperparams.lr)
+    optimizer = AdamW(parameters, lr=1e-4)
+    # optimizer = AdamW(parameters, lr=0.01)
     scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
+
+    # Setup dataloaders
+    generator = torch.Generator()
+    generator.manual_seed(DEFAULT_SEED)
+
+    train_dl = DataLoader(
+        train_ds,
+        batch_size=hyperparams.batch_size,
+        shuffle=True if not use_balancing else None,
+        sampler=train_ds.get_balanced_sampler(
+            generator=generator,
+            sampling_class="finetune_class",
+            method="log",
+            clip_range=(0.2, 10),
+        )
+        if use_balancing
+        else None,
+        generator=generator if not use_balancing else None,
+        num_workers=hyperparams.num_workers,
+    )
+
+    val_dl = DataLoader(
+        val_ds,
+        batch_size=hyperparams.batch_size,
+        shuffle=False,
+        num_workers=hyperparams.num_workers,
+    )
 
     # Run the finetuning
     logger.info("Starting finetuning...")
     finetuned_model = run_finetuning(
         model=model,
-        train_ds=train_ds,
-        val_ds=val_ds,
+        train_dl=train_dl,
+        val_dl=val_dl,
         experiment_name=experiment_name,
         output_dir=output_dir,
         loss_fn=loss_fn,
@@ -253,12 +242,142 @@ if __name__ == "__main__":
 
     # Evaluate the finetuned model
     logger.info("Evaluating the finetuned model...")
-    eval_results = evaluate_finetuned_model(
-        finetuned_model, test_ds, num_workers, batch_size
+    eval_results, confusionmatrix, confusionmatrix_norm = evaluate_finetuned_model(
+        finetuned_model,
+        test_ds,
+        num_workers,
+        batch_size,
+        time_explicit=time_explicit,
+        classes_list=classes_list,
     )
+
+    # Adjust figure size based on label length
+    max_label_length = max(len(label) for label in classes_list)
+    per_label_size = 0.45  # Width/height in inches per label
+    label_length_factor = 0.1  # Additional size per character in the longest label
+
+    # Define minimum and maximum limits if desired
+    min_size = 6
+    max_size = 30
+
+    # Compute figure size dynamically
+    fig_size = min(
+        max(
+            len(classes_list) * per_label_size + max_label_length * label_length_factor,
+            min_size,
+        ),
+        max_size,
+    )
+
+    _, ax = plt.subplots(figsize=(fig_size, fig_size))
+    confusionmatrix.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
+    plt.tight_layout()
+    plt.savefig(str(Path(output_dir) / f"CM_{experiment_name}.png"))
+    plt.close()
+
+    _, ax = plt.subplots(figsize=(fig_size, fig_size))
+    confusionmatrix_norm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+    # Format the text annotations: keep 2 decimal places
+    for text in ax.texts:
+        val = float(text.get_text())
+        text.set_text(f"{val:.2f}")
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
+    plt.tight_layout()
+    plt.savefig(str(Path(output_dir) / f"CM_{experiment_name}_norm.png"))
+    plt.close()
+
     eval_results.to_csv(
         Path(output_dir) / f"results_{experiment_name}.csv", index=False
     )
     logger.info("Evaluation results:")
     logger.info("\n" + eval_results.to_string(index=False))
+
     logger.info("Finetuning completed!")
+
+
+def parse_args(arg_list=None):
+    parser = argparse.ArgumentParser(description="Train in-season crop type model")
+
+    # General setup
+    parser.add_argument("--experiment_tag", type=str, default="")
+    parser.add_argument(
+        "--timestep_freq", type=str, choices=["month", "dekad"], default="month"
+    )
+
+    # Data paths
+    parser.add_argument(
+        "--val_samples_file",
+        type=str,
+        default=None,
+        help="Path to a CSV with val sample IDs. If not set, a random split will be used.",
+    )
+
+    # Task setup
+    parser.add_argument("--finetune_classes", type=str, default="LANDCOVER14")
+    parser.add_argument("--augment", action="store_true")
+    parser.add_argument("--time_explicit", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--use_balancing", action="store_true")
+
+    # Label timing (for time_explicit only)
+    parser.add_argument("--label_jitter", type=int, default=0)
+    parser.add_argument("--label_window", type=int, default=0)
+
+    # # Masking strategy
+    # parser.add_argument(
+    #     "--masking_train_mode",
+    #     type=str,
+    #     choices=["none", "fixed", "random"],
+    #     default="random",
+    # )
+    # parser.add_argument("--masking_train_from", type=int, default=5)
+
+    # parser.add_argument(
+    #     "--masking_val_mode",
+    #     type=str,
+    #     choices=["none", "fixed", "random"],
+    #     default="fixed",
+    # )
+    # parser.add_argument("--masking_val_from", type=int, default=6)
+
+    args = parser.parse_args(arg_list)
+
+    # # Compose masking strategy objects
+    # args.masking_strategy_train = MaskingStrategy(
+    #     mode=args.masking_train_mode, from_position=args.masking_train_from
+    # )
+    # args.masking_strategy_val = MaskingStrategy(
+    #     mode=args.masking_val_mode, from_position=args.masking_val_from
+    # )
+
+    return args
+
+
+if __name__ == "__main__":
+    # manual_args = [
+    #     "--experiment_tag",
+    #     "debug-run",
+    #     "--timestep_freq",
+    #     "month",
+    #     "--time_explicit",
+    #     "--label_jitter",
+    #     "1",
+    #     "--augment",
+    #     "--finetune_classes",
+    #     "CROPTYPE20",  # LANDCOVER14
+    #     "--use_balancing",
+    #     "--debug",
+    #     # "--masking_train_mode",
+    #     # "random",
+    #     # "--masking_train_from",
+    #     # "15",
+    #     # "--masking_val_mode",
+    #     # "fixed",
+    #     # "--masking_val_from",
+    #     # "18",
+    # ]
+    manual_args = None
+
+    args = parse_args(manual_args)
+    main(args)
