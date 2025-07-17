@@ -185,3 +185,37 @@ def retrieve_worldcereal_seasons(
         plot_worldcereal_seasons(results, extent)
 
     return results
+
+
+def valid_time_distribution(df):
+
+    # Make sure the column is of datetime type
+    df["date"] = pd.to_datetime(df["valid_time"])
+
+    # Extract month names (e.g., 'January', 'February', etc.)
+    df["month"] = df["date"].dt.month_name()
+
+    # To preserve calendar order
+    month_order = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+
+    # Plotting the histogram
+    df["month"].value_counts().reindex(month_order).plot(kind="bar")
+    plt.title("Distribution of training data by month")
+    plt.xlabel("Month")
+    plt.ylabel("Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
