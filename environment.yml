@@ -19,6 +19,7 @@ dependencies:
   - numpy<2.0.0
   - openeo=0.35.0
   - pip
+  - plotly==6.2.0
   - pyarrow=16.1.0
   - pydantic=2.8.0
   - pystac=1.10.1
