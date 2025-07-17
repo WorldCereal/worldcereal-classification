@@ -11,7 +11,7 @@ from openeo_gfmap import TemporalContext
 from shapely import wkt
 from shapely.geometry import Polygon
 
-from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
+from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def query_public_extractions(
@@ -336,7 +336,7 @@ def get_best_valid_time(
             proposed_date + pd.DateOffset(months=buffer) <= end_date
         )
 
-    def check_shift(proposed_date, valid_time, start_date, end_date, buffer):
+    def check_shift(proposed_date, valid_time, start_date, end_date, buffer, num_timesteps):
         proposed_start_date = proposed_date - pd.DateOffset(
             months=(num_timesteps // 2 - 1)
         )
@@ -458,8 +458,12 @@ def process_extractions_df(
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
 
-        # sanity check to make sure freq is not something we still don't support in Presto
-        if freq not in ["month", "dekad"]:
+        # define num_timesteps based on frequency
+        if freq == "month":
+            num_timesteps = 12
+        elif freq == "dekad":
+            num_timesteps = 36
+        else:
             raise ValueError(
                 f"Unsupported frequency alias: {freq}. Please use 'month' or 'dekad'."
             )
@@ -499,7 +503,7 @@ def process_extractions_df(
             get_best_valid_time,
             axis=1,
             buffer=buffer,
-            num_timesteps=NUM_TIMESTEPS,
+            num_timesteps=num_timesteps,
         )
 
         # remove invalid samples
