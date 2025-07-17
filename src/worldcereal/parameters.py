@@ -1,11 +1,11 @@
 from enum import Enum
 from typing import Type
 
-from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
+# from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
+# from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
 from worldcereal.openeo.postprocess import PostProcessor
 
 
@@ -74,9 +74,9 @@ class CropLandParameters(BaseModel):
         and passed in the process graph.
     """
 
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
-    )
+    # feature_extractor: Type[PatchFeatureExtractor] = Field(
+    #     default=PrestoFeatureExtractor
+    # )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
@@ -87,13 +87,13 @@ class CropLandParameters(BaseModel):
         classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx"  # NOQA
     )
 
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
-            )
+    # @model_validator(mode="after")
+    # def check_udf_types(self):
+    #     """Validates the FeatureExtractor and Classifier classes."""
+    #     if not issubclass(self.feature_extractor, PatchFeatureExtractor):
+    #         raise ValidationError(
+    #             f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
+    #         )
         # if not issubclass(self.classifier, ModelInference):
         #     raise ValidationError(
         #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
@@ -126,9 +126,9 @@ class CropTypeParameters(BaseModel):
         Whether or not to save the cropland mask as an intermediate result.
     """
 
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
-    )
+    # feature_extractor: Type[PatchFeatureExtractor] = Field(
+    #     default=PrestoFeatureExtractor
+    # )
     feature_parameters: FeaturesParameters = FeaturesParameters(
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
@@ -141,18 +141,18 @@ class CropTypeParameters(BaseModel):
     mask_cropland: bool = Field(default=True)
     save_mask: bool = Field(default=False)
 
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
-            )
+    # @model_validator(mode="after")
+    # def check_udf_types(self):
+    #     """Validates the FeatureExtractor and Classifier classes."""
+    #     if not issubclass(self.feature_extractor, PatchFeatureExtractor):
+    #         raise ValidationError(
+    #             f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
+    #         )
         # if not issubclass(self.classifier, ModelInference):
         #     raise ValidationError(
         #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
         #     )
-        return self
+        # return self
 
     @model_validator(mode="after")
     def check_mask_parameters(self):
