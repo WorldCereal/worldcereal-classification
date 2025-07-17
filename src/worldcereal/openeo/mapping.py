@@ -9,7 +9,6 @@ from pathlib import Path
 import openeo
 from openeo import DataCube
 from openeo_gfmap import TemporalContext
-from openeo_gfmap.inference.model_inference import apply_model_inference
 from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 
 from worldcereal.parameters import (
@@ -225,18 +224,20 @@ def _postprocess(
     """
 
     # Run postprocessing on the raw classification output
-    # Note that this uses the `apply_model_inference` method even though
-    # it is not truly model inference
-    parameters = postprocess_parameters.model_dump(exclude=["postprocessor"])
+    parameters = postprocess_parameters.model_dump()
     parameters.update({"classifier_url": classifier_url})
 
-    postprocessed_classes = apply_model_inference(
-        model_inference_class=postprocess_parameters.postprocessor,
-        cube=classes,
-        parameters=parameters,
+
+    postprocess_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "postprocess.py",
+        context=parameters)
+
+    postprocessed_classes = classes.apply_neighborhood(
+        process=postprocess_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
+            {"dimension": "t", "value": "P1D"},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
