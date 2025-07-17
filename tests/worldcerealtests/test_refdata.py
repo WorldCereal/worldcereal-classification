@@ -168,7 +168,7 @@ class TestMapClasses(unittest.TestCase):
         self.assertEqual(result_df.iloc[1]["finetune_class"], "temporary_crops")
         self.assertEqual(result_df.iloc[2]["finetune_class"], "temporary_crops")
         self.assertEqual(result_df.iloc[3]["finetune_class"], "grasslands")
-        self.assertEqual(result_df.iloc[4]["finetune_class"], "bare_sparsely_vegetated")
+        self.assertEqual(result_df.iloc[4]["finetune_class"], "built_up")
 
         # No one-hot columns should be created for binary case
         self.assertFalse(
