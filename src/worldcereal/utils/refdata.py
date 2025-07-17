@@ -331,7 +331,7 @@ def get_best_valid_time(
         magnitude of the shifts compared to buffer.
     """
 
-    def is_within_period(proposed_date, start_date, end_date):
+    def is_within_period(proposed_date, start_date, end_date, buffer):
         return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
             proposed_date + pd.DateOffset(months=buffer) <= end_date
         )
@@ -342,7 +342,7 @@ def get_best_valid_time(
         )
         proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
         return (
-            is_within_period(proposed_date, start_date, end_date)
+            is_within_period(proposed_date, start_date, end_date, buffer)
             & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
             & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
         )
