@@ -342,6 +342,15 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
             self.test_df, task_type="binary", num_outputs=1, time_explicit=True
         )
 
+        # Create a multiclass time-explicit dataset
+        self.multiclass_time_explicit_ds = WorldCerealLabelledDataset(
+            self.multiclass_df,
+            task_type="multiclass",
+            num_outputs=len(self.multiclass_classes),
+            classes_list=self.multiclass_classes,
+            time_explicit=True,
+        )
+
         # Loading the pretrained model is slow and not necessary for most test runs
         # We'll conditionally load it only when needed
         self.model_loaded = False
@@ -447,6 +456,36 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
             num_workers=0,
             batch_size=1,
             time_explicit=True,
+        )
+
+        # Check results dataframe has expected structure
+        self.assertIsInstance(results_df, pd.DataFrame)
+        self.assertIn("macro avg", results_df["class"].values)
+        self.assertTrue("precision" in results_df.columns)
+        self.assertTrue("recall" in results_df.columns)
+        self.assertTrue("f1-score" in results_df.columns)
+        self.assertTrue("support" in results_df.columns)
+
+    def test_evaluate_multiclass_time_explicit_classification(self):
+        """Test evaluation for time-explicit multiclass classification."""
+        from prometheo.models.presto.single_file_presto import FinetuningHead
+        from prometheo.utils import device
+
+        self._load_model_if_needed()
+
+        self.model.head = FinetuningHead(
+            hidden_size=self.model.encoder.embedding_size,
+            num_outputs=len(self.multiclass_classes),
+            regression=False,
+        ).to(device)
+
+        results_df, _, _ = evaluate_finetuned_model(
+            self.model,
+            self.multiclass_time_explicit_ds,
+            num_workers=0,
+            batch_size=1,
+            time_explicit=True,
+            classes_list=self.multiclass_classes,
         )
 
         # Check results dataframe has expected structure

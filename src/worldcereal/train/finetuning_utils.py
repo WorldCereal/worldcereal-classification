@@ -249,7 +249,7 @@ def evaluate_finetuned_model(
 
                 preds = preds[targets != NODATAVALUE]
                 probs = probs[targets != NODATAVALUE]
-                probs_all = probs_all[targets[:, -1] != NODATAVALUE, :]
+                probs_all = probs_all[(targets != NODATAVALUE)[..., -1], :]
                 targets = targets[targets != NODATAVALUE]
 
                 if return_uncertainty:
