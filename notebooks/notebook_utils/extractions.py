@@ -293,6 +293,14 @@ def visualize_timeseries(
     if band not in supported_bands:
         raise ValueError(f"Band {band} not found in the extractions dataframe")
 
+    # Check whether we have sufficient data
+    if len(extractions_gdf) < nsamples:
+        logger.warning(
+            f"Not enough samples in the dataframe to visualize {nsamples} samples. "
+            f"Visualizing {len(extractions_gdf)} samples instead."
+        )
+        nsamples = len(extractions_gdf)
+
     # Sample the data
     if sample_ids is None:
         sample_ids = extractions_gdf["sample_id"].unique()
