@@ -578,9 +578,9 @@ def apply_croptypepicker_to_df(df, croptypepicker, other_label: str = "other"):
     if croptypepicker.croptypes.empty:
         raise ValueError("No crop types selected, cannot proceed.")
 
-    # Isolate all crop types that have NOT been selected
+    # Isolate all samples that have NOT been selected
     included = croptypepicker.croptypes.index.values
-    excluded = df[~df["ewoc_code"].isin(included)]
+    excluded_sample_ids = df[~df["ewoc_code"].isin(included)]["sample_id"].to_list()
 
     # Prepare a mapping dictionary from original labels (index) to new labels
     label_mapping = croptypepicker.croptypes["new_label"].to_dict()
@@ -588,7 +588,7 @@ def apply_croptypepicker_to_df(df, croptypepicker, other_label: str = "other"):
     # Apply the mapping to the ewoc_code column
     df["downstream_class"] = df["ewoc_code"].map(label_mapping)
 
-    # Excluded crop types are assigned to "other" class
-    df.loc[excluded.index, "downstream_class"] = "other"
+    # Excluded samples are assigned to "other" class
+    df.loc[df["sample_id"].isin(excluded_sample_ids), "downstream_class"] = "other"
 
     return df
