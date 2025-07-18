@@ -74,7 +74,7 @@ class CropTypePicker:
         self,
         ewoc_codes: Optional[List[int]] = None,
         sample_df: pd.DataFrame = None,
-        count_threshold: int = 100,
+        count_threshold: int = 0,
         expand: bool = False,
     ):
         """
@@ -91,8 +91,8 @@ class CropTypePicker:
             By default None.
         count_threshold : int, optional
             Minimum count threshold for a crop type to be included in the picker.
-            If a crop has a lower count, it will be aggregated to its parent.
-            By default 100.
+            If a crop has a lower count, it will not be displayed.
+            By default 0.
         expand : bool, optional
             Whether to expand the widget by default.
             By default False.
