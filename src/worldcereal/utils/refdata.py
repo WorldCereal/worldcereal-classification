@@ -296,8 +296,29 @@ def month_diff(month1: int, month2: int) -> int:
     return (month2 - month1) % 12
 
 
+def is_within_period(proposed_date, start_date, end_date, buffer):
+    return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
+        proposed_date + pd.DateOffset(months=buffer) <= end_date
+    )
+
+
+def check_shift(proposed_date, valid_time, start_date, end_date, buffer, num_timesteps):
+    proposed_start_date = proposed_date - pd.DateOffset(months=(num_timesteps // 2 - 1))
+    proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
+    return (
+        # checks that the middle of the proposed period is within the available extractions
+        is_within_period(proposed_date, start_date, end_date, MIN_EDGE_BUFFER)
+        # checks that the proposed period does not fall too far outside the available extractions
+        & (proposed_start_date + pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date)
+        & (proposed_end_date - pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date)
+        # checks that true valid_time is not too close to the edges of the proposed period
+        & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
+        & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
+    )
+
+
 def get_best_valid_time(
-    row: pd.Series, buffer: int, num_timesteps: int
+    row: pd.Series, valid_time_buffer: int, num_timesteps: int
 ) -> Union[pd.Timestamp, float]:
     """
     Determines the best valid time for a given row of data based on specified shift constraints.
@@ -316,10 +337,9 @@ def get_best_valid_time(
         - end_date: The end date of the allowed period
         - valid_month_shift_forward: Number of months to shift forward
         - valid_month_shift_backward: Number of months to shift backward
-    buffer : int
-        Temporal buffer in months, determining:
-            - how close we allow the true valid_time of the sample to be to the edge of the proposed processing period.
-            - the maximum number of months the processing period can extend outside the available extractions.
+    valid_time_buffer : int
+        Temporal buffer in months, determining how close we allow the true valid_time of the sample to be to the edge of the proposed processing period.
+
     num_timesteps : int
         The number of timesteps accepted by the model.
         This is used to define the middle of the user-defined period.
@@ -332,29 +352,19 @@ def get_best_valid_time(
         magnitude of the shifts compared to buffer.
     """
 
-    def is_within_period(proposed_date, start_date, end_date, buffer):
-        return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
-            proposed_date + pd.DateOffset(months=buffer) <= end_date
+    # Run a check on provided valid_time_buffer
+    if valid_time_buffer > num_timesteps // 2:
+        logger.warning(
+            f"The provided valid_time_buffer ({valid_time_buffer} months) is larger than half the number of timesteps in the processing period. "
+            f"Reducing valid_time_buffer to half the number of timesteps: {num_timesteps // 2} months"
+        )
+        valid_time_buffer = num_timesteps // 2
+    if valid_time_buffer < 0:
+        raise ValueError(
+            f"The provided valid_time_buffer ({valid_time_buffer} months) must be a non-negative integer."
         )
 
-    def check_shift(
-        proposed_date, valid_time, start_date, end_date, buffer, num_timesteps
-    ):
-        proposed_start_date = proposed_date - pd.DateOffset(
-            months=(num_timesteps // 2 - 1)
-        )
-        proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
-        return (
-            # checks that the middle of the proposed period is within the available extractions
-            is_within_period(proposed_date, start_date, end_date, buffer)
-            # checks that the proposed period does not fall too far outside the available extractions
-            & (proposed_start_date + pd.DateOffset(months=buffer) >= start_date)
-            & (proposed_end_date - pd.DateOffset(months=buffer) <= end_date)
-            # checks that true valid_time is not too close to the edges of the proposed period
-            & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
-            & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
-        )
-
+    # Extract necessary fields from the row
     valid_time = row["valid_time"]
     start_date = row["start_date"]
     end_date = row["end_date"]
@@ -367,10 +377,20 @@ def get_best_valid_time(
     )
 
     shift_forward_ok = check_shift(
-        proposed_valid_time_fwd, valid_time, start_date, end_date, buffer, num_timesteps
+        proposed_valid_time_fwd,
+        valid_time,
+        start_date,
+        end_date,
+        valid_time_buffer,
+        num_timesteps,
     )
     shift_backward_ok = check_shift(
-        proposed_valid_time_bwd, valid_time, start_date, end_date, buffer, num_timesteps
+        proposed_valid_time_bwd,
+        valid_time,
+        start_date,
+        end_date,
+        valid_time_buffer,
+        num_timesteps,
     )
 
     if not shift_forward_ok and not shift_backward_ok:
@@ -383,7 +403,7 @@ def get_best_valid_time(
         return (
             proposed_valid_time_bwd
             if (row["valid_month_shift_backward"] - row["valid_month_shift_forward"])
-            <= buffer
+            <= MIN_EDGE_BUFFER
             else proposed_valid_time_fwd
         )
     return np.nan
@@ -393,7 +413,7 @@ def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
     freq: Literal["month", "dekad"] = "month",
-    buffer: int = MIN_EDGE_BUFFER,
+    valid_time_buffer: int = MIN_EDGE_BUFFER,
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a dataframe of extracted samples to align with a specified temporal context and frequency.
@@ -412,11 +432,9 @@ def process_extractions_df(
         within this temporal extent will be removed. Default is None (no temporal filtering).
     freq : Literal["month", "dekad"], default "month"
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
-    buffer : int, default MIN_EDGE_BUFFER (2)
+    valid_time_buffer : int, default MIN_EDGE_BUFFER (2)
         Buffer in months to apply when aligning available extractions with user-defined temporal extent.
-        Determines:
-            - how close we allow the true valid_time of the sample to be to the edge of the processing period
-            - the maximum number of months the processing period can extend outside the available extractions
+        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period
 
     Returns
     -------
@@ -512,7 +530,7 @@ def process_extractions_df(
         sample_dates["proposed_valid_time"] = sample_dates.apply(
             get_best_valid_time,
             axis=1,
-            buffer=buffer,
+            edge_buffer=valid_time_buffer,
             num_timesteps=num_timesteps,
         )
 
