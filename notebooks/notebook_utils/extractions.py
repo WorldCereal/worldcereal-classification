@@ -446,7 +446,8 @@ def query_extractions(
 
     if len(all_crops) <= 1:
         logger.warning(
-            "Not enough crop types found in the extracted data to train a model."
+            "Not enough crop types found in the extracted data to train a model. "
+            "Expand your area of interest or add more reference data."
         )
 
     # Explictily drop column "feature_index" if it exists
