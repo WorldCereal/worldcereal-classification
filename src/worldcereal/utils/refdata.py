@@ -317,8 +317,9 @@ def get_best_valid_time(
         - valid_month_shift_forward: Number of months to shift forward
         - valid_month_shift_backward: Number of months to shift backward
     buffer : int
-        Buffer in months to apply when aligning available extractions with user-defined temporal extent.
-        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period.
+        Temporal buffer in months, determining:
+            - how close we allow the true valid_time of the sample to be to the edge of the proposed processing period.
+            - the maximum number of months the processing period can extend outside the available extractions.
     num_timesteps : int
         The number of timesteps accepted by the model.
         This is used to define the middle of the user-defined period.
@@ -413,7 +414,9 @@ def process_extractions_df(
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
     buffer : int, default MIN_EDGE_BUFFER (2)
         Buffer in months to apply when aligning available extractions with user-defined temporal extent.
-        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period.
+        Determines:
+            - how close we allow the true valid_time of the sample to be to the edge of the processing period
+            - the maximum number of months the processing period can extend outside the available extractions
 
     Returns
     -------
