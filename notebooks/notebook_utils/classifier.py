@@ -43,6 +43,10 @@ def compute_training_features(
     # Align the samples with the season of interest
     df = process_extractions_df(df, season, freq, valid_time_buffer)
 
+    # Create an attribute "downstream_class" that is a copy of "ewoc_code"
+    # for compatibility with presto computation
+    df["downstream_class"] = df["ewoc_code"].copy()
+
     # Now compute the Presto embeddings
     df = compute_presto_embeddings(
         df,
@@ -57,8 +61,14 @@ def compute_training_features(
     logger.info(
         f'Samples originating from {df["ref_id"].nunique()} unique reference datasets.'
     )
+
     logger.info("Distribution of samples across years:")
+    # extract year from ref_id
+    df["year"] = df["ref_id"].str.split("_").str[0].astype(int)
     logger.info(df.year.value_counts())
+
+    # Rename downstream_class to ewoc_code
+    df.rename(columns={"downstream_class": "ewoc_code"}, inplace=True)
     ncroptypes = df["ewoc_code"].nunique()
     logger.info(f"Number of crop types remaining: {ncroptypes}")
     if ncroptypes <= 1:
