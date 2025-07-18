@@ -433,6 +433,7 @@ def generate_map(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
+    target_epsg: Optional[int] = None,
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -462,6 +463,9 @@ def generate_map(
         Tile size to use for the data loading in OpenEO, by default 128.
     job_options: dict, optional
         Additional job options to pass to the OpenEO backend, by default None
+    target_epsg: Optional[int] = None
+        EPSG code to use for the output products. If not provided, the
+        default EPSG will be used.
 
     Returns
     -------
@@ -486,6 +490,7 @@ def generate_map(
         out_format=out_format,
         backend_context=backend_context,
         tile_size=tile_size,
+        target_epsg=target_epsg,
     )
 
     if output_dir is not None:

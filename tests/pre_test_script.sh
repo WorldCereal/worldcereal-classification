@@ -19,13 +19,13 @@ dnf install git -y
 #   pip install .
 # "
 
-# For now only presto-worldcereal as gfmap is up to date on pypi
+# For now only prometheo as gfmap is up to date on pypi
 dir=$(pwd)
-PRESTO_URL="https://github.com/WorldCereal/presto-worldcereal.git"
+PROMETHEO_URL="https://github.com/WorldCereal/prometheo.git"
 
 su - jenkins -c "cd $dir && \
   source venv310/bin/activate && \
-  git clone -b croptype $PRESTO_URL && \
-  cd presto-worldcereal || { echo 'Directory not found! Exiting...'; exit 1; } && \
+  git clone $PROMETHEO_URL && \
+  cd prometheo || { echo 'Directory not found! Exiting...'; exit 1; } && \
   pip install .
 "
