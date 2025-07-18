@@ -17,6 +17,7 @@ from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.utils.refdata import process_extractions_df
+from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def get_input(label):
@@ -31,6 +32,7 @@ def compute_training_features(
     df: pd.DataFrame,
     season: TemporalContext,
     freq: Literal["month", "dekad"] = "month",
+    valid_time_buffer: int = MIN_EDGE_BUFFER,
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
@@ -39,7 +41,7 @@ def compute_training_features(
 ) -> pd.DataFrame:
 
     # Align the samples with the season of interest
-    df = process_extractions_df(df, season, freq)
+    df = process_extractions_df(df, season, freq, valid_time_buffer)
 
     # Now compute the Presto embeddings
     df = compute_presto_embeddings(
@@ -51,7 +53,7 @@ def compute_training_features(
         repeats=repeats,
     )
 
-    # Report on contents of the dataframe here
+    # Report on contents of the resulting dataframe here
     logger.info(
         f'Samples originating from {df["ref_id"].nunique()} unique reference datasets.'
     )
