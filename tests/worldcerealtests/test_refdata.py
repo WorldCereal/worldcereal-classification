@@ -40,7 +40,9 @@ def test_get_best_valid_time():
                 test_case["proposed_valid_time_month"],
             )
             proposed_valid_time = get_best_valid_time(
-                test_case, buffer=MIN_EDGE_BUFFER, num_timesteps=NUM_TIMESTEPS
+                test_case,
+                valid_time_buffer=MIN_EDGE_BUFFER,
+                num_timesteps=NUM_TIMESTEPS,
             )
             test_case_res.append([processing_period_middle_month, proposed_valid_time])
         return pd.DataFrame(
