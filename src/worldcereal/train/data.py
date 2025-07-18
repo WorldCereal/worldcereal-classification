@@ -102,22 +102,22 @@ def get_training_df(
     return final_df
 
 
-def remove_small_classes(df, min_samples_per_split=5):
+def remove_small_classes(df, min_samples):
     # Remove classes with too few samples for stratification
     # For stratified split, each class must have at least 2 samples for test split, and at least 2 for val split.
     # By default we'll use a minimum of 5 per class for safety.
 
     class_counts = df["finetune_class"].value_counts()
-    minor_classes = class_counts[class_counts < min_samples_per_split].index.tolist()
+    minor_classes = class_counts[class_counts < min_samples].index.tolist()
     if minor_classes:
         logger.warning(
-            f"The following classes have fewer than {min_samples_per_split} samples and will be removed for stratified splitting: {minor_classes}. "
+            f"The following classes have fewer than {min_samples} samples and will be removed for stratified splitting: {minor_classes}. "
             f"Samples removed: {df[df['finetune_class'].isin(minor_classes)].shape[0]}"
         )
         df = df[~df["finetune_class"].isin(minor_classes)].copy()
         # After removal, check again for any classes with too few samples
         class_counts = df["finetune_class"].value_counts()
-        if (class_counts < min_samples_per_split).any():
+        if (class_counts < min_samples).any():
             logger.error(
                 "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
             )
@@ -197,7 +197,7 @@ def get_training_dfs_from_parquet(
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
     # Remove classes with too few samples for stratification
-    df = remove_small_classes(df)
+    df = remove_small_classes(df, min_samples=10)
 
     if val_samples_file is not None:
         logger.info(f"Controlled train/test split based on: {val_samples_file}")
@@ -215,7 +215,7 @@ def get_training_dfs_from_parquet(
 
     # train_df, val_df = split_df(train_df, val_size=0.2)
     # Remove classes with too few samples for stratification, now on trainval_df
-    trainval_df = remove_small_classes(trainval_df)
+    trainval_df = remove_small_classes(trainval_df, min_samples=5)
     train_df, val_df = train_test_split(
         trainval_df,
         test_size=0.2,
