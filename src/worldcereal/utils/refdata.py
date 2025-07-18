@@ -339,7 +339,9 @@ def get_best_valid_time(
     def check_shift(
         proposed_date, valid_time, start_date, end_date, buffer, num_timesteps
     ):
-        proposed_start_date = proposed_date - pd.DateOffset(months=(num_timesteps // 2 - 1))
+        proposed_start_date = proposed_date - pd.DateOffset(
+            months=(num_timesteps // 2 - 1)
+        )
         proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
         return (
             # checks that the middle of the proposed period is within the available extractions

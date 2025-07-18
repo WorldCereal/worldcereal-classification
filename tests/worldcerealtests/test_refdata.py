@@ -22,7 +22,9 @@ def test_query_public_extractions():
 
 
 def test_get_best_valid_time():
-    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
+    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+
+    NUM_TIMESTEPS = 12
 
     def process_test_case(test_case: pd.Series) -> pd.DataFrame:
         test_case_res = []
@@ -91,14 +93,14 @@ def test_get_best_valid_time():
 
     # Assertions for test case 2
     assert (
-        test_case2_res[~test_case2_res["proposed_valid_month"].isin([7, 8, 9])][
+        test_case2_res[~test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
             "resulting_valid_time"
         ]
         .isna()
         .all()
     )
     assert (
-        test_case2_res[test_case2_res["proposed_valid_month"].isin([7, 8, 9])][
+        test_case2_res[test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
             "resulting_valid_time"
         ]
         .notna()
@@ -107,14 +109,14 @@ def test_get_best_valid_time():
 
     # Assertions for test case 3
     assert (
-        test_case3_res[~test_case3_res["proposed_valid_month"].isin([4, 5])][
+        test_case3_res[~test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
             "resulting_valid_time"
         ]
         .isna()
         .all()
     )
     assert (
-        test_case3_res[test_case3_res["proposed_valid_month"].isin([4, 5])][
+        test_case3_res[test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
             "resulting_valid_time"
         ]
         .notna()
