@@ -530,7 +530,7 @@ def process_extractions_df(
         sample_dates["proposed_valid_time"] = sample_dates.apply(
             get_best_valid_time,
             axis=1,
-            edge_buffer=valid_time_buffer,
+            valid_time_buffer=valid_time_buffer,
             num_timesteps=num_timesteps,
         )
 
