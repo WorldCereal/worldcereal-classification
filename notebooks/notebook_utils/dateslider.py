@@ -229,7 +229,12 @@ class date_slider:
 
         start = start.strftime("%Y-%m-%d")
         end = end.strftime("%Y-%m-%d")
-        logger.info(f"Selected processing period: {start} to {end}")
+        if self.show_year:
+            logger.info(f"Selected period: {start} to {end}")
+        else:
+            start_month_day = pd.to_datetime(start).strftime("%d %b")
+            end_month_day = pd.to_datetime(end).strftime("%d %b")
+            logger.info(f"Selected period: {start_month_day} to {end_month_day}")
 
         return TemporalContext(start, end)
 
