@@ -57,7 +57,7 @@ class PrestoEmbeddingTrainer:
         num_workers: int = 8,
         modelversion: str = "001",
         detector: str = "cropland",
-        binary_target: str = None,
+        downstream_classes: dict = None,
     ):
         self.presto_model_path = Path(presto_model_path)
         self.data_dir = Path(data_dir)
@@ -68,8 +68,24 @@ class PrestoEmbeddingTrainer:
         self.num_workers = num_workers
         self.modelversion = modelversion
         self.detector = detector
-        self.binary_target = binary_target
-        self.is_binary = binary_target is not None
+        self.downstream_classes = downstream_classes
+
+        # Determine if binary classification based on downstream_classes
+        if self.downstream_classes is not None:
+            unique_downstream = set(self.downstream_classes.values())
+            if len(unique_downstream) == 2:
+                self.is_binary = True
+                logger.info(
+                    f"Detected binary classification from downstream_classes: {unique_downstream}"
+                )
+            else:
+                self.is_binary = False
+                logger.info(
+                    f"Detected multiclass classification from downstream_classes: {unique_downstream}"
+                )
+        else:
+            # Default case: no downstream mapping, will be determined later based on finetune_classes
+            self.is_binary = False
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -286,24 +302,26 @@ class PrestoEmbeddingTrainer:
         # Calculate class weights
         logger.info("Calculating class weights...")
         class_weights = get_class_weights(
-            trn_df["finetune_class"].values,
+            trn_df[self.target_column].values,
             method="log",
             clip_range=(0.2, 10),
             normalize=True,
         )
 
         # Apply sample weights
-        sample_weights = np.ones_like(trn_df["finetune_class"].values, dtype=np.float32)
+        sample_weights = np.ones_like(
+            trn_df[self.target_column].values, dtype=np.float32
+        )
         for k, v in class_weights.items():
-            sample_weights[trn_df["finetune_class"].values == k] = v
+            sample_weights[trn_df[self.target_column].values == k] = v
         trn_df["weight"] = sample_weights
         val_df["weight"] = 1.0  # Validation weights are uniform
         tst_df["weight"] = 1.0  # Test weights are uniform
 
-        # Add label column (same as finetune_class for compatibility)
-        trn_df["label"] = trn_df["finetune_class"]
-        val_df["label"] = val_df["finetune_class"]
-        tst_df["label"] = tst_df["finetune_class"]
+        # Add label column using target column
+        trn_df["label"] = trn_df[self.target_column]
+        val_df["label"] = val_df[self.target_column]
+        tst_df["label"] = tst_df[self.target_column]
 
         # Save class information to config
         self.config["classes"] = {
@@ -356,35 +374,82 @@ class PrestoEmbeddingTrainer:
         self.classes_list = sorted(trn_df["finetune_class"].unique())
         logger.info(f"Final classes: {self.classes_list}")
 
-        # Apply binary mapping if binary_target is specified
-        if self.is_binary:
-            logger.info(
-                f"Applying binary mapping with target class: {self.binary_target}"
+        # Apply downstream class mapping (default to identity mapping if not specified)
+        if self.downstream_classes is not None:
+            logger.info(f"Applying downstream class mapping: {self.downstream_classes}")
+
+            # Check that all finetune classes are covered in the mapping
+            missing_classes = set(self.classes_list) - set(
+                self.downstream_classes.keys()
             )
-            if self.binary_target not in self.classes_list:
+            if missing_classes:
                 raise ValueError(
-                    f"Binary target class '{self.binary_target}' not found in classes: {self.classes_list}"
+                    f"Downstream mapping missing for classes: {missing_classes}"
                 )
 
-            # Map target class to 1, all others to 0
-            trn_df["finetune_class"] = (
-                trn_df["finetune_class"] == self.binary_target
-            ).astype(int)
-            val_df["finetune_class"] = (
-                val_df["finetune_class"] == self.binary_target
-            ).astype(int)
-            tst_df["finetune_class"] = (
-                tst_df["finetune_class"] == self.binary_target
-            ).astype(int)
+            # Apply mapping to all dataframes
+            trn_df["downstream_class"] = trn_df["finetune_class"].map(
+                self.downstream_classes
+            )
+            val_df["downstream_class"] = val_df["finetune_class"].map(
+                self.downstream_classes
+            )
+            tst_df["downstream_class"] = tst_df["finetune_class"].map(
+                self.downstream_classes
+            )
 
-            # Update classes list for binary classification
-            self.classes_list = [0, 1]
+            # Update classes list to downstream classes
+            self.classes_list = sorted(trn_df["downstream_class"].unique())
+            logger.info(f"Classes after downstream mapping: {self.classes_list}")
+
+            # Set the target column for training
+            self.target_column = "downstream_class"
+        else:
+            # Default case: create identity mapping for finetune_classes
             logger.info(
-                f"Binary classes: {self.classes_list} (0: non-{self.binary_target}, 1: {self.binary_target})"
+                "No downstream_classes specified, using finetune_classes directly"
+            )
+            self.downstream_classes = {cls: cls for cls in self.classes_list}
+            trn_df["downstream_class"] = trn_df["finetune_class"]
+            val_df["downstream_class"] = val_df["finetune_class"]
+            tst_df["downstream_class"] = tst_df["finetune_class"]
+            logger.info(f"Using classes: {self.classes_list}")
+
+            # Set the target column for training
+            self.target_column = "downstream_class"
+
+        # Determine if binary classification based on final classes
+        if len(self.classes_list) == 2:
+            self.is_binary = True
+            logger.info(
+                f"Binary classification detected with classes: {self.classes_list}"
+            )
+
+            # If binary classification with "other" class, ensure proper ordering
+            if "other" in self.classes_list:
+                target_class = [cls for cls in self.classes_list if cls != "other"][0]
+                # Ensure "other" is first (index 0) and target class is second (index 1)
+                self.classes_list = ["other", target_class]
+                logger.info(
+                    f"Binary classes reordered: {self.classes_list} (other=0, {target_class}=1)"
+                )
+
+                # Save target class name for reference
+                self.target_class_name = target_class
+        else:
+            self.is_binary = False
+            logger.info(
+                f"Multiclass classification with {len(self.classes_list)} classes: {self.classes_list}"
             )
 
         # Prepare data
         trn_df, val_df, tst_df = self._prepare_training_data(trn_df, val_df, tst_df)
+
+        # Update config with final class information
+        self.config["final_classes"] = self.classes_list
+        if hasattr(self, "target_class_name"):
+            self.config["target_class_name"] = self.target_class_name
+        self.save_config()
 
         # Save processed data
         logger.info("Saving processed data...")
@@ -505,8 +570,9 @@ class PrestoEmbeddingTrainer:
         metrics = {}
 
         if len(self.classes_list) == 2:
-            # Binary classification
+            # Binary classification - use the second class as positive label
             pos_label = self.classes_list[1]
+
             metrics["OA"] = round(accuracy_score(true_labels, preds), 3)
             metrics["F1"] = round(f1_score(true_labels, preds, pos_label=pos_label), 3)
             metrics["Precision"] = round(
@@ -553,9 +619,10 @@ class PrestoEmbeddingTrainer:
             "num_workers": self.num_workers,
             "modelversion": self.modelversion,
             "detector": self.detector,
-            "binary_target": self.binary_target,
+            "downstream_classes": self.downstream_classes,
             "is_binary": self.is_binary,
         }
+
         self.save_config()
 
     def save_config(self) -> None:
@@ -634,10 +701,10 @@ def parse_args() -> argparse.Namespace:
         help="Type of detector (cropland, croptype, etc.)",
     )
     parser.add_argument(
-        "--binary_target",
+        "--downstream_classes",
         type=str,
         default=None,
-        help="Target class for binary classification. If specified, this class will be mapped to 1 and all others to 0.",
+        help='JSON string mapping finetune_classes to downstream classes. Example: \'{"class1": "target", "class2": "non_target"}\'. If not specified, finetune_classes are used directly. If resulting classes are binary, binary mode is automatically enabled.',
     )
     return parser.parse_args()
 
@@ -658,21 +725,38 @@ def main() -> None:
                 self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930.pt"
                 self.data_dir = "/projects/worldcereal/models/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930/"
                 self.output_dir = "./CROPLAND2"
-                self.finetune_classes = "CROPLAND2"
+                self.finetune_classes = "LANDCOVER10"
                 self.timestep_freq = "month"
                 self.batch_size = 1024
                 self.num_workers = 8
                 self.modelversion = "001-debug"
                 self.detector = "temporary-crops"
-                self.binary_target = (
-                    "temporary_crops"  # or None for multiclass on finetune_classes
-                )
+                self.downstream_classes = {
+                    "temporary_crops": "cropland",
+                    "temporary_grasses": "other",
+                    "bare_sparsely_vegetated": "other",
+                    "permanent_crops": "other",
+                    "grasslands": "other",
+                    "wetlands": "other",
+                    "shrubland": "other",
+                    "trees": "other",
+                    "built_up": "other",
+                    "water": "other",
+                }
 
         args = ManualArgs()
         logger.info("Using manual configuration for debug mode")
     else:
         args = parse_args()
         logger.info("Using command line arguments")
+
+        # Parse downstream_classes JSON string if provided
+        if args.downstream_classes is not None:
+            try:
+                args.downstream_classes = json.loads(args.downstream_classes)
+                logger.info(f"Parsed downstream_classes: {args.downstream_classes}")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON for downstream_classes: {e}")
 
     # Plot without display
     plt.switch_backend("Agg")
@@ -688,7 +772,7 @@ def main() -> None:
         num_workers=args.num_workers,
         modelversion=args.modelversion,
         detector=args.detector,
-        binary_target=args.binary_target,
+        downstream_classes=args.downstream_classes,
     )
 
     # Create initial config
