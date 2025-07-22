@@ -305,7 +305,11 @@ def load_dataframe(
         df = gpd.read_file(df_path, filters=filters)
 
     if check_existing:
-        if collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
+        if collection is None:
+            pipeline_log.warning(
+                "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections, but collection is None."
+            )
+        elif collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
             ref_id = str(df_path).split("/")[-1].split(".")[0]
             pipeline_log.info(
                 "Checking existing samples in STAC API for ref_id %s, collection %s.",
@@ -346,7 +350,7 @@ def load_dataframe(
                 )
         else:
             pipeline_log.warning(
-                "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL1 collections. ",
+                "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections. ",
                 "Collection %s is not supported. Skipping STAC check.",
                 collection,
             )
