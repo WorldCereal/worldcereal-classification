@@ -139,14 +139,14 @@ def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
     if bandname in WORLDCEREAL_BANDS["DEM"]:
         pass
     # Divide by 10000 for S2 bands
-    elif bandname.startswith("S2-L2A"):
+    elif bandname in WORLDCEREAL_BANDS["SENTINEL2"]:
         array[idx_valid] = array[idx_valid] / 10000
     # Convert to dB for S1 bands
-    elif bandname.startswith("S1-SIGMA0"):
+    elif bandname in WORLDCEREAL_BANDS["SENTINEL1"]:
         idx_valid = idx_valid & (array > 0)
         array[idx_valid] = 20 * np.log10(array[idx_valid]) - 83
     # Scale meteo bands by factor 100
-    elif bandname.startswith("AGERA5"):
+    elif bandname in WORLDCEREAL_BANDS["METEO"]:
         array[idx_valid] = array[idx_valid] / 100
     else:
         raise ValueError(f"Unsupported band name {bandname}")
