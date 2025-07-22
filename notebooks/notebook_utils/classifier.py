@@ -21,6 +21,7 @@ from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def get_input(label):
+    """Get user input as short string without spaces."""
     while True:
         modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
         if " " not in modelname:
@@ -39,6 +40,41 @@ def compute_training_features(
     mask_ratio: float = 0.30,
     repeats: int = 1,
 ) -> pd.DataFrame:
+    """Compute features for training a crop classification model.
+    This function processes the time series in the input dataframe to align
+    them with the specified temporal context (season) and computes
+    Presto embeddings based on the extracted time series.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing the training data.
+    season : TemporalContext
+        Temporal context defining the season of interest.
+    freq : Literal["month", "dekad"], optional
+        Frequency of the data, by default "month".
+    valid_time_buffer : int, optional
+        Buffer in months to apply when aligning available extractions
+        with user-defined temporal extent.
+        Determines how close we allow the true valid_time of the sample
+        to be to the edge of the processing period, by default MIN_EDGE_BUFFER.
+    batch_size : int, optional
+        Batch size for processing, by default 256.
+    task_type : str, optional
+        Type of task (e.g., "croptype"), by default "croptype".
+    augment : bool, optional
+        If True, temporal jittering is enabled, by default True.
+    mask_ratio : float, optional
+        If > 0, inputs are randomly masked before computing Presto embeddings, by default 0.30
+    repeats : int, optional
+        Number of times to repeat each sample, by default 1.
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe containing the computed 128 Presto embeddings,
+        along with ewoc_code (crop type label).
+    """
 
     # Align the samples with the season of interest
     df = process_extractions_df(df, season, freq, valid_time_buffer)
@@ -171,7 +207,7 @@ def train_classifier(
     training_dataframe: pd.DataFrame,
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
-    show_confusion_matrix: str = "relative",
+    show_confusion_matrix: Optional[Literal["absolute", "relative"]] = "relative",
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
     """Method to train a custom CatBoostClassifier on a training dataframe.
 
@@ -183,10 +219,10 @@ def train_classifier(
         class names to use, by default None
     balance_classes : bool, optional
         if True, class weights are used during training to balance the classes, by default False
-    show_confusion_matrix : str, optional
+    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
         if 'absolute', the confusion matrix is shown as absolute values,
         if 'relative', the confusion matrix is shown as relative values,
-        if 'none', no confusion matrix is shown,
+        if None, no confusion matrix is shown,
         by default 'relative'
 
     Returns
@@ -288,7 +324,11 @@ def train_classifier(
     report = classification_report(samples_test["downstream_class"], pred)
     cm = confusion_matrix(samples_test["downstream_class"], pred)
 
-    if show_confusion_matrix in ["absolute", "relative"]:
+    # Show confusion matrix if requested
+    if show_confusion_matrix is not None:
+
+        assert show_confusion_matrix in ["absolute", "relative"]
+
         labels = np.sort(training_dataframe["downstream_class"].unique())
 
         if show_confusion_matrix == "relative":
