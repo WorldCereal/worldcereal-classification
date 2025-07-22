@@ -10,6 +10,7 @@ from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
 
+from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import (
     gdf_to_points,
@@ -19,13 +20,6 @@ from worldcereal.utils.refdata import (
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
-
-BANDS = {
-    "S2-L2A": ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B11", "B12"],
-    "S1-SIGMA0": ["VV", "VH"],
-    "DEM": ["slope", "elevation"],
-    "AGERA5": ["PRECIP", "TMEAN"],
-}
 
 NODATAVALUE = 65535
 
@@ -142,17 +136,17 @@ def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
     array = array.astype(np.float32)
 
     # No scaling for DEM bands
-    if bandname in BANDS["DEM"]:
+    if bandname in WORLDCEREAL_BANDS["DEM"]:
         pass
     # Divide by 10000 for S2 bands
-    elif bandname.startswith("S2-L2A"):
+    elif bandname in WORLDCEREAL_BANDS["SENTINEL2"]:
         array[idx_valid] = array[idx_valid] / 10000
     # Convert to dB for S1 bands
-    elif bandname.startswith("S1-SIGMA0"):
+    elif bandname in WORLDCEREAL_BANDS["SENTINEL1"]:
         idx_valid = idx_valid & (array > 0)
         array[idx_valid] = 20 * np.log10(array[idx_valid]) - 83
     # Scale meteo bands by factor 100
-    elif bandname.startswith("AGERA5"):
+    elif bandname in WORLDCEREAL_BANDS["METEO"]:
         array[idx_valid] = array[idx_valid] / 100
     else:
         raise ValueError(f"Unsupported band name {bandname}")
@@ -220,16 +214,25 @@ def get_band_statistics(
 
     # Get the band statistics
     band_stats = {}
-    for sensor, bands in BANDS.items():
-        for band in bands:
-            if sensor == "DEM":
-                bandname = band
-            else:
-                bandname = f"{sensor}-{band}"
+    for source, bands in WORLDCEREAL_BANDS.items():
+        for bandname in bands:
             if bandname in extractions_gdf.columns:
                 # count percentage of nodata values
                 nodata_count = (extractions_gdf[bandname] == NODATAVALUE).sum()
                 nodata_percentage = nodata_count / len(extractions_gdf) * 100
+                # Treat missing bands
+                if nodata_percentage == 100:
+                    logger.warning(
+                        f"Band {bandname} has no valid data in the extractions dataframe."
+                    )
+                    band_stats[bandname] = {
+                        "%_nodata": "100.00",
+                        "min": "N/A",
+                        "max": "N/A",
+                        "mean": "N/A",
+                        "std": "N/A",
+                    }
+                    continue
                 # Apply scaling
                 scaled_values = _apply_band_scaling(
                     extractions_gdf[bandname].values, bandname
@@ -297,11 +300,19 @@ def visualize_timeseries(
 
     # Check whether we have a valid band name
     supported_bands = [
-        f"{k}-{value}" for k, values in BANDS.items() for value in values
+        value for k, values in WORLDCEREAL_BANDS.items() for value in values
     ]
     supported_bands.append("NDVI")
     if band not in supported_bands:
         raise ValueError(f"Band {band} not found in the extractions dataframe")
+
+    # Check whether we have sufficient data
+    if len(extractions_gdf) < nsamples:
+        logger.warning(
+            f"Not enough samples in the dataframe to visualize {nsamples} samples. "
+            f"Visualizing {len(extractions_gdf)} samples instead."
+        )
+        nsamples = len(extractions_gdf)
 
     # Sample the data
     if sample_ids is None:
@@ -448,7 +459,8 @@ def query_extractions(
 
     if len(all_crops) <= 1:
         logger.warning(
-            "Not enough crop types found in the extracted data to train a model."
+            "Not enough crop types found in the extracted data to train a model. "
+            "Expand your area of interest or add more reference data."
         )
 
     # Explictily drop column "feature_index" if it exists

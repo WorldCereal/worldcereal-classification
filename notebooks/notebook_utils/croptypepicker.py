@@ -74,7 +74,7 @@ class CropTypePicker:
         self,
         ewoc_codes: Optional[List[int]] = None,
         sample_df: pd.DataFrame = None,
-        count_threshold: int = 100,
+        count_threshold: int = 0,
         expand: bool = False,
     ):
         """
@@ -91,8 +91,8 @@ class CropTypePicker:
             By default None.
         count_threshold : int, optional
             Minimum count threshold for a crop type to be included in the picker.
-            If a crop has a lower count, it will be aggregated to its parent.
-            By default 100.
+            If a crop has a lower count, it will not be displayed.
+            By default 0.
         expand : bool, optional
             Whether to expand the widget by default.
             By default False.
@@ -557,9 +557,7 @@ def clean_hierarchy_keys(hierarchy):
     return recursive_update_key(hierarchy)
 
 
-def apply_croptypepicker_to_df(
-    df, croptypepicker, other_label: str = "other_temporary_crops"
-):
+def apply_croptypepicker_to_df(df, croptypepicker, other_label: str = "other"):
     """Apply the selected crop types from the CropTypePicker to a DataFrame of samples
     Parameters
     ----------
@@ -569,7 +567,7 @@ def apply_croptypepicker_to_df(
         CropTypePicker object containing the selected crop types.
     other_label : str, optional
         Label to assign to samples that do not belong to the selected crop types.
-        By default "other_temporary_crops".
+        By default "other".
 
     Returns
     -------
@@ -580,9 +578,9 @@ def apply_croptypepicker_to_df(
     if croptypepicker.croptypes.empty:
         raise ValueError("No crop types selected, cannot proceed.")
 
-    # Isolate all crop types that have NOT been selected
+    # Isolate all samples that have NOT been selected
     included = croptypepicker.croptypes.index.values
-    excluded = df[~df["ewoc_code"].isin(included)]
+    excluded_sample_ids = df[~df["ewoc_code"].isin(included)]["sample_id"].to_list()
 
     # Prepare a mapping dictionary from original labels (index) to new labels
     label_mapping = croptypepicker.croptypes["new_label"].to_dict()
@@ -590,7 +588,7 @@ def apply_croptypepicker_to_df(
     # Apply the mapping to the ewoc_code column
     df["downstream_class"] = df["ewoc_code"].map(label_mapping)
 
-    # Excluded crop types are assigned to "other_temporary_crops" class
-    df.loc[excluded.index, "downstream_class"] = "other_temporary_crops"
+    # Excluded samples are assigned to "other" class
+    df.loc[df["sample_id"].isin(excluded_sample_ids), "downstream_class"] = "other"
 
     return df

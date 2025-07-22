@@ -19,6 +19,35 @@ from openeo_gfmap.preprocessing.compositing import mean_compositing, median_comp
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
+WORLDCEREAL_S2_BANDS = [
+    "S2-L2A-B02",
+    "S2-L2A-B03",
+    "S2-L2A-B04",
+    "S2-L2A-B05",
+    "S2-L2A-B06",
+    "S2-L2A-B07",
+    "S2-L2A-B08",
+    "S2-L2A-B8A",
+    "S2-L2A-B11",
+    "S2-L2A-B12",
+]
+
+WORLDCEREAL_S1_BANDS = [
+    "S1-SIGMA0-VH",
+    "S1-SIGMA0-VV",
+]
+
+WORLDCEREAL_DEM_BANDS = ["elevation", "slope"]
+
+WORLDCEREAL_METEO_BANDS = ["AGERA5-PRECIP", "AGERA5-TMEAN"]
+
+WORLDCEREAL_BANDS = {
+    "SENTINEL2": WORLDCEREAL_S2_BANDS,
+    "SENTINEL1": WORLDCEREAL_S1_BANDS,
+    "DEM": WORLDCEREAL_DEM_BANDS,
+    "METEO": WORLDCEREAL_METEO_BANDS,
+}
+
 
 class InvalidTemporalContextError(Exception):
     pass
@@ -417,18 +446,7 @@ def worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         temporal_extent=temporal_extent,
-        bands=[
-            "S2-L2A-B02",
-            "S2-L2A-B03",
-            "S2-L2A-B04",
-            "S2-L2A-B05",
-            "S2-L2A-B06",
-            "S2-L2A-B07",
-            "S2-L2A-B08",
-            "S2-L2A-B8A",
-            "S2-L2A-B11",
-            "S2-L2A-B12",
-        ],
+        bands=WORLDCEREAL_S2_BANDS,
         fetch_type=fetch_type,
         filter_tile=s2_tile,
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
@@ -460,10 +478,7 @@ def worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         temporal_extent=temporal_extent,
-        bands=[
-            "S1-SIGMA0-VH",
-            "S1-SIGMA0-VV",
-        ],
+        bands=WORLDCEREAL_S1_BANDS,
         fetch_type=fetch_type,
         target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit

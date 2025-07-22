@@ -118,7 +118,7 @@ def query_public_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1114000000
+AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -235,7 +235,7 @@ def query_private_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1114000000
+AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
