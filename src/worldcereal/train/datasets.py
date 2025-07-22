@@ -316,6 +316,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         augment: bool = False,
         label_jitter: int = 0,  # ± timesteps to jitter true label pos, for time_explicit only
         label_window: int = 0,  # ± timesteps to expand around label pos (true or moved), for time_explicit only
+        return_sample_id: bool = False,
         **kwargs,
     ):
         """Labelled version of WorldCerealDataset for supervised training.
@@ -337,6 +338,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         label_window : int, optional
             ± timesteps to expand around label pos (true or moved), for time_explicit only, by default 0.
             Only used if `time_explicit` is True.
+        return_sample_id : bool, optional
+            whether to return the sample_id in the output, by default False.
+            If True, the sample_id will be included in the output as a separate element.
         """
         assert task_type in ["binary", "multiclass"], (
             f"Invalid task type `{task_type}` for labelled dataset"
@@ -353,6 +357,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         self.time_explicit = time_explicit
         self.label_jitter = label_jitter
         self.label_window = label_window
+        self.return_sample_id = return_sample_id
+
+        if self.return_sample_id and "sample_id" not in self.dataframe.columns:
+            raise ValueError(
+                "`return_sample_id` is True, but 'sample_id' column not found in dataframe."
+            )
 
     def __getitem__(self, idx):
         row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
@@ -365,7 +375,13 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             valid_position=valid_position - timestep_positions[0],
         )
 
-        return Predictors(**inputs, label=label)
+        predictors = Predictors(**inputs, label=label)
+
+        if self.return_sample_id:
+            sample_id = row["sample_id"]
+            return predictors, sample_id
+        else:
+            return predictors
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
