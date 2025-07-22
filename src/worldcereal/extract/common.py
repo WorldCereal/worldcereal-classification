@@ -344,6 +344,11 @@ def load_dataframe(
                     collection,
                 )
             else:
+                pipeline_log.info(
+                    "All samples already exist in STAC API for ref_id %s, collection %s. No samples to extract.",
+                    ref_id,
+                    collection,
+                )
                 return gpd.GeoDataFrame()
         else:
             pipeline_log.warning(
