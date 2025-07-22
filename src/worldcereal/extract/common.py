@@ -129,7 +129,7 @@ def post_job_action_patch(
             len(base_gpd[base_gpd.extract == extract_value]),
         )
 
-    extracted_gpd = base_gpd[base_gpd.extract == extract_value].reset_index(drop=True)
+    extracted_gpd = base_gpd[base_gpd.extract >= extract_value].reset_index(drop=True)
     # In this case we want to burn the metadata in a new file in the same folder as the S2 product
     for item in job_items:
         item_id = item.id.replace(".nc", "").replace("openEO_", "")
@@ -189,6 +189,35 @@ def post_job_action_patch(
 
         # Saves the new attributes in the netcdf file
         ds = xr.open_dataset(item_asset_path)
+
+        # Validate spatial dimensions based on resolution
+        expected_dim_size = {"10m": 64, "20m": 32}.get(spatial_resolution, None)
+        if expected_dim_size is not None:
+            actual_x_size = ds.dims.get("x", 0)
+            actual_y_size = ds.dims.get("y", 0)
+
+            if actual_x_size != expected_dim_size or actual_y_size != expected_dim_size:
+                pipeline_log.error(
+                    "Dimension validation failed for %s: expected %dx%d for %s resolution, got %dx%d",
+                    item_asset_path,
+                    expected_dim_size,
+                    expected_dim_size,
+                    spatial_resolution,
+                    actual_x_size,
+                    actual_y_size,
+                )
+                raise ValueError(
+                    f"Invalid dimensions for {spatial_resolution} resolution: "
+                    f"expected {expected_dim_size}x{expected_dim_size}, got {actual_x_size}x{actual_y_size}"
+                )
+
+            pipeline_log.debug(
+                "Dimension validation passed for %s: %dx%d matches expected %s resolution",
+                item_asset_path,
+                actual_x_size,
+                actual_y_size,
+                spatial_resolution,
+            )
 
         ds = ds.assign_attrs(new_attributes)
 
