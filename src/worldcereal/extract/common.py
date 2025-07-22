@@ -317,7 +317,7 @@ def load_dataframe(
                 collection,
             )
             client = pystac_client.Client.open(STAC_ROOT_URL)
-            samples_list = []
+            samples_list: list[str] = []
             stac_query = {"ref_id": {"eq": ref_id}}
 
             if collection == "PATCH_SENTINEL1":
