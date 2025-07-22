@@ -285,6 +285,7 @@ def load_dataframe(
     extract_value: int = 0,
     check_existing: bool = False,
     collection: Optional[ExtractionCollection] = None,
+    ref_id: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """
     Load the input dataframe from the given path.
@@ -310,7 +311,6 @@ def load_dataframe(
                 "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections, but collection is None."
             )
         elif collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
-            ref_id = str(df_path).split("/")[-1].split(".")[0]
             pipeline_log.info(
                 "Checking existing samples in STAC API for ref_id %s, collection %s.",
                 ref_id,
@@ -759,6 +759,7 @@ def _prepare_extraction_jobs(
             extract_value,
             check_existing=check_existing_extractions,
             collection=collection,
+            ref_id=ref_id,
         )
         samples_gdf["ref_id"] = ref_id
         pipeline_log.info("Creating new job tracking dataframe.")
