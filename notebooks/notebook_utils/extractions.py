@@ -220,6 +220,19 @@ def get_band_statistics(
                 # count percentage of nodata values
                 nodata_count = (extractions_gdf[bandname] == NODATAVALUE).sum()
                 nodata_percentage = nodata_count / len(extractions_gdf) * 100
+                # Treat missing bands
+                if nodata_percentage == 100:
+                    logger.warning(
+                        f"Band {bandname} has no valid data in the extractions dataframe."
+                    )
+                    band_stats[bandname] = {
+                        "%_nodata": "100.00",
+                        "min": "N/A",
+                        "max": "N/A",
+                        "mean": "N/A",
+                        "std": "N/A",
+                    }
+                    continue
                 # Apply scaling
                 scaled_values = _apply_band_scaling(
                     extractions_gdf[bandname].values, bandname
