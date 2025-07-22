@@ -6,7 +6,6 @@ from openeo.udf.udf_data import UdfData
 from worldcereal.openeo.feature_extractor import apply_udf_data as feature_udf
 from worldcereal.openeo.inference import apply_udf_data as inference_udf
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
-from worldcereal.utils.models import load_model_lut
 
 
 def create_udf_data(arr: xr.DataArray, parameters: dict, epsg: int = 32631) -> UdfData:
@@ -23,17 +22,11 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
 
     print("Get Presto cropland features")
 
-    # Feature extraction parameters for cropland
-    feature_params = {
-        "ignore_dependencies": True,
-        "compile_presto": False,
-        "presto_model_url": CropLandParameters().feature_parameters.presto_model_url,
-        "rescale_s1": CropLandParameters().feature_parameters.rescale_s1,
-        "temporal_prediction": CropLandParameters().feature_parameters.temporal_prediction,
-    }
+    # Initialize CropLandParameters
+    cropland_params = CropLandParameters().feature_parameters.model_dump()
 
     # Create UDF data for feature extraction
-    feature_udf_data = create_udf_data(WorldCerealPreprocessedInputs, feature_params)
+    feature_udf_data = create_udf_data(WorldCerealPreprocessedInputs, cropland_params)
 
     # Run feature extraction UDF
     feature_result = feature_udf(feature_udf_data)
@@ -41,11 +34,8 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
 
     print("Running cropland classification inference UDF locally")
 
-    # Classification parameters for cropland
-    classifier_params = {
-        "ignore_dependencies": True,
-        "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
-    }
+    # Get classifier parameters
+    classifier_params = CropLandParameters().classifier_parameters.model_dump()
 
     # Create UDF data for classification
     classifier_udf_data = create_udf_data(cropland_features, classifier_params)
@@ -72,15 +62,11 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     print("Get Presto croptype features")
 
-    # Feature extraction parameters for croptype
-    feature_params = {
-        "ignore_dependencies": True,
-        "compile_presto": False,
-        "presto_model_url": CropTypeParameters().feature_parameters.presto_model_url,
-        "rescale_s1": False,
-        "temporal_prediction": True,
-        "target_date": None,  # Use middle timestep
-    }
+    # Initialize CropTypeParameters with custom target_date - that's it!
+    croptype_params = CropTypeParameters(target_date=None)
+
+    # Get feature parameters and add any testing overrides
+    feature_params = croptype_params.feature_parameters.model_dump()
 
     # Create UDF data for feature extraction
     feature_udf_data = create_udf_data(WorldCerealPreprocessedInputs, feature_params)
@@ -91,16 +77,8 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     print("Running croptype classification inference UDF locally")
 
-    lookup_table = load_model_lut(
-        CropTypeParameters().classifier_parameters.classifier_url
-    )
-
-    # Classification parameters for croptype
-    classifier_params = {
-        "ignore_dependencies": True,
-        "lookup_table": lookup_table,
-        "classifier_url": CropTypeParameters().classifier_parameters.classifier_url,
-    }
+    # Get classifier parameters and add any testing overrides
+    classifier_params = croptype_params.classifier_parameters.model_dump()
 
     # Create UDF data for classification
     classifier_udf_data = create_udf_data(croptype_features, classifier_params)
@@ -113,18 +91,37 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
         "classification",
         "probability",
         "probability_barley",
+        "probability_dry_pulses_legumes",
+        "probability_fibre_crops",
+        "probability_flower_crops",
+        "probability_grass_fodder_crops",
+        "probability_herb_spice_medicinal_crops",
         "probability_maize",
-        "probability_millet_sorghum",
-        "probability_other_crop",
+        "probability_millet",
+        "probability_oats",
+        "probability_other_oilseed",
+        "probability_other_root_tuber",
+        "probability_potatoes",
         "probability_rapeseed_rape",
+        "probability_rice",
+        "probability_rye",
+        "probability_sorghum",
         "probability_soy_soybeans",
+        "probability_spring_barley",
+        "probability_spring_oats",
+        "probability_spring_rye",
+        "probability_spring_triticale",
+        "probability_spring_wheat",
+        "probability_sugarbeet",
         "probability_sunflower",
+        "probability_triticale",
+        "probability_vegetables_fruits",
         "probability_wheat",
     ]
 
     #  First assert below depends on the amount of classes in the model
-    assert croptype_classification.sel(bands="classification").values.max() <= 7
+    assert croptype_classification.sel(bands="classification").values.max() <= 26
     assert croptype_classification.sel(bands="classification").values.min() >= 0
     assert croptype_classification.sel(bands="probability").values.max() <= 100
     assert croptype_classification.sel(bands="probability").values.min() >= 0
-    assert croptype_classification.shape == (10, 100, 100)
+    assert croptype_classification.shape == (29, 100, 100)
