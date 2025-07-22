@@ -1,35 +1,33 @@
 """Feature computer GFMAP compatible to compute Presto embeddings."""
 
-import xarray as xr
-from openeo.udf.udf_data import UdfData
-from openeo.udf import XarrayDataCube
-from openeo.metadata import CollectionMetadata
+import copy
+import functools
+import random
+import sys
 import urllib.request
 import zipfile
-import functools
 from pathlib import Path
-import sys
-import copy
-
-from pyproj import Transformer
-from pyproj.crs import CRS
-from shapely.geometry import Point
-from shapely.ops import transform
-
-import random
+from typing import Optional
 
 import numpy as np
+import xarray as xr
+from openeo.metadata import CollectionMetadata
+from openeo.udf import XarrayDataCube
+from openeo.udf.udf_data import UdfData
+from pyproj import Transformer
+from pyproj.crs import CRS
 from scipy.ndimage import (
     convolve,
     zoom,
 )
+from shapely.geometry import Point
+from shapely.ops import transform
 
 sys.path.append("feature_deps")
 
 import torch  # noqa: E402
 
-
-PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.1-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.2-py3-none-any.whl"
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
@@ -52,9 +50,9 @@ LAT_HARMONIZED_NAME = "GEO-LAT"
 LON_HARMONIZED_NAME = "GEO-LON"
 EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
+
 @functools.lru_cache(maxsize=6)
 def unpack_prometheo_wheel(wheel_url: str):
-
     destination_dir = Path.cwd() / "dependencies" / "prometheo"
     destination_dir.mkdir(exist_ok=True, parents=True)
 
@@ -115,7 +113,6 @@ def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
     """
 
     if epsg == 4326:
-
         # self.logger.info(
         #     "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
         # )
@@ -132,6 +129,7 @@ def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
     # self.logger.info(f"Resolution for computing slope: {resolution}")
 
     return resolution
+
 
 def compute_slope(inarr: xr.DataArray, resolution: int) -> xr.DataArray:
     """Computes the slope using the scipy library. The input array should
@@ -150,8 +148,6 @@ def compute_slope(inarr: xr.DataArray, resolution: int) -> xr.DataArray:
     xr.DataArray
         output array containing 'slope' band in degrees.
     """
-
-
 
     def _rolling_fill(darr, max_iter=2):
         """Helper function that also reflects values inside
@@ -288,8 +284,49 @@ def compute_slope(inarr: xr.DataArray, resolution: int) -> xr.DataArray:
         },
     )
 
-def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
 
+def select_timestep_from_temporal_features(
+    features: xr.DataArray, target_date: Optional[str] = None
+) -> xr.DataArray:
+    """Select a specific timestep from temporal features based on target date.
+
+    Parameters
+    ----------
+    features : xr.DataArray
+        Temporal features with time dimension preserved.
+    target_date : str, optional
+        Target date in ISO format (YYYY-MM-DD). If None, selects middle timestep.
+
+    Returns
+    -------
+    xr.DataArray
+        Features for the selected timestep with time dimension removed.
+    """
+    if target_date is None:
+        # Select middle timestep
+        mid_idx = len(features.t) // 2
+        features = features.isel(t=mid_idx)
+    else:
+        # Parse target date and find closest timestep
+        target_datetime = np.datetime64(target_date)
+
+        # Check if target_datetime is within the temporal extent of features
+        min_time = features.t.min().values
+        max_time = features.t.max().values
+
+        if target_datetime < min_time or target_datetime > max_time:
+            raise ValueError(
+                f"Target date {target_date} is outside the temporal extent of features. "
+                f"Available time range: {min_time} to {max_time}"
+            )
+
+        # Find closest timestep
+        features = features.sel(t=target_datetime, method="nearest")
+
+    return features
+
+
+def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     if epsg is None:
         raise ValueError(
             "EPSG code is required for Presto feature extraction, but was "
@@ -300,27 +337,23 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
 
     presto_model_url = parameters.get("presto_model_url")
     # self.logger.info(f'Loading Presto model from "{presto_model_url}"')
-    prometheo_wheel_url = parameters.get(
-        "prometheo_wheel_url", PROMETHEO_WHL_URL
-    )
+    prometheo_wheel_url = parameters.get("prometheo_wheel_url", PROMETHEO_WHL_URL)
     # self.logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
 
     ignore_dependencies = parameters.get("ignore_dependencies", False)
     # if ignore_dependencies:
-        # self.logger.info(
-        #     "`ignore_dependencies` flag is set to True. Make sure that "
-        #     "Presto and its dependencies are available on the runtime "
-        #     "environment"
-        # )
+    # self.logger.info(
+    #     "`ignore_dependencies` flag is set to True. Make sure that "
+    #     "Presto and its dependencies are available on the runtime "
+    #     "environment"
+    # )
 
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
     inarr = inarr.transpose("bands", "t", "x", "y")
 
     # Change the band names
-    new_band_names = [
-        GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands
-    ]
+    new_band_names = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
     inarr = inarr.assign_coords(bands=new_band_names)
 
     # Handle NaN values in Presto compatible way
@@ -344,6 +377,9 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
         inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
 
     batch_size = parameters.get("batch_size", 256)
+    temporal_prediction = parameters.get("temporal_prediction", False)
+    target_date = parameters.get("target_date", None)
+
     # TODO: compile_presto not used for now?
     # compile_presto = parameters.get("compile_presto", False)
     # self.logger.info(f"Compile presto: {compile_presto}")
@@ -353,6 +389,7 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     # TODO: try to take run_model_inference from worldcereal
     from prometheo.datasets.worldcereal import run_model_inference
     from prometheo.models import Presto
+    from prometheo.models.pooling import PoolingMethods
     from prometheo.models.presto.wrapper import load_presto_weights
 
     presto_model = Presto()
@@ -361,16 +398,27 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     # self.logger.info("Extracting presto features")
     # Check if we have the expected 12 timesteps
     if len(inarr.t) != 12:
-        raise ValueError(
-            f"Can only run Presto on 12 timesteps, got: {len(inarr.t)}"
-        )
+        raise ValueError(f"Can only run Presto on 12 timesteps, got: {len(inarr.t)}")
+
+    # Determine pooling method based on temporal_prediction parameter
+    pooling_method = (
+        PoolingMethods.TIME if temporal_prediction else PoolingMethods.GLOBAL
+    )
+
     features = run_model_inference(
         inarr,
         presto_model,
         epsg=epsg,
         batch_size=batch_size,
+        pooling_method=pooling_method,
     )
+
+    # If temporal prediction, select specific timestep based on target_date
+    if temporal_prediction:
+        features = select_timestep_from_temporal_features(features, target_date)
+
     return features
+
 
 def get_latlons(inarr: xr.DataArray, epsg: int) -> xr.DataArray:
     """Returns the latitude and longitude coordinates of the given array in
@@ -418,6 +466,7 @@ def get_latlons(inarr: xr.DataArray, epsg: int) -> xr.DataArray:
         },
     )
 
+
 def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
     """Rescales the input array from uint16 to float32 decibel values.
     The input array should be in uint16 format, as this optimizes memory usage in Open-EO
@@ -453,7 +502,9 @@ def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
     arr.loc[dict(bands=s1_bands_to_select)] = data_to_rescale
     return arr
 
+
 # Below comes the actual UDF part
+
 
 # Apply the Feature Extraction UDF
 def apply_udf_data(udf_data: UdfData) -> UdfData:
@@ -475,7 +526,9 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     if parameters.get("rescale_s1", True):
         arr = rescale_s1_backscatter(arr)
 
-    arr = execute(inarr=arr, parameters=parameters, epsg=epsg).transpose("bands", "y", "x")
+    arr = execute(inarr=arr, parameters=parameters, epsg=epsg).transpose(
+        "bands", "y", "x"
+    )
 
     cube = XarrayDataCube(arr)
 
@@ -483,7 +536,7 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
     return udf_data
 
+
 # Change band names
 def apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:
-
     return metadata.rename_labels(dimension="bands", target=get_output_labels())

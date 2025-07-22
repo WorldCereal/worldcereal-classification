@@ -1,6 +1,7 @@
 from enum import Enum
-# from typing import Type
+from typing import Optional
 
+# from typing import Type
 # from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
 # from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -30,11 +31,38 @@ class FeaturesParameters(BaseModel):
         should be a PyTorch serialized model.
     compile_presto : bool (default=False)
         Whether to compile the Presto encoder for speeding up large-scale inference.
+    temporal_prediction : bool (default=False)
+        Whether to use temporal-explicit predictions. If True, the time dimension
+        is preserved in Presto features and a specific timestep is selected later.
+        If False, features are pooled across time (non-temporal prediction).
+    target_date : str (default=None)
+        Target date for temporal-explicit predictions in ISO format (YYYY-MM-DD).
+        Only used when temporal_prediction=True. If None, the middle timestep is used.
     """
 
     rescale_s1: bool
     presto_model_url: str
     compile_presto: bool
+    temporal_prediction: bool = Field(default=False)
+    target_date: Optional[str] = Field(default=None)
+
+    @model_validator(mode="after")
+    def check_temporal_parameters(self):
+        """Validates temporal prediction parameters."""
+        if self.target_date is not None and not self.temporal_prediction:
+            raise ValidationError(
+                "target_date can only be specified when temporal_prediction=True"
+            )
+
+        if self.target_date is not None:
+            try:
+                from datetime import datetime
+
+                datetime.fromisoformat(self.target_date)
+            except ValueError:
+                raise ValidationError("target_date must be in ISO format (YYYY-MM-DD)")
+
+        return self
 
 
 class ClassifierParameters(BaseModel):
@@ -81,6 +109,7 @@ class CropLandParameters(BaseModel):
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
         compile_presto=False,
+        temporal_prediction=False,
     )
     # classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
@@ -94,10 +123,10 @@ class CropLandParameters(BaseModel):
     #         raise ValidationError(
     #             f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
     #         )
-        # if not issubclass(self.classifier, ModelInference):
-        #     raise ValidationError(
-        #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-        #     )
+    # if not issubclass(self.classifier, ModelInference):
+    #     raise ValidationError(
+    #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+    #     )
 
 
 class CropTypeParameters(BaseModel):
@@ -133,6 +162,8 @@ class CropTypeParameters(BaseModel):
         rescale_s1=False,
         presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-testset2023-month-CROPTYPE_INSEASON-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-random-masked-from-5-run%3D202505201027_encoder.pt",  # NOQA
         compile_presto=False,
+        temporal_prediction=True,
+        target_date=None,  # By default take the middle date
     )
     # classifier: Type[ModelInference] = Field(default=CropClassifier)
     classifier_parameters: ClassifierParameters = ClassifierParameters(
@@ -148,11 +179,11 @@ class CropTypeParameters(BaseModel):
     #         raise ValidationError(
     #             f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
     #         )
-        # if not issubclass(self.classifier, ModelInference):
-        #     raise ValidationError(
-        #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-        #     )
-        # return self
+    # if not issubclass(self.classifier, ModelInference):
+    #     raise ValidationError(
+    #         f"Classifier must be a subclass of ModelInference, got {self.classifier}"
+    #     )
+    # return self
 
     @model_validator(mode="after")
     def check_mask_parameters(self):
