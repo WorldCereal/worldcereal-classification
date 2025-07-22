@@ -344,10 +344,7 @@ def load_dataframe(
                     collection,
                 )
             else:
-                # should it be softer somehow and just continue to the next dataset if available?..
-                raise Exception(
-                    f"All samples already exist in STAC API for ref_id {ref_id}, collection {collection}. No samples to extract. Exiting."
-                )
+                return gpd.GeoDataFrame()
         else:
             pipeline_log.warning(
                 "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections. ",
