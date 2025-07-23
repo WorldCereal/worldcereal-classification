@@ -3,6 +3,7 @@
 import functools
 import sys
 import copy
+import logging
 
 from openeo.udf.udf_data import UdfData
 from openeo.udf import XarrayDataCube
@@ -17,6 +18,7 @@ import onnxruntime as ort  # noqa: E402
 
 EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
+logger = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=6)
 def load_and_prepare_model(model_url: str):
@@ -107,7 +109,7 @@ def execute(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
     if "classifier_url" not in parameters:
         raise ValueError('Missing required parameter "classifier_url"')
     classifier_url = parameters.get("classifier_url")
-    # self.logger.info(f'Loading classifier model from "{classifier_url}"')
+    logger.info(f'Loading classifier model from "{classifier_url}"')
 
     # shape and indices for output ("xy", "bands")
     x_coords, y_coords = inarr.x.values, inarr.y.values
@@ -118,9 +120,9 @@ def execute(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
     )
 
     # Run catboost classification
-    # self.logger.info("Catboost classification with input shape: %s", inarr.shape)
+    logger.info("Catboost classification with input shape: %s", inarr.shape)
     classification = predict(onnx_session=onnx_session, lut_sorted=lut_sorted, features=inarr.values)
-    # self.logger.info("Classification done with shape: %s", inarr.shape)
+    logger.info("Classification done with shape: %s", inarr.shape)
 
     output_labels = get_output_labels(lut_sorted)
 

@@ -1,7 +1,7 @@
 import numpy as np
 import xarray as xr
 
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
+from worldcereal.openeo.feature_extractor import compute_slope, evaluate_resolution
 
 
 def test_slope_computation():
@@ -24,12 +24,9 @@ def test_slope_computation():
         },
     )
 
-    extractor = PrestoFeatureExtractor()
-    extractor._epsg = 4326  # pylint: disable=protected-access
-
     # In the UDF no_data is set to 65535
-    resolution = extractor.evaluate_resolution(array)
-    slope = extractor.compute_slope(
+    resolution = evaluate_resolution(inarr=array, epsg=4326)
+    slope = compute_slope(
         array, resolution
     ).values  # pylint: disable=protected-access
 

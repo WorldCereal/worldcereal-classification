@@ -2,6 +2,7 @@
 
 import copy
 import functools
+import logging
 import random
 import sys
 import urllib.request
@@ -50,6 +51,8 @@ LAT_HARMONIZED_NAME = "GEO-LAT"
 LON_HARMONIZED_NAME = "GEO-LON"
 EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
+
+logger = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=6)
 def unpack_prometheo_wheel(wheel_url: str):
@@ -113,9 +116,9 @@ def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
     """
 
     if epsg == 4326:
-        # self.logger.info(
-        #     "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
-        # )
+        logger.info(
+            "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
+        )
 
         transformer = Transformer.from_crs(epsg, 3857, always_xy=True)
         points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]
@@ -126,7 +129,7 @@ def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
     else:
         resolution = abs(inarr.x[1].values - inarr.x[0].values)
 
-    # self.logger.info(f"Resolution for computing slope: {resolution}")
+    logger.info(f"Resolution for computing slope: {resolution}")
 
     return resolution
 
@@ -336,17 +339,17 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
         raise ValueError('Missing required parameter "presto_model_url"')
 
     presto_model_url = parameters.get("presto_model_url")
-    # self.logger.info(f'Loading Presto model from "{presto_model_url}"')
+    logger.info(f'Loading Presto model from "{presto_model_url}"')
     prometheo_wheel_url = parameters.get("prometheo_wheel_url", PROMETHEO_WHL_URL)
-    # self.logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
+    logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
 
     ignore_dependencies = parameters.get("ignore_dependencies", False)
-    # if ignore_dependencies:
-    # self.logger.info(
-    #     "`ignore_dependencies` flag is set to True. Make sure that "
-    #     "Presto and its dependencies are available on the runtime "
-    #     "environment"
-    # )
+    if ignore_dependencies:
+        logger.info(
+            "`ignore_dependencies` flag is set to True. Make sure that "
+            "Presto and its dependencies are available on the runtime "
+            "environment"
+        )
 
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
@@ -361,15 +364,15 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
 
     if not ignore_dependencies:
         # Unzip the Presto dependencies on the backend
-        # self.logger.info("Unpacking prometheo wheel")
+        logger.info("Unpacking prometheo wheel")
         deps_dir = unpack_prometheo_wheel(prometheo_wheel_url)
 
-        # self.logger.info("Appending dependencies")
+        logger.info("Appending dependencies")
         sys.path.append(str(deps_dir))
 
     if "slope" not in inarr.bands:
         # If 'slope' is not present we need to compute it here
-        # self.logger.warning("`slope` not found in input array. Computing ...")
+        logger.warning("`slope` not found in input array. Computing ...")
         resolution = evaluate_resolution(inarr.isel(t=0), epsg)
         slope = compute_slope(inarr.isel(t=0), resolution)
         slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
@@ -384,7 +387,7 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     # compile_presto = parameters.get("compile_presto", False)
     # self.logger.info(f"Compile presto: {compile_presto}")
 
-    # self.logger.info("Loading Presto model for inference")
+    logger.info("Loading Presto model for inference")
 
     # TODO: try to take run_model_inference from worldcereal
     from prometheo.datasets.worldcereal import run_model_inference
@@ -395,7 +398,7 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     presto_model = Presto()
     presto_model = load_presto_weights(presto_model, presto_model_url)
 
-    # self.logger.info("Extracting presto features")
+    logger.info("Extracting presto features")
     # Check if we have the expected 12 timesteps
     if len(inarr.t) != 12:
         raise ValueError(f"Can only run Presto on 12 timesteps, got: {len(inarr.t)}")
