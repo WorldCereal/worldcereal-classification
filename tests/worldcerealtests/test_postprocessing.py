@@ -25,7 +25,6 @@ def test_cropland_postprocessing(WorldCerealCroplandClassification):
 
     parameters={
             "ignore_dependencies": True,
-            "GEO-EPSG": None,
             "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "smooth_probabilities",
         }
@@ -46,7 +45,6 @@ def test_cropland_postprocessing_majority_vote(WorldCerealCroplandClassification
 
     parameters={
             "ignore_dependencies": True,
-            "GEO-EPSG": None,
             "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "majority_vote",
             "kernel_size": 7,
@@ -67,7 +65,6 @@ def test_croptype_postprocessing(WorldCerealCroptypeClassification):
 
     parameters={
             "ignore_dependencies": True,
-            "GEO-EPSG": None,
             "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "smooth_probabilities",
         }
@@ -89,7 +86,6 @@ def test_croptype_postprocessing_majority_vote(WorldCerealCroptypeClassification
 
     parameters={
             "ignore_dependencies": True,
-            "GEO-EPSG": None,
             "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "majority_vote",
             "kernel_size": 7,

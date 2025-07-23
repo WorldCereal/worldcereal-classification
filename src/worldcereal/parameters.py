@@ -1,14 +1,7 @@
 from enum import Enum
 from typing import Optional
 
-# from typing import Type
-# from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
-# from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
-
-# from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-# from worldcereal.openeo.postprocess import PostProcessor
-
 
 class WorldCerealProductType(Enum):
     """Enum to define the different WorldCereal products."""
@@ -210,17 +203,6 @@ class PostprocessParameters(BaseModel):
     kernel_size: int = Field(default=5)
     save_intermediate: bool = Field(default=False)
     keep_class_probs: bool = Field(default=False)
-
-    # postprocessor: Type[ModelInference] = Field(default=PostProcessor)
-
-    # @model_validator(mode="after")
-    # def check_udf_types(self):
-    #     """Validates the PostProcessor class."""
-    #     if not issubclass(self.postprocessor, ModelInference):
-    #         raise ValidationError(
-    #             f"Postprocessor must be a subclass of PostProcessor, got {self.postprocessor}"
-    #         )
-    #     return self
 
     @model_validator(mode="after")
     def check_parameters(self):
