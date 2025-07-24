@@ -318,7 +318,6 @@ def load_dataframe(
             )
             client = pystac_client.Client.open(STAC_ROOT_URL)
             samples_list: list[str] = []
-            stac_query = {"ref_id": {"eq": ref_id}}
 
             if collection == "PATCH_SENTINEL1":
                 STAC_COLLECTION = "worldcereal_sentinel_1_patch_extractions"
@@ -330,7 +329,12 @@ def load_dataframe(
                 )
 
             stac_search = client.search(
-                collections=[STAC_COLLECTION], query=stac_query, max_items=None
+                collections=[STAC_COLLECTION],
+                filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]}, 
+                filter_lang="cql2-json",
+                fields={
+                    "exclude": ["assets", "links", "geometry", "bbox"]
+                },
             )
             for item in stac_search.items():
                 sample_id = item.properties.get("sample_id")
