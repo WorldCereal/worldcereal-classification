@@ -109,8 +109,11 @@ def get_label_points(
 
     Returns
     -------
-    gpd.GeoDataFrame
-        The label points as a GeoDataFrame.
+    gpd.GeoDataFrame, bool
+        A tuple containing:
+        - gpd.GeoDataFrame: The sampled GeoDataFrame with label points.
+        - bool: A flag indicating whether S1 extraction is disabled
+                (True if no S1 sample_ids found).
 
     """
 
@@ -138,20 +141,31 @@ def get_label_points(
         for item in search_s2.items()
     }
 
-    # Find sample_ids which are present in both STAC collections
+    # Find sample_ids which are present in either S2 or both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
-
-    if len(common_sample_ids) > 0:
-        logger.info(f"Found {len(common_sample_ids)} common sample_ids in S1 and S2")
-    else:
+    if len(common_sample_ids) == 0:
         logger.warning(
-            f"No common sample_ids found in S1 and S2 for ref_id: {row['ref_id']} and "
-            f"epsg: {row['epsg']}, reverting to S2 only."
+            "No common sample_ids found in S1 and S2 STAC collections. "
+            "S1 extraction will be disabled from process graph!."
         )
-        common_sample_ids = set(items_s2.keys())
+        disable_s1 = True
+    else:
+        logger.info(f"Found {len(common_sample_ids)} common sample_ids in S1 and S2")
+        disable_s1 = False
+
+    s2_only_sample_ids = set(items_s2.keys()).difference(common_sample_ids)
+    logger.info(f"Found {len(s2_only_sample_ids)} S2-only sample_ids")
+    selected_sample_ids = common_sample_ids.union(s2_only_sample_ids)
+
+    if len(selected_sample_ids) == 0:
+        raise ValueError(
+            "No sample_ids found in S1 or S2 STAC collections. "
+            "Please check the extractions for this ref_id and epsg."
+        )
+    logger.info(f"Total selected sample_ids for extraction: {len(selected_sample_ids)}")
 
     # Items with the same sample_id will also have the same geometry
-    polygons = [items_s2[sample_id] for sample_id in common_sample_ids]
+    polygons = [items_s2[sample_id] for sample_id in selected_sample_ids]
 
     multi_polygon = MultiPolygon(polygons)
 
@@ -168,7 +182,7 @@ def get_label_points(
 
     sampled_gdf = gdf_to_points(gdf)
 
-    return sampled_gdf
+    return sampled_gdf, disable_s1
 
 
 def generate_output_path_patch_to_point_worldcereal(
@@ -311,10 +325,12 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         # Get the ground truth in the patches
         # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
-        gdf = get_label_points(row, ground_truth_file=row["ground_truth_file"])
+        gdf, disable_s1 = get_label_points(
+            row, ground_truth_file=row["ground_truth_file"]
+        )
         gdf["ref_id"] = (
             row.ref_id
-        )  # Overwrite due to current back in automatic assignment
+        )  # Overwrite due to current bug in automatic assignment
 
         if gdf.empty:
             logger.warning(f"No samples found for {row.epsg} and {row.ref_id}")
@@ -325,21 +341,25 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         # Keep essential attributes only
         gdf = gdf[RDM_DEFAULT_COLUMNS]
 
-        # Determine S1 orbit; very small buffer to cover cases with < 3 samples
-        try:
-            job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
-                BackendContext(Backend.CDSE),
-                BoundingBoxExtent(
-                    *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
-                ),
-                TemporalContext(row.start_date, row.end_date),
-            )
-        except UncoveredS1Exception:
-            logger.warning(
-                f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
-                "This will result in no S1 data being extracted."
-            )
-            job_df.loc[ix, "orbit_state"] = "DESCENDING"  # Just a placeholder
+        if not disable_s1:
+            # Determine S1 orbit; very small buffer to cover cases with < 3 samples
+            try:
+                job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
+                    BackendContext(Backend.CDSE),
+                    BoundingBoxExtent(
+                        *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
+                    ),
+                    TemporalContext(row.start_date, row.end_date),
+                )
+            except UncoveredS1Exception:
+                logger.warning(
+                    f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
+                    "This will result in no S1 data being extracted."
+                )
+                job_df.loc[ix, "orbit_state"] = "DESCENDING"  # Just a placeholder
+        else:
+            # Disabling S1 which cannot be automatically handled yet by openEO
+            job_df.loc[ix, "orbit_state"] = None
 
         # Determine S2 tiles
         logger.info("Finding S2 tiles ...")
@@ -394,9 +414,13 @@ def create_job_patch_to_point_worldcereal(
 
     # Assume row has the following fields: backend, start_date, end_date, epsg, ref_id and geometry_url
 
-    s1_orbit_state = row.get(
-        "orbit_state", "DESCENDING"
-    )  # default to DESCENDING, same as for inference workflow
+    # s1_orbit_state = row.get(
+    #     "orbit_state", "DESCENDING"
+    # )  # default to DESCENDING, same as for inference workflow
+
+    # Currently, empty datacubes for NetCDF collections are not supported
+    # so we have to manually take care of the no-S1 case.
+    s1_orbit_state = row.get("orbit_state") if not row.isnull()["orbit_state"] else None
 
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
@@ -457,6 +481,15 @@ def post_job_action_point_worldcereal(parquet_file):
     gdf["timestamp"] = pd.to_datetime(gdf["date"])
     gdf.drop(columns=["date"], inplace=True)
 
+    if "S1-SIGMA0-VH" not in gdf.columns or "S1-SIGMA0-VV" not in gdf.columns:
+        logger.warning(
+            "S1 bands not found in the extracted data. "
+            "This probably due to disabling of S1 in patch-to-point."
+            " Filling with nodata values."
+        )
+        gdf["S1-SIGMA0-VH"] = 65535
+        gdf["S1-SIGMA0-VV"] = 65535
+
     # Convert band dtype to uint16 (temporary fix)
     # TODO: remove this step when the issue is fixed on the OpenEO backend
     bands = [
@@ -498,7 +531,7 @@ def post_job_action_point_worldcereal(parquet_file):
     assert (
         len(gdf["ref_id"].unique()) == 1
     ), f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
-    ref_id = gdf["ref_id"][0]
+    ref_id = gdf["ref_id"].iloc[0]
     year = int(ref_id.split("_")[0])
     gdf["year"] = year
 
@@ -536,16 +569,19 @@ def worldcereal_preprocessed_inputs_from_patches(
         "proj:epsg": lambda x: eq(x, epsg),
     }
 
-    s1_raw = connection.load_stac(
-        url=STAC_ENDPOINT_S1,
-        properties=s1_stac_property_filter,
-        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
-    )
-    s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
-    s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
-    s1 = mean_compositing(s1, period=period)
-    s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
+    if s1_orbit_state is not None:
+        s1_raw = connection.load_stac(
+            url=STAC_ENDPOINT_S1,
+            properties=s1_stac_property_filter,
+            temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+            bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
+        )
+        s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
+        s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
+        s1 = mean_compositing(s1, period=period)
+        s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
+    else:
+        logger.warning("No S1 orbit state provided, S1 extraction will be disabled.")
 
     s2_raw = connection.load_stac(
         url=STAC_ENDPOINT_S2,
@@ -611,7 +647,11 @@ def worldcereal_preprocessed_inputs_from_patches(
         target=["AGERA5-TMEAN", "AGERA5-PRECIP"],
     )
 
-    cube = s2.merge_cubes(s1)
+    if s1_orbit_state is None:
+        # If no S1 orbit state is provided, we disable S1
+        cube = s2
+    else:
+        cube = s2.merge_cubes(s1)
     cube = cube.merge_cubes(meteo)
     cube = cube.merge_cubes(copernicus)
 
