@@ -236,8 +236,7 @@ def _postprocess(
         process=postprocess_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
-            {"dimension": "y", "unit": "px", "value": 128},
-            {"dimension": "t", "value": "P1D"},
+            {"dimension": "y", "unit": "px", "value": 128}
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
