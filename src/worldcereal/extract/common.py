@@ -330,11 +330,9 @@ def load_dataframe(
 
             stac_search = client.search(
                 collections=[STAC_COLLECTION],
-                filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]}, 
+                filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]},
                 filter_lang="cql2-json",
-                fields={
-                    "exclude": ["assets", "links", "geometry", "bbox"]
-                },
+                fields={"exclude": ["assets", "links", "geometry", "bbox"]},
             )
             for item in stac_search.items():
                 sample_id = item.properties.get("sample_id")
