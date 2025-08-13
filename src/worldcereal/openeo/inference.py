@@ -20,7 +20,7 @@ EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
 logger = logging.getLogger(__name__)
 
-@functools.lru_cache(maxsize=6)
+@functools.lru_cache(maxsize=1)
 def load_and_prepare_model(model_url: str):
     """Function to be used instead the default GFMap load_ort_model function.
     Loads the model, validates it and extracts LUT from the model metadata.
@@ -32,6 +32,7 @@ def load_and_prepare_model(model_url: str):
         Public URL to the ONNX classification model.
     """
     # Load the model
+    logger.info(f"Loading ONNX model from {model_url}")
     response = requests.get(model_url, timeout=120)
     model = ort.InferenceSession(response.content)
 

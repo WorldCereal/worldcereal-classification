@@ -1,4 +1,4 @@
-"""Feature computer GFMAP compatible to compute Presto embeddings."""
+"""openEO UDF to compute Presto/Prometheo features."""
 
 import copy
 import functools
@@ -54,7 +54,7 @@ EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
 logger = logging.getLogger(__name__)
 
-@functools.lru_cache(maxsize=6)
+@functools.lru_cache(maxsize=1)
 def unpack_prometheo_wheel(wheel_url: str):
     destination_dir = Path.cwd() / "dependencies" / "prometheo"
     destination_dir.mkdir(exist_ok=True, parents=True)
@@ -68,7 +68,7 @@ def unpack_prometheo_wheel(wheel_url: str):
     return destination_dir
 
 
-@functools.lru_cache(maxsize=6)
+@functools.lru_cache(maxsize=1)
 def compile_encoder(presto_encoder):
     """Helper function that compiles the encoder of a Presto model
     and performs a warm-up on dummy data. The lru_cache decorator
@@ -92,12 +92,6 @@ def compile_encoder(presto_encoder):
         )
 
     return presto_encoder
-
-
-def get_output_labels() -> list:
-    """Returns the output labels from this UDF, which is the output labels
-    of the presto embeddings"""
-    return [f"presto_ft_{i}" for i in range(128)]
 
 
 def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
@@ -330,6 +324,8 @@ def select_timestep_from_temporal_features(
 
 
 def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
+    """Executes the feature extraction process on the input array."""
+
     if epsg is None:
         raise ValueError(
             "EPSG code is required for Presto feature extraction, but was "
@@ -542,4 +538,4 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
 # Change band names
 def apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:
-    return metadata.rename_labels(dimension="bands", target=get_output_labels())
+    return metadata.rename_labels(dimension="bands", target=[f"presto_ft_{i}" for i in range(128)])

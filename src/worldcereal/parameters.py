@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 
@@ -49,8 +50,6 @@ class FeaturesParameters(BaseModel):
 
         if self.target_date is not None:
             try:
-                from datetime import datetime
-
                 datetime.fromisoformat(self.target_date)
             except ValueError:
                 raise ValidationError("target_date must be in ISO format (YYYY-MM-DD)")

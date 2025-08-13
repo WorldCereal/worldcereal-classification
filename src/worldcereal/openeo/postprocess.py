@@ -18,7 +18,7 @@ import onnxruntime as ort  # noqa: E402
 EXCLUDED_VALUES = [254, 255, 65535]
 NODATA = 255
 
-@functools.lru_cache(maxsize=6)
+@functools.lru_cache(maxsize=1)
 def lut_from_url(model_url: str) -> dict:
     """Method to extract lookup table from model URL.
     Loads the model, validates it and extracts LUT from the model metadata.
