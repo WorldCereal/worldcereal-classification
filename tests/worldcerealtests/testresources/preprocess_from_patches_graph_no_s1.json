@@ -1,0 +1,404 @@
+{
+    "loadstac1": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B01",
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B09",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-B8A",
+                "S2-L2A-DISTANCE-TO-CLOUD",
+                "S2-L2A-SCL",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "properties": {
+                "ref_id": {
+                    "process_graph": {
+                        "eq1": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": "test_ref_id"
+                            },
+                            "result": true
+                        }
+                    }
+                },
+                "proj:epsg": {
+                    "process_graph": {
+                        "eq2": {
+                            "process_id": "eq",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": 32631
+                            },
+                            "result": true
+                        }
+                    }
+                }
+            },
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/worldcereal_sentinel_2_patch_extractions"
+        }
+    },
+    "filterbands1": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
+                "S2-L2A-B11",
+                "S2-L2A-B12",
+                "S2-L2A-SCL_DILATED_MASK"
+            ],
+            "data": {
+                "from_node": "loadstac1"
+            }
+        }
+    },
+    "applydimension1": {
+        "process_id": "apply_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "filterbands1"
+            },
+            "dimension": "bands",
+            "process": {
+                "process_graph": {
+                    "arrayelement1": {
+                        "process_id": "array_element",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            },
+                            "label": "S2-L2A-SCL_DILATED_MASK"
+                        }
+                    },
+                    "neq1": {
+                        "process_id": "neq",
+                        "arguments": {
+                            "x": {
+                                "from_node": "arrayelement1"
+                            },
+                            "y": 1
+                        }
+                    },
+                    "if1": {
+                        "process_id": "if",
+                        "arguments": {
+                            "accept": {
+                                "from_parameter": "data"
+                            },
+                            "value": {
+                                "from_node": "neq1"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "aggregatetemporalperiod1": {
+        "process_id": "aggregate_temporal_period",
+        "arguments": {
+            "data": {
+                "from_node": "applydimension1"
+            },
+            "dimension": "t",
+            "period": "month",
+            "reducer": {
+                "process_graph": {
+                    "median1": {
+                        "process_id": "median",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "filterbands2": {
+        "process_id": "filter_bands",
+        "arguments": {
+            "bands": [
+                "S2-L2A-B02",
+                "S2-L2A-B03",
+                "S2-L2A-B04",
+                "S2-L2A-B05",
+                "S2-L2A-B06",
+                "S2-L2A-B07",
+                "S2-L2A-B08",
+                "S2-L2A-B8A",
+                "S2-L2A-B11",
+                "S2-L2A-B12"
+            ],
+            "data": {
+                "from_node": "aggregatetemporalperiod1"
+            }
+        }
+    },
+    "apply1": {
+        "process_id": "apply",
+        "arguments": {
+            "data": {
+                "from_node": "filterbands2"
+            },
+            "process": {
+                "process_graph": {
+                    "linearscalerange1": {
+                        "process_id": "linear_scale_range",
+                        "arguments": {
+                            "inputMax": 65534,
+                            "inputMin": 0,
+                            "outputMax": 65534,
+                            "outputMin": 0,
+                            "x": {
+                                "from_parameter": "x"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "loadstac2": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "temperature-mean",
+                "precipitation-flux"
+            ],
+            "temporal_extent": [
+                "2020-01-01",
+                "2020-12-31"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
+        }
+    },
+    "resamplespatial1": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadstac2"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
+    "renamelabels1": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial1"
+            },
+            "dimension": "bands",
+            "target": [
+                "AGERA5-TMEAN",
+                "AGERA5-PRECIP"
+            ]
+        }
+    },
+    "mergecubes1": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "apply1"
+            },
+            "cube2": {
+                "from_node": "renamelabels1"
+            }
+        }
+    },
+    "loadstac3": {
+        "process_id": "load_stac",
+        "arguments": {
+            "bands": [
+                "Slope"
+            ],
+            "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE_TERRASCOPE"
+        }
+    },
+    "renamelabels2": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "loadstac3"
+            },
+            "dimension": "bands",
+            "target": [
+                "slope"
+            ]
+        }
+    },
+    "resamplespatial2": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "renamelabels2"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
+    "reducedimension1": {
+        "process_id": "reduce_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial2"
+            },
+            "dimension": "t",
+            "reducer": {
+                "process_graph": {
+                    "min1": {
+                        "process_id": "min",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "loadcollection1": {
+        "process_id": "load_collection",
+        "arguments": {
+            "bands": [
+                "DEM"
+            ],
+            "id": "COPERNICUS_30",
+            "spatial_extent": null,
+            "temporal_extent": null
+        }
+    },
+    "resamplespatial3": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadcollection1"
+            },
+            "method": "bilinear",
+            "projection": 32631,
+            "resolution": 10.0
+        }
+    },
+    "reducedimension2": {
+        "process_id": "reduce_dimension",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial3"
+            },
+            "dimension": "t",
+            "reducer": {
+                "process_graph": {
+                    "min2": {
+                        "process_id": "min",
+                        "arguments": {
+                            "data": {
+                                "from_parameter": "data"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "renamelabels3": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "reducedimension2"
+            },
+            "dimension": "bands",
+            "source": [
+                "DEM"
+            ],
+            "target": [
+                "elevation"
+            ]
+        }
+    },
+    "mergecubes2": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "reducedimension1"
+            },
+            "cube2": {
+                "from_node": "renamelabels3"
+            }
+        }
+    },
+    "apply2": {
+        "process_id": "apply",
+        "arguments": {
+            "data": {
+                "from_node": "mergecubes2"
+            },
+            "process": {
+                "process_graph": {
+                    "linearscalerange2": {
+                        "process_id": "linear_scale_range",
+                        "arguments": {
+                            "inputMax": 65534,
+                            "inputMin": 0,
+                            "outputMax": 65534,
+                            "outputMin": 0,
+                            "x": {
+                                "from_parameter": "x"
+                            }
+                        },
+                        "result": true
+                    }
+                }
+            }
+        }
+    },
+    "mergecubes3": {
+        "process_id": "merge_cubes",
+        "arguments": {
+            "cube1": {
+                "from_node": "mergecubes1"
+            },
+            "cube2": {
+                "from_node": "apply2"
+            }
+        },
+        "result": true
+    }
+}

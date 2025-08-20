@@ -175,6 +175,9 @@ def main(
         )
     logger.info(f"Found {len(parquet_files)} parquet files.")
     merged_gdf = merge_individual_parquet_files(parquet_files)
+    merged_gdf = (
+        merged_gdf.drop_duplicates()
+    )  # Ensure no duplicates in case of double extractions
     merged_dir = (
         root_folder / "MERGED_PARQUETS"
         if period == "month"
