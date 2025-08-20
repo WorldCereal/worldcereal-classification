@@ -235,7 +235,7 @@
                                 "x": {
                                     "from_parameter": "value"
                                 },
-                                "y": null
+                                "y": "DESCENDING"
                             },
                             "result": true
                         }

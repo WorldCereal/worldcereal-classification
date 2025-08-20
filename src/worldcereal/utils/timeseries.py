@@ -10,7 +10,6 @@ STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
 NODATAVALUE = 65535
 MIN_EDGE_BUFFER = 2
-NUM_TIMESTEPS = 12
 
 BAND_MAPPINGS = {
     "10m": ["OPTICAL-B02", "OPTICAL-B03", "OPTICAL-B04", "OPTICAL-B08"],

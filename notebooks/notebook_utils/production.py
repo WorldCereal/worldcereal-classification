@@ -439,7 +439,7 @@ def run_map_production(
             )
             with plot_out:
                 plot_out.clear_output(wait=True)
-                display(fig)
+                fig.show(renderer="notebook")
             with log_out:
                 log_out.clear_output(wait=True)
                 print(

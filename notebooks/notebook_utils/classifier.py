@@ -1,10 +1,11 @@
-from typing import List, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
+from openeo_gfmap import TemporalContext
 from presto.utils import DEFAULT_SEED
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
@@ -15,9 +16,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
+from worldcereal.utils.refdata import process_extractions_df
+from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def get_input(label):
+    """Get user input as short string without spaces."""
     while True:
         modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
         if " " not in modelname:
@@ -25,7 +29,93 @@ def get_input(label):
         print("Invalid input. Please enter a name without spaces.")
 
 
-def prepare_training_dataframe(
+def compute_training_features(
+    df: pd.DataFrame,
+    season: TemporalContext,
+    freq: Literal["month", "dekad"] = "month",
+    valid_time_buffer: int = MIN_EDGE_BUFFER,
+    batch_size: int = 256,
+    task_type: str = "croptype",
+    augment: bool = True,
+    mask_ratio: float = 0.30,
+    repeats: int = 1,
+) -> pd.DataFrame:
+    """Compute features for training a crop classification model.
+    This function processes the time series in the input dataframe to align
+    them with the specified temporal context (season) and computes
+    Presto embeddings based on the extracted time series.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing the training data.
+    season : TemporalContext
+        Temporal context defining the season of interest.
+    freq : Literal["month", "dekad"], optional
+        Frequency of the data, by default "month".
+    valid_time_buffer : int, optional
+        Buffer in months to apply when aligning available extractions
+        with user-defined temporal extent.
+        Determines how close we allow the true valid_time of the sample
+        to be to the edge of the processing period, by default MIN_EDGE_BUFFER.
+    batch_size : int, optional
+        Batch size for processing, by default 256.
+    task_type : str, optional
+        Type of task (e.g., "croptype"), by default "croptype".
+    augment : bool, optional
+        If True, temporal jittering is enabled, by default True.
+    mask_ratio : float, optional
+        If > 0, inputs are randomly masked before computing Presto embeddings, by default 0.30
+    repeats : int, optional
+        Number of times to repeat each sample, by default 1.
+
+    Returns
+    -------
+    pd.DataFrame
+        Dataframe containing the computed 128 Presto embeddings,
+        along with ewoc_code (crop type label).
+    """
+
+    # Align the samples with the season of interest
+    df = process_extractions_df(df, season, freq, valid_time_buffer)
+
+    # Create an attribute "downstream_class" that is a copy of "ewoc_code"
+    # for compatibility with presto computation
+    df["downstream_class"] = df["ewoc_code"].copy()
+
+    # Now compute the Presto embeddings
+    df = compute_presto_embeddings(
+        df,
+        batch_size=batch_size,
+        task_type=task_type,
+        augment=augment,
+        mask_ratio=mask_ratio,
+        repeats=repeats,
+    )
+
+    # Report on contents of the resulting dataframe here
+    logger.info(
+        f'Samples originating from {df["ref_id"].nunique()} unique reference datasets.'
+    )
+
+    logger.info("Distribution of samples across years:")
+    # extract year from ref_id
+    df["year"] = df["ref_id"].str.split("_").str[0].astype(int)
+    logger.info(df.year.value_counts())
+
+    # Rename downstream_class to ewoc_code
+    df.rename(columns={"downstream_class": "ewoc_code"}, inplace=True)
+    ncroptypes = df["ewoc_code"].nunique()
+    logger.info(f"Number of crop types remaining: {ncroptypes}")
+    if ncroptypes <= 1:
+        logger.warning(
+            "Not enough crop types found in the remaining data to train a model, cannot continue with model training!"
+        )
+
+    return df
+
+
+def compute_presto_embeddings(
     df: pd.DataFrame,
     batch_size: int = 256,
     task_type: str = "croptype",
@@ -117,7 +207,7 @@ def train_classifier(
     training_dataframe: pd.DataFrame,
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
-    show_confusion_matrix: bool = False,
+    show_confusion_matrix: Optional[Literal["absolute", "relative"]] = "relative",
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
     """Method to train a custom CatBoostClassifier on a training dataframe.
 
@@ -129,8 +219,11 @@ def train_classifier(
         class names to use, by default None
     balance_classes : bool, optional
         if True, class weights are used during training to balance the classes, by default False
-    show_confusion_matrix : bool, optional
-        if True, the confusion matrix is shown, by default False
+    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
+        if 'absolute', the confusion matrix is shown as absolute values,
+        if 'relative', the confusion matrix is shown as relative values,
+        if None, no confusion matrix is shown,
+        by default 'relative'
 
     Returns
     -------
@@ -231,12 +324,19 @@ def train_classifier(
     report = classification_report(samples_test["downstream_class"], pred)
     cm = confusion_matrix(samples_test["downstream_class"], pred)
 
-    if show_confusion_matrix:
+    # Show confusion matrix if requested
+    if show_confusion_matrix is not None:
+
+        assert show_confusion_matrix in ["absolute", "relative"]
+
         labels = np.sort(training_dataframe["downstream_class"].unique())
 
-        # normalize CM
-        row_sums = cm.sum(axis=1, keepdims=True)
-        cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
+        if show_confusion_matrix == "relative":
+            # normalize CM
+            row_sums = cm.sum(axis=1, keepdims=True)
+            cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
+        else:
+            cm_normalized = cm
 
         font_size = 18
         fig, ax = plt.subplots(figsize=(12, 10))
@@ -256,6 +356,7 @@ def train_classifier(
         ax.set_xlabel("Predicted label", fontsize=font_size - 4)
         ax.set_ylabel("True label", fontsize=font_size - 4)
         ax.tick_params(axis="both", which="major", labelsize=font_size - 4)
+        fig.suptitle(f"Confusion Matrix ({show_confusion_matrix.capitalize()})")
         plt.tight_layout()
         plt.show()
 

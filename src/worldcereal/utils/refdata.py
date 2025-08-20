@@ -16,6 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
+from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -234,7 +235,7 @@ def query_public_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1114000000
+AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -351,7 +352,7 @@ def query_private_extractions(
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
-AND ewoc_code < 1114000000
+AND ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
@@ -412,7 +413,30 @@ def month_diff(month1: int, month2: int) -> int:
     return (month2 - month1) % 12
 
 
-def get_best_valid_time(row: pd.Series):
+def is_within_period(proposed_date, start_date, end_date, buffer):
+    return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
+        proposed_date + pd.DateOffset(months=buffer) <= end_date
+    )
+
+
+def check_shift(proposed_date, valid_time, start_date, end_date, buffer, num_timesteps):
+    proposed_start_date = proposed_date - pd.DateOffset(months=(num_timesteps // 2 - 1))
+    proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
+    return (
+        # checks that the middle of the proposed period is within the available extractions
+        is_within_period(proposed_date, start_date, end_date, MIN_EDGE_BUFFER)
+        # checks that the proposed period does not fall too far outside the available extractions
+        & (proposed_start_date + pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date)
+        & (proposed_end_date - pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date)
+        # checks that true valid_time is not too close to the edges of the proposed period
+        & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
+        & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
+    )
+
+
+def get_best_valid_time(
+    row: pd.Series, valid_time_buffer: int, num_timesteps: int
+) -> Union[pd.Timestamp, float]:
     """
     Determines the best valid time for a given row of data based on specified shift constraints.
 
@@ -430,38 +454,34 @@ def get_best_valid_time(row: pd.Series):
         - end_date: The end date of the allowed period
         - valid_month_shift_forward: Number of months to shift forward
         - valid_month_shift_backward: Number of months to shift backward
+    valid_time_buffer : int
+        Temporal buffer in months, determining how close we allow the true valid_time of the sample to be to the edge of the proposed processing period.
+
+    num_timesteps : int
+        The number of timesteps accepted by the model.
+        This is used to define the middle of the user-defined period.
 
     Returns
     -------
     datetime or np.nan
         The best valid time after applying shifts, or np.nan if no valid time can be found.
         If both forward and backward shifts are valid, the choice depends on the relative
-        magnitude of the shifts compared to MIN_EDGE_BUFFER.
-
-    Notes
-    -----
-    The function uses MIN_EDGE_BUFFER and NUM_TIMESTEPS constants imported from
-    worldcereal.utils.timeseries to determine valid periods and time windows.
+        magnitude of the shifts compared to buffer.
     """
 
-    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER, NUM_TIMESTEPS
-
-    def is_within_period(proposed_date, start_date, end_date):
-        return (proposed_date - pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date) & (
-            proposed_date + pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
+    # Run a check on provided valid_time_buffer
+    if valid_time_buffer > num_timesteps // 2:
+        logger.warning(
+            f"The provided valid_time_buffer ({valid_time_buffer} months) is larger than half the number of timesteps in the processing period. "
+            f"Reducing valid_time_buffer to half the number of timesteps: {num_timesteps // 2} months"
+        )
+        valid_time_buffer = num_timesteps // 2
+    if valid_time_buffer < 0:
+        raise ValueError(
+            f"The provided valid_time_buffer ({valid_time_buffer} months) must be a non-negative integer."
         )
 
-    def check_shift(proposed_date, valid_time, start_date, end_date):
-        proposed_start_date = proposed_date - pd.DateOffset(
-            months=(NUM_TIMESTEPS // 2 - 1)
-        )
-        proposed_end_date = proposed_date + pd.DateOffset(months=(NUM_TIMESTEPS // 2))
-        return (
-            is_within_period(proposed_date, start_date, end_date)
-            & (valid_time >= proposed_start_date)
-            & (valid_time <= proposed_end_date)
-        )
-
+    # Extract necessary fields from the row
     valid_time = row["valid_time"]
     start_date = row["start_date"]
     end_date = row["end_date"]
@@ -474,10 +494,20 @@ def get_best_valid_time(row: pd.Series):
     )
 
     shift_forward_ok = check_shift(
-        proposed_valid_time_fwd, valid_time, start_date, end_date
+        proposed_valid_time_fwd,
+        valid_time,
+        start_date,
+        end_date,
+        valid_time_buffer,
+        num_timesteps,
     )
     shift_backward_ok = check_shift(
-        proposed_valid_time_bwd, valid_time, start_date, end_date
+        proposed_valid_time_bwd,
+        valid_time,
+        start_date,
+        end_date,
+        valid_time_buffer,
+        num_timesteps,
     )
 
     if not shift_forward_ok and not shift_backward_ok:
@@ -493,12 +523,14 @@ def get_best_valid_time(row: pd.Series):
             <= MIN_EDGE_BUFFER
             else proposed_valid_time_fwd
         )
+    return np.nan
 
 
 def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
     freq: Literal["month", "dekad"] = "month",
+    valid_time_buffer: int = MIN_EDGE_BUFFER,
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a dataframe of extracted samples to align with a specified temporal context and frequency.
@@ -517,6 +549,9 @@ def process_extractions_df(
         within this temporal extent will be removed. Default is None (no temporal filtering).
     freq : Literal["month", "dekad"], default "month"
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
+    valid_time_buffer : int, default MIN_EDGE_BUFFER (2)
+        Buffer in months to apply when aligning available extractions with user-defined temporal extent.
+        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period
 
     Returns
     -------
@@ -568,8 +603,12 @@ def process_extractions_df(
         # get the middle of the user-defined temporal extent
         start_date, end_date = processing_period.to_datetime()
 
-        # sanity check to make sure freq is not something we still don't support in Presto
-        if freq not in ["month", "dekad"]:
+        # define num_timesteps based on frequency
+        if freq == "month":
+            num_timesteps = 12
+        elif freq == "dekad":
+            num_timesteps = 36
+        else:
             raise ValueError(
                 f"Unsupported frequency alias: {freq}. Please use 'month' or 'dekad'."
             )
@@ -606,7 +645,10 @@ def process_extractions_df(
             axis=1,
         )
         sample_dates["proposed_valid_time"] = sample_dates.apply(
-            lambda xx: get_best_valid_time(xx), axis=1
+            get_best_valid_time,
+            axis=1,
+            valid_time_buffer=valid_time_buffer,
+            num_timesteps=num_timesteps,
         )
 
         # remove invalid samples

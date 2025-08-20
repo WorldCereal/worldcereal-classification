@@ -1,4 +1,3 @@
-import ast
 import copy
 import logging
 import random
@@ -57,12 +56,15 @@ def color_distance(c1, c2):
 
 
 def generate_distinct_colors(n, min_distance=100):
-    colors = [(186, 186, 186)]  # grey is reserved for no-cropland
-    while len(colors) < n:
+    colors = [
+        (186, 186, 186),
+        (255, 255, 255),
+    ]  # grey is reserved for no-cropland, white for no data
+    while len(colors) < n + 2:  # +2 for no-cropland and no-data
         new_color = generate_random_color()
         if all(color_distance(new_color, c) > min_distance for c in colors):
             colors.append(new_color)
-    return colors[1:]
+    return colors[2:]
 
 
 def _get_colormap(product, lut=None):
@@ -73,156 +75,14 @@ def _get_colormap(product, lut=None):
         if lut is not None:
             logger.info((f"Assigning random color map for product {product}. "))
             colormap = {}
-            distinct_colors = generate_distinct_colors(len(lut))
-            for i, color in enumerate(distinct_colors):
-                colormap[i] = (*color, 255)
-            if product == "croptype":
-                colormap[254] = (186, 186, 186, 255)  # add no cropland color
+            # Generate distinct colors for the LUT
+            distinct_colors = generate_distinct_colors(len(lut.values()))
+            for code, color in zip(list(lut.values()), distinct_colors):
+                colormap[code] = (*color, 255)
         else:
             colormap = None
 
     return colormap
-
-
-def prepare_visualization(results):
-
-    final_paths = {}
-    colormaps = {}
-
-    for product, product_params in results.products.items():
-
-        paths = {}
-
-        # Get product parameters
-        basepath = product_params["path"]
-        if basepath is None:
-            logger.warning("No products downloaded. Aborting!")
-            return None
-        product_type = product_params["type"].value
-        temporal_extent = product_params["temporal_extent"]
-        lut = product_params["lut"]
-
-        # Adjust LUT for crop type product
-        if product_type == "croptype":
-            # add no cropland class
-            lut["no_cropland"] = 254
-
-        # get properties and data from input file
-        with rasterio.open(basepath, "r") as src:
-            labels = src.read(1).astype(np.uint8)
-            probs = src.read(2).astype(np.uint8)
-            meta = src.meta
-
-        nodata = _get_nodata(product_type)
-        if product_type not in colormaps:
-            colormaps[product_type] = _get_colormap(product_type, lut)
-
-        # construct dictionary of output files to be generated
-        outfiles = {
-            "classification": {
-                "data": labels,
-                "colormap": colormaps[product_type],
-                "nodata": nodata,
-                "lut": lut,
-            },
-            "probability": {
-                "data": probs,
-                "colormap": _get_colormap("probability"),
-                "nodata": _get_nodata("probability"),
-                "lut": None,
-            },
-        }
-
-        # write output files
-        meta.update(count=1)
-        meta.update(dtype=rasterio.uint8)
-        for label, settings in outfiles.items():
-            # construct final output path
-            filename = f"{product}_{label}_{temporal_extent.start_date}_{temporal_extent.end_date}.tif"
-            outpath = basepath.parent / filename
-            bandnames = [label]
-            meta.update(nodata=settings["nodata"])
-            with rasterio.open(outpath, "w", **meta) as dst:
-                dst.write(settings["data"], indexes=1)
-                dst.nodata = settings["nodata"]
-                for i, b in enumerate(bandnames):
-                    dst.update_tags(i + 1, band_name=b)
-                    if settings["lut"] is not None:
-                        dst.update_tags(i + 1, lut=settings["lut"])
-                if settings["colormap"] is not None:
-                    dst.write_colormap(1, settings["colormap"])
-            paths[label] = outpath
-
-        final_paths[product] = paths
-
-    return final_paths
-
-
-def visualize_classification(rasters, product):
-    """Function to visualize a classification raster using matplotlib.
-
-    Parameters
-    ----------
-    rasters : Dict[str, Dict[str, Path]]
-        Dictionary containing all generated rasters.
-        Output of function prepare_visualization.
-    product : str
-        Name of the product you wish to visualize.
-        e.g. "cropland"
-    """
-
-    filepath = rasters[product]["classification"]
-
-    with rasterio.open(filepath, "r") as src:
-        arr_classif = src.read().squeeze()
-        colormap = src.colormap(1)
-        lut = ast.literal_eval(src.tags(1)["lut"])
-
-    # Filter colormap based on LUT (lookup table)
-    colormap = {k: v for k, v in colormap.items() if k in lut.values()}
-
-    # Apply RGB scaling
-    colormap = {key: scale_rgb(value) for key, value in colormap.items()}
-
-    # Create a custom ListedColormap
-    cmap = mpl.colors.ListedColormap([colormap[key] for key in sorted(colormap.keys())])
-
-    fig, ax = plt.subplots()
-
-    # create a second axes for the colorbar
-    ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
-
-    # Get class labels and set colorbar boundaries
-    classlabels = list(lut.keys())
-    bounds = np.linspace(0, len(classlabels), len(classlabels) + 1)
-
-    # Define a norm for the colormap
-    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-
-    # plot the raster
-    ax.imshow(arr_classif, cmap=cmap, norm=norm)
-
-    # Create a colorbar with class labels
-    cb = mpl.colorbar.ColorbarBase(
-        ax2,
-        cmap=cmap,
-        norm=norm,
-        spacing="proportional",
-        boundaries=bounds,
-        # Middle of each class
-        ticks=np.arange(len(classlabels)) + 0.5,
-        format="%1i",
-    )
-
-    # Set the colorbar ticks and labels
-    cb.set_ticks(np.arange(len(classlabels)) + 0.5)
-    cb.set_ticklabels(classlabels)
-
-    # Turn off axis
-    ax.axis("off")
-
-    # Display the plot
-    plt.show()
 
 
 # Helper function to scale RGB values
@@ -276,19 +136,22 @@ def visualize_product(
                 "cropland": 1,
             }
 
-    # Adjust LUT for crop type product
-    if product.startswith("croptype"):
-        # add no cropland class
-        lut["no_cropland"] = 254
-
     with rasterio.open(path, "r") as src:
         classification = src.read(1).astype(np.uint8)
         probability = src.read(2).astype(np.uint8)
         meta = src.meta
 
     nodata = _get_nodata(product)
+
     colormap = _get_colormap(product, lut)
-    colormap = {k: v for k, v in colormap.items() if k in lut.values()}
+    # Adjust LUT and colormap for crop type product
+    if product.startswith("croptype"):
+        # add no cropland class
+        lut["no_cropland"] = 254
+        colormap[254] = (186, 186, 186, 255)  # no cropland color
+    # add no data color to lut and colormap
+    lut["no_data"] = nodata
+    colormap[nodata] = (255, 255, 255, 255)  # no data color
 
     if write:
         # Write the classification raster with colormap
@@ -315,8 +178,12 @@ def visualize_product(
     # Apply RGB scaling
     colormap = {key: scale_rgb(value) for key, value in colormap.items()}
 
+    # Sort colormap according to keys
+    colormap = {key: colormap[key] for key in sorted(colormap.keys())}
+    codes = list(colormap.keys())
+
     # Create a custom ListedColormap
-    cmap = mpl.colors.ListedColormap([colormap[key] for key in sorted(colormap.keys())])
+    cmap = mpl.colors.ListedColormap([colormap[key] for key in codes])
 
     fig, ax = plt.subplots()
 
@@ -324,8 +191,10 @@ def visualize_product(
     ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
 
     # Get class labels and set colorbar boundaries
-    classlabels = list(lut.keys())
-    bounds = np.linspace(0, len(classlabels), len(classlabels) + 1)
+    # define boundaries halfway between each code:
+    bounds = [(a + b) / 2 for a, b in zip(codes, codes[1:])]
+    # extend for under/overflow:
+    bounds = [codes[0] - 0.5] + bounds + [codes[-1] + 0.5]
 
     # Define a norm for the colormap
     norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
@@ -334,19 +203,23 @@ def visualize_product(
     ax.imshow(classification, cmap=cmap, norm=norm)
 
     # Create a colorbar with class labels
+    tick_positions = np.arange(len(codes)) + 0.5
+    uniform_bounds = np.arange(len(codes) + 1)  # [0, 1, 2, ..., len(codes)]
+    norm_cb = mpl.colors.BoundaryNorm(uniform_bounds, cmap.N)  # norm for colorbar
     cb = mpl.colorbar.ColorbarBase(
         ax2,
         cmap=cmap,
-        norm=norm,
-        spacing="proportional",
-        boundaries=bounds,
-        # Middle of each class
-        ticks=np.arange(len(classlabels)) + 0.5,
+        norm=norm_cb,
+        spacing="uniform",
+        boundaries=uniform_bounds,
+        ticks=tick_positions,
         format="%1i",
     )
 
-    # Set the colorbar ticks and labels
-    cb.set_ticks(np.arange(len(classlabels)) + 0.5)
+    # Set the colorbar labels
+    # invert lut
+    lut = {v: k for k, v in lut.items()}
+    classlabels = [str(lut.get(code, code)) for code in codes]
     cb.set_ticklabels(classlabels)
 
     # Turn off axis

@@ -114,11 +114,38 @@ def test_worldcereal_preprocessed_inputs_from_patches_graph():
         connection=vito_connection(),
         temporal_extent=temporal_extent,
         ref_id="test_ref_id",
+        s1_orbit_state="DESCENDING",
         epsg=32631,
     )
 
     # Ref file with processing graph
     ref_graph = basedir / "testresources" / "preprocess_from_patches_graph.json"
+
+    # # uncomment to save current graph to the ref file
+    # with open(ref_graph, "w") as f:
+    #     f.write(json.dumps(cube.flat_graph(), indent=4))
+
+    with open(ref_graph, "r") as f:
+        expected = json.load(f)
+        assert expected == cube.flat_graph()
+
+
+def test_worldcereal_preprocessed_inputs_from_patches_no_s1_graph():
+    """This version gets a preprocessed cube from extracted patches.
+    when S1 is not available and thus disabled."""
+
+    temporal_extent = TemporalContext("2020-01-01", "2020-12-31")
+
+    cube = worldcereal_preprocessed_inputs_from_patches(
+        connection=vito_connection(),
+        temporal_extent=temporal_extent,
+        ref_id="test_ref_id",
+        s1_orbit_state=None,  # Should disable S1
+        epsg=32631,
+    )
+
+    # Ref file with processing graph
+    ref_graph = basedir / "testresources" / "preprocess_from_patches_graph_no_s1.json"
 
     # # uncomment to save current graph to the ref file
     # with open(ref_graph, "w") as f:
