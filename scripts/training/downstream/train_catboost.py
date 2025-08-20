@@ -9,11 +9,10 @@ The script uses the Trainer class pattern from the old version with modern evalu
 and on-the-fly embedding computation from the new version.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -57,7 +56,7 @@ class PrestoEmbeddingTrainer:
         num_workers: int = 8,
         modelversion: str = "001",
         detector: str = "cropland",
-        downstream_classes: dict = None,
+        downstream_classes: Optional[dict] = None,
     ):
         self.presto_model_path = Path(presto_model_path)
         self.data_dir = Path(data_dir)
@@ -97,7 +96,7 @@ class PrestoEmbeddingTrainer:
         )
 
         # Initialize config
-        self.config = {}
+        self.config: Dict[str, Any] = {}
 
     def _check_for_embeddings(self) -> bool:
         """Check if pre-computed embeddings exist."""
@@ -545,7 +544,7 @@ class PrestoEmbeddingTrainer:
             true_labels, preds, xticks_rotation="vertical"
         )
         fig, ax = plt.subplots(figsize=(fig_size, fig_size))
-        cm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+        cm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)  # type: ignore
         plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
         plt.tight_layout()
         plt.savefig(self.output_dir / "CM_abs.png")
@@ -556,7 +555,7 @@ class PrestoEmbeddingTrainer:
             true_labels, preds, normalize="true", xticks_rotation="vertical"
         )
         fig, ax = plt.subplots(figsize=(fig_size, fig_size))
-        cm_norm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
+        cm_norm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)  # type: ignore
         for text in ax.texts:
             val = float(text.get_text())
             text.set_text(f"{val:.2f}")
@@ -747,7 +746,7 @@ def main() -> None:
         args = ManualArgs()
         logger.info("Using manual configuration for debug mode")
     else:
-        args = parse_args()
+        args = parse_args()  # type: ignore
         logger.info("Using command line arguments")
 
         # Parse downstream_classes JSON string if provided
