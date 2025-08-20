@@ -13,6 +13,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Union
 import geopandas as gpd
 import pandas as pd
 import pystac
+import pystac_client
 import xarray as xr
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
@@ -58,6 +59,8 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
 RETRIES = int(os.environ.get("WORLDCEREAL_EXTRACTION_RETRIES", 5))
 DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
 BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
+
+STAC_ROOT_URL = "https://stac.openeo.vito.be/"
 
 
 def extraction_job_quality_check(
@@ -306,8 +309,18 @@ def generate_output_path_patch(
     )
 
 
-def load_dataframe(df_path: Path, extract_value: int = 0) -> gpd.GeoDataFrame:
-    """Load the input dataframe from the given path."""
+def load_dataframe(
+    df_path: Path,
+    extract_value: int = 0,
+    check_existing: bool = False,
+    collection: Optional[ExtractionCollection] = None,
+    ref_id: Optional[str] = None,
+) -> gpd.GeoDataFrame:
+    """
+    Load the input dataframe from the given path.
+    Optionally filter the dataframe based on the `extract_value` and check
+    for existing samples in the STAC API.
+    """
     pipeline_log.info("Loading input dataframe from %s.", df_path)
 
     # Specify a filter for "extract" column. Only extract the samples
@@ -317,9 +330,64 @@ def load_dataframe(df_path: Path, extract_value: int = 0) -> gpd.GeoDataFrame:
     pipeline_log.info("Reading the input dataframe with filters: %s", filters)
 
     if df_path.name.endswith("parquet"):
-        return gpd.read_parquet(df_path, filters=filters)
+        df = gpd.read_parquet(df_path, filters=filters)
     else:
-        return gpd.read_file(df_path, filters=filters)
+        df = gpd.read_file(df_path, filters=filters)
+
+    if check_existing:
+        if collection is None:
+            pipeline_log.warning(
+                "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections, but collection is None."
+            )
+        elif collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
+            pipeline_log.info(
+                "Checking existing samples in STAC API for ref_id %s, collection %s.",
+                ref_id,
+                collection,
+            )
+            client = pystac_client.Client.open(STAC_ROOT_URL)
+            samples_list: list[str] = []
+
+            if collection == "PATCH_SENTINEL1":
+                STAC_COLLECTION = "worldcereal_sentinel_1_patch_extractions"
+            elif collection == "PATCH_SENTINEL2":
+                STAC_COLLECTION = "worldcereal_sentinel_2_patch_extractions"
+            else:
+                raise ValueError(
+                    f"Collection {collection} is not supported for STAC check."
+                )
+
+            stac_search = client.search(
+                collections=[STAC_COLLECTION],
+                filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]},
+                filter_lang="cql2-json",
+                fields={"exclude": ["assets", "links", "geometry", "bbox"]},
+            )
+            for item in stac_search.items():
+                sample_id = item.properties.get("sample_id")
+                if sample_id:
+                    samples_list.append(sample_id)
+            df = df[~df["sample_id"].isin(samples_list)]
+            if len(df) > 0:
+                pipeline_log.info(
+                    "Filtered out %s samples that already exist in STAC API for collection %s.",
+                    len(samples_list),
+                    collection,
+                )
+            else:
+                pipeline_log.info(
+                    "All samples already exist in STAC API for ref_id %s, collection %s. No samples to extract.",
+                    ref_id,
+                    collection,
+                )
+                return gpd.GeoDataFrame()
+        else:
+            pipeline_log.warning(
+                "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections. ",
+                "Collection %s is not supported. Skipping STAC check.",
+                collection,
+            )
+    return df
 
 
 def prepare_job_dataframe(
@@ -636,6 +704,7 @@ def _prepare_extraction_jobs(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
+    check_existing_extractions: bool = False,
 ) -> tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]:
     """Function responsible for preparing the extraction jobs:
     splitting jobs, preparing the job manager, setting up the extraction functions.
@@ -672,6 +741,9 @@ def _prepare_extraction_jobs(
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
+    check_existing_extractions : bool, optional
+        Check if the samples already exist in the STAC API and filter them out,
+        by default False
 
     Returns
     -------
@@ -715,7 +787,13 @@ def _prepare_extraction_jobs(
         )
     else:
         # Load the input dataframe and build the job dataframe
-        samples_gdf = load_dataframe(samples_df_path, extract_value)
+        samples_gdf = load_dataframe(
+            samples_df_path,
+            extract_value,
+            check_existing=check_existing_extractions,
+            collection=collection,
+            ref_id=ref_id,
+        )
         samples_gdf["ref_id"] = ref_id
         pipeline_log.info("Creating new job tracking dataframe.")
         job_df = prepare_job_dataframe(
@@ -802,6 +880,7 @@ def run_extractions(
     extract_value: int = 1,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
+    check_existing_extractions: bool = False,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
 
@@ -837,6 +916,9 @@ def run_extractions(
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
         Save metadata of extractions to STAC API (requires authentication), by default False
+    check_existing_extractions : bool, optional
+        Check if the samples already exist in the STAC API and filter them out,
+        by default False
 
     """
     pipeline_log.info("Starting the extractions workflow...")
@@ -854,6 +936,7 @@ def run_extractions(
         extract_value=extract_value,
         backend=backend,
         write_stac_api=write_stac_api,
+        check_existing_extractions=check_existing_extractions,
     )
 
     # Run the extraction jobs
