@@ -189,3 +189,9 @@ notebooks/catboost_info/*
 
 .notebook-tests/
 .local-presto-test/
+
+# output files of notebook runs
+notebooks/download/*
+notebooks/extractions/*
+notebooks/runs/*
+notebooks/bbox/*
