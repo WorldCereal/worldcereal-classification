@@ -26,7 +26,7 @@ from openeo_gfmap.utils.catalogue import select_s1_orbitstate_vvvh
 from pyproj import CRS
 from tqdm import tqdm
 
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
+from worldcereal.openeo.feature_extractor import compute_slope
 from worldcereal.openeo.preprocessing import (
     spatially_filter_cube,
     worldcereal_preprocessed_inputs,
@@ -291,8 +291,7 @@ def postprocess_extracted_file(
     if "slope" not in ds:
         pipeline_log.info("Computing slope")
         slope = (
-            PrestoFeatureExtractor()
-            .compute_slope(
+            compute_slope(
                 ds.isel(t=1)[["elevation"]].to_array(dim="bands"), resolution=10
             )
             .sel(bands="slope", drop=True)

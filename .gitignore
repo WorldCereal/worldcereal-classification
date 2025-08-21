@@ -47,6 +47,14 @@ MANIFEST
 .noseids
 experimental/**
 
+# By default don't track notebooks
+notebooks/**
+notebooks/*.ipynb
+
+# Misc
+scripts/docker
+scripts/other/**
+
 # don't track catboost training info
 src/worldcereal/train/catboost_info
 
@@ -169,7 +177,7 @@ notebooks/catboost_info/*
 *.cbm
 *.pt
 *.onnx
-*.nc
+# *.nc
 *.7z
 *.dmg
 *.gz
@@ -181,3 +189,9 @@ notebooks/catboost_info/*
 
 .notebook-tests/
 .local-presto-test/
+
+# output files of notebook runs
+notebooks/download/*
+notebooks/extractions/*
+notebooks/runs/*
+notebooks/bbox/*

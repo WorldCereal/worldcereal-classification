@@ -1,5 +1,8 @@
 import glob
-from typing import Literal, Optional, Union
+import importlib.resources
+import json
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import duckdb
 import geopandas as gpd
@@ -8,10 +11,124 @@ import pandas as pd
 import requests
 from loguru import logger
 from openeo_gfmap import TemporalContext
+from prometheo.utils import DEFAULT_SEED
 from shapely import wkt
 from shapely.geometry import Polygon
 
+from worldcereal.data import croptype_mappings
 from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def get_class_mappings() -> Dict:
+    """Method to get the WorldCereal class mappings for downstream task.
+
+    Returns
+    -------
+    Dict
+        the resulting dictionary with the class mappings
+    """
+    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
+        CLASS_MAPPINGS = json.load(f)
+
+    return CLASS_MAPPINGS
+
+
+def get_legend() -> pd.DataFrame:
+    """Method to get the latest version of the WorldCereal legend.
+
+    Returns
+    -------
+    pd.DataFrame
+        the latest parsed version of the WorldCereal legend
+    """
+
+    artifactory_base_url = (
+        "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
+    )
+    crop_legend_url = (
+        artifactory_base_url + "legend/WorldCereal_LC_CT_legend_latest.csv"
+    )
+
+    crop_legend = pd.read_csv(crop_legend_url, header=0, sep=";")
+    crop_legend["ewoc_code"] = crop_legend["ewoc_code"].str.replace("-", "").astype(int)
+    crop_legend = crop_legend.ffill(axis=1)
+
+    return crop_legend
+
+
+def map_classes(
+    df: pd.DataFrame,
+    finetune_classes="CROPTYPE0",
+    class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
+    filter_classes=[0, 1000000000],
+) -> pd.DataFrame:
+    """
+    Maps the original classes in a DataFrame to fine-tuning classes based on predefined mappings.
+
+    This function takes a DataFrame containing 'ewoc_code' column and maps these codes to new classes
+    defined in `class_mappings` dictionary under the specified fine-tuning class set. It also
+    creates a 'balancing_class' column based on the WorldCereal crop legend (dynamically loaded)
+    for potential class balancing.
+
+    Args:
+        df (pd.DataFrame):
+            Input DataFrame containing an 'ewoc_code' column with original class codes.
+        finetune_classes (str):
+            The set of fine-tuning classes to use from CLASS_MAPPINGS.
+            This should be one of the keys in CLASS_MAPPINGS.
+            Most popular maps: "LANDCOVER14", "CROPTYPE9", "CROPTYPE0", "CROPLAND2".
+            Defaults to "CROPLAND2".
+        class_mappings (dict, optional):
+            Dictionary containing the mapping of original class codes to new class labels.
+        filter_classes (list, optional):
+            List of class codes to exclude from the dataset.
+            Defaults to [0, 1000000000].
+
+    Returns:
+        pd.DataFrame: The processed DataFrame with added columns:
+            - 'finetune_class': The mapped class labels
+            - 'balancing_class': Class labels for dataset balancing
+
+    Notes:
+        - Removes classes that are not present in the CLASS_MAPPINGS dictionary
+    """
+
+    df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
+    legend = get_legend().set_index("ewoc_code")
+
+    # Check if all classes are present in the mapping dictionary
+    existing_codes_list = set(df["ewoc_code"].astype(int).astype(str).unique())
+    # Compute codes that are missing in the mapping dictionary
+    missing_codes = existing_codes_list - set(class_mappings[finetune_classes])
+    if missing_codes:
+        missing_classes_count = {}
+        for code in list(missing_codes):
+            if int(code) not in legend.index:
+                logger.warning(
+                    f"Class code `{code}` is not present in the WorldCereal legend, and will be skipped!"
+                )
+                continue
+            class_name = legend.loc[int(code)]["label_full"]
+            class_count = (df["ewoc_code"] == int(code)).sum()
+            missing_classes_count[f"{code} - {class_name}"] = class_count
+
+        if len(missing_classes_count) > 0:
+            logger.warning(
+                f"Some classes are missing in the mapping dictionary and thus will be removed: {missing_classes_count}. "
+                f"A total of {(df.ewoc_code.astype(str).isin(missing_codes)).sum()} samples will be removed from the dataframe."
+            )
+        df = df.loc[~df["ewoc_code"].astype(int).astype(str).isin(missing_codes)].copy()
+
+    df.loc[:, "finetune_class"] = df["ewoc_code"].map(
+        {int(k): v for k, v in class_mappings[finetune_classes].items()}
+    )
+
+    # Will be used for balancing if the flag is set
+    df.loc[:, "balancing_class"] = df["ewoc_code"].map(legend["sampling_label"])
+
+    return df
 
 
 def query_public_extractions(
@@ -573,6 +690,82 @@ def process_extractions_df(
     )
 
     return df_processed
+
+
+def join_with_world_df(dataframe: pd.DataFrame) -> pd.DataFrame:
+    filename = (
+        "world-administrative-boundaries/world-administrative-boundaries.geoparquet"
+    )
+    world_df = gpd.read_parquet(DATA_DIR / filename)
+    world_df = world_df.drop(columns=["status", "color_code", "iso_3166_1_"])
+
+    gdataframe = gpd.GeoDataFrame(
+        data=dataframe,
+        geometry=gpd.GeoSeries.from_xy(x=dataframe.lon, y=dataframe.lat),
+        crs="EPSG:4326",
+    )
+    # project to non geographic CRS, otherwise geopandas gives a warning
+    joined = gpd.sjoin_nearest(
+        gdataframe.to_crs("EPSG:3857"), world_df.to_crs("EPSG:3857"), how="left"
+    )
+    joined = joined[~joined.index.duplicated(keep="first")]
+    if joined.isna().any(axis=1).any():
+        logger.warning("Some coordinates couldn't be matched to a country")
+    return joined.to_crs("EPSG:4326")
+
+
+def split_df(
+    df: pd.DataFrame,
+    val_sample_ids: Optional[List[str]] = None,
+    val_countries_iso3: Optional[List[str]] = None,
+    val_years: Optional[List[int]] = None,
+    val_size: Optional[float] = None,
+    train_only_samples: Optional[List[str]] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if val_size is not None:
+        assert (
+            (val_countries_iso3 is None)
+            and (val_years is None)
+            and (val_sample_ids is None)
+        )
+        val, train = np.split(
+            df.sample(frac=1, random_state=DEFAULT_SEED), [int(val_size * len(df))]
+        )
+        logger.info(f"Using {len(train)} train and {len(val)} val samples")
+        return pd.DataFrame(train), pd.DataFrame(val)
+    if val_sample_ids is not None:
+        assert (val_countries_iso3 is None) and (val_years is None)
+        is_val = df.sample_id.isin(val_sample_ids)
+        is_train = ~df.sample_id.isin(val_sample_ids)
+    elif val_countries_iso3 is not None:
+        assert (val_sample_ids is None) and (val_years is None)
+        df = join_with_world_df(df)
+        for country in val_countries_iso3:
+            assert df.iso3.str.contains(country).any(), (
+                f"Tried removing {country} but it is not in the dataframe"
+            )
+        if train_only_samples is not None:
+            is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
+                train_only_samples
+            )
+        else:
+            is_val = df.iso3.isin(val_countries_iso3)
+        is_train = ~df.iso3.isin(val_countries_iso3)
+    elif val_years is not None:
+        df["end_date_ts"] = pd.to_datetime(df.end_date)
+        if train_only_samples is not None:
+            is_val = df.end_date_ts.dt.year.isin(val_years) & ~df.sample_id.isin(
+                train_only_samples
+            )
+        else:
+            is_val = df.end_date_ts.dt.year.isin(val_years)
+        is_train = ~df.end_date_ts.dt.year.isin(val_years)
+
+    logger.info(
+        f"Using {len(is_val) - sum(is_val)} train and {sum(is_val)} val samples"
+    )
+
+    return df[is_train], df[is_val]
 
 
 def _check_geom(row):

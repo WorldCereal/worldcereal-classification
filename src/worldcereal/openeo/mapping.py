@@ -4,11 +4,11 @@ sub-module.
 """
 
 from typing import Optional
+from pathlib import Path
 
+import openeo
 from openeo import DataCube
 from openeo_gfmap import TemporalContext
-from openeo_gfmap.features.feature_extractor import apply_feature_extractor
-from openeo_gfmap.inference.model_inference import apply_model_inference
 from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 
 from worldcereal.parameters import (
@@ -45,10 +45,15 @@ def _cropland_map(
     """
 
     # Run feature computer
-    features = apply_feature_extractor(
-        feature_extractor_class=cropland_parameters.feature_extractor,
-        cube=inputs,
-        parameters=cropland_parameters.feature_parameters.model_dump(),
+    feature_parameters = cropland_parameters.feature_parameters.model_dump()
+
+    feature_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "feature_extractor.py",
+        context=feature_parameters,
+    )
+
+    features = inputs.apply_neighborhood(
+        process=feature_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
@@ -59,15 +64,16 @@ def _cropland_map(
         ],
     )
 
-    # Run model inference on features
-    parameters = cropland_parameters.classifier_parameters.model_dump(
-        exclude=["classifier"]
-    )
 
-    classes = apply_model_inference(
-        model_inference_class=cropland_parameters.classifier,
-        cube=features,
-        parameters=parameters,
+    # Run model inference on features
+    inference_parameters = cropland_parameters.classifier_parameters.model_dump()
+
+    inference_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "inference.py",
+        context=inference_parameters)
+
+    classes = features.apply_neighborhood(
+        process=inference_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
@@ -130,10 +136,15 @@ def _croptype_map(
     """
 
     # Run feature computer
-    features = apply_feature_extractor(
-        feature_extractor_class=croptype_parameters.feature_extractor,
-        cube=inputs,
-        parameters=croptype_parameters.feature_parameters.model_dump(),
+    feature_parameters = croptype_parameters.feature_parameters.model_dump()
+
+    feature_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "feature_extractor.py",
+        context=feature_parameters,
+    )
+
+    features = inputs.apply_neighborhood(
+        process=feature_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
@@ -144,15 +155,14 @@ def _croptype_map(
         ],
     )
 
-    # Run model inference on features
-    parameters = croptype_parameters.classifier_parameters.model_dump(
-        exclude=["classifier"]
-    )
 
-    classes = apply_model_inference(
-        model_inference_class=croptype_parameters.classifier,
-        cube=features,
-        parameters=parameters,
+    # Run model inference on features
+    inference_parameters = croptype_parameters.classifier_parameters.model_dump()
+
+    inference_udf = openeo.UDF.from_file(path=Path(__file__).resolve().parent / "inference.py", context=inference_parameters)
+
+    classes = features.apply_neighborhood(
+        process=inference_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
             {"dimension": "y", "unit": "px", "value": 128},
@@ -214,18 +224,19 @@ def _postprocess(
     """
 
     # Run postprocessing on the raw classification output
-    # Note that this uses the `apply_model_inference` method even though
-    # it is not truly model inference
-    parameters = postprocess_parameters.model_dump(exclude=["postprocessor"])
+    parameters = postprocess_parameters.model_dump()
     parameters.update({"classifier_url": classifier_url})
 
-    postprocessed_classes = apply_model_inference(
-        model_inference_class=postprocess_parameters.postprocessor,
-        cube=classes,
-        parameters=parameters,
+
+    postprocess_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "postprocess.py",
+        context=parameters)
+
+    postprocessed_classes = classes.apply_neighborhood(
+        process=postprocess_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
-            {"dimension": "y", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128}
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},
