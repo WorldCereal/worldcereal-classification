@@ -323,7 +323,7 @@ def select_timestep_from_temporal_features(
     return features
 
 
-def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
+def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     """Executes the feature extraction process on the input array."""
 
     if epsg is None:
@@ -349,7 +349,7 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
 
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
-    inarr = inarr.transpose("bands", "t", "x", "y")
+    inarr = inarr.transpose("bands", "t", "x", "y")  # Presto/Prometheo expects xy dimension order
 
     # Change the band names
     new_band_names = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
@@ -415,6 +415,8 @@ def execute(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
     # If temporal prediction, select specific timestep based on target_date
     if temporal_prediction:
         features = select_timestep_from_temporal_features(features, target_date)
+
+    features = features.transpose("bands", "y", "x")  # openEO expects yx order after the UDF
 
     return features
 
@@ -525,9 +527,7 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     if parameters.get("rescale_s1", True):
         arr = rescale_s1_backscatter(arr)
 
-    arr = execute(inarr=arr, parameters=parameters, epsg=epsg).transpose(
-        "bands", "y", "x"
-    )
+    arr = extract_presto_embeddings(inarr=arr, parameters=parameters, epsg=epsg)
 
     cube = XarrayDataCube(arr)
 

@@ -105,7 +105,7 @@ def predict(onnx_session: ort.InferenceSession, lut_sorted: dict, features: np.n
         [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]
     ).transpose()
 
-def execute(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
+def apply_inference(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
 
     if "classifier_url" not in parameters:
         raise ValueError('Missing required parameter "classifier_url"')
@@ -114,7 +114,7 @@ def execute(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
 
     # shape and indices for output ("xy", "bands")
     x_coords, y_coords = inarr.x.values, inarr.y.values
-    inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()
+    inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()  # Transpose to xy since CatBoost expects this
 
     onnx_session, lut_sorted = (
         load_and_prepare_model(classifier_url)
@@ -135,7 +135,7 @@ def execute(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
             "x": x_coords,
             "y": y_coords,
         },
-    )
+    ).transpose("bands", "y", "x")  # openEO expects yx order after the UDF
 
     return classification_da
 
@@ -154,11 +154,11 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
     parameters[EPSG_HARMONIZED_NAME] = proj
 
-    arr = cube.get_array().transpose("bands", "y", "x")
-    arr = execute(
+    arr = cube.get_array()
+    arr = apply_inference(
         inarr=arr,
         parameters=parameters,
-    ).transpose("bands", "y", "x")
+    )
 
     cube = XarrayDataCube(arr)
 
