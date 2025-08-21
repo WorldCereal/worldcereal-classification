@@ -267,7 +267,9 @@ def reclassify(
     )
 
 
-def execute(inarr: xr.DataArray, parameters: dict) -> xr.DataArray:
+def apply_postprocessing(inarr: xr.DataArray, parameters: dict) -> xr.DataArray:
+
+    inarr = inarr.transpose("bands", "y", "x")  # Ensure correct dimension order for openEO backend
 
     if "classifier_url" not in parameters:
         raise ValueError('Missing required parameter "classifier_url"')
@@ -331,6 +333,8 @@ def execute(inarr: xr.DataArray, parameters: dict) -> xr.DataArray:
             f"Unknown post-processing method: {parameters.get('method')}"
         )
 
+    new_labels = new_labels.transpose("bands", "y", "x")  # Ensure correct dimension order for openEO backend
+
     return new_labels
 
 
@@ -343,11 +347,11 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     cube = udf_data.datacube_list[0]
     parameters = copy.deepcopy(udf_data.user_context)
 
-    arr = cube.get_array().transpose("bands", "y", "x")
-    arr = execute(
+    arr = cube.get_array()
+    arr = apply_postprocessing(
         inarr=arr,
         parameters=parameters,
-    ).transpose("bands", "y", "x")
+    )
 
     cube = XarrayDataCube(arr)
 
