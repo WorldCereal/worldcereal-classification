@@ -6,7 +6,7 @@ import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from openeo_gfmap import TemporalContext
-from presto.utils import DEFAULT_SEED
+from prometheo.utils import DEFAULT_SEED
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     classification_report,
