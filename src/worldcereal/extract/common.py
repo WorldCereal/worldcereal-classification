@@ -16,17 +16,15 @@ import pystac
 import pystac_client
 import xarray as xr
 import grp
-from dataclasses import dataclass
 
 #TODO move this dependence off
 
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
-from openeo_gfmap.manager.job_manager import GFMAPJobManager
-from openeo.extra.job_management import MultiBackendJobManager
-from openeo import Connection
 
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
+
+from worldcereal.extract.jobmanager import ExtractionJobManager  
 
 from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
@@ -49,7 +47,6 @@ from worldcereal.stac.stac_api_interaction import (
     StacApiInteraction,
     VitoStacApiAuthentication,
 )
-from worldcereal.utils.retry import retry
 
 from worldcereal.extract.patch_s1 import (  # isort: skip
     create_job_patch_s1,
@@ -63,10 +60,6 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
     generate_output_path_patch_worldcereal,
 )
 
-
-RETRIES = int(os.environ.get("WORLDCEREAL_EXTRACTION_RETRIES", 5))
-DELAY = int(os.environ.get("WORLDCEREAL_EXTRACTION_DELAY", 10))
-BACKOFF = int(os.environ.get("WORLDCEREAL_EXTRACTION_BACKOFF", 5))
 
 STAC_ROOT_URL = "https://stac.openeo.vito.be/"
 
@@ -694,14 +687,16 @@ def run_extractions(
     path_fn = setup_output_path_fn(collection)
     post_job_fn = setup_post_job_fn(collection, extract_value, write_stac_api)
 
-    # Initialize job manager
+    # Initialize job manager with STAC support if requested
     job_manager = _initialize_job_manager(
         output_folder,
         path_fn,
         post_job_fn,
         backend,
         parallel_jobs,
-        restart_failed
+        stac_enabled=write_stac_api,
+        collection_id=f"{ref_id}_extractions",
+        collection_description=f"Extractions for {collection.name} with ref_id {ref_id}",
     )
 
     # --- Run the extraction jobs ---
@@ -712,12 +707,10 @@ def run_extractions(
         tracking_df_path=tracking_df_path,
     )
 
-    # --- Merge the extraction jobs (for point extractions) ---
-    if collection == ExtractionCollection.POINT_WORLDCEREAL:
-        _merge_extraction_jobs(output_folder, ref_id)
-
-    pipeline_log.info("Extractions workflow completed.")
-    pipeline_log.info(f"Results stored in folder: {output_folder}.")
+    # --- Write STAC collection if enabled ---
+    if write_stac_api:
+        job_manager.write_stac()
+        pipeline_log.info("STAC collection saved successfully.")
 
 
 def _load_or_create_job_dataframe(
@@ -767,30 +760,33 @@ def _initialize_job_manager(
     post_job_fn: Callable,
     backend: Backend,
     parallel_jobs: int = 2,
-    restart_failed: bool = False,
-) -> "GFMAPJobManager":
-    """Create and configure the extraction job manager."""
-    pipeline_log.info("Initializing the job manager.")
-    job_manager = GFMAPJobManager(
+    stac_enabled: bool = False,
+    collection_id: Optional[str] = None,
+    collection_description: str = "",
+) -> ExtractionJobManager:
+    """Create and configure the extraction job manager with optional STAC support."""
+
+    job_manager = ExtractionJobManager(
         output_dir=output_folder,
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
         poll_sleep=60,
-        n_threads=1,
-        restart_failed=restart_failed,
-        stac_enabled=False,
+        stac_enabled=stac_enabled,
+        collection_id=collection_id,
+        collection_description=collection_description,
     )
+
     job_manager.add_backend(
         backend.value,
         BACKEND_CONNECTIONS[backend],
         parallel_jobs=parallel_jobs,
     )
+
     return job_manager
 
 
-@retry(exceptions=Exception, tries=RETRIES, delay=DELAY, backoff=BACKOFF, logger=pipeline_log)
 def _run_extraction_jobs(
-    job_manager: MultiBackendJobManager,
+    job_manager: ExtractionJobManager,
     job_df: pd.DataFrame,
     datacube_fn: Callable,
     tracking_df_path: Path,
