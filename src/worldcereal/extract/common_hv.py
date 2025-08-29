@@ -420,11 +420,11 @@ def _fetch_existing_sample_ids(collection_id: str, ref_id: str) -> list[str]:
 # ----------------------------
 # Job dataframe preparation
 # ----------------------------
-def prepare_job_dataframe(samples_gdf: gpd.GeoDataFrame, collection: ExtractionCollection, max_locations: int) -> pd.DataFrame:
+def prepare_job_dataframe(samples_gdf: gpd.GeoDataFrame, collection: ExtractionCollection, max_locations: int, backend: Backend) -> pd.DataFrame:
     """Prepare a job dataframe by splitting the samples and creating jobs for the specified collection."""
     pipeline_log.info("Preparing the job dataframe")
     split_dfs = _split_samples(samples_gdf, max_locations)
-    job_df = _create_jobs_for_collection(collection, split_dfs)
+    job_df = _create_jobs_for_collection(collection, split_dfs, backend)
     pipeline_log.info("Job dataframe created with %s jobs", len(job_df))
     return job_df
 
@@ -440,7 +440,7 @@ def _split_samples(samples_gdf: gpd.GeoDataFrame, max_locations: int) -> list[gp
         split_dfs.extend(split_job_s2grid(df, max_points=max_locations))
     return split_dfs
 
-def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: list[gpd.GeoDataFrame]) -> pd.DataFrame:
+def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: list[gpd.GeoDataFrame], backend: Backend) -> pd.DataFrame:
     """
     Create jobs for the specified collection from the split GeoDataFrames.
     """
@@ -453,7 +453,7 @@ def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: lis
     }
     if collection not in dataframe_creators:
         raise ValueError(f"Collection {collection} not supported")
-    return dataframe_creators[collection](split_dfs)
+    return dataframe_creators[collection](backend, split_dfs)
 
 
 # ----------------------------
@@ -908,7 +908,7 @@ def _load_or_create_job_dataframe(
     )
     samples_gdf["ref_id"] = ref_id
     pipeline_log.info("Creating new job tracking dataframe.")
-    job_df = prepare_job_dataframe(samples_gdf, collection, max_locations_per_job)
+    job_df = prepare_job_dataframe(samples_gdf, collection, max_locations_per_job, backend)
     job_df.to_csv(tracking_df_path, index=False)
     return job_df
 
