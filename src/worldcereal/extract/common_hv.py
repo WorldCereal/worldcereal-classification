@@ -16,8 +16,12 @@ import pystac
 import pystac_client
 import xarray as xr
 
-from openeo.extra.job_management import MultiBackendJobManager
+from openeo.extra.job_management import (
+        CsvJobDatabase,
+        MultiBackendJobManager
+    )
 from openeo.rest.job import BatchJob
+from openeo import Connection
 import threading
 import pickle
 from pystac import CatalogType
@@ -148,7 +152,6 @@ class ExtractionJobManager(MultiBackendJobManager):
             existing_ids = {item.id for item in self._root_collection.get_all_items()}
             new_items = [item for item in items if item.id not in existing_ids]
             self._root_collection.add_items(new_items)
-            _log.info("Added %d items to STAC collection from job %s", len(new_items), job_id)
             self._persist_stac()
 
     def write_stac(self):
@@ -777,6 +780,7 @@ def run_extractions(
     restart_failed: bool = False,
     extract_value: int = 1,
     backend=Backend.CDSE,
+    connection = Connection,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
 ) -> None:
@@ -847,7 +851,7 @@ def run_extractions(
         output_folder,
         path_fn,
         post_job_fn,
-        backend,
+        connection,
         parallel_jobs,
         stac_enabled=write_stac_api,
         collection_id=f"{ref_id}_extractions",
@@ -861,6 +865,7 @@ def run_extractions(
         datacube_fn=datacube_fn,
         tracking_df_path=tracking_df_path,
     )
+    
 
     # --- Merge the extraction jobs (for point extractions) --- #TODO check how this works?
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
@@ -917,7 +922,7 @@ def _initialize_job_manager(
     output_folder: Path,
     path_fn: Callable,
     post_job_fn: Callable,
-    backend: Backend,
+    connection: Connection,
     parallel_jobs: int = 2,
     stac_enabled: bool = False,
     collection_id: Optional[str] = None,
@@ -935,6 +940,10 @@ def _initialize_job_manager(
         collection_description=collection_description,
     )
 
+    job_manager.add_backend(
+            "cdse", connection=connection, parallel_jobs=parallel_jobs
+        )
+
 
     return job_manager
 
@@ -947,7 +956,13 @@ def _run_extraction_jobs(
 ) -> None:
     """Execute extraction jobs using the manager."""
     pipeline_log.info("Running the extraction jobs.")
-    job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
+
+    job_db = CsvJobDatabase(path=tracking_df_path)
+    job_df = job_manager._normalize_df(job_df)
+    job_db.persist(job_df)
+
+
+    job_manager.run_jobs(df=job_df, job_db=job_db, start_job=datacube_fn)
     pipeline_log.info("Extraction jobs completed.")
 
 
