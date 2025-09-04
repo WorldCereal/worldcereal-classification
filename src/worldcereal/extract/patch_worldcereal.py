@@ -380,7 +380,6 @@ def post_job_action_patch_worldcereal(
 
 def generate_output_path_patch_worldcereal(
     root_folder: Path,
-    job_index: int,
     row: pd.Series,
     asset_id: str,
 ):

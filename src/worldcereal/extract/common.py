@@ -7,8 +7,7 @@ from datetime import datetime
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, Iterable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import geopandas as gpd
 import pandas as pd
@@ -30,7 +29,6 @@ from pystac import CatalogType
 
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
-
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 
 from worldcereal.extract.patch_meteo import (
@@ -70,6 +68,7 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
 
 STAC_ROOT_URL = "https://stac.openeo.vito.be/"
 
+#TODO for stac testing; test alternative names
 PATCH_COLLECTIONS = {
     "PATCH_SENTINEL1": "worldcereal_sentinel_1_patch_extractions",
     "PATCH_SENTINEL2": "worldcereal_sentinel_2_patch_extractions",
@@ -169,40 +168,44 @@ class ExtractionJobManager(MultiBackendJobManager):
     # -------------------------
     def on_job_done(self, job: BatchJob, row: pd.Series):
         try:
-            #job_products = self._download_job_results(job, row)
-            #job_metadata = job.get_results().get_metadata()
-            #job_items = self._process_job_items(job, job_products, job_metadata)
+            job_products = self._download_job_results(job, row)
+            job_metadata = job.get_results().get_metadata()
+            job_items = self._process_job_items(job, job_products, job_metadata)
 
             # Call user-defined post-job action
-            #if self._post_job_action:
-            #    _log.debug("Running post_job_action for job %s", job.job_id)
-            #    job_items = self._post_job_action(job_items, row)
+            if self._post_job_action:
+                pipeline_log.info("Running post_job_action for job %s", job.job_id)
+                job_items = self._post_job_action(job_items,
+                                                  row,
+                                                  extract_value=1) #TODO figure out how to pass this value correctly
 
             # STAC integration
-            #if self.stac_enabled:
-            #    stac_items = []
-            #    for item_info in job_items:
-            #        # Convert each processed job item into a minimal pystac.Item
-            #        item_id = f"{job.job_id}_{item_info['asset_id']}"
-            #        item = pystac.Item(
-            #            id=item_id,
-            #            geometry=None,
-            #            bbox=None,
-            #            datetime=None,
-            #            properties={}
-            #        )
-            #        item.add_asset(
-            #            key=item_info['asset_id'],
-            #            asset=pystac.Asset(href=str(item_info['path']))
-            #        )
-            #        stac_items.append(item)
-            #
-            #    self._update_stac(job.job_id, stac_items)
+            if self.stac_enabled:
+                pipeline_log.info("Running post_job_action for job %s", job.job_id)
+                stac_items = []
+                for item_info in job_items:
+                    # Convert each processed job item into a minimal pystac.Item
+                    item_id = f"{job.job_id}_{item_info['asset_id']}"
+                    item = pystac.Item(
+                        id=item_id,
+                        geometry=None,
+                        bbox=None,
+                        datetime=None,
+                        properties={}
+                    )
+                    item.add_asset(
+                        key=item_info['asset_id'],
+                        asset=pystac.Asset(href=str(item_info['path']))
+                    )
+                    stac_items.append(item)
 
-            print("Job %s processed successfully.", job.job_id)
+            #TODO enable
+            # self._update_stac(job.job_id, stac_items)
+
+            pipeline_log.info("Job %s processed successfully.", job.job_id)
 
         except Exception as e:
-            print("Error processing job %s: %s", job.job_id, e)
+            pipeline_log.warning("Error processing job %s: %s", job.job_id, e)
             raise
 
     def _download_job_results(self, job: BatchJob, row: pd.Series) -> dict:
@@ -210,23 +213,42 @@ class ExtractionJobManager(MultiBackendJobManager):
         job_results = job.get_results()
         for idx, asset_id in enumerate([a.name for a in job_results.get_assets()]):
             asset = job_results.get_asset(asset_id)
-            output_path = self._output_path_gen(self._output_dir, idx, row, asset_id)
+            output_path = self._output_path_gen(self._output_dir, row, asset_id)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             asset.download(output_path)
             job_products[asset_id] = {"path": output_path, "asset": asset}
         return job_products
 
     def _process_job_items(self, job: BatchJob, job_products: dict, job_metadata: dict) -> list:
-        items = []
-        for asset_id, info in job_products.items():
-            items.append({
-                "job_id": job.job_id,
-                "asset_id": asset_id,
-                "path": info["path"],
-                "asset": info["asset"],
-                "metadata": job_metadata
-            })
-        return items
+        """Convert job results to proper PySTAC Items."""
+        job_collection = pystac.Collection.from_dict(job_metadata)
+        job_items = []
+
+        for item_metadata in job_collection.get_all_items():
+            try:
+                item = pystac.read_file(item_metadata.get_self_href())
+                
+                # Get the asset name from the item
+                asset_name = list(item.assets.values())[0].title
+                
+                # Use the asset name directly as the key (without job ID prefix)
+                asset_path = job_products[asset_name]["path"]
+                
+                # Update asset href to local downloaded path
+                for asset in item.assets.values():
+                    asset.href = str(asset_path)
+                
+                job_items.append(item)
+                pipeline_log.info("Processed item %s from job %s", item.id, job.job_id)
+                
+            except Exception as e:
+                pipeline_log.exception(
+                    "Failed to process item %s from job %s: %s",
+                    item_metadata.id, job.job_id, e
+                )
+                raise e
+        
+        return job_items
 
 # ----------------------------
 # Utility helpers
@@ -247,79 +269,6 @@ def safe_chown_group(path: Path, group_name: str = "vito") -> None:
         shutil.chown(path, group=gid)
     except PermissionError:
         return
-
-# ----------------------------
-# Job status helpers
-# ----------------------------
-def _count_by_status(job_status_df: pd.DataFrame, statuses: Iterable[str] = ()) -> dict:
-    """Count the number of jobs by their status."""
-    status_histogram = job_status_df.groupby("status").size().to_dict()
-    if statuses:
-        status_histogram = {k: v for k, v in status_histogram.items() if k in set(statuses)}
-    return status_histogram
-
-def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
-    """Read the job tracking CSV file."""
-    job_status_file = output_folder / "job_tracking.csv"
-    if job_status_file.exists():
-        return pd.read_csv(job_status_file)
-    raise FileNotFoundError(f"Job status file not found at {job_status_file}")
-
-def check_job_status(output_folder: Path) -> dict:
-    """Check the status of jobs in the specified output folder."""
-    job_status_df = _read_job_tracking_csv(output_folder)
-    status_histogram = _count_by_status(job_status_df)
-    status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"]).sort_values("count", ascending=False)
-    pipeline_log.info("\nOverall jobs status:\n%s", status_count.to_string(index=False))
-    return status_histogram
-
-# ----------------------------
-# Successful Job Statistics
-# ----------------------------
-def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
-    """
-    Get details of succeeded jobs from the job tracking CSV file.
-    """
-    job_status_df = _read_job_tracking_csv(output_folder)
-    succeeded_jobs = _filter_succeeded_jobs(job_status_df)
-    if succeeded_jobs.empty:
-        return pd.DataFrame()
-    succeeded_jobs = _derive_job_metrics(succeeded_jobs)
-    _print_job_summary(succeeded_jobs)
-    return succeeded_jobs
-
-def _filter_succeeded_jobs(job_status_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filter the job status DataFrame to only include succeeded jobs.
-    """
-    return job_status_df[job_status_df["status"].isin(["finished", "postprocessing"])].copy()
-
-def _derive_job_metrics(succeeded_jobs: pd.DataFrame) -> pd.DataFrame:
-    """
-    Derive additional metrics from the succeeded jobs DataFrame.
-    """
-    succeeded_jobs["n_samples"] = succeeded_jobs["geometry"].apply(lambda g: len(json.loads(g)["features"]))
-    columns = ["id", "s2_tile", "n_samples", "duration", "costs"]
-    succeeded_jobs = succeeded_jobs[columns]
-    succeeded_jobs["duration"] = succeeded_jobs["duration"].fillna("0s")
-    seconds = succeeded_jobs["duration"].str.rstrip("s").astype(int)
-    succeeded_jobs["duration_mins"] = seconds / 60
-    if succeeded_jobs["duration_mins"].sum() == 0:
-        succeeded_jobs.drop(columns=["duration_mins"], inplace=True)
-    return succeeded_jobs
-
-def _print_job_summary(succeeded_jobs: pd.DataFrame) -> None:
-    """
-    Print a summary of the succeeded jobs.
-    """
-    pipeline_log.info("-" * 37)
-    if pd.notnull(succeeded_jobs["costs"]).all():
-        total_credits = int(succeeded_jobs["costs"].sum())
-        avg_credits = int(succeeded_jobs["costs"].mean())
-        pipeline_log.info("Total credits: %s, Avg cost: %s over %s jobs", total_credits, avg_credits, len(succeeded_jobs))
-    pipeline_log.info("Number of samples extracted: %s", succeeded_jobs["n_samples"].sum())
-    pipeline_log.info("Succeeded job details:\n%s", succeeded_jobs.to_string(index=False))
-    pipeline_log.info("-" * 37)
 
 
 # ----------------------------
@@ -363,7 +312,6 @@ def extraction_job_quality_check(
             )
 
     pipeline_log.debug("Quality checks passed!")
-
 
 
 # ----------------------------
@@ -464,6 +412,7 @@ def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: lis
 # ----------------------------
 def _extract_geometry_information(extracted_gpd: gpd.GeoDataFrame, item_id: str) -> Optional[pd.Series]:
     """Extract geometry information for a given item ID."""
+    pipeline_log.info(f"Extracting geometry information for item_id: {item_id}")
     sample_id_column_name = "sample_id" if "sample_id" in extracted_gpd.columns else "sampleID"
     
     geometry_information = extracted_gpd.loc[extracted_gpd[sample_id_column_name] == item_id]
@@ -484,6 +433,7 @@ def _extract_geometry_information(extracted_gpd: gpd.GeoDataFrame, item_id: str)
 def _create_new_attributes(row: pd.Series, geometry_info: pd.Series, 
                           description: str, title: str, spatial_resolution: str) -> dict:
     """Create new attributes for the netCDF file."""
+    pipeline_log.info(f"Creating new attributes for {title}")
     attributes = {
         "start_date": row.start_date,
         "end_date": row.end_date,
@@ -508,6 +458,7 @@ def _create_new_attributes(row: pd.Series, geometry_info: pd.Series,
 
 def _validate_dataset_dimensions(ds: xr.Dataset, item_asset_path: Path, spatial_resolution: str) -> None:
     """Validate dataset dimensions match expected resolution."""
+    pipeline_log.info(f"Validating dataset dimensions for {item_asset_path}")
     expected_dim_sizes = {"10m": 64, "20m": 32}
     expected_dim_size = expected_dim_sizes.get(spatial_resolution)
     
@@ -540,25 +491,49 @@ def _validate_dataset_dimensions(ds: xr.Dataset, item_asset_path: Path, spatial_
         spatial_resolution,
     )
 
-def _save_dataset_with_attributes(ds: xr.Dataset, item_asset_path: Path) -> None:
-    """Save dataset with new attributes and proper permissions."""
-    with NamedTemporaryFile(delete=False) as temp_file:
-        ds.to_netcdf(temp_file.name)
-        shutil.move(temp_file.name, item_asset_path)
-        os.chmod(item_asset_path, 0o755)
-        safe_chown_group(item_asset_path)
+import tempfile
+from pathlib import Path
+
+
+def _save_dataset_with_attributes(ds, item_asset_path: Path):
+    item_asset_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Use a temporary file
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        pipeline_log.info(f"Writing dataset to temporary file: {tmp_path}")
+        ds.to_netcdf(tmp_path)  # write safely to temp file
+
+    # Move temp file to final destination
+    pipeline_log.info(f"Moving temporary file to final destination: {item_asset_path}")
+    tmp_path.replace(item_asset_path)
+
+    _set_file_permissions(item_asset_path)
+
+
+def _set_file_permissions(path: Path):
+    """Set file permissions in a Windows-compatible way."""
+    pipeline_log.info(f"Setting file permissions for {path}")
+    if os.name == 'posix':
+        try:
+            os.chmod(path, 0o755)
+            safe_chown_group(path)
+        except (PermissionError, OSError):
+            pass
 
 def _verify_file_integrity(item_asset_path: Path) -> None:
+    pipeline_log.info(f"Verifying file integrity for {item_asset_path}")
     """Verify that the output file is not corrupt."""
     try:
-        ds = xr.open_dataset(item_asset_path)
-        ds.close()
+        with xr.open_dataset(item_asset_path) as src:
+            ds = src.load()
     except Exception as e:
         pipeline_log.error("The output file %s is corrupt. Error: %s", item_asset_path, e)
         raise
 
 def _update_stac_item_metadata(item: pystac.Item, new_attributes: dict) -> None:
     """Update STAC item metadata with new attributes."""
+    pipeline_log.info(f"Updating STAC item metadata for {item.id}")
     item.properties.update(new_attributes)
     item.properties["providers"] = [{"name": "openEO platform"}]
     extension = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
@@ -566,6 +541,7 @@ def _update_stac_item_metadata(item: pystac.Item, new_attributes: dict) -> None:
 
 def _upload_to_stac_api(job_items: List[pystac.Item], sensor: str) -> None:
     """Upload items to STAC API."""
+    pipeline_log.info("Preparing to upload items to STAC API")
     username = os.getenv("STAC_API_USERNAME")
     password = os.getenv("STAC_API_PASSWORD")
 
@@ -588,6 +564,7 @@ def _process_single_item(item: pystac.Item, extracted_gpd: gpd.GeoDataFrame, row
                         description: str, title: str, spatial_resolution: str,
                         s1_orbit_fix: bool, write_stac_api: bool) -> None:
     """Process a single STAC item."""
+    pipeline_log.info(f"Processing STAC item: {item}")
     item_id = item.id.replace(".nc", "").replace("openEO_", "")
     
     geometry_info = _extract_geometry_information(extracted_gpd, item_id)
@@ -599,10 +576,12 @@ def _process_single_item(item: pystac.Item, extracted_gpd: gpd.GeoDataFrame, row
         item.id = item.id.replace(".nc", f"_{row.orbit_state}.nc")
 
     item_asset_path = Path(list(item.assets.values())[0].href)
+    pipeline_log.info(f"Item asset path: {item_asset_path}")
     
     # Create and apply new attributes
     new_attributes = _create_new_attributes(row, geometry_info, description, title, spatial_resolution)
-    ds = xr.open_dataset(item_asset_path)
+    with xr.open_dataset(item_asset_path) as src:
+        ds = src.load() 
     
     # Validate dimensions
     _validate_dataset_dimensions(ds, item_asset_path, spatial_resolution)
@@ -620,6 +599,7 @@ def _process_single_item(item: pystac.Item, extracted_gpd: gpd.GeoDataFrame, row
     if write_stac_api:
         _update_stac_item_metadata(item, new_attributes)
 
+#TODO; am I indeed getting job_items?
 def post_job_action_patch(
     job_items: List[pystac.Item],
     row: pd.Series,
@@ -632,7 +612,7 @@ def post_job_action_patch(
     sensor: str = "Sentinel1",
 ) -> list:
     """Process job items after extraction to add metadata and validate results."""
-    
+    pipeline_log.info(f"Post-processing {len(job_items)} job items")
     # Perform quality checks
     extraction_job_quality_check(row)
     
@@ -669,7 +649,7 @@ def generate_output_path_patch(
     asset_id: str,
 ) -> Path:
     """Generate the output path for extracted patch data."""
-    
+    pipeline_log.info(f"Generating output path for asset_id: {asset_id}")
     # Extract sample ID from asset ID
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
     
@@ -829,6 +809,7 @@ def run_extractions(
     tracking_df_path = output_folder / "job_tracking.csv"
 
     # Load or create job dataframe
+    pipeline_log.info("Loading or creating job dataframe.")
     job_df = _load_or_create_job_dataframe(
         tracking_df_path,
         samples_df_path,
@@ -842,7 +823,9 @@ def run_extractions(
     )
 
     # Setup extraction functions
+    pipeline_log.info("Setting up extraction functions.")
     datacube_fn = setup_datacube_creation_fn(collection, job_options)
+
     path_fn = setup_output_path_fn(collection)
     post_job_fn = setup_post_job_fn(collection, extract_value, write_stac_api)
 
@@ -900,7 +883,6 @@ def _load_or_create_job_dataframe(
                 "status",
             ] = "not_started"
         job_df.to_csv(tracking_df_path, index=False)
-        pipeline_log.info("Job status histogram: %s", check_job_status(tracking_df_path.parent))
         return job_df
 
     # Create new job dataframe
@@ -955,14 +937,15 @@ def _run_extraction_jobs(
     tracking_df_path: Path,
 ) -> None:
     """Execute extraction jobs using the manager."""
-    pipeline_log.info("Running the extraction jobs.")
+    pipeline_log.info("Persisting dataframes.")
 
     job_db = CsvJobDatabase(path=tracking_df_path)
     job_df = job_manager._normalize_df(job_df)
     job_db.persist(job_df)
-
-
+    pipeline_log.info("Running the extraction jobs.")
+    
     job_manager.run_jobs(df=job_df, job_db=job_db, start_job=datacube_fn)
+            
     pipeline_log.info("Extraction jobs completed.")
 
 
