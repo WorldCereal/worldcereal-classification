@@ -8,6 +8,8 @@ from functools import partial
 from importlib.metadata import version
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
+from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
@@ -66,13 +68,17 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
 )
 
 
+
 STAC_ROOT_URL = "https://stac.openeo.vito.be/"
 
-#TODO for stac testing; test alternative names
+#TODO I do not seem to see these new collections?
 PATCH_COLLECTIONS = {
-    "PATCH_SENTINEL1": "worldcereal_sentinel_1_patch_extractions",
-    "PATCH_SENTINEL2": "worldcereal_sentinel_2_patch_extractions",
+    "PATCH_SENTINEL1": "hv_test_worldcereal_sentinel_1_patch_extractions",
+    "PATCH_SENTINEL2": "hv_test_worldcereal_sentinel_2_patch_extractions",
 }
+
+#TODO move and make use of manager.py
+#from worldcereal.extract.manager import ExtractionJobManager
 
 # -------------------------
 # Job manager
@@ -86,7 +92,7 @@ class ExtractionJobManager(MultiBackendJobManager):
         output_path_generator: Callable,
         post_job_action: Optional[Callable] = None,
         poll_sleep: int = 5,
-        stac_enabled: bool = False,
+        write_stac_api: bool = False, #for catalog creation/publishing
         collection_id: Optional[str] = None,
         collection_description: Optional[str] = "",
         stac_path: Optional[Union[str, Path]] = None,
@@ -99,22 +105,26 @@ class ExtractionJobManager(MultiBackendJobManager):
         self._post_job_action = post_job_action
 
         # STAC support
-        self.stac_enabled = stac_enabled
         self.collection_id = collection_id
         self.collection_description = collection_description
         self.stac_path = stac_path
+        self._catalogue_cache = self._output_dir / "catalogue_cache.bin"
+        self.write_stac_api = write_stac_api
+
+        if self.write_stac_api:
+            self._init_stac_components()
+
+
+    def _init_stac_components(self):
+        """Initialize STAC API components"""
         self.lock = threading.Lock()
         self._catalogue_cache = self._output_dir / "catalogue_cache.bin"
-
-        self._root_collection = None
-        if self.stac_enabled:
-            self._root_collection = self._initialize_stac()
+        self._root_collection = self._initialize_stac()
 
 
     # -------------------------
     # STAC helper methods
     # -------------------------
-    #TODO validate the whole STAC stuff
     def _load_stac(self) -> Optional[pystac.Collection]:
         if self._catalogue_cache.exists():
             with open(self._catalogue_cache, "rb") as f:
@@ -159,6 +169,7 @@ class ExtractionJobManager(MultiBackendJobManager):
             return
         stac_dir = self._output_dir / "stac"
         stac_dir.mkdir(parents=True, exist_ok=True)
+        self._root_collection.update_extent_from_items()
         self._root_collection.set_self_href(str(stac_dir / "collection.json"))
         self._root_collection.normalize_hrefs(str(stac_dir))
         self._root_collection.save(catalog_type=CatalogType.SELF_CONTAINED)
@@ -170,37 +181,20 @@ class ExtractionJobManager(MultiBackendJobManager):
         try:
             job_products = self._download_job_results(job, row)
             job_metadata = job.get_results().get_metadata()
-            job_items = self._process_job_items(job, job_products, job_metadata)
-
-            # Call user-defined post-job action
+            
+            # Always create STAC items for post-processing if a post_job_action is provided
             if self._post_job_action:
-                pipeline_log.info("Running post_job_action for job %s", job.job_id)
-                job_items = self._post_job_action(job_items,
-                                                  row,
-                                                  extract_value=1) #TODO figure out how to pass this value correctly
-
-            # STAC integration
-            if self.stac_enabled:
-                pipeline_log.info("Running post_job_action for job %s", job.job_id)
-                stac_items = []
-                for item_info in job_items:
-                    # Convert each processed job item into a minimal pystac.Item
-                    item_id = f"{job.job_id}_{item_info['asset_id']}"
-                    item = pystac.Item(
-                        id=item_id,
-                        geometry=None,
-                        bbox=None,
-                        datetime=None,
-                        properties={}
-                    )
-                    item.add_asset(
-                        key=item_info['asset_id'],
-                        asset=pystac.Asset(href=str(item_info['path']))
-                    )
-                    stac_items.append(item)
-
-            #TODO enable
-            # self._update_stac(job.job_id, stac_items)
+                job_items = self._process_job_items(job, job_products, job_metadata)
+                job_items = self._post_job_action(job_items, row, extract_value=1)
+                
+                # Update STAC catalog if enabled
+                if self.write_stac_api:
+                    self._update_stac(job.job_id, job_items)
+            else:
+                # If no post-processing, just update STAC catalog if enabled
+                if self.write_stac_api:
+                    job_items = self._process_job_items(job, job_products, job_metadata)
+                    self._update_stac(job.job_id, job_items)
 
             pipeline_log.info("Job %s processed successfully.", job.job_id)
 
@@ -313,6 +307,50 @@ def extraction_job_quality_check(
 
     pipeline_log.debug("Quality checks passed!")
 
+def _validate_dataset_dimensions(ds: xr.Dataset, item_asset_path: Path, spatial_resolution: str) -> None:
+    """Validate dataset dimensions match expected resolution."""
+    pipeline_log.info(f"Validating dataset dimensions for {item_asset_path}")
+    expected_dim_sizes = {"10m": 64, "20m": 32}
+    expected_dim_size = expected_dim_sizes.get(spatial_resolution)
+    
+    if expected_dim_size is None:
+        return
+    
+    actual_x_size = ds.dims.get("x", 0)
+    actual_y_size = ds.dims.get("y", 0)
+
+    if actual_x_size != expected_dim_size or actual_y_size != expected_dim_size:
+        pipeline_log.error(
+            "Dimension validation failed for %s: expected %dx%d for %s resolution, got %dx%d",
+            item_asset_path,
+            expected_dim_size,
+            expected_dim_size,
+            spatial_resolution,
+            actual_x_size,
+            actual_y_size,
+        )
+        raise ValueError(
+            f"Invalid dimensions for {spatial_resolution} resolution: "
+            f"expected {expected_dim_size}x{expected_dim_size}, got {actual_x_size}x{actual_y_size}"
+        )
+
+    pipeline_log.debug(
+        "Dimension validation passed for %s: %dx%d matches expected %s resolution",
+        item_asset_path,
+        actual_x_size,
+        actual_y_size,
+        spatial_resolution,
+    )
+
+def _verify_file_integrity(item_asset_path: Path) -> None:
+    pipeline_log.info(f"Verifying file integrity for {item_asset_path}")
+    """Verify that the output file is not corrupt."""
+    try:
+        with xr.open_dataset(item_asset_path) as src:
+            ds = src.load()
+    except Exception as e:
+        pipeline_log.error("The output file %s is corrupt. Error: %s", item_asset_path, e)
+        raise
 
 # ----------------------------
 # Dataframe loading and filtering
@@ -368,9 +406,7 @@ def _fetch_existing_sample_ids(collection_id: str, ref_id: str) -> list[str]:
     )
     return [item.properties.get("sample_id") for item in search.items() if item.properties.get("sample_id")]
 
-# ----------------------------
-# Job dataframe preparation
-# ----------------------------
+
 def prepare_job_dataframe(samples_gdf: gpd.GeoDataFrame, collection: ExtractionCollection, max_locations: int, backend: Backend) -> pd.DataFrame:
     """Prepare a job dataframe by splitting the samples and creating jobs for the specified collection."""
     pipeline_log.info("Preparing the job dataframe")
@@ -390,6 +426,10 @@ def _split_samples(samples_gdf: gpd.GeoDataFrame, max_locations: int) -> list[gp
     for df in split_by_time:
         split_dfs.extend(split_job_s2grid(df, max_points=max_locations))
     return split_dfs
+
+# ----------------------------
+# Job creation
+# ----------------------------
 
 def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: list[gpd.GeoDataFrame], backend: Backend) -> pd.DataFrame:
     """
@@ -456,50 +496,12 @@ def _create_new_attributes(row: pd.Series, geometry_info: pd.Series,
     
     return attributes
 
-def _validate_dataset_dimensions(ds: xr.Dataset, item_asset_path: Path, spatial_resolution: str) -> None:
-    """Validate dataset dimensions match expected resolution."""
-    pipeline_log.info(f"Validating dataset dimensions for {item_asset_path}")
-    expected_dim_sizes = {"10m": 64, "20m": 32}
-    expected_dim_size = expected_dim_sizes.get(spatial_resolution)
-    
-    if expected_dim_size is None:
-        return
-    
-    actual_x_size = ds.dims.get("x", 0)
-    actual_y_size = ds.dims.get("y", 0)
-
-    if actual_x_size != expected_dim_size or actual_y_size != expected_dim_size:
-        pipeline_log.error(
-            "Dimension validation failed for %s: expected %dx%d for %s resolution, got %dx%d",
-            item_asset_path,
-            expected_dim_size,
-            expected_dim_size,
-            spatial_resolution,
-            actual_x_size,
-            actual_y_size,
-        )
-        raise ValueError(
-            f"Invalid dimensions for {spatial_resolution} resolution: "
-            f"expected {expected_dim_size}x{expected_dim_size}, got {actual_x_size}x{actual_y_size}"
-        )
-
-    pipeline_log.debug(
-        "Dimension validation passed for %s: %dx%d matches expected %s resolution",
-        item_asset_path,
-        actual_x_size,
-        actual_y_size,
-        spatial_resolution,
-    )
-
-import tempfile
-from pathlib import Path
-
 
 def _save_dataset_with_attributes(ds, item_asset_path: Path):
     item_asset_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Use a temporary file
-    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+    with NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
         tmp_path = Path(tmp.name)
         pipeline_log.info(f"Writing dataset to temporary file: {tmp_path}")
         ds.to_netcdf(tmp_path)  # write safely to temp file
@@ -521,15 +523,6 @@ def _set_file_permissions(path: Path):
         except (PermissionError, OSError):
             pass
 
-def _verify_file_integrity(item_asset_path: Path) -> None:
-    pipeline_log.info(f"Verifying file integrity for {item_asset_path}")
-    """Verify that the output file is not corrupt."""
-    try:
-        with xr.open_dataset(item_asset_path) as src:
-            ds = src.load()
-    except Exception as e:
-        pipeline_log.error("The output file %s is corrupt. Error: %s", item_asset_path, e)
-        raise
 
 def _update_stac_item_metadata(item: pystac.Item, new_attributes: dict) -> None:
     """Update STAC item metadata with new attributes."""
@@ -609,7 +602,7 @@ def post_job_action_patch(
     spatial_resolution: str,
     s1_orbit_fix: bool = False,
     write_stac_api: bool = False,
-    sensor: str = "Sentinel1",
+    sensor: str = "Sentinel2", #TODO this is terrible and needs to be removed
 ) -> list:
     """Process job items after extraction to add metadata and validate results."""
     pipeline_log.info(f"Post-processing {len(job_items)} job items")
@@ -836,7 +829,7 @@ def run_extractions(
         post_job_fn,
         connection,
         parallel_jobs,
-        stac_enabled=write_stac_api,
+        write_stac_api=write_stac_api,
         collection_id=f"{ref_id}_extractions",
         collection_description=f"Extractions for {collection.name} with ref_id {ref_id}",
     )
@@ -906,7 +899,7 @@ def _initialize_job_manager(
     post_job_fn: Callable,
     connection: Connection,
     parallel_jobs: int = 2,
-    stac_enabled: bool = False,
+    write_stac_api: bool = False,
     collection_id: Optional[str] = None,
     collection_description: str = "",
 ) -> ExtractionJobManager:
@@ -917,7 +910,7 @@ def _initialize_job_manager(
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
         poll_sleep=60,
-        stac_enabled=stac_enabled,
+        write_stac_api=write_stac_api,
         collection_id=collection_id,
         collection_description=collection_description,
     )
@@ -925,7 +918,6 @@ def _initialize_job_manager(
     job_manager.add_backend(
             "cdse", connection=connection, parallel_jobs=parallel_jobs
         )
-
 
     return job_manager
 
