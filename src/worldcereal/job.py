@@ -326,6 +326,81 @@ def create_inference_process_graph(
     return classes
 
 
+def create_inputs_process_graph(
+    spatial_extent: BoundingBoxExtent,
+    temporal_extent: TemporalContext,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+    out_format: str = "NetCDF",
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
+    tile_size: Optional[int] = 128,
+    target_epsg: Optional[int] = None,
+) -> openeo.DataCube:
+    """Wrapper function that creates the inputs openEO process graph.
+
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        spatial extent of the map
+    temporal_extent : TemporalContext
+        temporal range to consider
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]]
+        Sentinel-1 orbit state to use for the inference. If not provided,
+        the orbit state will be dynamically determined based on the spatial extent.
+    out_format : str, optional
+        Output format, by default "NetCDF"
+    backend_context : BackendContext
+        backend to run the job on, by default CDSE.
+    tile_size: int, optional
+        Tile size to use for the data loading in OpenEO, by default 128.
+    target_epsg: Optional[int] = None
+        EPSG code to use for the output products. If not provided, the
+        default EPSG will be used.
+
+    Returns
+    -------
+    openeo.DataCube
+        DataCube object representing the inputs process graph.
+        This object can be used to execute the job on the OpenEO backend.
+        The result will be a DataCube with the preprocessed inputs.
+
+    Raises
+    ------
+    ValueError
+        if the out_format is not supported
+    """
+
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {format} not supported.")
+
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+
+    # Preparing the input cube for inference
+    inputs = worldcereal_preprocessed_inputs(
+        connection=connection,
+        backend_context=backend_context,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        tile_size=tile_size,
+        s1_orbit_state=s1_orbit_state,
+        target_epsg=target_epsg,
+        # disable_meteo=True,
+    )
+
+    # Spatial filtering
+    inputs = inputs.filter_bbox(dict(spatial_extent))
+
+    # Save the final result
+    inputs = inputs.save_result(
+        format=out_format,
+        options=dict(
+            filename_prefix=f"preprocessed-inputs_{temporal_extent.start_date}_{temporal_extent.end_date}",
+        ),
+    )
+
+    return inputs
+
+
 def create_inference_job(
     row: pd.Series,
     connection: openeo.Connection,
