@@ -1,8 +1,9 @@
 import concurrent
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable
+from typing import Iterable, List
 
 import pystac
+import os
 import pystac_client
 import requests
 from openeo.rest.auth.oidc import (
@@ -11,6 +12,7 @@ from openeo.rest.auth.oidc import (
     OidcResourceOwnerPasswordAuthenticator,
 )
 from requests.auth import AuthBase
+from worldcereal.extract.utils import pipeline_log
 
 
 class VitoStacApiAuthentication(AuthBase):
@@ -215,3 +217,25 @@ class StacApiInteraction:
 
     def get_collection_id(self) -> str:
         return self.collection_id
+    
+
+def upload_to_stac_api(job_items: List[pystac.Item], sensor: str, stac_root_url: str) -> None:
+    """Upload items to STAC API."""
+    pipeline_log.info("Preparing to upload items to STAC API")
+    username = os.getenv("STAC_API_USERNAME")
+    password = os.getenv("STAC_API_PASSWORD")
+
+    if not username or not password:
+        error_msg = "STAC API credentials not found. Please set STAC_API_USERNAME and STAC_API_PASSWORD."
+        pipeline_log.error(error_msg)
+        raise ValueError(error_msg)
+
+    stac_api_interaction = StacApiInteraction(
+        sensor=sensor,
+        base_url=stac_root_url,
+        auth=VitoStacApiAuthentication(username=username, password=password),
+    )
+
+    pipeline_log.info("Writing the STAC API metadata")
+    stac_api_interaction.upload_items_bulk(job_items)
+    pipeline_log.info("STAC API metadata written")

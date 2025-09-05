@@ -12,7 +12,7 @@ from worldcereal.extract.utils import pipeline_log
 from typing import Callable, Optional
 from worldcereal.stac.constants import ExtractionCollection
 from worldcereal.extract.quality_checks import extraction_job_quality_check, validate_dataset_dimensions, verify_file_integrity
-from worldcereal.stac.utils import upload_to_stac_api, update_stac_item_metadata
+from worldcereal.stac.utils import update_stac_item_metadata
 from worldcereal.extract.utils import extract_geometry_information
 from worldcereal.extract.attribute_processing import create_new_attributes, save_dataset_with_attributes
 
@@ -36,8 +36,6 @@ from worldcereal.extract.point_worldcereal import (
     generate_output_path_point_worldcereal,
     
 )
-
-
 
 # Helper function to get function from mapping with error handling
 def _get_fn(mapping: dict, collection: ExtractionCollection, collection_name: str) -> Callable:
@@ -179,10 +177,6 @@ def post_job_action_patch(
             item, extracted_gpd, row, description, title, 
             spatial_resolution, s1_orbit_fix, write_stac_api
         )
-    
-    # Upload to STAC API if requested
-    if write_stac_api:
-        upload_to_stac_api(job_items, sensor)
     
     return job_items
 

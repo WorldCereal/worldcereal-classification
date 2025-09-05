@@ -157,3 +157,16 @@ def extract_geometry_information(extracted_gpd: gpd.GeoDataFrame, item_id: str) 
     
     return geometry_information.iloc[0]
 
+
+def infer_sensor_from_collection(collection) -> str:
+    """Infer Sentinel1 or Sentinel2 from collection enum or string."""
+    name = collection.name if hasattr(collection, "name") else str(collection)
+    name = name.upper()
+
+    if "SENTINEL1" in name:
+        return "Sentinel1"
+    elif "SENTINEL2" in name:
+        return "Sentinel2"
+    else:
+        raise ValueError(f"Could not infer sensor from collection: {name}")
+

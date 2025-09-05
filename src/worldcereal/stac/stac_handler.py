@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import pystac
 import threading
 import pickle
@@ -62,5 +62,11 @@ class StacHandler:
         self._root_collection.normalize_hrefs(str(stac_dir))
         self._root_collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
         pipeline_log.info("STAC collection saved to %s", stac_dir)
+
+    def get_all_items(self) -> List[pystac.Item]:
+        """Get all items from the STAC collection"""
+        if not self._root_collection:
+            return []
+        return list(self._root_collection.get_all_items())
 
    

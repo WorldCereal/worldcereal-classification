@@ -1,11 +1,11 @@
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict
 import geopandas as gpd
 import pandas as pd
 
 from worldcereal.extract.utils import pipeline_log
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
-from worldcereal.stac.utils import get_collection_id, fetch_existing_sample_ids
+from worldcereal.stac.utils import  fetch_existing_sample_ids
 
 from openeo_gfmap import Backend
 from worldcereal.stac.constants import ExtractionCollection
@@ -27,22 +27,25 @@ from worldcereal.extract.patch_worldcereal import (  # isort: skip
 
 from worldcereal.extract.utils import pipeline_log
 
-PATCH_COLLECTIONS = {
-    "PATCH_SENTINEL1": "hv_test_worldcereal_sentinel_1_patch_extractions",
-    "PATCH_SENTINEL2": "hv_test_worldcereal_sentinel_2_patch_extractions",
-}
-STAC_ROOT_URL = "https://stac.openeo.vito.be/"
 
-
-def load_dataframe(df_path: Path, extract_value: int = 0, check_existing: bool = False,
-                   collection: Optional[str] = None, ref_id: Optional[str] = None) -> gpd.GeoDataFrame:
+def load_dataframe(
+    df_path: Path, 
+    extract_value: int = 0, 
+    check_existing: bool = False,
+    collection: Optional[str] = None, 
+    ref_id: Optional[str] = None,
+    stac_root_url: Optional[str] = None,
+    patch_collections: Optional[Dict[str, str]] = None
+) -> gpd.GeoDataFrame:
     """
     Load a GeoDataFrame from a file, applying filters as necessary.
     """
     pipeline_log.info("Loading input dataframe from %s", df_path)
     df = _read_filtered_dataframe(df_path, extract_value)
     if check_existing:
-        df = _filter_existing_samples(df, collection, ref_id)
+        df = _filter_existing_samples(
+            df, collection, ref_id, stac_root_url, patch_collections
+        )
     return df
 
 def _read_filtered_dataframe(df_path: Path, extract_value: int) -> gpd.GeoDataFrame:
@@ -55,20 +58,26 @@ def _read_filtered_dataframe(df_path: Path, extract_value: int) -> gpd.GeoDataFr
         return gpd.read_parquet(df_path, filters=filters)
     return gpd.read_file(df_path, filters=filters)
 
-def _filter_existing_samples(df: gpd.GeoDataFrame, collection: Optional[str], ref_id: Optional[str]) -> gpd.GeoDataFrame:
+def _filter_existing_samples(
+    df: gpd.GeoDataFrame, 
+    collection: Optional[str], 
+    ref_id: Optional[str],
+    stac_root_url: Optional[str],
+    patch_collections: Optional[Dict[str, str]]
+) -> gpd.GeoDataFrame:
     """
     Filter the GeoDataFrame to only include samples that do not already exist in the specified collection.
     """
-    if not collection or collection not in PATCH_COLLECTIONS or not ref_id:
-        pipeline_log.warning("STAC check skipped: unsupported collection or missing ref_id")
+    if not collection or not patch_collections or collection not in patch_collections or not ref_id or not stac_root_url:
+        pipeline_log.warning("STAC check skipped: missing parameters or unsupported collection")
         return df
     
-    collection_id = get_collection_id(collection)
+    collection_id = patch_collections.get(collection)
     if not collection_id:
         pipeline_log.warning("STAC check skipped: unsupported collection %s", collection)
         return df
 
-    existing_ids = fetch_existing_sample_ids(collection_id, ref_id)
+    existing_ids = fetch_existing_sample_ids(collection_id, ref_id, stac_root_url)
     if not existing_ids:
         return df
     
@@ -121,6 +130,8 @@ def initialize_job_dataframe(
     backend: Backend,
     restart_failed: bool,
     check_existing_extractions: bool,
+    stac_root_url: Optional[str] = None,
+    patch_collections: Optional[Dict[str, str]] = None
 ) -> pd.DataFrame:
     """Load an existing job tracking dataframe or create a new one."""
     if tracking_df_path.exists():
@@ -141,8 +152,10 @@ def initialize_job_dataframe(
         samples_df_path,
         extract_value,
         check_existing=check_existing_extractions,
-        collection=collection,
+        collection=collection.name if collection else None,  # Convert enum to string
         ref_id=ref_id,
+        stac_root_url=stac_root_url,
+        patch_collections=patch_collections
     )
     samples_gdf["ref_id"] = ref_id
     pipeline_log.info("Creating new job tracking dataframe.")
