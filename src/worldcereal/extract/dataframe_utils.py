@@ -2,12 +2,12 @@ from pathlib import Path
 from typing import Optional, Callable
 import geopandas as gpd
 import pandas as pd
-import pystac_client
 
 from worldcereal.extract.utils import pipeline_log
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
-from openeo_gfmap import Backend
+from worldcereal.stac.utils import get_collection_id, fetch_existing_sample_ids
 
+from openeo_gfmap import Backend
 from worldcereal.stac.constants import ExtractionCollection
 
 from worldcereal.extract.patch_meteo import (
@@ -63,28 +63,18 @@ def _filter_existing_samples(df: gpd.GeoDataFrame, collection: Optional[str], re
         pipeline_log.warning("STAC check skipped: unsupported collection or missing ref_id")
         return df
     
-    collection_id = PATCH_COLLECTIONS[collection]
-    existing_ids = _fetch_existing_sample_ids(collection_id, ref_id)
+    collection_id = get_collection_id(collection)
+    if not collection_id:
+        pipeline_log.warning("STAC check skipped: unsupported collection %s", collection)
+        return df
+
+    existing_ids = fetch_existing_sample_ids(collection_id, ref_id)
     if not existing_ids:
         return df
     
     filtered_df = df[~df["sample_id"].isin(existing_ids)]
     pipeline_log.info("Filtered out %s existing samples for %s", len(df)-len(filtered_df), collection)
     return filtered_df
-
-def _fetch_existing_sample_ids(collection_id: str, ref_id: str) -> list[str]:
-    """
-    Fetch the IDs of existing samples in the specified collection and reference ID.
-    """
-    client = pystac_client.Client.open(STAC_ROOT_URL)
-    search = client.search(
-        collections=[collection_id],
-        filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]},
-        filter_lang="cql2-json",
-        fields={"exclude": ["assets", "links", "geometry", "bbox"]},
-    )
-    return [item.properties.get("sample_id") for item in search.items() if item.properties.get("sample_id")]
-
 
 def prepare_job_dataframe(samples_gdf: gpd.GeoDataFrame, collection: ExtractionCollection, max_locations: int, backend: Backend) -> pd.DataFrame:
     """Prepare a job dataframe by splitting the samples and creating jobs for the specified collection."""
@@ -121,7 +111,7 @@ def _create_jobs_for_collection(collection: ExtractionCollection, split_dfs: lis
         raise ValueError(f"Collection {collection} not supported")
     return dataframe_creators[collection](backend, split_dfs)
 
-def load_or_create_job_dataframe(
+def initialize_job_dataframe(
     tracking_df_path: Path,
     samples_df_path: Path,
     collection: ExtractionCollection,

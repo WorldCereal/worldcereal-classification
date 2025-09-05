@@ -12,16 +12,17 @@ from openeo.extra.job_management import (
 from openeo import Connection
 
 from worldcereal.extract.job_manager import ExtractionJobManager
+from worldcereal.stac.stac_handler import StacHandler
 from worldcereal.utils.file_utils import ensure_dir
 
-from worldcereal.extract.dataframe_utils import load_or_create_job_dataframe
+from worldcereal.extract.dataframe_utils import initialize_job_dataframe
 from worldcereal.extract.function_factory import (
     setup_datacube_creation_fn,
     setup_output_path_fn,
     setup_post_job_fn,
 )
 
-from worldcereal.extract.point_worldcereal import merge_output_files_point_worldcereal,
+from worldcereal.extract.point_worldcereal import merge_output_files_point_worldcereal
 from worldcereal.extract.utils import pipeline_log
 from worldcereal.stac.constants import ExtractionCollection
 
@@ -87,7 +88,7 @@ def run_extractions(
 
     # Load or create job dataframe
     pipeline_log.info("Loading or creating job dataframe.")
-    job_df = load_or_create_job_dataframe(
+    job_df = initialize_job_dataframe(
         tracking_df_path,
         samples_df_path,
         collection,
@@ -155,9 +156,7 @@ def _initialize_job_manager(
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
         poll_sleep=60,
-        write_stac_api=write_stac_api,
-        collection_id=collection_id,
-        collection_description=collection_description,
+        stac_handler=StacHandler(output_folder, collection_id, collection_description) if write_stac_api else None,
     )
 
     job_manager.add_backend(

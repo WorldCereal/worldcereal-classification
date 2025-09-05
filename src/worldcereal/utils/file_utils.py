@@ -20,7 +20,7 @@ def safe_chown_group(path: Path, group_name: str = "vito") -> None:
     except PermissionError:
         return
 
-def _set_file_permissions(path: Path):
+def set_file_permissions(path: Path):
     """Set file permissions in a Windows-compatible way."""
     pipeline_log.info(f"Setting file permissions for {path}")
     if os.name == 'posix':

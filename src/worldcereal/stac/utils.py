@@ -1,8 +1,38 @@
+"""STAC-specific utility functions."""
+
 import os
-import pystac
 from typing import List
+import pystac
+import pystac_client
+
 from worldcereal.extract.utils import pipeline_log
 from worldcereal.stac.stac_api_interaction import StacApiInteraction, VitoStacApiAuthentication
+
+STAC_ROOT_URL = "https://stac.openeo.vito.be/"
+
+# Collection mapping stays here since it's STAC-specific
+PATCH_COLLECTIONS = {
+    "PATCH_SENTINEL1": "hv_test_worldcereal_sentinel_1_patch_extractions",
+    "PATCH_SENTINEL2": "hv_test_worldcereal_sentinel_2_patch_extractions",
+}
+
+def get_collection_id(collection_name: str) -> str:
+    """Get STAC collection ID from collection name."""
+    return PATCH_COLLECTIONS.get(collection_name)
+
+def fetch_existing_sample_ids(collection_id: str, ref_id: str) -> List[str]:
+    """
+    Fetch the IDs of existing samples in the specified collection and reference ID.
+    Pure STAC operation - no DataFrame knowledge.
+    """
+    client = pystac_client.Client.open(STAC_ROOT_URL)
+    search = client.search(
+        collections=[collection_id],
+        filter={"op": "=", "args": [{"property": "properties.ref_id"}, ref_id]},
+        filter_lang="cql2-json",
+        fields={"exclude": ["assets", "links", "geometry", "bbox"]},
+    )
+    return [item.properties.get("sample_id") for item in search.items() if item.properties.get("sample_id")]
 
 def update_stac_item_metadata(item: pystac.Item, new_attributes: dict) -> None:
     """Update STAC item metadata with new attributes."""
