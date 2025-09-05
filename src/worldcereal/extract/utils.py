@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
+from typing import Optional
 
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
@@ -135,4 +136,24 @@ def get_job_nb_polygons(row: pd.Series) -> int:
             )
         )
     )
+
+def extract_geometry_information(extracted_gpd: gpd.GeoDataFrame, item_id: str) -> Optional[pd.Series]:
+    """Extract geometry information for a given item ID."""
+    pipeline_log.info(f"Extracting geometry information for item_id: {item_id}")
+    sample_id_column_name = "sample_id" if "sample_id" in extracted_gpd.columns else "sampleID"
+    
+    geometry_information = extracted_gpd.loc[extracted_gpd[sample_id_column_name] == item_id]
+    
+    if len(geometry_information) == 0:
+        pipeline_log.warning("No geometry found for the sample_id %s in the input geometry.", item_id)
+        return None
+    
+    if len(geometry_information) > 1:
+        pipeline_log.warning(
+            "Duplicate geometries found for the sample_id %s in the input geometry, selecting the first one at index: %s.",
+            item_id,
+            geometry_information.index[0],
+        )
+    
+    return geometry_information.iloc[0]
 

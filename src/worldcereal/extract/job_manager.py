@@ -5,7 +5,7 @@ from openeo.rest.job import BatchJob
 from openeo.extra.job_management import MultiBackendJobManager
 from worldcereal.extract.utils import pipeline_log
 import pystac
-from worldcereal.stac_handler import StacHandler  # Import from separate module
+from worldcereal.stac.stac_handler import StacHandler  # Import from separate module
 
 class ExtractionJobManager(MultiBackendJobManager):
     """A simplified job manager that handles job execution, post-processing, and optional STAC integration."""
