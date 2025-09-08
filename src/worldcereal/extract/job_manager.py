@@ -31,6 +31,7 @@ class ExtractionJobManager(MultiBackendJobManager):
             job_metadata = job.get_results().get_metadata()
             
             # Process job items
+            #TODO check output; collection seems to be wrong
             job_items = self._process_job_items(job, job_products, job_metadata)
             
             # Apply post-job action if provided

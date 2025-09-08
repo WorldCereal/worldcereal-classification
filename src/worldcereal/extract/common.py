@@ -10,11 +10,10 @@ from openeo.extra.job_management import CsvJobDatabase
 
 from worldcereal.extract.job_manager import ExtractionJobManager
 from worldcereal.stac.stac_handler import StacHandler
-from worldcereal.stac.stac_api_interaction import upload_to_stac_api 
+from worldcereal.stac.stac_api_interaction import upload_to_stac_api
 
 
 from worldcereal.utils.file_utils import ensure_dir
-from worldcereal.extract.utils import infer_sensor_from_collection
 from worldcereal.extract.dataframe_utils import initialize_job_dataframe
 from worldcereal.extract.function_factory import (
     setup_datacube_creation_fn,
@@ -85,11 +84,18 @@ def run_extractions(
         write_stac_api,
     )
 
+    try:
+        collection_id = PATCH_COLLECTIONS.get(collection.name)
+        collection_description = f"Extractions for {collection_id} with ref_id {ref_id}"
+    except Exception as e:
+        pipeline_log.error(f"Error retrieving collection info: {e}")
+
+
     # Initialize STAC handler if needed
     stac_handler = StacHandler(
-        output_folder,
-        str(PATCH_COLLECTIONS.get(collection.name)),
-        f"Extractions for {PATCH_COLLECTIONS.get(collection.name)} with ref_id {ref_id}"
+        output_dir=output_folder,
+        collection_id=collection_id,
+        collection_description=collection_description
     )
 
     # --- Initialize the job manager ---
@@ -127,8 +133,10 @@ def run_extractions(
     pipeline_log.info("STAC collection saved successfully.")
 
     if write_stac_api:
-        pipeline_log.info("Uploading STAC Items to remote API...")
         job_items = stac_handler.get_all_items()  # Make sure this method exists
-        sensor = infer_sensor_from_collection(collection)
-        upload_to_stac_api(job_items, sensor=sensor, stac_root_url=STAC_ROOT_URL)
+
+        pipeline_log.info("Uploading items to STAC API")
+        upload_to_stac_api(job_items, collection_id=collection_id, stac_root_url=STAC_ROOT_URL)
         pipeline_log.info("Upload to STAC API completed successfully.")
+
+

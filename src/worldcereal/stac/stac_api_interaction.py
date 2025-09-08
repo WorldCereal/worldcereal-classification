@@ -1,10 +1,8 @@
-import concurrent
-from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterable, List, Optional
 
 import pystac
 import os
-import pystac_client
 import requests
 from openeo.rest.auth.oidc import (
     OidcClientInfo,
@@ -56,128 +54,115 @@ class VitoStacApiAuthentication(AuthBase):
 
         return f"Bearer {tokens.access_token}"
 
-
 class StacApiInteraction:
-    """Class that handles the interaction with a STAC API."""
-
-    _SENSOR_COLLECTION_CATALOG = {
-        "Sentinel1": "worldcereal_sentinel_1_patch_extractions",
-        "Sentinel2": "worldcereal_sentinel_2_patch_extractions",
-    }
+    """
+    Handles interaction with a STAC API root and a specific collection ID.
+    Use stac_root to point to the STAC API root (e.g. "https://.../stac")
+    and collection_id for the collection you want to operate on.
+    """
 
     def __init__(
-        self, sensor: str, base_url: str, auth: AuthBase, bulk_size: int = 500
+        self,
+        stac_root: str,
+        collection_id: Optional[str],
+        auth: AuthBase,
+        bulk_size: int = 500,
     ):
-        if sensor not in self.catalog.keys():
-            raise ValueError(
-                f"Invalid sensor '{sensor}'. Allowed values are: {', '.join(self.catalog.keys())}."
-            )
-        self.sensor = sensor
-        self.base_url = base_url
-        self.collection_id = self.catalog[self.sensor]
-
+        # normalize root URL (no trailing slash)
+        self.base_url = stac_root.rstrip("/")
+        self.collection_id = collection_id
         self.auth = auth
-
         self.bulk_size = bulk_size
 
-    @property
-    def catalog(self):
-        return self._SENSOR_COLLECTION_CATALOG.copy()
+    def _join_url(self, url_path: str) -> str:
+        # safe join ensuring exactly one slash between parts
+        return self.base_url + "/" + url_path.lstrip("/")
 
     def exists(self) -> bool:
-        client = pystac_client.Client.open(self.base_url)
-        return (
-            len([c.id for c in client.get_collections() if c.id == self.collection_id])
-            > 0
+        """
+        If self.collection_id is provided, check GET /collections/{collection_id}.
+        If collection_id is None, check that the STAC root is reachable (GET root).
+        """
+        # check root reachable
+        root_resp = requests.get(self.base_url, auth=self.auth)
+        if root_resp.status_code != requests.codes.ok:
+            # root unreachable -> treat as non-existent / error
+            return False
+
+        if not self.collection_id:
+            # root exists and no collection specified
+            return True
+
+        coll_resp = requests.get(
+            self._join_url(f"collections/{self.collection_id}"), auth=self.auth
         )
+        return coll_resp.status_code == requests.codes.ok
 
-    def _join_url(self, url_path: str) -> str:
-        return str(self.base_url + "/" + url_path)
-
-    def create_collection(self):
+    def create_collection(self, description: Optional[str] = None):
         spatial_extent = pystac.SpatialExtent([[-180, -90, 180, 90]])
         temporal_extent = pystac.TemporalExtent([[None, None]])
         extent = pystac.Extent(spatial=spatial_extent, temporal=temporal_extent)
-
         collection = pystac.Collection(
             id=self.collection_id,
-            description=f"WorldCereal Patch Extractions for {self.sensor}",
+            description=description or f"Collection {self.collection_id}",
             extent=extent,
         )
-
         collection.validate()
         coll_dict = collection.to_dict()
-
         default_auth = {
             "_auth": {
                 "read": ["anonymous"],
                 "write": ["stac-openeo-admin", "stac-openeo-editor"],
             }
         }
-
         coll_dict.update(default_auth)
-
         response = requests.post(
             self._join_url("collections"), auth=self.auth, json=coll_dict
         )
-
         expected_status = [
             requests.status_codes.codes.ok,
             requests.status_codes.codes.created,
             requests.status_codes.codes.accepted,
         ]
-
         self._check_response_status(response, expected_status)
-
         return response
 
     def add_item(self, item: pystac.Item):
         if not self.exists():
             self.create_collection()
-
         self._prepare_item(item)
-
         url_path = f"collections/{self.collection_id}/items"
-        response = requests.post(
-            self._join_url(url_path), auth=self.auth, json=item.to_dict()
-        )
-
+        response = requests.post(self._join_url(url_path), auth=self.auth, json=item.to_dict())
         expected_status = [
             requests.status_codes.codes.ok,
             requests.status_codes.codes.created,
             requests.status_codes.codes.accepted,
         ]
-
         self._check_response_status(response, expected_status)
-
         return response
 
     def _prepare_item(self, item: pystac.Item):
-        item.collection_id = self.collection_id
-        if not item.get_links(pystac.RelType.COLLECTION):
-            item.add_link(
-                pystac.Link(rel=pystac.RelType.COLLECTION, target=item.collection_id)
-            )
+        if self.collection_id:
+            item.collection_id = self.collection_id
+            if not item.get_links(pystac.RelType.COLLECTION):
+                item.add_link(
+                    pystac.Link(rel=pystac.RelType.COLLECTION, target=item.collection_id)
+                )
 
     def _ingest_bulk(self, items: Iterable[pystac.Item]) -> dict:
         if not all(i.collection_id == self.collection_id for i in items):
             raise Exception("All collection IDs should be identical for bulk ingests")
-
         url_path = f"collections/{self.collection_id}/bulk_items"
         data = {
             "method": "upsert",
             "items": {item.id: item.to_dict() for item in items},
         }
-        response = requests.post(
-            url=self._join_url(url_path), auth=self.auth, json=data
-        )
-
+        response = requests.post(url=self._join_url(url_path), auth=self.auth, json=data)
         expected_status = [
             requests.status_codes.codes.ok,
             requests.status_codes.codes.created,
             requests.status_codes.codes.accepted,
         ]
-
         self._check_response_status(response, expected_status)
         return response.json()
 
@@ -187,55 +172,69 @@ class StacApiInteraction:
 
         chunk = []
         futures = []
-
         with ThreadPoolExecutor(max_workers=4) as executor:
             for item in items:
                 self._prepare_item(item)
                 chunk.append(item)
-
-                if len(chunk) == self.bulk_size:
+                if len(chunk) >= self.bulk_size:
                     futures.append(executor.submit(self._ingest_bulk, chunk.copy()))
                     chunk = []
-
+            # submit any final chunk
             if chunk:
-                self._ingest_bulk(chunk)
+                futures.append(executor.submit(self._ingest_bulk, chunk.copy()))
 
-            for _ in concurrent.futures.as_completed(futures):
-                continue
+            # wait for and surface exceptions if any
+            for fut in as_completed(futures):
+                _res = fut.result()  # will raise if underlying call raised
 
-    def _check_response_status(
-        self, response: requests.Response, expected_status_codes: list[int]
-    ):
+    def _check_response_status(self, response: requests.Response, expected_status_codes: list[int]):
         if response.status_code not in expected_status_codes:
             message = (
                 f"Expecting HTTP status to be any of {expected_status_codes} "
                 + f"but received {response.status_code} - {response.reason}, request method={response.request.method}\n"
                 + f"response body:\n{response.text}"
             )
-
             raise Exception(message)
 
-    def get_collection_id(self) -> str:
+    def get_collection_id(self) -> Optional[str]:
         return self.collection_id
-    
 
-def upload_to_stac_api(job_items: List[pystac.Item], sensor: str, stac_root_url: str) -> None:
-    """Upload items to STAC API."""
-    pipeline_log.info("Preparing to upload items to STAC API")
+
+def upload_to_stac_api(items: List[pystac.Item], collection_id: str, stac_root_url: str) -> None:
+    """Debug version of STAC API upload with detailed logging."""
+    pipeline_log.info(f"Preparing to upload {len(items)} items to STAC API")
     username = os.getenv("STAC_API_USERNAME")
     password = os.getenv("STAC_API_PASSWORD")
-
     if not username or not password:
-        error_msg = "STAC API credentials not found. Please set STAC_API_USERNAME and STAC_API_PASSWORD."
+        error_msg = "STAC API credentials not found."
         pipeline_log.error(error_msg)
         raise ValueError(error_msg)
 
     stac_api_interaction = StacApiInteraction(
-        sensor=sensor,
-        base_url=stac_root_url,
+        stac_root=stac_root_url,
+        collection_id=collection_id,
         auth=VitoStacApiAuthentication(username=username, password=password),
     )
 
-    pipeline_log.info("Writing the STAC API metadata")
-    stac_api_interaction.upload_items_bulk(job_items)
-    pipeline_log.info("STAC API metadata written")
+    pipeline_log.info(f"Checking if collection '{collection_id}' exists...")
+    collection_exists_before = stac_api_interaction.exists()
+    pipeline_log.info(f"Collection exists before upload: {collection_exists_before}")
+
+    if not collection_exists_before:
+        pipeline_log.info("Collection doesn't exist, attempting to create it...")
+        try:
+            stac_api_interaction.create_collection()
+            pipeline_log.info("Collection creation attempted")
+            collection_exists_after = stac_api_interaction.exists()
+            pipeline_log.info(f"Collection exists after creation attempt: {collection_exists_after}")
+        except Exception as e:
+            pipeline_log.error(f"Collection creation failed: {e}")
+            raise
+
+    pipeline_log.info(f"Starting bulk upload of {len(items)} items...")
+    try:
+        stac_api_interaction.upload_items_bulk(items)
+        pipeline_log.info("Bulk upload completed")
+    except Exception as e:
+        pipeline_log.error(f"Bulk upload failed: {e}")
+        raise

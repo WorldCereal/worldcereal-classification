@@ -11,7 +11,6 @@ from openeo_gfmap.backend import BACKEND_CONNECTIONS
 def extraction_job_quality_check(job_entry: pd.Series, orfeo_error_threshold: float = 0.3) -> None:
     """Perform quality checks on an extraction job."""
     
-    
     conn = BACKEND_CONNECTIONS[Backend[job_entry["backend_name"].upper()]]()
     job = conn.job(job_entry.id)
 

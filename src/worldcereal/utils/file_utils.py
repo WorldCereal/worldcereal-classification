@@ -29,3 +29,5 @@ def set_file_permissions(path: Path):
             safe_chown_group(path)
         except (PermissionError, OSError):
             pass
+
+    
