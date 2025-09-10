@@ -122,6 +122,7 @@ def main(args):
     val_df = val_df[val_df["available_timesteps"] >= 12]
     test_df = test_df[test_df["available_timesteps"] >= 12]
 
+    logger.info("Saving train, val, and test DataFrames to parquet files ...")
     train_df.to_parquet(Path(output_dir) / "train_df.parquet")
     val_df.to_parquet(Path(output_dir) / "val_df.parquet")
     test_df.to_parquet(Path(output_dir) / "test_df.parquet")
@@ -143,6 +144,10 @@ def main(args):
             f"Number of classes {num_classes} is not supported. "
             f"Dataset contains the following classes: {train_df.finetune_class.unique()}."
         )
+    logger.info(f"Task type: {task_type}, num_outputs: {num_outputs}")
+    logger.info(f"Number of training samples: {len(train_df)}")
+    logger.info(f"Number of validation samples: {len(val_df)}")
+    logger.info(f"Number of test samples: {len(test_df)}")
 
     # Use type casting to specify to mypy that task_type is a valid Literal value
     task_type_literal: Literal["binary", "multiclass"] = task_type  # type: ignore
