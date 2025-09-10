@@ -61,7 +61,7 @@ def create_worldcereal_inputsjob(
     connection: openeo.Connection,
     provider,
     connection_provider,
-    s1_orbit_state: Literal["ASCENDING", "DESCENDING"] | None,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
