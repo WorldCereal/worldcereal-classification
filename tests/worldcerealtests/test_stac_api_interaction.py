@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import call, MagicMock, patch
 
 import pystac
 import pytest
@@ -127,5 +127,7 @@ class TestStacApiInteraction:
             },
         ]
 
-        for i, call in enumerate(mock_requests_post.call_args_list):
-            assert call[1] == expected_calls[i]
+        mock_requests_post.assert_has_calls(
+            [call(**ec) for ec in expected_calls],
+            any_order=True,
+)

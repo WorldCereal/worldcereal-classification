@@ -6,7 +6,7 @@ import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from openeo_gfmap import TemporalContext
-from presto.utils import DEFAULT_SEED
+from prometheo.utils import DEFAULT_SEED
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     classification_report,
@@ -37,8 +37,6 @@ def compute_training_features(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
-    mask_ratio: float = 0.30,
-    repeats: int = 1,
 ) -> pd.DataFrame:
     """Compute features for training a crop classification model.
     This function processes the time series in the input dataframe to align
@@ -64,10 +62,6 @@ def compute_training_features(
         Type of task (e.g., "croptype"), by default "croptype".
     augment : bool, optional
         If True, temporal jittering is enabled, by default True.
-    mask_ratio : float, optional
-        If > 0, inputs are randomly masked before computing Presto embeddings, by default 0.30
-    repeats : int, optional
-        Number of times to repeat each sample, by default 1.
 
     Returns
     -------
@@ -89,13 +83,11 @@ def compute_training_features(
         batch_size=batch_size,
         task_type=task_type,
         augment=augment,
-        mask_ratio=mask_ratio,
-        repeats=repeats,
     )
 
     # Report on contents of the resulting dataframe here
     logger.info(
-        f'Samples originating from {df["ref_id"].nunique()} unique reference datasets.'
+        f"Samples originating from {df['ref_id'].nunique()} unique reference datasets."
     )
 
     logger.info("Distribution of samples across years:")
@@ -120,8 +112,6 @@ def compute_presto_embeddings(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
-    mask_ratio: float = 0.30,
-    repeats: int = 1,
 ) -> pd.DataFrame:
     """Method to generate a training dataframe with Presto embeddings for downstream Catboost training.
 
@@ -135,10 +125,6 @@ def compute_presto_embeddings(
         cropland or croptype task, by default "croptype"
     augment : bool, optional
         if True, temporal jittering is enabled, by default True
-    mask_ratio : float, optional
-        if > 0, inputs are randomly masked before computing Presto embeddings, by default 0.30
-    repeats: int, optional
-        number of times to repeat each, by default 1
 
     Returns
     -------
@@ -149,53 +135,36 @@ def compute_presto_embeddings(
     ------
     ValueError
         if an unknown tasktype is specified
-    ValueError
-        if repeats > 1 and augment=False and mask_ratio=0
     """
-    from presto.presto import Presto
+    from prometheo.models import Presto
+    from prometheo.models.presto.wrapper import load_presto_weights
 
     from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
     if task_type == "croptype":
         presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
-        use_valid_date_token = (
-            CropTypeParameters().feature_parameters.use_valid_date_token
-        )
     elif task_type == "cropland":
         presto_model_url = CropLandParameters().feature_parameters.presto_model_url
-        use_valid_date_token = (
-            CropLandParameters().feature_parameters.use_valid_date_token
-        )
     else:
         raise ValueError(f"Unknown task type: {task_type}")
 
-    if repeats > 1 and not augment and mask_ratio == 0:
-        raise ValueError("Repeats > 1 requires augment=True or mask_ratio > 0.")
-
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto.load_pretrained(
-        presto_model_url,
-        from_url=True,
-        strict=False,
-        valid_month_as_token=use_valid_date_token,
-    )
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_model_url)
 
     # Initialize dataset
     df = df.reset_index()
     ds = WorldCerealTrainingDataset(
         df,
-        task_type=task_type,
+        task_type="multiclass" if task_type == "croptype" else "binary",
         augment=augment,
-        mask_ratio=mask_ratio,
-        repeats=repeats,
     )
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
         presto_model,
         batch_size=batch_size,
-        valid_date_as_token=use_valid_date_token,
     )
 
     logger.info("Done.")
@@ -326,7 +295,6 @@ def train_classifier(
 
     # Show confusion matrix if requested
     if show_confusion_matrix is not None:
-
         assert show_confusion_matrix in ["absolute", "relative"]
 
         labels = np.sort(training_dataframe["downstream_class"].unique())

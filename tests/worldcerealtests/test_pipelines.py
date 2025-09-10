@@ -3,7 +3,8 @@ import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
-from presto.presto import Presto
+from prometheo.models import Presto
+from prometheo.models.presto.wrapper import load_presto_weights
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -81,7 +82,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     print("*" * 40)
 
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
-    assert training_df.shape == (238, 247)
+    assert training_df.shape == (238, 246)
 
     # We keep original ewoc_code for this test
     training_df["downstream_class"] = training_df["ewoc_code"]
@@ -91,28 +92,17 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto.load_pretrained(
-        presto_model_url,
-        from_url=True,
-        strict=False,
-        valid_month_as_token=True,
-    )
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_model_url)
 
     # Initialize dataset
     df = training_df.reset_index()
-    ds = WorldCerealTrainingDataset(
-        df,
-        task_type="croptype",
-        augment=True,
-        mask_ratio=0.30,
-        repeats=1,
-    )
+    ds = WorldCerealTrainingDataset(df, task_type="multiclass", augment=True)
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
         presto_model,
         batch_size=256,
-        valid_date_as_token=True,
     )
     logger.info("Presto embeddings computed.")
 

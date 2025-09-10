@@ -38,6 +38,7 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B06": "OPTICAL-B06",
     "S2-L2A-B07": "OPTICAL-B07",
     "S2-L2A-B08": "OPTICAL-B08",
+    "S2-L2A-B8A": "OPTICAL-B8A",
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
     "valid_date": "valid_time",
@@ -853,6 +854,12 @@ def process_parquet(
         freq = "month"
     if freq == "10D":
         freq = "dekad"
+
+    # `feature_index` is an openEO spefic column we should remove to avoid
+    # it being treated as unique values which is not true after merging
+    # multiple parquet files
+    if "feature_index" in df.columns:
+        df = df.drop("feature_index", axis=1)
 
     # Validate input
     validator = DataFrameValidator()
