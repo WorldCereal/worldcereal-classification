@@ -201,13 +201,15 @@ def get_training_dfs_from_parquet(
     df = remove_small_classes(df, min_samples=10)
 
     if test_samples_file is not None:
-        logger.info(f"Controlled train/test split based on: {test_samples_file}")
+        logger.info(
+            f"Controlled `train/val` vs `test` split based on: {test_samples_file}"
+        )
         test_samples_df = pd.read_csv(test_samples_file)
         trainval_df, test_df = split_df(
             df, val_sample_ids=test_samples_df.sample_id.tolist()
         )
     else:
-        logger.info("Random train/val vs test split ...")
+        logger.info("Random `train/val` vs `test` split ...")
         # train_df, test_df = split_df(df, val_size=0.2)
         # TO DO: add possibility of per-class stratification to original split_df function
         trainval_df, test_df = train_test_split(
@@ -219,12 +221,13 @@ def get_training_dfs_from_parquet(
     trainval_df = remove_small_classes(trainval_df, min_samples=5)
 
     if val_samples_file is not None:
-        logger.info(f"Controlled train vs val split based on: {val_samples_file}")
+        logger.info(f"Controlled `train` vs `val` split based on: {val_samples_file}")
         val_samples_df = pd.read_csv(val_samples_file)
         train_df, val_df = split_df(
             trainval_df, val_sample_ids=val_samples_df.sample_id.tolist()
         )
     else:
+        logger.info("Random `train` vs `val` split ...")
         train_df, val_df = train_test_split(
             trainval_df,
             test_size=0.2,
