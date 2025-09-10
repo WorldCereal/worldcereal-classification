@@ -284,6 +284,7 @@ def query_private_extractions(
     filter_cropland: bool = True,
     buffer: int = 250000,
     crop_types: Optional[list[int]] = None,
+    ref_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Query and filter private extraction data stored in parquet files.
@@ -306,6 +307,9 @@ def query_private_extractions(
     crop_types : Optional[List[int]], optional
             List of crop types to filter on, by default None
             If None, all crop types are included.
+    ref_ids : Optional[List[str]], optional
+        List of reference IDs to filter on, by default None
+        If None, all reference IDs are included.
 
     Returns
     -------
@@ -323,6 +327,15 @@ def query_private_extractions(
         f"{merged_private_parquet_path}/**/*.parquet",
         recursive=True,
     )
+
+    if ref_ids is not None:
+        private_collection_paths = [
+            p for p in private_collection_paths if Path(p).stem in ref_ids
+        ]
+    if len(private_collection_paths) == 0:
+        logger.warning("No private collections found.")
+
+    logger.info(f"Checking {len(private_collection_paths)} datasets...")
 
     if bbox_poly is not None:
         bbox_poly = (
@@ -351,17 +364,22 @@ def query_private_extractions(
     # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
-        cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+        prefix = "WHERE" if bbox_poly is None else "AND"
+        cropland_filter_query_part = f"""
+{prefix} ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
         cropland_filter_query_part = ""
 
     if crop_types is not None:
+        if (bbox_poly is None) and (not filter_cropland):
+            prefix = "WHERE"
+        else:
+            prefix = "AND"
         ct_list_str = ",".join([str(x) for x in crop_types])
         cropland_filter_query_part += f"""
-AND ewoc_code IN ({ct_list_str})
+{prefix} ewoc_code IN ({ct_list_str})
 """
 
     main_query = "SET TimeZone = 'UTC';\n"
@@ -741,9 +759,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(country).any(), (
-                f"Tried removing {country} but it is not in the dataframe"
-            )
+            assert df.iso3.str.contains(
+                country
+            ).any(), f"Tried removing {country} but it is not in the dataframe"
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples
