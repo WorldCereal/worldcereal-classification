@@ -77,7 +77,7 @@ def create_worldcereal_inputsjob(
         The name of the provider to use for the connection.
     s1_orbit_state : Literal['ASCENDING', 'DESCENDING'], optional
         If specified, only Sentinel-1 data from the given orbit state will be used.
-        If None, it will be automatically determined but we want it fixed here.
+        If None, it will be automatically determined.
     job_options : dict, optional
         A dictionary of job options to customize the job.
         If None, default options will be used.
@@ -163,7 +163,8 @@ def create_job_dataframe_from_grid(
     Parameters
     ----------
     grid_path : Path
-        Path to the grid file (GeoJSON or shapefile) defining the locations to extract.
+        Path to the geo file (any format that GeoPandas read_file() accepts + .(geo)parquet) defining the patches to extract.
+        Must contain a geometry column with polygons in valid CRS.
     start_date : str
         Start date for the extractions in 'YYYY-MM-DD' format.
     end_date : str
@@ -180,8 +181,24 @@ def create_job_dataframe_from_grid(
     pd.DataFrame
         The created job dataframe.
     """
+    if str(grid_path).endswith("parquet") or str(grid_path).endswith("geoparquet"):
+        production_gdf = gpd.read_parquet(grid_path)
+    else:
+        production_gdf = gpd.read_file(grid_path)
+    assert (
+        "geometry" in production_gdf.columns
+    ), "The grid file must contain a geometry column."
+    assert all(
+        production_gdf.geometry.type == "Polygon"
+    ), "All geometries in the grid file must be of type Polygon."
+    assert production_gdf.crs is not None, "The grid file must have a defined CRS."
+    assert (
+        production_gdf.crs.to_epsg() is not None
+    ), "The grid file must have a defined EPSG code."
+    assert pd.to_datetime(start_date) < pd.to_datetime(
+        end_date
+    ), "The start_date must be earlier than the end_date."
 
-    production_gdf = gpd.read_file(grid_path)
     production_gdf["start_date"] = start_date
     production_gdf["end_date"] = end_date
     if not tile_name_col:
@@ -231,7 +248,8 @@ def main(
     Parameters
     ----------
     grid_path : Path
-        Path to the grid file (GeoJSON or shapefile) defining the locations to extract.
+        Path to the geo file (any format that GeoPandas read_file() accepts + .(geo)parquet) defining the patches to extract.
+        Must contain a geometry column with polygons in valid CRS.
     extractions_start_date : str
         Start date for the extractions in 'YYYY-MM-DD' format.
     extractions_end_date : str
@@ -268,7 +286,7 @@ def main(
     """
 
     job_tracking_path = output_folder / "job_tracking.csv"
-    if job_tracking_path.is_file():
+    if job_tracking_path.is_file() and not overwrite_job_df:
         job_df = pd.read_csv(job_tracking_path)
         if restart_failed:
             logger.info("Resetting failed jobs.")
@@ -279,7 +297,7 @@ def main(
             # Save new job tracking dataframe
             job_df.to_csv(job_tracking_path, index=False)
     else:
-        # Create a job dataframe if it does not exist
+        # Create a job dataframe if it does not exist or if overwrite is True
         job_df = create_job_dataframe_from_grid(
             grid_path=grid_path,
             start_date=extractions_start_date,
