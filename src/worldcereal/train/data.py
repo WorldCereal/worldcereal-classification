@@ -130,6 +130,7 @@ def get_training_dfs_from_parquet(
     finetune_classes: str = "CROPLAND2",
     class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
     val_samples_file: Optional[Union[Path, str]] = None,
+    test_samples_file: Optional[Union[Path, str]] = None,
     debug: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -199,14 +200,14 @@ def get_training_dfs_from_parquet(
     # Remove classes with too few samples for stratification
     df = remove_small_classes(df, min_samples=10)
 
-    if val_samples_file is not None:
-        logger.info(f"Controlled train/test split based on: {val_samples_file}")
-        val_samples_df = pd.read_csv(val_samples_file)
+    if test_samples_file is not None:
+        logger.info(f"Controlled train/test split based on: {test_samples_file}")
+        test_samples_df = pd.read_csv(test_samples_file)
         trainval_df, test_df = split_df(
-            df, val_sample_ids=val_samples_df.sample_id.tolist()
+            df, val_sample_ids=test_samples_df.sample_id.tolist()
         )
     else:
-        logger.info("Random train/test split ...")
+        logger.info("Random train/val vs test split ...")
         # train_df, test_df = split_df(df, val_size=0.2)
         # TO DO: add possibility of per-class stratification to original split_df function
         trainval_df, test_df = train_test_split(
@@ -216,16 +217,24 @@ def get_training_dfs_from_parquet(
     # train_df, val_df = split_df(train_df, val_size=0.2)
     # Remove classes with too few samples for stratification, now on trainval_df
     trainval_df = remove_small_classes(trainval_df, min_samples=5)
-    train_df, val_df = train_test_split(
-        trainval_df,
-        test_size=0.2,
-        random_state=42,
-        stratify=trainval_df["finetune_class"],
-    )
 
-    if val_samples_file:
-        # With controlled validation set it's possible that either
-        # the validation set has unique classes not present in training
+    if val_samples_file is not None:
+        logger.info(f"Controlled train vs val split based on: {val_samples_file}")
+        val_samples_df = pd.read_csv(val_samples_file)
+        train_df, val_df = split_df(
+            trainval_df, val_sample_ids=val_samples_df.sample_id.tolist()
+        )
+    else:
+        train_df, val_df = train_test_split(
+            trainval_df,
+            test_size=0.2,
+            random_state=42,
+            stratify=trainval_df["finetune_class"],
+        )
+
+    if test_samples_file:
+        # With controlled test set it's possible that either
+        # the test set has unique classes not present in training
         # So we need to remove those classes in its totality
         train_classes = set(train_df["finetune_class"].unique())
         val_classes = set(val_df["finetune_class"].unique())
