@@ -1,17 +1,18 @@
+import argparse
 import json
 import random
 import shutil
 import time
 from functools import partial
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional, Union
 
 import geopandas as gpd
 import openeo
 import pandas as pd
 from loguru import logger
 from openeo import BatchJob
-from openeo.extra.job_management import MultiBackendJobManager
+from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 
@@ -61,7 +62,30 @@ def create_worldcereal_inputsjob(
     provider,
     connection_provider,
     s1_orbit_state: Literal["ASCENDING", "DESCENDING"] | None,
+    job_options: Optional[dict] = None,
 ):
+    """Function to create a job for collecting preprocessed inputs for WorldCereal.
+    Parameters
+    ----------
+    row : pd.Series
+        A row from the job dataframe containing the parameters for the job.
+    connection : openeo.Connection
+        An active openEO connection.
+    provider : str
+        The name of the provider to use for the job.
+    connection_provider : str
+        The name of the provider to use for the connection.
+    s1_orbit_state : Literal['ASCENDING', 'DESCENDING'], optional
+        If specified, only Sentinel-1 data from the given orbit state will be used.
+        If None, it will be automatically determined but we want it fixed here.
+    job_options : dict, optional
+        A dictionary of job options to customize the job.
+        If None, default options will be used.
+    Returns
+    -------
+    openeo.BatchJob
+        The created batch job.
+    """
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
     spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
 
@@ -72,17 +96,18 @@ def create_worldcereal_inputsjob(
         target_epsg=int(row["epsg"]),
     )
 
-    # Submit the job
-    job_options = {
-        "driver-memory": "4g",
-        "executor-memory": "2g",
-        "executor-memoryOverhead": "1g",
-        # "etl_organization_id": 10523,
-        "python-memory": "4g",
-        "soft-errors": 0.1,
-        "image-name": "python311",
-        "max-executors": 10,
-    }
+    # If no custom job options are provided, use these defaults
+    if not job_options:
+        job_options = {
+            "driver-memory": "4g",
+            "executor-memory": "2g",
+            "executor-memoryOverhead": "1g",
+            "python-memory": "4g",
+            "soft-errors": 0.1,
+            "image-name": "registry.internal/prod/openeo-geotrellis-kube-python311:20250619-34",
+            # "image-name": "python311",
+            "max-executors": 10,
+        }
 
     return preprocessed_inputs.create_job(
         title=f"WorldCereal collect inputs for {row.tile_name}",
@@ -126,65 +151,155 @@ def generate_output_path_inference(
     return subfolder
 
 
-if __name__ == "__main__":
-    # ------------------------
-    # Flexible parameters
-    output_folder = Path("/vitodata/worldcereal/...")
-    parallel_jobs = 20
-    randomize_production_grid = (
-        True  # If True, it will randomly select tiles from the production grid
-    )
-    debug = False  # Triggers a selection of tiles
-    s1_orbit_state = (
-        None  # If None, it will be automatically determined but we want it fixed here.
-    )
-    start_date = "2024-10-01"
-    end_date = "2025-09-30"
-    production_grid = "/vitodata/worldcereal/data/INSEASONPOC/france_inseason_poc_productionunits.parquet"
-    restart_failed = True  # If True, it will restart failed jobs
-    # ------------------------
+def create_job_dataframe_from_grid(
+    grid_path: Path,
+    start_date: str,
+    end_date: str,
+    output_folder: Path,
+    tile_name_col: Optional[str] = None,
+    overwrite: bool = False,
+) -> pd.DataFrame:
+    """Function to create a job dataframe from a grid file.
+    Parameters
+    ----------
+    grid_path : Path
+        Path to the grid file (GeoJSON or shapefile) defining the locations to extract.
+    start_date : str
+        Start date for the extractions in 'YYYY-MM-DD' format.
+    end_date : str
+        End date for the extractions in 'YYYY-MM-DD' format.
+    output_folder : Path
+        The folder where to store the extracted data
+    tile_name_col : str, optional
+        Name of the column in the grid file that contains the tile names.
+        If None, tiles will be named as "patch_0", "patch_1",  etc.
+    overwrite : bool, optional
+        Whether to overwrite the existing job tracking dataframe if it exists. Default is False.
+    Returns
+    -------
+    pd.DataFrame
+        The created job dataframe.
+    """
 
-    job_tracking_csv = output_folder / "job_tracking.csv"
+    production_gdf = gpd.read_file(grid_path)
+    production_gdf["start_date"] = start_date
+    production_gdf["end_date"] = end_date
+    if not tile_name_col:
+        production_gdf["tile_name"] = [f"patch_{i}" for i in range(len(production_gdf))]
+    else:
+        production_gdf["tile_name"] = production_gdf[tile_name_col]
+    production_gdf["epsg"] = production_gdf.crs.to_epsg()
 
-    # Ensure the output folder exists
-    output_folder.mkdir(parents=True, exist_ok=True)
+    job_tracking_path = Path(output_folder) / "job_tracking.csv"
+    job_db = CsvJobDatabase(path=job_tracking_path)
 
-    # Create a job dataframe if it does not exist
-    print(job_tracking_csv)
-    if job_tracking_csv.is_file():
-        logger.info("Job tracking file already exists, skipping job creation.")
-        job_df = pd.read_csv(job_tracking_csv)
+    if job_tracking_path.is_file() and not overwrite:
+        logger.info(f"Job tracking file found at {job_tracking_path}.")
+        return job_db.read()
 
+    if job_tracking_path.is_file() and overwrite:
+        # Backup old DB and recreate from scratch
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        backup = job_tracking_path.with_suffix(f".csv.bckp.{ts}")
+        job_tracking_path.replace(backup)
+        logger.info(f"Backed up old job DB to {backup}")
+
+    # Fresh initialize (file does not exist at this point)
+    logger.info(f"Creating new job tracking file at {job_tracking_path}.")
+    job_db.initialize_from_df(production_gdf)
+
+    return job_db.read()
+
+
+def main(
+    grid_path: Path,
+    extractions_start_date: str,
+    extractions_end_date: str,
+    output_folder: Path,
+    overwrite_job_df: bool = False,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+    memory: Optional[str] = None,
+    python_memory: Optional[str] = None,
+    max_executors: Optional[int] = None,
+    parallel_jobs: int = 2,
+    restart_failed: bool = False,
+    image_name: Optional[str] = None,
+    organization_id: Optional[int] = None,
+) -> None:
+    """Main function responsible for creating and launching jobs to collect preprocessed inputs.
+
+    Parameters
+    ----------
+    grid_path : Path
+        Path to the grid file (GeoJSON or shapefile) defining the locations to extract.
+    extractions_start_date : str
+        Start date for the extractions in 'YYYY-MM-DD' format.
+    extractions_end_date : str
+        End date for the extractions in 'YYYY-MM-DD' format.
+    output_folder : Path
+        The folder where to store the extracted data
+    overwrite_job_df : bool, optional
+        Whether to overwrite the existing job tracking dataframe if it exists. Default is False.
+    s1_orbit_state : Literal['ASCENDING', 'DESCENDING'], optional
+        If specified, only Sentinel-1 data from the given orbit state will be used.
+        If None, it will be automatically determined but we want it fixed here.
+    memory : str, optional
+        Memory to allocate for the executor.
+        If not specified, the default value is used, depending on type of collection.
+    python_memory : str, optional
+        Memory to allocate for the python processes as well as OrfeoToolbox in the executors,
+        If not specified, the default value is used, depending on type of collection.
+    max_executors : int, optional
+        Number of executors to run.
+        If not specified, the default value is used, depending on type of collection.
+    parallel_jobs : int, optional
+        The maximum number of parallel jobs to run at the same time, by default 10
+    restart_failed : bool, optional
+        Restart the jobs that previously failed, by default False
+    image_name : str, optional
+        Specific openEO image name to use for the jobs, by default None
+    organization_id : int, optional
+        ID of the organization to use for the job, by default None in which case
+        the active organization for the user is used
+
+    Returns
+    -------
+    None
+    """
+
+    job_tracking_path = output_folder / "job_tracking.csv"
+    if job_tracking_path.is_file():
+        job_df = pd.read_csv(job_tracking_path)
         if restart_failed:
             logger.info("Resetting failed jobs.")
             job_df.loc[
                 job_df["status"].isin(["error", "start_failed"]),
                 "status",
             ] = "not_started"
-
             # Save new job tracking dataframe
-            job_df.to_csv(job_tracking_csv, index=False)
-
+            job_df.to_csv(job_tracking_path, index=False)
     else:
-        logger.info("Job tracking file does not exist, creating new jobs.")
-
-        production_gdf = gpd.read_parquet(production_grid).rename(
-            columns={"name": "tile_name"}
+        # Create a job dataframe if it does not exist
+        job_df = create_job_dataframe_from_grid(
+            grid_path=grid_path,
+            start_date=extractions_start_date,
+            end_date=extractions_end_date,
+            output_folder=output_folder,
+            overwrite=overwrite_job_df,
         )
-        if debug:
-            logger.info("Running in debug mode, selecting a subset of tiles.")
-            # Select a subset of tiles for debugging
-            # This is just an example selection, adjust as needed
-            selection = ["E382N290", "E412N272", "E370N226", "E364N274", "E338N288"]
-            production_gdf = production_gdf[production_gdf["tile_name"].isin(selection)]
 
-        if randomize_production_grid:
-            logger.info("Randomizing the production grid tiles.")
-            production_gdf = production_gdf.sample(frac=1).reset_index(drop=True)
-
-        job_df = production_gdf[["tile_name", "geometry"]].copy()
-        job_df["start_date"] = start_date
-        job_df["end_date"] = end_date
+    # Compile custom job options
+    job_options: Optional[Dict[str, Union[str, int]]] = {
+        key: value
+        for key, value in {
+            "executor-memory": memory,
+            "python-memory": python_memory,
+            "max-executors": max_executors,
+            "image-name": image_name,
+            "etl_organization_id": organization_id,
+        }.items()
+        if value is not None
+    } or None
 
     # Retry loop starts here
     attempt = 0
@@ -200,12 +315,13 @@ if __name__ == "__main__":
 
             # Kick off all jobs
             manager.run_jobs(
-                df=job_df,
                 start_job=partial(
                     create_worldcereal_inputsjob,
                     s1_orbit_state=s1_orbit_state,
+                    job_options=job_options,
+                    connection=connection,
                 ),
-                job_db=job_tracking_csv,
+                job_db=job_tracking_path,
             )
             logger.info("All jobs submitted successfully.")
             break  # success: exit loop
@@ -227,3 +343,96 @@ if __name__ == "__main__":
             # Non-retryable or maxed-out
             logger.error(f"Max retries reached. Last error: {exc}")
             raise
+
+    logger.info("All done!")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Collect preprocessed inputs for polygon patches."
+    )
+    parser.add_argument(
+        "grid_path",
+        type=Path,
+        help="Path to the grid file (GeoJSON or shapefile) defining the locations to extract.",
+    )
+    parser.add_argument(
+        "extractions_start_date",
+        type=str,
+        help="Start date for the extractions in 'YYYY-MM-DD' format",
+    )
+    parser.add_argument(
+        "extractions_end_date",
+        type=str,
+        help="End date for the extractions in 'YYYY-MM-DD' format",
+    )
+    parser.add_argument(
+        "output_folder", type=Path, help="The folder where to store the extracted data"
+    )
+    parser.add_argument(
+        "--overwrite_job_df",
+        action="store_true",
+        help="Whether to overwrite the existing job tracking dataframe if it exists.",
+    )
+    parser.add_argument(
+        "--s1_orbit_state",
+        type=str,
+        choices=["ASCENDING", "DESCENDING"],
+        help="Specify the S1 orbit state to use for the jobs.",
+    )
+    parser.add_argument(
+        "--memory",
+        type=str,
+        default="1800m",
+        help="Memory to allocate for the executor.",
+    )
+    parser.add_argument(
+        "--python_memory",
+        type=str,
+        default="1900m",
+        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
+    )
+    parser.add_argument(
+        "--max_executors", type=int, default=22, help="Number of executors to run."
+    )
+    parser.add_argument(
+        "--parallel_jobs",
+        type=int,
+        default=2,
+        help="The maximum number of parallel jobs to run at the same time.",
+    )
+    parser.add_argument(
+        "--restart_failed",
+        action="store_true",
+        help="Restart the jobs that previously failed.",
+    )
+    parser.add_argument(
+        "--image_name",
+        type=str,
+        default=None,
+        help="Specific openEO image name to use for the jobs.",
+    )
+    parser.add_argument(
+        "--organization_id",
+        type=int,
+        default=None,
+        help="ID of the organization to use for the job.",
+    )
+
+    args = parser.parse_args()
+
+    main(
+        grid_path=args.grid_path,
+        extractions_start_date=args.extractions_start_date,
+        extractions_end_date=args.extractions_end_date,
+        output_folder=args.output_folder,
+        overwrite_job_df=args.overwrite_job_df,
+        s1_orbit_state=args.s1_orbit_state,
+        memory=args.memory,
+        python_memory=args.python_memory,
+        max_executors=args.max_executors,
+        parallel_jobs=args.parallel_jobs,
+        restart_failed=args.restart_failed,
+        image_name=args.image_name,
+        organization_id=args.organization_id,
+    )
