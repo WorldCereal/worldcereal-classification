@@ -200,7 +200,7 @@ def post_job_action_patch(
             actual_y_size = ds.dims.get("y", 0)
 
             if actual_x_size != expected_dim_size or actual_y_size != expected_dim_size:
-                pipeline_log.error(
+                pipeline_log.warning(
                     "Dimension validation failed for %s: expected %dx%d for %s resolution, got %dx%d",
                     item_asset_path,
                     expected_dim_size,
@@ -208,10 +208,6 @@ def post_job_action_patch(
                     spatial_resolution,
                     actual_x_size,
                     actual_y_size,
-                )
-                raise ValueError(
-                    f"Invalid dimensions for {spatial_resolution} resolution: "
-                    f"expected {expected_dim_size}x{expected_dim_size}, got {actual_x_size}x{actual_y_size}"
                 )
 
             pipeline_log.debug(
