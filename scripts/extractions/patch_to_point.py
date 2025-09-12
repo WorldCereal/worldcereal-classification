@@ -39,7 +39,7 @@ class PatchToPointJobManager(MultiBackendJobManager):
 
 
 def merge_individual_parquet_files(
-    parquet_files: List[Path] | List[str],
+    parquet_files: Union[List[Path], List[str]],
 ) -> gpd.GeoDataFrame:
     """
     Merge individual parquet files into a single GeoDataFrame.
@@ -106,8 +106,8 @@ def main(
     ground_truth_file: str,
     root_folder: Path,
     period: str = "month",
-    restart_failed: Optional[bool] = False,
-    only_flagged_samples: Optional[bool] = False,
+    restart_failed: bool = False,
+    only_flagged_samples: bool = False,
     driver_memory: Optional[str] = "12G",
     driver_memoryOverhead: Optional[str] = "2G",
     executor_cores: Optional[int] = 2,
