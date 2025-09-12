@@ -101,13 +101,22 @@ def merge_individual_parquet_files(
 
 
 def main(
-    connection,
-    ref_id,
-    ground_truth_file,
-    root_folder,
-    period="month",
-    restart_failed=False,
-    only_flagged_samples=False,
+    connection: openeo.Connection,
+    ref_id: str,
+    ground_truth_file: str,
+    root_folder: Path,
+    period: str = "month",
+    restart_failed: Optional[bool] = False,
+    only_flagged_samples: Optional[bool] = False,
+    driver_memory: Optional[str] = "12G",
+    driver_memoryOverhead: Optional[str] = "2G",
+    executor_cores: Optional[int] = 2,
+    executor_memory: Optional[str] = "4G",
+    executor_memoryOverhead: Optional[str] = "2G",
+    max_executors: Optional[int] = 300,
+    parallel_jobs: Optional[int] = 1,
+    image_name: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -129,6 +138,24 @@ def main(
     only_flagged_samples : bool, optional
         If True, only samples with extract flag >0 will be retrieved, no collateral samples.
         (This is useful for very large and dense datasets like USDA).
+    driver_memory : str, optional
+        The maximum amount of memory to allocate for the driver. Default is '12G'.
+    driver_memoryOverhead : str, optional
+        Memory to allocate for the driver overhead. Default is '2G'.
+    executor_cores : int, optional
+        Number of cores to allocate per executor. Default is 2.
+    executor_memory : str, optional
+        Memory to allocate for the executor. Default is '4G'.
+    executor_memoryOverhead : str, optional
+        Memory to allocate for the executor overhead. Default is '2G'.
+    max_executors : int, optional
+        Number of executors to run. Default is 300.
+    parallel_jobs : int, optional
+        The maximum number of parallel jobs to run at the same time. Default is 1.
+    image_name : str, optional
+        Specific openEO image name to use for the jobs. Default is None.
+    organization_id : int, optional
+        ID of the organization to use for the job. Default is None.
 
     Returns
     -------
@@ -163,10 +190,30 @@ def main(
         )
         job_db.initialize_from_df(job_df)
 
+    # Compile custom job options
+    job_options: Optional[Dict[str, Union[str, int]]] = {
+        key: value
+        for key, value in {
+            "driver-memory": driver_memory,
+            "driver-memoryOverhead": driver_memoryOverhead,
+            "executor-cores": executor_cores,
+            "executor-memory": executor_memory,
+            "executor-memoryOverhead": executor_memoryOverhead,
+            "max-executors": max_executors,
+            "image-name": image_name,
+            "etl_organization_id": organization_id,
+        }.items()
+        if value is not None
+    } or None
+
     manager = PatchToPointJobManager(root_dir=output_folder)
-    manager.add_backend("terrascope", connection=connection, parallel_jobs=5)
+    manager.add_backend("terrascope", connection=connection, parallel_jobs=parallel_jobs)
     manager.run_jobs(
-        start_job=partial(create_job_patch_to_point_worldcereal, period=period),
+        start_job=partial(
+            create_job_patch_to_point_worldcereal, 
+            period=period,
+            job_options=job_options,
+            ),
         job_db=job_db,
     )
 
@@ -228,6 +275,57 @@ if __name__ == "__main__":
         action="store_true",
         help="If True, only samples with extract flag >0 will be retrieved, no collateral samples.",
     )
+    parser.add_argument(
+        "--driver_memory",
+        type=str,
+        default="12G",
+        help="The maximum amount of memory to allocate for the driver.",
+    )
+    parser.add_argument(
+        "--driver_memoryOverhead",
+        type=str,
+        default="2G",
+        help="Memory to allocate for the driver overhead.",
+    )
+    parser.add_argument(
+        "--executor_cores",
+        type=int,
+        default=2,
+        help="Number of cores to allocate per executor.",
+    )
+    parser.add_argument(
+        "--executor_memory",
+        type=str,
+        default="4G",
+        help="Memory to allocate for the executor.",
+    )
+    parser.add_argument(
+        "--executor_memoryOverhead",
+        type=str,
+        default="2G",
+        help="Memory to allocate for the executor overhead.",
+    )
+    parser.add_argument(
+        "--max_executors", type=int, default=22, help="Number of executors to run."
+    )
+    parser.add_argument(
+        "--parallel_jobs",
+        type=int,
+        default=1,
+        help="The maximum number of parallel jobs to run at the same time.",
+    )
+    parser.add_argument(
+        "--image_name",
+        type=str,
+        default=None,
+        help="Specific openEO image name to use for the jobs.",
+    )
+    parser.add_argument(
+        "--organization_id",
+        type=int,
+        default=None,
+        help="ID of the organization to use for the job.",
+    )
 
     args = parser.parse_args()
 
@@ -236,6 +334,15 @@ if __name__ == "__main__":
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
     only_flagged_samples = args.only_flagged_samples
+    driver_memory=args.driver_memory
+    driver_memoryOverhead=args.driver_memoryOverhead
+    executor_cores = args.executor_cores
+    executor_memory=args.executor_memory
+    executor_memoryOverhead=args.executor_memoryOverhead
+    max_executors=args.max_executors
+    parallel_jobs=args.parallel_jobs
+    image_name=args.image_name
+    organization_id=args.organization_id
 
     logger.info("Starting patch to point extractions ...")
     logger.info(f"Root folder: {root_folder}")
@@ -249,6 +356,22 @@ if __name__ == "__main__":
             f"/vitodata/worldcereal/data/RDM/{ref_id}/harmonized/{ref_id}.geoparquet"
         )
 
-        main(connection, ref_id, ground_truth_file, root_folder, period, restart_failed, only_flagged_samples)
+        main(
+            connection=connection,
+            ref_id=ref_id,
+            ground_truth_file=ground_truth_file,
+            root_folder=root_folder,
+            period=period,
+            restart_failed=restart_failed,
+            only_flagged_samples=only_flagged_samples,
+            memory=memory,
+            python_memory=python_memory,
+            driver_memoryOverhead=driver_memoryOverhead,
+            executor_memoryOverhead=executor_memoryOverhead,
+            max_executors=max_executors,
+            parallel_jobs=parallel_jobs,
+            image_name=image_name,
+            organization_id=organization_id,
+        )
 
     logger.success("All done!")
