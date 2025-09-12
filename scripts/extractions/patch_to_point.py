@@ -107,6 +107,7 @@ def main(
     root_folder,
     period="month",
     restart_failed=False,
+    only_flagged_samples=False,
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -125,6 +126,9 @@ def main(
         Period for extractions, either 'month' or 'dekad'. Default is 'month'.
     restart_failed : bool, optional
         Whether to restart failed jobs. Default is False.
+    only_flagged_samples : bool, optional
+        If True, only samples with extract flag >0 will be retrieved, no collateral samples.
+        (This is useful for very large and dense datasets like USDA).
 
     Returns
     -------
@@ -155,12 +159,12 @@ def main(
     if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
-            ref_id, ground_truth_file
+            ref_id, ground_truth_file, only_flagged_samples
         )
         job_db.initialize_from_df(job_df)
 
     manager = PatchToPointJobManager(root_dir=output_folder)
-    manager.add_backend("terrascope", connection=connection, parallel_jobs=1)
+    manager.add_backend("terrascope", connection=connection, parallel_jobs=5)
     manager.run_jobs(
         start_job=partial(create_job_patch_to_point_worldcereal, period=period),
         job_db=job_db,
@@ -219,6 +223,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Restart failed jobs if the job tracking file exists.",
     )
+    parser.add_argument(
+        "--only-flagged-samples",
+        action="store_true",
+        help="If True, only samples with extract flag >0 will be retrieved, no collateral samples.",
+    )
 
     args = parser.parse_args()
 
@@ -226,6 +235,7 @@ if __name__ == "__main__":
     period = args.period
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
+    only_flagged_samples = args.only_flagged_samples
 
     logger.info("Starting patch to point extractions ...")
     logger.info(f"Root folder: {root_folder}")
@@ -239,6 +249,6 @@ if __name__ == "__main__":
             f"/vitodata/worldcereal/data/RDM/{ref_id}/harmonized/{ref_id}.geoparquet"
         )
 
-        main(connection, ref_id, ground_truth_file, root_folder, period, restart_failed)
+        main(connection, ref_id, ground_truth_file, root_folder, period, restart_failed, only_flagged_samples)
 
     logger.success("All done!")
