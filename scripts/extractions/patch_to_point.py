@@ -2,7 +2,7 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import List, Union, Optional, Dict
+from typing import Dict, List, Optional, Union
 
 import geopandas as gpd
 import openeo
@@ -39,7 +39,7 @@ class PatchToPointJobManager(MultiBackendJobManager):
 
 
 def merge_individual_parquet_files(
-    parquet_files: List[Union[Path, str]],
+    parquet_files: List[Path] | List[str],
 ) -> gpd.GeoDataFrame:
     """
     Merge individual parquet files into a single GeoDataFrame.
@@ -207,13 +207,15 @@ def main(
     } or None
 
     manager = PatchToPointJobManager(root_dir=output_folder)
-    manager.add_backend("terrascope", connection=connection, parallel_jobs=parallel_jobs)
+    manager.add_backend(
+        "terrascope", connection=connection, parallel_jobs=parallel_jobs
+    )
     manager.run_jobs(
         start_job=partial(
-            create_job_patch_to_point_worldcereal, 
+            create_job_patch_to_point_worldcereal,
             period=period,
             job_options=job_options,
-            ),
+        ),
         job_db=job_db,
     )
 
@@ -334,15 +336,15 @@ if __name__ == "__main__":
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
     only_flagged_samples = args.only_flagged_samples
-    driver_memory=args.driver_memory
-    driver_memoryOverhead=args.driver_memoryOverhead
+    driver_memory = args.driver_memory
+    driver_memoryOverhead = args.driver_memoryOverhead
     executor_cores = args.executor_cores
-    executor_memory=args.executor_memory
-    executor_memoryOverhead=args.executor_memoryOverhead
-    max_executors=args.max_executors
-    parallel_jobs=args.parallel_jobs
-    image_name=args.image_name
-    organization_id=args.organization_id
+    executor_memory = args.executor_memory
+    executor_memoryOverhead = args.executor_memoryOverhead
+    max_executors = args.max_executors
+    parallel_jobs = args.parallel_jobs
+    image_name = args.image_name
+    organization_id = args.organization_id
 
     logger.info("Starting patch to point extractions ...")
     logger.info(f"Root folder: {root_folder}")

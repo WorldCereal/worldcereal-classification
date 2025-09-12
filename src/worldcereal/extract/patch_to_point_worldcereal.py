@@ -93,7 +93,9 @@ def label_points_centroid(
 
 
 def get_label_points(
-    row: pd.Series, ground_truth_file: Optional[Union[Path, str]] = None, only_flagged_samples: bool = False
+    row: pd.Series,
+    ground_truth_file: Optional[Union[Path, str]] = None,
+    only_flagged_samples: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Retrieve label points for a given row from STAC collections and RDM API.
@@ -228,7 +230,9 @@ def generate_output_path_patch_to_point_worldcereal(
     return subfolder / output_file
 
 
-def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=None, only_flagged_samples: bool = False):
+def create_job_dataframe_patch_to_point_worldcereal(
+    ref_id, ground_truth_file=None, only_flagged_samples: bool = False
+):
     """
     Create a job dataframe for patch-to-point extractions.
 
@@ -333,7 +337,9 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
         gdf, disable_s1 = get_label_points(
-            row, ground_truth_file=row["ground_truth_file"], only_flagged_samples=only_flagged_samples
+            row,
+            ground_truth_file=row["ground_truth_file"],
+            only_flagged_samples=only_flagged_samples,
         )
         gdf["ref_id"] = (
             row.ref_id
