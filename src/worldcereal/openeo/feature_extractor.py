@@ -54,6 +54,7 @@ EPSG_HARMONIZED_NAME = "GEO-EPSG"
 
 logger = logging.getLogger(__name__)
 
+
 @functools.lru_cache(maxsize=1)
 def unpack_prometheo_wheel(wheel_url: str):
     destination_dir = Path.cwd() / "dependencies" / "prometheo"
@@ -323,7 +324,9 @@ def select_timestep_from_temporal_features(
     return features
 
 
-def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) -> xr.DataArray:
+def extract_presto_embeddings(
+    inarr: xr.DataArray, parameters: dict, epsg: int
+) -> xr.DataArray:
     """Executes the feature extraction process on the input array."""
 
     if epsg is None:
@@ -349,11 +352,36 @@ def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) 
 
     # The below is required to avoid flipping of the result
     # when running on OpenEO backend!
-    inarr = inarr.transpose("bands", "t", "x", "y")  # Presto/Prometheo expects xy dimension order
+    inarr = inarr.transpose(
+        "bands", "t", "x", "y"
+    )  # Presto/Prometheo expects xy dimension order
 
     # Change the band names
     new_band_names = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
     inarr = inarr.assign_coords(bands=new_band_names)
+
+    # Log pixel statistics
+    total_pixels = inarr.size
+    num_nan_pixels = np.isnan(inarr.values).sum()
+    num_zero_pixels = (inarr.values == 0).sum()
+    num_nodatavalue_pixels = (inarr.values == 65535).sum()
+    logger.info("Band names: " + ", ".join(inarr.bands.values))
+    logger.info(
+        f"Array dtype: {inarr.dtype}, "
+        f"Array size: {inarr.shape}, total pixels: {total_pixels}, "
+        f"Pixel statistics: NaN pixels = {num_nan_pixels} "
+        f"({num_nan_pixels / total_pixels * 100:.2f}%), "
+        f"0 pixels = {num_zero_pixels} "
+        f"({num_zero_pixels / total_pixels * 100:.2f}%), "
+        f"NODATAVALUE pixels = {num_nodatavalue_pixels} "
+        f"({num_nodatavalue_pixels / total_pixels * 100:.2f}%)"
+    )
+
+    # Log mean value (ignoring NaNs) per band
+    for band in inarr.bands.values:
+        band_data = inarr.sel(bands=band).values
+        mean_value = np.nanmean(band_data)
+        logger.info(f"Band '{band}': Mean value (ignoring NaNs) = {mean_value:.2f}")
 
     # Handle NaN values in Presto compatible way
     inarr = inarr.fillna(65535)
@@ -378,6 +406,13 @@ def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) 
     batch_size = parameters.get("batch_size", 256)
     temporal_prediction = parameters.get("temporal_prediction", False)
     target_date = parameters.get("target_date", None)
+    logger.info(
+        (
+            f"Extracting Presto features with batch size {batch_size}, "
+            f"temporal_prediction={temporal_prediction}, "
+            f"target_date={target_date}"
+        )
+    )
 
     # TODO: compile_presto not used for now?
     # compile_presto = parameters.get("compile_presto", False)
@@ -403,6 +438,7 @@ def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) 
     pooling_method = (
         PoolingMethods.TIME if temporal_prediction else PoolingMethods.GLOBAL
     )
+    logger.info(f"Using pooling method: {pooling_method}")
 
     features = run_model_inference(
         inarr,
@@ -416,7 +452,9 @@ def extract_presto_embeddings(inarr: xr.DataArray, parameters: dict, epsg: int) 
     if temporal_prediction:
         features = select_timestep_from_temporal_features(features, target_date)
 
-    features = features.transpose("bands", "y", "x")  # openEO expects yx order after the UDF
+    features = features.transpose(
+        "bands", "y", "x"
+    )  # openEO expects yx order after the UDF
 
     return features
 
@@ -523,6 +561,7 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     arr = cube.get_array().transpose("bands", "t", "y", "x")
 
     epsg = parameters.pop(EPSG_HARMONIZED_NAME)
+    logger.info(f"EPSG code determined for feature extraction: {epsg}")
 
     if parameters.get("rescale_s1", True):
         arr = rescale_s1_backscatter(arr)
@@ -538,4 +577,6 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
 # Change band names
 def apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:
-    return metadata.rename_labels(dimension="bands", target=[f"presto_ft_{i}" for i in range(128)])
+    return metadata.rename_labels(
+        dimension="bands", target=[f"presto_ft_{i}" for i in range(128)]
+    )
