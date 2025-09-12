@@ -2,7 +2,7 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Optional, Dict
 
 import geopandas as gpd
 import openeo
@@ -364,9 +364,10 @@ if __name__ == "__main__":
             period=period,
             restart_failed=restart_failed,
             only_flagged_samples=only_flagged_samples,
-            memory=memory,
-            python_memory=python_memory,
+            driver_memory=driver_memory,
             driver_memoryOverhead=driver_memoryOverhead,
+            executor_cores=executor_cores,
+            executor_memory=executor_memory,
             executor_memoryOverhead=executor_memoryOverhead,
             max_executors=max_executors,
             parallel_jobs=parallel_jobs,
