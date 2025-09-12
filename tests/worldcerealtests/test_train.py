@@ -29,7 +29,7 @@ def test_worldcerealtraindataset(WorldCerealExtractionsDF):
     for predictors, attrs in dl:
         assert predictors.s1.shape == (2, 1, 1, 12, 2)
         assert predictors.s2.shape == (2, 1, 1, 12, 13)
-        assert predictors.meteo.shape == (2, 12, 2)
+        assert predictors.meteo.shape == (2, 1, 1, 12, 2)
         assert predictors.latlon.shape == (2, 1, 1, 2)
         assert predictors.dem.shape == (2, 1, 1, 2)
         assert predictors.timestamps.shape == (2, 12, 3)

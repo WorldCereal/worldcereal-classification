@@ -294,10 +294,10 @@ class WorldCerealDataset(Dataset):
             dtype=np.float32,
         )  # [H, W, T, len(S2_BANDS)]
         meteo = np.full(
-            (self.num_timesteps, len(METEO_BANDS)),
+            (1, 1, self.num_timesteps, len(METEO_BANDS)),
             fill_value=NODATAVALUE,
             dtype=np.float32,
-        )  # [T, len(METEO_BANDS)]
+        )  # [H, W, T, len(METEO_BANDS)]
         dem = np.full(
             (1, 1, len(DEM_BANDS)), fill_value=NODATAVALUE, dtype=np.float32
         )  # [H, W, len(DEM_BANDS)]
@@ -571,10 +571,10 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
             dtype=np.float32,
         )  # [B, H, W, T, len(S2_BANDS)]
         meteo = np.full(
-            (1, num_timesteps, len(METEO_BANDS)),
+            (1, h, w, num_timesteps, len(METEO_BANDS)),
             fill_value=NODATAVALUE,
             dtype=np.float32,
-        )  # [B, T, len(METEO_BANDS)]
+        )  # [B, H, W, T, len(METEO_BANDS)]
         dem = np.full(
             (1, h, w, len(DEM_BANDS)), fill_value=NODATAVALUE, dtype=np.float32
         )  # [B, H, W, len(DEM_BANDS)]
@@ -607,11 +607,11 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
         elif band == "precipitation":
             # scaling, and AgERA5 is in mm, prometheo convention expects m
             values[idx_valid] = values[idx_valid] / (100 * 1000.0)
-            meteo[..., METEO_BANDS.index(band)] = rearrange(values[:, 0, 0], "t -> 1 t")
+            meteo[..., METEO_BANDS.index(band)] = rearrange(values, "t x y -> 1 y x t")
         elif band == "temperature":
             # remove scaling
             values[idx_valid] = values[idx_valid] / 100
-            meteo[..., METEO_BANDS.index(band)] = rearrange(values[:, 0, 0], "t -> 1 t")
+            meteo[..., METEO_BANDS.index(band)] = rearrange(values, "t x y -> 1 y x t")
         elif band in DEM_BANDS:
             values = values[0]  # dem is not temporal
             dem[..., DEM_BANDS.index(band)] = rearrange(values, "x y -> 1 y x")
@@ -628,7 +628,7 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     predictors_dict = {
         "s1": rearrange(s1, "1 h w t c -> (h w) 1 1 t c"),
         "s2": rearrange(s2, "1 h w t c -> (h w) 1 1 t c"),
-        "meteo": repeat(meteo, "1 t c -> b t c", b=x.size),
+        "meteo": rearrange(meteo, "1 h w t c -> (h w) 1 1 t c"),
         "latlon": rearrange(latlon, "h w c ->  (h w) 1 1 c"),
         "dem": rearrange(dem, "1 h w c -> (h w) 1 1 c"),
         "timestamps": repeat(_get_timestamps(), "1 t d -> b t d", b=x.size),

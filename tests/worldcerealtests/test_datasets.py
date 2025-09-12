@@ -138,7 +138,7 @@ class TestWorldCerealDataset(unittest.TestCase):
         # Check shapes
         self.assertEqual(s1.shape, (1, 1, self.num_timesteps, len(S1_BANDS)))
         self.assertEqual(s2.shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
-        self.assertEqual(meteo.shape, (self.num_timesteps, len(METEO_BANDS)))
+        self.assertEqual(meteo.shape, (1, 1, self.num_timesteps, len(METEO_BANDS)))
         self.assertEqual(dem.shape, (1, 1, len(DEM_BANDS)))
 
         # Check all initialized with NODATAVALUE
@@ -165,7 +165,9 @@ class TestWorldCerealDataset(unittest.TestCase):
         # Check shapes
         self.assertEqual(inputs["s1"].shape, (1, 1, self.num_timesteps, len(S1_BANDS)))
         self.assertEqual(inputs["s2"].shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
-        self.assertEqual(inputs["meteo"].shape, (self.num_timesteps, len(METEO_BANDS)))
+        self.assertEqual(
+            inputs["meteo"].shape, (1, 1, self.num_timesteps, len(METEO_BANDS))
+        )
         self.assertEqual(inputs["dem"].shape, (1, 1, len(DEM_BANDS)))
         self.assertEqual(inputs["latlon"].shape, (1, 1, 2))
         self.assertEqual(inputs["timestamps"].shape, (self.num_timesteps, 3))
@@ -382,7 +384,7 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
         # Check shapes
         self.assertEqual(s1.shape, (1, 1, self.num_timesteps, len(S1_BANDS)))
         self.assertEqual(s2.shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
-        self.assertEqual(meteo.shape, (self.num_timesteps, len(METEO_BANDS)))
+        self.assertEqual(meteo.shape, (1, 1, self.num_timesteps, len(METEO_BANDS)))
         self.assertEqual(dem.shape, (1, 1, len(DEM_BANDS)))
 
         # Check all initialized with NODATAVALUE
@@ -409,7 +411,9 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
         # Check shapes
         self.assertEqual(inputs["s1"].shape, (1, 1, self.num_timesteps, len(S1_BANDS)))
         self.assertEqual(inputs["s2"].shape, (1, 1, self.num_timesteps, len(S2_BANDS)))
-        self.assertEqual(inputs["meteo"].shape, (self.num_timesteps, len(METEO_BANDS)))
+        self.assertEqual(
+            inputs["meteo"].shape, (1, 1, self.num_timesteps, len(METEO_BANDS))
+        )
         self.assertEqual(inputs["dem"].shape, (1, 1, len(DEM_BANDS)))
         self.assertEqual(inputs["latlon"].shape, (1, 1, 2))
         self.assertEqual(inputs["timestamps"].shape, (self.num_timesteps, 3))
