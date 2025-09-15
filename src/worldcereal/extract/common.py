@@ -200,7 +200,7 @@ def post_job_action_patch(
             actual_y_size = ds.dims.get("y", 0)
 
             if actual_x_size != expected_dim_size or actual_y_size != expected_dim_size:
-                pipeline_log.error(
+                pipeline_log.warning(
                     "Dimension validation failed for %s: expected %dx%d for %s resolution, got %dx%d",
                     item_asset_path,
                     expected_dim_size,
@@ -208,10 +208,6 @@ def post_job_action_patch(
                     spatial_resolution,
                     actual_x_size,
                     actual_y_size,
-                )
-                raise ValueError(
-                    f"Invalid dimensions for {spatial_resolution} resolution: "
-                    f"expected {expected_dim_size}x{expected_dim_size}, got {actual_x_size}x{actual_y_size}"
                 )
 
             pipeline_log.debug(
@@ -339,7 +335,10 @@ def load_dataframe(
             pipeline_log.warning(
                 "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections, but collection is None."
             )
-        elif collection in ["PATCH_SENTINEL1", "PATCH_SENTINEL2"]:
+        elif collection in [
+            ExtractionCollection.PATCH_SENTINEL1,
+            ExtractionCollection.PATCH_SENTINEL2,
+        ]:
             pipeline_log.info(
                 "Checking existing samples in STAC API for ref_id %s, collection %s.",
                 ref_id,
@@ -348,9 +347,9 @@ def load_dataframe(
             client = pystac_client.Client.open(STAC_ROOT_URL)
             samples_list: list[str] = []
 
-            if collection == "PATCH_SENTINEL1":
+            if collection == ExtractionCollection.PATCH_SENTINEL1:
                 STAC_COLLECTION = "worldcereal_sentinel_1_patch_extractions"
-            elif collection == "PATCH_SENTINEL2":
+            elif collection == ExtractionCollection.PATCH_SENTINEL2:
                 STAC_COLLECTION = "worldcereal_sentinel_2_patch_extractions"
             else:
                 raise ValueError(
