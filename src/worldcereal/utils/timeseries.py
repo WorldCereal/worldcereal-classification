@@ -796,7 +796,7 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
 
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
-    freq: Literal["month", "dekad", "MS", "10D"] = "month",
+    freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
     required_min_timesteps: Optional[int] = None,
     min_edge_buffer: int = 2,  # only used if valid_time is used
@@ -811,9 +811,8 @@ def process_parquet(
     df : Union[pd.DataFrame, gpd.GeoDataFrame]
         Input DataFrame or GeoDataFrame containing time series data.
         Must include 'sample_id' and 'timestamp' columns.
-    freq : Literal["month", "dekad", "MS", "10D"], default="month"
+    freq : Literal["month", "dekad"], default="month"
         Frequency of the time series data.
-        "MS" is an alias for "month" and "10D" is an alias for "dekad".
     use_valid_time : bool, default=True
         Whether to calculate and use valid time positions in the time series.
     required_min_timesteps : Optional[int], default=None
@@ -849,11 +848,6 @@ def process_parquet(
 
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
-
-    if freq == "MS":
-        freq = "month"
-    if freq == "10D":
-        freq = "dekad"
 
     # `feature_index` is an openEO spefic column we should remove to avoid
     # it being treated as unique values which is not true after merging
