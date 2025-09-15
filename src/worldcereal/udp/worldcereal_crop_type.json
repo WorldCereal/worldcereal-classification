@@ -1556,7 +1556,7 @@
   },
   "id": "worldcereal_crop_type",
   "summary": "Crop type mapping using Sentinel-1, Sentinel-2, METEO and Copernicus-30 data",
-  "description": "Load in Sentinel-1, Sentinel-2, METEO and Copernicus-30 data and apply a CatBoost model to map the type of crops.",
+  "description": "The ESA WorldCereal Crop Type Detector combines Sentinel-1 (SAR) and Sentinel-2 (optical) time series with meteorological inputs and in-situ observations to produce global 10 m crop-type maps, processed at scale via openEO within the Copernicus Data Space Ecosystem. It generates pixel-level embeddings using the WorldCereal “Presto” geospatial foundation model and classifies them with a lightweight CatBoost model, with options for users to train or adapt the downstream classifier for their own crops and regions. The implementation requires a user-provided ONNX model via a model_url parameter and exports results as cloud-optimized GeoTIFFs for easy integration into GIS workflows.",
   "parameters": [
     {
       "name": "spatial_extent",
