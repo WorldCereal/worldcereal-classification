@@ -587,7 +587,7 @@ before the start_date"
                     "before",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer)
+                for n_ts_to_add in range(1, min_edge_buffer+1)
             ]
             + [
                 create_dummy_rows(
@@ -599,7 +599,7 @@ before the start_date"
                     "after",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer)
+                for n_ts_to_add in range(1, min_edge_buffer+1)
             ]
         )
 
