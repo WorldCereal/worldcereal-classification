@@ -36,7 +36,7 @@ class TestProcessParquet(TestCase):
             "sample_id": ["sample_1"] * self.n_months,
             "timestamp": month_range,
             "start_date": [self.start_date] * self.n_months,
-            "valid_date": [self.start_date + pd.DateOffset(months=9)] * self.n_months,
+            "valid_time": [self.start_date + pd.DateOffset(months=9)] * self.n_months,
             "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_months),
@@ -57,12 +57,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_months,
         }
 
-        # valid_date close to start_date
+        # valid_time close to start_date
         sample_2_data_month = {
             "sample_id": ["sample_2"] * self.n_months,
             "timestamp": month_range,
             "start_date": [self.start_date] * self.n_months,
-            "valid_date": [
+            "valid_time": [
                 self.start_date + pd.DateOffset(months=(MIN_EDGE_BUFFER // 2))
             ]
             * self.n_months,
@@ -86,12 +86,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_months,
         }
 
-        # valid_date close to end_date
+        # valid_time close to end_date
         sample_3_data_month = {
             "sample_id": ["sample_3"] * self.n_months,
             "timestamp": month_range,
             "start_date": [self.start_date] * self.n_months,
-            "valid_date": [self.end_date - pd.DateOffset(months=(MIN_EDGE_BUFFER // 2))]
+            "valid_time": [self.end_date - pd.DateOffset(months=(MIN_EDGE_BUFFER // 2))]
             * self.n_months,
             "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
@@ -113,12 +113,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_months,
         }
 
-        # valid_date outside range of extractions
+        # valid_time outside range of extractions
         sample_4_data_month = {
             "sample_id": ["sample_4"] * self.n_months,
             "timestamp": month_range,
             "start_date": [self.start_date] * self.n_months,
-            "valid_date": [self.end_date + pd.DateOffset(months=(MIN_EDGE_BUFFER + 1))]
+            "valid_time": [self.end_date + pd.DateOffset(months=(MIN_EDGE_BUFFER + 1))]
             * self.n_months,
             "elevation": [np.random.randint(1000, size=1)[0]] * self.n_months,
             "slope": [np.random.randint(1000, size=1)[0]] * self.n_months,
@@ -154,7 +154,7 @@ class TestProcessParquet(TestCase):
             "sample_id": ["sample_1"] * self.n_dekads,
             "timestamp": dekad_range,
             "start_date": [self.start_date] * self.n_dekads,
-            "valid_date": [pd.to_datetime("2021-07-05")] * self.n_dekads,
+            "valid_time": [pd.to_datetime("2021-07-05")] * self.n_dekads,
             "elevation": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "slope": [np.random.randint(1000, size=1)[0]] * self.n_dekads,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.n_dekads),
@@ -175,12 +175,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_dekads,
         }
 
-        # valid_date close to start_date
+        # valid_time close to start_date
         sample_2_data_dekad = {
             "sample_id": ["sample_2"] * self.n_dekads,
             "timestamp": dekad_range,
             "start_date": [self.start_date] * self.n_dekads,
-            "valid_date": [
+            "valid_time": [
                 _dekad_startdate_from_date(
                     pd.to_datetime(self.start_date)
                     + pd.DateOffset(days=10 * (MIN_EDGE_BUFFER // 2))
@@ -207,12 +207,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_dekads,
         }
 
-        # valid_date close to end_date
+        # valid_time close to end_date
         sample_3_data_dekad = {
             "sample_id": ["sample_3"] * self.n_dekads,
             "timestamp": dekad_range,
             "start_date": [self.start_date] * self.n_dekads,
-            "valid_date": [
+            "valid_time": [
                 _dekad_startdate_from_date(
                     pd.to_datetime(self.end_date)
                     - pd.DateOffset(days=10 * (MIN_EDGE_BUFFER // 2))
@@ -239,12 +239,12 @@ class TestProcessParquet(TestCase):
             "lon": [np.random.uniform(-180, 180, size=1)[0]] * self.n_dekads,
         }
 
-        # valid_date outside range of extractions
+        # valid_time outside range of extractions
         sample_4_data_dekad = {
             "sample_id": ["sample_4"] * self.n_dekads,
             "timestamp": dekad_range,
             "start_date": [self.start_date] * self.n_dekads,
-            "valid_date": [
+            "valid_time": [
                 _dekad_startdate_from_date(
                     pd.to_datetime(self.end_date)
                     + pd.DateOffset(days=10 * (MIN_EDGE_BUFFER + 1))
@@ -374,7 +374,7 @@ class TestProcessParquet(TestCase):
                     min_edge_buffer=MIN_EDGE_BUFFER,
                 )
 
-    def test_process_parquet_valid_date_close_to_start(self):
+    def test_process_parquet_valid_time_close_to_start(self):
         for freq in self.allowed_freqs:
             result = process_parquet(
                 (
@@ -410,7 +410,7 @@ class TestProcessParquet(TestCase):
                 obtained_available_timesteps == expected_available_timesteps
             )
 
-    def test_process_parquet_valid_date_close_to_end(self):
+    def test_process_parquet_valid_time_close_to_end(self):
         for freq in self.allowed_freqs:
             print(f"Testing freq: {freq}")
             result = process_parquet(
