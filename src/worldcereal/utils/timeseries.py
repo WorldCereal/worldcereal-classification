@@ -160,7 +160,7 @@ class DataFrameValidator:
             logger.warning(f"Dropping {faulty_samples.sum()} faulty sample(s). \n"
                            f"Reason: Could not establish a valid center point with the given \n"
                            f"min_edge_buffer of {min_edge_buffer} for the following date ranges:\n"
-                           f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date', 'available_timesteps', 'valid_position']].drop_duplicates().to_string(index=False)}"
+                           f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
 
         df_wide = df_wide[~(faulty_samples | validtime_outside_range)]
@@ -557,25 +557,6 @@ Filling them with NODATAVALUE."
             ["valid_position", "timestamp_ind", "valid_position_diff"]
         ].max()
 
-        samples_after_end_date = latest_obs_position[
-            latest_obs_position["valid_position"] > latest_obs_position["timestamp_ind"]
-        ].index.tolist()
-        samples_before_start_date = latest_obs_position[
-            latest_obs_position["valid_position"] < 0
-        ].index.tolist()
-
-        if (len(samples_after_end_date) > 0) or (len(samples_before_start_date) > 0):
-            logger.warning(
-                f"Removing {len(samples_after_end_date)} samples with valid_time \
-after the end_date and {len(samples_before_start_date)} samples with valid_time \
-before the start_date"
-            )
-            df_long = df_long[
-                ~df_long["sample_id"].isin(
-                    samples_before_start_date + samples_after_end_date
-                )
-            ]
-
         intermediate_dummy_df = pd.concat(
             [
                 create_dummy_rows(
@@ -605,7 +586,7 @@ before the start_date"
 
         if not intermediate_dummy_df.empty:
             logger.warning(
-                f"Added {intermediate_dummy_df['timestamp'].nunique()} dummy timestamp(s) \
+                f"Added {intermediate_dummy_df['timestamp'].nunique()} dummy timestamp(s) on edges \
 for {intermediate_dummy_df['sample_id'].nunique()} samples to fill in the found gaps."
             )
 
