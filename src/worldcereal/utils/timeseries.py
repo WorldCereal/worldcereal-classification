@@ -798,7 +798,6 @@ def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
-    required_min_timesteps: Optional[int] = None,
     min_edge_buffer: int = 2,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
@@ -815,9 +814,6 @@ def process_parquet(
         Frequency of the time series data.
     use_valid_time : bool, default=True
         Whether to calculate and use valid time positions in the time series.
-    required_min_timesteps : Optional[int], default=None
-        Minimum number of timesteps required for each sample.
-        Samples with fewer timesteps will be filtered out.
     min_edge_buffer : int, default=2
         Minimum number of timesteps to include as buffer at the edges
         when calculating valid positions. Only used if use_valid_time is True.
@@ -848,6 +844,12 @@ def process_parquet(
 
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
+
+    # Determine required minimum timesteps based on frequency
+    if freq == "dekad":
+        required_min_timesteps = 36
+    if freq == "month":
+        required_min_timesteps = 12
 
     # `feature_index` is an openEO spefic column we should remove to avoid
     # it being treated as unique values which is not true after merging
@@ -931,8 +933,7 @@ def process_parquet(
         df_pivot["valid_date"] = df_pivot["valid_time"].copy()
         df_pivot = validator.check_faulty_samples(df_pivot, min_edge_buffer)
 
-    if required_min_timesteps:
-        df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
+    df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
 
     df_pivot["start_date"] = (
         df_pivot["start_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
