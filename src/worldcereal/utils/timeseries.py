@@ -553,6 +553,10 @@ Filling them with NODATAVALUE."
             dummy_df[FEATURE_COLUMNS] = NODATAVALUE
             return dummy_df
 
+        if min_edge_buffer < 1:
+            logger.info("min_edge_buffer < 1, skipping addition of dummy timestamps.")
+            return df_long
+
         latest_obs_position = df_long.groupby("sample_id")[
             ["valid_position", "timestamp_ind", "valid_position_diff"]
         ].max()
