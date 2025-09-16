@@ -463,7 +463,6 @@ def create_job_patch_to_point_worldcereal(
             "executor-memoryOverhead": "2G",
             "log_level": "info",
             "max-executors": 300,
-            "image-name": "vito-docker-private.artifactory.vgt.vito.be/openeo-yarn:20250812-3958",
         }
 
     return cube.create_job(
