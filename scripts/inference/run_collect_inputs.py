@@ -57,9 +57,7 @@ class InferenceJobManager(MultiBackendJobManager):
 
     def generate_output_path(
         self,
-        geometry_index: int,
         row: pd.Series,
-        asset_id: Optional[str] = None,
     ) -> Path:
         tile_name = row.tile_name
         subfolder = self._root_dir / str(tile_name)
