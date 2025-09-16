@@ -2,7 +2,7 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Union
 
 import geopandas as gpd
 import openeo
@@ -60,8 +60,13 @@ def parse_job_options_from_args(args) -> Dict[str, Union[str, int]]:
         if value is not None
     } or None
     if parsed_job_options is not None:
-        logger.info(f"Using custom job options for the following parameters: {list(parsed_job_options.keys())}")
-        job_options = {k: (v if v is not None else DEFAULT_JOB_OPTIONS[k]) for k, v in parsed_job_options.items()}
+        logger.info(
+            f"Using custom job options for the following parameters: {list(parsed_job_options.keys())}"
+        )
+        job_options = {
+            k: (v if v is not None else DEFAULT_JOB_OPTIONS[k])
+            for k, v in parsed_job_options.items()
+        }
     else:
         logger.info("No custom job options provided, using defaults.")
         job_options = DEFAULT_JOB_OPTIONS.copy()
@@ -295,53 +300,33 @@ if __name__ == "__main__":
         default=None,
         help="Local parallel jobs.",
     )
+    parser.add_argument("--driver_memory", type=str, default=None, help="Driver memory")
     parser.add_argument(
-        "--driver_memory", 
+        "--driver_memoryOverhead",
         type=str,
         default=None,
-        help="Driver memory"
+        help="Driver memory overhead.",
     )
     parser.add_argument(
-        "--driver_memoryOverhead", 
-        type=str, 
-        default=None, 
-        help="Driver memory overhead."
+        "--executor_cores", type=int, default=None, help="Executor cores."
     )
     parser.add_argument(
-        "--executor_cores", 
-        type=int, 
-        default=None,
-        help="Executor cores."
-    )
-    parser.add_argument(
-        "--executor_memory",
-        type=str,
-        default=None,
-        help="Executor memory."
+        "--executor_memory", type=str, default=None, help="Executor memory."
     )
     parser.add_argument(
         "--executor_memoryOverhead",
         type=str,
         default=None,
-        help="Executor memory overhead."
+        help="Executor memory overhead.",
     )
     parser.add_argument(
-        "--max_executors",
-        type=int,
-        default=None,
-        help="Max executors."
+        "--max_executors", type=int, default=None, help="Max executors."
     )
     parser.add_argument(
-        "--image_name",
-        type=str,
-        default=None,
-        help="openEO image name."
+        "--image_name", type=str, default=None, help="openEO image name."
     )
     parser.add_argument(
-        "--organization_id",
-        type=int,
-        default=None,
-        help="Organization id."
+        "--organization_id", type=int, default=None, help="Organization id."
     )
 
     args = parser.parse_args()
