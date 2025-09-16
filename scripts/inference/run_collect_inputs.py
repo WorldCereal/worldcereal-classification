@@ -24,9 +24,9 @@ MAX_DELAY = 10
 
 
 class InferenceJobManager(MultiBackendJobManager):
-    def on_job_done(self, job: BatchJob, row):
+    def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
         logger.info(f"Job {job.job_id} completed")
-        output_dir = self.generate_output_path(self._root_dir, 0, row)
+        output_dir = self.generate_output_path(row)
 
         # Get job results
         job_result = job.get_results()
@@ -113,8 +113,6 @@ def create_worldcereal_inputsjob(
             "executor-memoryOverhead": "1g",
             "python-memory": "4g",
             "soft-errors": 0.1,
-            "image-name": "registry.internal/prod/openeo-geotrellis-kube-python311:20250619-34",
-            # "image-name": "python311",
             "max-executors": 10,
         }
 
