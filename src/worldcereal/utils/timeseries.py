@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Union
 
 import geopandas as gpd
 import numpy as np
@@ -144,10 +144,15 @@ class DataFrameValidator:
             + df_wide["available_timesteps"] // 2,
         )
 
-        validtime_outside_range = (df_wide["valid_position"] < 0) | (
-            df_wide["valid_position"] >= df_wide["available_timesteps"]
-        ) | (df_wide["valid_time"]>df_wide["end_date"]) | (df_wide["valid_time"]<df_wide["start_date"])
-        faulty_samples = (min_center_point > max_center_point) & ~validtime_outside_range
+        validtime_outside_range = (
+            (df_wide["valid_position"] < 0)
+            | (df_wide["valid_position"] >= df_wide["available_timesteps"])
+            | (df_wide["valid_time"] > df_wide["end_date"])
+            | (df_wide["valid_time"] < df_wide["start_date"])
+        )
+        faulty_samples = (
+            min_center_point > max_center_point
+        ) & ~validtime_outside_range
 
         if validtime_outside_range.sum() > 0:
             logger.warning(
@@ -155,12 +160,13 @@ class DataFrameValidator:
                 f"Reason: Valid time must be within the range of available timesteps. Samples with the following dates are affected:\n"
                 f"{df_wide[validtime_outside_range][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
-    
+
         if faulty_samples.sum() > 0:
-            logger.warning(f"Dropping {faulty_samples.sum()} faulty sample(s). \n"
-                           f"Reason: Could not establish a valid center point with the given \n"
-                           f"min_edge_buffer of {min_edge_buffer} for the following date ranges:\n"
-                           f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
+            logger.warning(
+                f"Dropping {faulty_samples.sum()} faulty sample(s). \n"
+                f"Reason: Could not establish a valid center point with the given \n"
+                f"min_edge_buffer of {min_edge_buffer} for the following date ranges:\n"
+                f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
 
         df_wide = df_wide[~(faulty_samples | validtime_outside_range)]
@@ -572,7 +578,7 @@ Filling them with NODATAVALUE."
                     "before",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer+1)
+                for n_ts_to_add in range(1, min_edge_buffer + 1)
             ]
             + [
                 create_dummy_rows(
@@ -584,7 +590,7 @@ Filling them with NODATAVALUE."
                     "after",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer+1)
+                for n_ts_to_add in range(1, min_edge_buffer + 1)
             ]
         )
 
