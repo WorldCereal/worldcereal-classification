@@ -26,7 +26,7 @@ MAX_DELAY = 10
 class InferenceJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row):
         logger.info(f"Job {job.job_id} completed")
-        output_dir = generate_output_path_inference(self._root_dir, 0, row)
+        output_dir = self.generate_output_path(self._root_dir, 0, row)
 
         # Get job results
         job_result = job.get_results()
@@ -54,6 +54,17 @@ class InferenceJobManager(MultiBackendJobManager):
             json.dump(result_metadata, f, ensure_ascii=False)
 
         logger.success("Job completed")
+
+    def generate_output_path(
+        self,
+        geometry_index: int,
+        row: pd.Series,
+        asset_id: Optional[str] = None,
+    ) -> Path:
+        tile_name = row.tile_name
+        subfolder = self._root_dir / str(tile_name)
+        subfolder.mkdir(parents=True, exist_ok=True)
+        return subfolder
 
 
 def create_worldcereal_inputsjob(
@@ -113,42 +124,6 @@ def create_worldcereal_inputsjob(
         title=f"WorldCereal collect inputs for {row.tile_name}",
         job_options=job_options,
     )
-
-
-def generate_output_path_inference(
-    root_folder: Path,
-    geometry_index: int,
-    row: pd.Series,
-    asset_id: Optional[str] = None,
-) -> Path:
-    """Method to generate the output path for inference jobs.
-
-    Parameters
-    ----------
-    root_folder : Path
-        root folder where the output parquet file will be saved
-    geometry_index : int
-        For point extractions, only one asset (a geoparquet file) is generated per job.
-        Therefore geometry_index is always 0. It has to be included in the function signature
-        to be compatible with the GFMapJobManager
-    row : pd.Series
-        the current job row from the GFMapJobManager
-    asset_id : str, optional
-        Needed for compatibility with GFMapJobManager but not used.
-
-    Returns
-    -------
-    Path
-        output path for the point extractions parquet file
-    """
-
-    tile_name = row.tile_name
-
-    # Create the subfolder to store the output
-    subfolder = root_folder / str(tile_name)
-    subfolder.mkdir(parents=True, exist_ok=True)
-
-    return subfolder
 
 
 def create_job_dataframe_from_grid(
