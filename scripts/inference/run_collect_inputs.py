@@ -157,8 +157,7 @@ def create_job_dataframe_from_grid(
     end_date: str,
     output_folder: Path,
     tile_name_col: Optional[str] = None,
-    overwrite: bool = False,
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     """Function to create a job dataframe from a grid file.
     Parameters
     ----------
@@ -174,13 +173,13 @@ def create_job_dataframe_from_grid(
     tile_name_col : str, optional
         Name of the column in the grid file that contains the tile names.
         If None, tiles will be named as "patch_0", "patch_1",  etc.
-    overwrite : bool, optional
-        Whether to overwrite the existing job tracking dataframe if it exists. Default is False.
     Returns
     -------
-    pd.DataFrame
-        The created job dataframe.
+    gpd.GeoDataFrame
+        GeoDataFrame with production grid prepared to be transformed into jobs.
     """
+    assert grid_path is not None, "grid_path must be provided when overwrite is True."
+    assert Path(grid_path).is_file(), f"The grid file {grid_path} does not exist."
     if str(grid_path).endswith("parquet") or str(grid_path).endswith("geoparquet"):
         production_gdf = gpd.read_parquet(grid_path)
     else:
@@ -207,33 +206,70 @@ def create_job_dataframe_from_grid(
         production_gdf["tile_name"] = production_gdf[tile_name_col]
     production_gdf["epsg"] = production_gdf.crs.to_epsg()
 
+    return production_gdf
+
+
+def create_job_database(
+    output_folder: Path,
+    overwrite: bool = False,
+    grid_path: Optional[Path] = None,
+    extractions_start_date: Optional[str] = None,
+    extractions_end_date: Optional[str] = None,
+) -> CsvJobDatabase:
     job_tracking_path = Path(output_folder) / "job_tracking.csv"
     job_db = CsvJobDatabase(path=job_tracking_path)
+    if job_db.exists():
+        if overwrite:
+            if (
+                grid_path is None
+                or extractions_start_date is None
+                or extractions_end_date is None
+            ):
+                raise ValueError(
+                    "grid_path, extractions_start_date and extractions_end_date must be provided when overwriting."
+                )
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            backup = job_tracking_path.with_suffix(f".csv.bckp.{ts}")
+            job_tracking_path.replace(backup)
+            logger.info(f"Backed up old job DB to {backup}")
+            logger.info(f"Creating new job tracking file at {job_tracking_path}.")
+            production_gdf = create_job_dataframe_from_grid(
+                grid_path=grid_path,
+                start_date=extractions_start_date,
+                end_date=extractions_end_date,
+                output_folder=output_folder,
+            )
+            job_db.initialize_from_df(production_gdf)
+    else:
+        if overwrite:
+            raise ValueError("Cannot back up a non-existing job database")
+        else:
+            if (
+                grid_path is None
+                or extractions_start_date is None
+                or extractions_end_date is None
+            ):
+                raise ValueError(
+                    "grid_path, extractions_start_date and extractions_end_date must be provided when creating new job database."
+                )
+            logger.info(f"Creating new job tracking file at {job_tracking_path}.")
+            production_gdf = create_job_dataframe_from_grid(
+                grid_path=grid_path,
+                start_date=extractions_start_date,
+                end_date=extractions_end_date,
+                output_folder=output_folder,
+            )
+            job_db.initialize_from_df(production_gdf)
 
-    if job_tracking_path.is_file() and not overwrite:
-        logger.info(f"Job tracking file found at {job_tracking_path}.")
-        return job_db.read()
-
-    if job_tracking_path.is_file() and overwrite:
-        # Backup old DB and recreate from scratch
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        backup = job_tracking_path.with_suffix(f".csv.bckp.{ts}")
-        job_tracking_path.replace(backup)
-        logger.info(f"Backed up old job DB to {backup}")
-
-    # Fresh initialize (file does not exist at this point)
-    logger.info(f"Creating new job tracking file at {job_tracking_path}.")
-    job_db.initialize_from_df(production_gdf)
-
-    return job_db.read()
+    return job_db
 
 
 def main(
-    grid_path: Path,
-    extractions_start_date: str,
-    extractions_end_date: str,
     output_folder: Path,
     overwrite_job_df: bool = False,
+    grid_path: Optional[Path] = None,
+    extractions_start_date: Optional[str] = None,
+    extractions_end_date: Optional[str] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     memory: Optional[str] = None,
     python_memory: Optional[str] = None,
@@ -296,14 +332,15 @@ def main(
             ] = "not_started"
             # Save new job tracking dataframe
             job_df.to_csv(job_tracking_path, index=False)
+        job_db = CsvJobDatabase(path=job_tracking_path)
     else:
-        # Create a job dataframe if it does not exist or if overwrite is True
-        job_df = create_job_dataframe_from_grid(
-            grid_path=grid_path,
-            start_date=extractions_start_date,
-            end_date=extractions_end_date,
-            output_folder=output_folder,
+        # Create a jobdb if it does not exist or if overwrite is True
+        job_db = create_job_database(
+            output_folder,
             overwrite=overwrite_job_df,
+            grid_path=grid_path,
+            extractions_start_date=extractions_start_date,
+            extractions_end_date=extractions_end_date,
         )
 
     # Compile custom job options
@@ -339,7 +376,7 @@ def main(
                     job_options=job_options,
                     connection=connection,
                 ),
-                job_db=job_tracking_path,
+                job_db=job_db,
             )
             logger.info("All jobs submitted successfully.")
             break  # success: exit loop
