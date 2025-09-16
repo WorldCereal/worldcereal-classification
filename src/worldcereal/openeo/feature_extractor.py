@@ -366,7 +366,7 @@ def extract_presto_embeddings(
     num_zero_pixels = (inarr.values == 0).sum()
     num_nodatavalue_pixels = (inarr.values == 65535).sum()
     logger.info("Band names: " + ", ".join(inarr.bands.values))
-    logger.info(
+    logger.debug(
         f"Array dtype: {inarr.dtype}, "
         f"Array size: {inarr.shape}, total pixels: {total_pixels}, "
         f"Pixel statistics: NaN pixels = {num_nan_pixels} "
@@ -381,7 +381,7 @@ def extract_presto_embeddings(
     for band in inarr.bands.values:
         band_data = inarr.sel(bands=band).values
         mean_value = np.nanmean(band_data)
-        logger.info(f"Band '{band}': Mean value (ignoring NaNs) = {mean_value:.2f}")
+        logger.debug(f"Band '{band}': Mean value (ignoring NaNs) = {mean_value:.2f}")
 
     # Handle NaN values in Presto compatible way
     inarr = inarr.fillna(65535)
