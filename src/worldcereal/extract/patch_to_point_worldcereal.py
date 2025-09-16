@@ -419,10 +419,8 @@ def create_job_patch_to_point_worldcereal(
     connection: openeo.Connection,
     provider,
     connection_provider,
-    executor_memory: str = "2G",
-    python_memory: str = "3G",
+    job_options: dict,
     period="month",
-    job_options: Optional[dict] = None,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -454,16 +452,6 @@ def create_job_patch_to_point_worldcereal(
         url=str(row["geometry_url"]), format="Parquet"
     )
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
-
-    if job_options is None:
-        job_options = {
-            "driver-memory": "12G",
-            "executor-cores": 2,
-            "executor-memory": "4G",
-            "executor-memoryOverhead": "2G",
-            "log_level": "info",
-            "max-executors": 300,
-        }
 
     return cube.create_job(
         title=f"WorldCereal patch-to-point extraction for: {row['ref_id']} and epsg: {row['epsg']} (period: {period})",
