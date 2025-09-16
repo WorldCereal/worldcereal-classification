@@ -703,3 +703,61 @@ class TestProcessParquet(TestCase):
         self.assertTrue(all(isinstance(d, str) for d in result["start_date"]))
         self.assertTrue(all(isinstance(d, str) for d in result["end_date"]))
         self.assertTrue(all(isinstance(d, str) for d in result["valid_time"]))
+
+    def test_max_timesteps_trim_auto(self):
+        """Test automatic trimming reduces width while keeping required minimum timesteps."""
+        # choose dekad to have larger initial potential width
+        result_no_trim = process_parquet(self.df_dekad, freq="dekad", use_valid_time=True)
+        # expect many timestep columns (feature ts indices). Count SAR-VV entries as proxy
+        wide_cols_no_trim = [c for c in result_no_trim.columns if c.startswith("SAR-VV-ts")]  # after suffixing
+        n_no_trim = len(wide_cols_no_trim)
+
+        result_trim = process_parquet(
+            self.df_dekad,
+            freq="dekad",
+            use_valid_time=True,
+            max_timesteps_trim="auto",
+        )
+        wide_cols_trim = [c for c in result_trim.columns if c.startswith("SAR-VV-ts")] 
+        n_trim = len(wide_cols_trim)
+
+        # auto should trim when original > required_min_timesteps + 2 * MIN_EDGE_BUFFER
+        self.assertTrue(n_trim <= n_no_trim)
+        self.assertTrue(n_trim >= self.min_timesteps_dekad)
+
+        # valid_position must remain within [0, available_timesteps)
+        self.assertTrue((result_trim["valid_position"] >= 0).all())
+        self.assertTrue((result_trim["valid_position"] < result_trim["available_timesteps"]).all())
+
+    def test_max_timesteps_trim_explicit(self):
+        """Test explicit trimming window produces expected available_timesteps upper bound."""
+        target_max = 20
+        result_trim = process_parquet(
+            self.df_month,
+            freq="month",
+            use_valid_time=True,
+            max_timesteps_trim=target_max,
+        )
+        self.assertTrue((result_trim["available_timesteps"] <= target_max).all())
+        # Still meets required minimum
+        self.assertTrue((result_trim["available_timesteps"] >= self.min_timesteps_month).all())
+
+    def test_max_timesteps_trim_no_valid_time(self):
+        """Trimming should also work when valid_time logic disabled (center on midpoint)."""
+        target_max = self.min_timesteps_month
+        result_trim = process_parquet(
+            self.df_month,
+            freq="month",
+            use_valid_time=False,
+            max_timesteps_trim=target_max,
+        )
+        self.assertTrue((result_trim["available_timesteps"] <= target_max).all())
+        # required minimum still enforced
+        self.assertTrue((result_trim["available_timesteps"] >= self.min_timesteps_month).all())
+
+    def test_max_timesteps_trim_errors(self):
+        """Test invalid inputs for max_timesteps_trim raise errors."""
+        with self.assertRaises(ValueError):
+            process_parquet(self.df_month, freq="month", use_valid_time=True, max_timesteps_trim=5)  # below required 12
+        with self.assertRaises(ValueError):
+            process_parquet(self.df_month, freq="month", use_valid_time=True, max_timesteps_trim="invalid")
