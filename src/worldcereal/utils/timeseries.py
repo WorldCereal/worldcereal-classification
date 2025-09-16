@@ -802,12 +802,93 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
     return timestamps
 
 
+def _trim_timesteps(
+    df: pd.DataFrame,
+    max_timesteps_trim: Union[int, None],
+    required_min_timesteps: int,
+    min_edge_buffer: int,
+    use_valid_time: bool,
+    freq: str,
+) -> pd.DataFrame:
+    """Trim per-sample timesteps to reduce width prior to pivot.
+
+    Centering strategy:
+      - If use_valid_time: center window on valid_position.
+      - Else: center window on midpoint of series (floor(available/2)).
+
+    After trimming, timestamp_ind, start/end_date, and (if applicable) valid_position
+    + valid_position_diff are recomputed.
+    """
+    if max_timesteps_trim is None:
+        return df
+
+    # Resolve 'auto'
+    if isinstance(max_timesteps_trim, str):
+        if max_timesteps_trim.lower() == "auto":
+            max_timesteps_trim = required_min_timesteps + 2 * min_edge_buffer
+        else:
+            raise ValueError(
+                "Unsupported string for max_timesteps_trim. Use 'auto' or provide an int."
+            )
+    if not isinstance(max_timesteps_trim, int):  # type: ignore
+        raise TypeError("max_timesteps_trim must be int, 'auto', or None")
+    if max_timesteps_trim < required_min_timesteps:
+        raise ValueError(
+            f"max_timesteps_trim ({max_timesteps_trim}) cannot be smaller than required minimum timesteps ({required_min_timesteps})."
+        )
+
+    def _trim_sample(g: pd.DataFrame) -> pd.DataFrame:
+        total_ts = g["timestamp_ind"].nunique()
+        if total_ts <= max_timesteps_trim:  # nothing to trim
+            return g
+        if use_valid_time:
+            center = int(g["valid_position"].iloc[0])
+        else:
+            center = total_ts // 2
+        half = max_timesteps_trim // 2
+        left = center - half
+        right = left + max_timesteps_trim - 1
+        if left < 0:
+            right += -left
+            left = 0
+        if right >= total_ts:
+            shift = right - (total_ts - 1)
+            right = total_ts - 1
+            left = max(0, left - shift)
+        window_size = right - left + 1
+        if window_size > max_timesteps_trim:
+            # remove excess from side furthest from center
+            if right - center > center - left:
+                right -= (window_size - max_timesteps_trim)
+            else:
+                left += (window_size - max_timesteps_trim)
+        return g[(g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right)]
+
+    before_unique = df["timestamp_ind"].nunique()
+    df = df.groupby("sample_id", group_keys=False).apply(_trim_sample).reset_index(drop=True)  # type: ignore
+    after_unique = df["timestamp_ind"].nunique()
+    if after_unique < before_unique:
+        logger.info(
+            f"Trimmed timesteps (global unique indices {before_unique} -> {after_unique}) using max_timesteps_trim={max_timesteps_trim}."
+        )
+
+    # Recompute basics
+    df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+    df["start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+    df["end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+    if use_valid_time:
+        df = TimeSeriesProcessor.calculate_valid_position(df)
+        df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+    return df
+
+
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
     min_edge_buffer: int = 2,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
+    max_timesteps_trim: Union[int, str, None] = None,  # optionally trim width before pivot
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a DataFrame or GeoDataFrame with time series data by filling missing timestamps,
@@ -828,6 +909,17 @@ def process_parquet(
     return_after_fill : bool, default=False
         If True, returns the DataFrame after filling missing dates
         but before pivoting. Used for debugging purposes.
+    max_timesteps_trim : Union[int, str, None], default=None
+        Optional maximum number of timesteps to retain (after dummy timestamp handling) per sample
+        prior to pivoting. When provided, each sample's observations are trimmed to a centered
+        window around the valid position (if use_valid_time=True) or around the series midpoint
+        (if use_valid_time=False). Accepted values:
+          - None: (default) No trimming; preserves current behaviour.
+          - 'auto': Uses required_min_timesteps + 2 * min_edge_buffer.
+          - int: Explicit maximum; must be >= required_min_timesteps.
+        After trimming, timestamp indices, start/end dates, and (if applicable) valid_position
+        and derived relative positions are recomputed. This reduces memory footprint for global
+        models where very long sequences are unnecessary.
 
     Returns
     -------
@@ -912,6 +1004,19 @@ def process_parquet(
         index_columns.append("valid_position")
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
         df = processor.add_dummy_timestamps(df, min_edge_buffer, freq)
+
+    if max_timesteps_trim is not None:
+        logger.info(
+            f"Trimming to max_timesteps_trim={max_timesteps_trim} per sample prior to pivot."
+        )
+        df = _trim_timesteps(
+            df=df,
+            max_timesteps_trim=max_timesteps_trim,
+            required_min_timesteps=required_min_timesteps,
+            min_edge_buffer=min_edge_buffer,
+            use_valid_time=use_valid_time,
+            freq=freq,
+        )
 
     df["available_timesteps"] = df["sample_id"].map(
         df.groupby("sample_id")["timestamp"].nunique().astype(int)
