@@ -206,7 +206,8 @@ class EmbeddingsParameters(BaseParameters):
         )
 
     feature_parameters: FeaturesParameters = Field(
-        default_factory=_default_feature_parameters  # type: ignore[arg-type]
+        # Wrap staticmethod call so pydantic receives a true zero-arg callable
+        default_factory=lambda: EmbeddingsParameters._default_feature_parameters()
     )
 
     def __init__(self, presto_model_url: Optional[str] = None, **kwargs):
