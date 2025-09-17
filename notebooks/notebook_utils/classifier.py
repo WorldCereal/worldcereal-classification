@@ -205,6 +205,7 @@ def train_classifier(
         When not enough classes are present in the training dataframe to train a model
     """
 
+    # Split into train and test set
     logger.info("Split train/test ...")
     samples_train, samples_test = train_test_split(
         training_dataframe,
@@ -288,16 +289,70 @@ def train_classifier(
     )
 
     # Make predictions
-    pred = custom_downstream_model.predict(samples_test[bands]).flatten()
+    report, cm, _ = apply_classifier(
+        samples_test,
+        custom_downstream_model,
+        show_confusion_matrix=show_confusion_matrix,
+    )
 
-    report = classification_report(samples_test["downstream_class"], pred)
-    cm = confusion_matrix(samples_test["downstream_class"], pred)
+    return custom_downstream_model, report, cm
+
+
+def apply_classifier(
+    df: pd.DataFrame,
+    model: CatBoostClassifier,
+    show_confusion_matrix: Optional[Literal["absolute", "relative"]] = None,
+    print_report: bool = True,
+    target_attribute: str = "downstream_class",
+) -> pd.DataFrame:
+    """Method to apply a trained CatBoostClassifier to a dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        input dataframe containing the features to apply the model on
+    model : CatBoostClassifier
+        trained CatBoost model
+    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
+        if 'absolute', the confusion matrix is shown as absolute values,
+        if 'relative', the confusion matrix is shown as relative values,
+        if None, no confusion matrix is shown,
+        by default None
+    print_report : bool, optional
+        if True, the classification report is printed to the console,
+        by default True
+    target_attribute : str, optional
+        name of the attribute in the dataframe containing the true class labels,
+        by default "downstream_class"
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe with additional columns "predicted_class" and "predicted_proba"
+    """
+
+    # Make predictions
+    bands = [f"presto_ft_{i}" for i in range(128)]
+    pred = model.predict(df[bands]).flatten()
+
+    # Classification report
+    report_dict = classification_report(df[target_attribute], pred, output_dict=True)
+    if print_report:
+        report = classification_report(df[target_attribute], pred)
+        logger.info("Classification report:")
+        print(report)
+
+    # Confusion matrix
+    cm = confusion_matrix(df[target_attribute], pred)
 
     # Show confusion matrix if requested
     if show_confusion_matrix is not None:
         assert show_confusion_matrix in ["absolute", "relative"]
 
-        labels = np.sort(training_dataframe["downstream_class"].unique())
+        # Get list of unique labels
+        pred_labels = np.unique(pred)
+        true_labels = np.unique(df[target_attribute])
+        labels = sorted(np.unique(np.concatenate((pred_labels, true_labels))))
 
         if show_confusion_matrix == "relative":
             # normalize CM
@@ -328,4 +383,4 @@ def train_classifier(
         plt.tight_layout()
         plt.show()
 
-    return custom_downstream_model, report, cm
+    return report_dict, cm, pred
