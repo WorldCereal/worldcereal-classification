@@ -47,6 +47,9 @@ MANIFEST
 .noseids
 experimental/**
 
+# By default don't track notebooks
+notebooks/*.ipynb
+
 # Misc
 scripts/docker
 scripts/other/**
