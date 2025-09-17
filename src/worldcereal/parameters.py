@@ -191,13 +191,36 @@ class EmbeddingsParameters(BaseParameters):
         and passed in the process graph.
     """
 
-    feature_parameters: FeaturesParameters = BaseParameters.create_feature_parameters(
-        rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
-        compile_presto=False,
-        temporal_prediction=False,
-        target_date=None,
+    @staticmethod
+    def _default_feature_parameters() -> FeaturesParameters:
+        """Internal helper returning the default feature parameters instance.
+
+        Centralizes the defaults so they are declared only once.
+        """
+        return BaseParameters.create_feature_parameters(
+            rescale_s1=False,
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
+            compile_presto=False,
+            temporal_prediction=False,
+            target_date=None,
+        )
+
+    feature_parameters: FeaturesParameters = Field(
+        default_factory=_default_feature_parameters  # type: ignore[arg-type]
     )
+
+    def __init__(self, presto_model_url: Optional[str] = None, **kwargs):
+        """Allow initialization with a custom Presto model URL without
+        duplicating the default argument list.
+
+        Users may still pass an explicit `feature_parameters` to override all
+        aspects; in that case `presto_model_url` is ignored.
+        """
+        if "feature_parameters" not in kwargs and presto_model_url is not None:
+            fp = self._default_feature_parameters().model_copy()
+            fp.presto_model_url = presto_model_url  # type: ignore[attr-defined]
+            kwargs["feature_parameters"] = fp
+        super().__init__(**kwargs)
 
 
 class PostprocessParameters(BaseModel):
