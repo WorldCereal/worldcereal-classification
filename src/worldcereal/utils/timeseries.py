@@ -819,6 +819,8 @@ def _trim_timesteps(
     After trimming, timestamp_ind, start/end_date, and (if applicable) valid_position
     + valid_position_diff are recomputed.
     """
+    import gc
+
     if max_timesteps_trim is None:
         return df
 
@@ -840,7 +842,7 @@ def _trim_timesteps(
     def _trim_sample(g: pd.DataFrame) -> pd.DataFrame:
         total_ts = g["timestamp_ind"].nunique()
         if total_ts <= max_timesteps_trim:  # nothing to trim
-            return g
+            return []
         if use_valid_time:
             center = int(g["valid_position"].iloc[0])
         else:
@@ -862,15 +864,18 @@ def _trim_timesteps(
                 right -= (window_size - max_timesteps_trim)
             else:
                 left += (window_size - max_timesteps_trim)
-        return g[(g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right)]
+        index_to_drop = g.index[~((g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right))].to_list()
+
+        return index_to_drop
 
     before_unique = df["timestamp_ind"].nunique()
-    df = df.groupby("sample_id", group_keys=False).apply(_trim_sample).reset_index(drop=True)  # type: ignore
-    after_unique = df["timestamp_ind"].nunique()
-    if after_unique < before_unique:
-        logger.info(
-            f"Trimmed timesteps (global unique indices {before_unique} -> {after_unique}) using max_timesteps_trim={max_timesteps_trim}."
-        )
+
+    inds_to_drop = df[["sample_id", "timestamp_ind", "valid_position"]].groupby("sample_id", group_keys=False).apply(_trim_sample).values
+    inds_to_drop = np.concatenate(inds_to_drop)
+    df.drop(index=inds_to_drop, inplace=True)
+    gc.collect()
+
+    # df = df.groupby("sample_id", group_keys=False).apply(_trim_sample).reset_index(drop=True)  # type: ignore
 
     # Recompute basics
     df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
@@ -879,6 +884,12 @@ def _trim_timesteps(
     if use_valid_time:
         df = TimeSeriesProcessor.calculate_valid_position(df)
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+
+    after_unique = df["timestamp_ind"].nunique()
+    if after_unique < before_unique:
+        logger.info(
+            f"Trimmed timesteps (global unique indices {before_unique} -> {after_unique}) using max_timesteps_trim={max_timesteps_trim}."
+        )
     return df
 
 
