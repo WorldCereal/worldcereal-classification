@@ -43,6 +43,7 @@ from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def get_input(label):
+    """Get user input as short string without spaces."""
     while True:
         modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
         if " " not in modelname:
