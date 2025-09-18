@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Union
 
 import geopandas as gpd
 import numpy as np
@@ -144,11 +144,34 @@ class DataFrameValidator:
             + df_wide["available_timesteps"] // 2,
         )
 
-        faulty_samples = min_center_point > max_center_point
-        if faulty_samples.sum() > 0:
-            logger.warning(f"Dropping {faulty_samples.sum()} faulty sample(s).")
+        validtime_outside_range = (
+            (df_wide["valid_position"] < 0)
+            | (df_wide["valid_position"] >= df_wide["available_timesteps"])
+            | (df_wide["valid_time"] > df_wide["end_date"])
+            | (df_wide["valid_time"] < df_wide["start_date"])
+        )
+        faulty_samples = (
+            min_center_point > max_center_point
+        ) & ~validtime_outside_range
 
-        return df_wide[~faulty_samples]
+        if validtime_outside_range.sum() > 0:
+            logger.warning(
+                f"Dropping {validtime_outside_range.sum()} samples with valid_time outside the expected range. \n"
+                f"Reason: Valid time must be within the range of available timesteps. Samples with the following dates are affected:\n"
+                f"{df_wide[validtime_outside_range][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
+            )
+
+        if faulty_samples.sum() > 0:
+            logger.warning(
+                f"Dropping {faulty_samples.sum()} faulty sample(s). \n"
+                f"Reason: Could not establish a valid center point with the given \n"
+                f"min_edge_buffer of {min_edge_buffer} for the following date ranges:\n"
+                f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
+            )
+
+        df_wide = df_wide[~(faulty_samples | validtime_outside_range)]
+
+        return df_wide
 
     @staticmethod
     def check_min_timesteps(
@@ -536,28 +559,13 @@ Filling them with NODATAVALUE."
             dummy_df[FEATURE_COLUMNS] = NODATAVALUE
             return dummy_df
 
+        if min_edge_buffer < 1:
+            logger.info("min_edge_buffer < 1, skipping addition of dummy timestamps.")
+            return df_long
+
         latest_obs_position = df_long.groupby("sample_id")[
             ["valid_position", "timestamp_ind", "valid_position_diff"]
         ].max()
-
-        samples_after_end_date = latest_obs_position[
-            latest_obs_position["valid_position"] > latest_obs_position["timestamp_ind"]
-        ].index.tolist()
-        samples_before_start_date = latest_obs_position[
-            latest_obs_position["valid_position"] < 0
-        ].index.tolist()
-
-        if (len(samples_after_end_date) > 0) or (len(samples_before_start_date) > 0):
-            logger.warning(
-                f"Removing {len(samples_after_end_date)} samples with valid_time \
-after the end_date and {len(samples_before_start_date)} samples with valid_time \
-before the start_date"
-            )
-            df_long = df_long[
-                ~df_long["sample_id"].isin(
-                    samples_before_start_date + samples_after_end_date
-                )
-            ]
 
         intermediate_dummy_df = pd.concat(
             [
@@ -570,7 +578,7 @@ before the start_date"
                     "before",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer)
+                for n_ts_to_add in range(1, min_edge_buffer + 1)
             ]
             + [
                 create_dummy_rows(
@@ -582,13 +590,13 @@ before the start_date"
                     "after",
                     freq,
                 )
-                for n_ts_to_add in range(1, min_edge_buffer)
+                for n_ts_to_add in range(1, min_edge_buffer + 1)
             ]
         )
 
         if not intermediate_dummy_df.empty:
             logger.warning(
-                f"Added {intermediate_dummy_df['timestamp'].nunique()} dummy timestamp(s) \
+                f"Added {intermediate_dummy_df['timestamp'].nunique()} dummy timestamp(s) on edges \
 for {intermediate_dummy_df['sample_id'].nunique()} samples to fill in the found gaps."
             )
 
@@ -796,9 +804,8 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
 
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
-    freq: Literal["month", "dekad", "MS", "10D"] = "month",
+    freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
-    required_min_timesteps: Optional[int] = None,
     min_edge_buffer: int = 2,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
@@ -811,14 +818,10 @@ def process_parquet(
     df : Union[pd.DataFrame, gpd.GeoDataFrame]
         Input DataFrame or GeoDataFrame containing time series data.
         Must include 'sample_id' and 'timestamp' columns.
-    freq : Literal["month", "dekad", "MS", "10D"], default="month"
+    freq : Literal["month", "dekad"], default="month"
         Frequency of the time series data.
-        "MS" is an alias for "month" and "10D" is an alias for "dekad".
     use_valid_time : bool, default=True
         Whether to calculate and use valid time positions in the time series.
-    required_min_timesteps : Optional[int], default=None
-        Minimum number of timesteps required for each sample.
-        Samples with fewer timesteps will be filtered out.
     min_edge_buffer : int, default=2
         Minimum number of timesteps to include as buffer at the edges
         when calculating valid positions. Only used if use_valid_time is True.
@@ -850,10 +853,11 @@ def process_parquet(
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
 
-    if freq == "MS":
-        freq = "month"
-    if freq == "10D":
-        freq = "dekad"
+    # Determine required minimum timesteps based on frequency
+    if freq == "dekad":
+        required_min_timesteps = 36
+    if freq == "month":
+        required_min_timesteps = 12
 
     # `feature_index` is an openEO spefic column we should remove to avoid
     # it being treated as unique values which is not true after merging
@@ -937,8 +941,7 @@ def process_parquet(
         df_pivot["valid_date"] = df_pivot["valid_time"].copy()
         df_pivot = validator.check_faulty_samples(df_pivot, min_edge_buffer)
 
-    if required_min_timesteps:
-        df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
+    df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
 
     df_pivot["start_date"] = (
         df_pivot["start_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")

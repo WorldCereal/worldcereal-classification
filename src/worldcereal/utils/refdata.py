@@ -691,7 +691,7 @@ def process_extractions_df(
         )
 
     df_processed = process_parquet(
-        df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
+        df_raw, freq=freq, use_valid_time=True
     )
 
     if processing_period is not None:
