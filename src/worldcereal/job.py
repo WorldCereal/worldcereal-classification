@@ -336,6 +336,7 @@ def create_embeddings_process_graph(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
+    scale_uint16: bool = True,
 ) -> openeo.DataCube:
     """Create an OpenEO process graph for generating embeddings.
 
@@ -357,6 +358,8 @@ def create_embeddings_process_graph(
         Tile size to use for the data loading in OpenEO, by default 128.
     target_epsg : Optional[int], optional
         EPSG code to use for the output products. If not provided, the default EPSG will be used.
+    scale_uint16 : bool, optional
+        Whether to scale the embeddings to uint16 for memory optimization, by default True.
 
     Returns
     -------
@@ -391,14 +394,17 @@ def create_embeddings_process_graph(
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
     embeddings = _embeddings_map(
-        inputs, temporal_extent, embeddings_parameters=embeddings_parameters
+        inputs,
+        temporal_extent,
+        embeddings_parameters=embeddings_parameters,
+        scale_uint16=scale_uint16,
     )
 
     # Save the final result
     embeddings = embeddings.save_result(
         format=out_format,
         options=dict(
-            filename_prefix=f"embeddings_{temporal_extent.start_date}_{temporal_extent.end_date}",
+            filename_prefix=f"WorldCereal_Embeddings_{temporal_extent.start_date}_{temporal_extent.end_date}",
         ),
     )
 

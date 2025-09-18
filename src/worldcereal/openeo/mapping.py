@@ -209,6 +209,7 @@ def _embeddings_map(
     inputs: DataCube,
     temporal_extent: TemporalContext,
     embeddings_parameters: EmbeddingsParameters,
+    scale_uint16: bool = True,
 ) -> DataCube:
     """Method to produce embeddings map from preprocessed inputs, using
     a Prometheo feature extractor.
@@ -221,6 +222,8 @@ def _embeddings_map(
         Temporal extent of the input cube.
     embeddings_parameters : EmbeddingsParameters
         Parameters for the embeddings product inference pipeline.
+    scale_uint16 : bool, optional
+        Whether to scale the embeddings to uint16 for memory optimization, by default True.
 
     Returns
     -------
@@ -250,6 +253,13 @@ def _embeddings_map(
 
     # Get rid of temporal dimension
     embeddings = embeddings.reduce_dimension(dimension="t", reducer="mean")
+
+    # Cast to uint16
+    if scale_uint16:
+        offset = -6
+        scale = 0.0002
+        embeddings = (embeddings - offset) / scale
+        embeddings = embeddings.linear_scale_range(0, 65534, 0, 65534)
 
     return embeddings
 
