@@ -103,6 +103,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         ds,
         presto_model,
         batch_size=256,
+        time_explicit=True,  # Important for croptype
     )
     logger.info("Presto embeddings computed.")
 

@@ -35,11 +35,12 @@ from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from worldcereal.openeo.mapping import _cropland_map, _croptype_map
+from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
+    EmbeddingsParameters,
     PostprocessParameters,
     WorldCerealProductType,
 )
@@ -326,6 +327,90 @@ def create_inference_process_graph(
     return classes
 
 
+def create_embeddings_process_graph(
+    spatial_extent: BoundingBoxExtent,
+    temporal_extent: TemporalContext,
+    embeddings_parameters: EmbeddingsParameters = EmbeddingsParameters(),
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+    out_format: str = "GTiff",
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
+    tile_size: Optional[int] = 128,
+    target_epsg: Optional[int] = None,
+    scale_uint16: bool = True,
+) -> openeo.DataCube:
+    """Create an OpenEO process graph for generating embeddings.
+
+    Parameters
+    ----------
+    spatial_extent : BoundingBoxExtent
+        Spatial extent of the map.
+    temporal_extent : TemporalContext
+        Temporal range to consider.
+    embeddings_parameters : EmbeddingsParameters, optional
+        Parameters for the embeddings product inference pipeline, by default EmbeddingsParameters().
+    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
+        Sentinel-1 orbit state to use for the inference. If not provided, the orbit state will be dynamically determined based on the spatial extent, by default None.
+    out_format : str, optional
+        Output format, by default "GTiff".
+    backend_context : BackendContext, optional
+        Backend to run the job on, by default BackendContext(Backend.CDSE).
+    tile_size : Optional[int], optional
+        Tile size to use for the data loading in OpenEO, by default 128.
+    target_epsg : Optional[int], optional
+        EPSG code to use for the output products. If not provided, the default EPSG will be used.
+    scale_uint16 : bool, optional
+        Whether to scale the embeddings to uint16 for memory optimization, by default True.
+
+    Returns
+    -------
+    openeo.DataCube
+        DataCube object representing the embeddings process graph. This object can be used to execute the job on the OpenEO backend. The result will be a DataCube with the embeddings.
+
+    Raises
+    ------
+    ValueError
+        If the output format is not supported.
+    """
+
+    if out_format not in ["GTiff", "NetCDF"]:
+        raise ValueError(f"Format {format} not supported.")
+
+    # Make a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+
+    # Preparing the input cube for inference
+    inputs = worldcereal_preprocessed_inputs(
+        connection=connection,
+        backend_context=backend_context,
+        spatial_extent=spatial_extent,
+        temporal_extent=temporal_extent,
+        tile_size=tile_size,
+        s1_orbit_state=s1_orbit_state,
+        target_epsg=target_epsg,
+        # disable_meteo=True,
+    )
+
+    # Spatial filtering
+    inputs = inputs.filter_bbox(dict(spatial_extent))
+
+    embeddings = _embeddings_map(
+        inputs,
+        temporal_extent,
+        embeddings_parameters=embeddings_parameters,
+        scale_uint16=scale_uint16,
+    )
+
+    # Save the final result
+    embeddings = embeddings.save_result(
+        format=out_format,
+        options=dict(
+            filename_prefix=f"WorldCereal_Embeddings_{temporal_extent.start_date}_{temporal_extent.end_date}",
+        ),
+    )
+
+    return embeddings
+
+
 def create_inputs_process_graph(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
@@ -399,7 +484,6 @@ def create_inputs_process_graph(
     )
 
     return inputs
-
 
 def create_inference_job(
     row: pd.Series,
@@ -860,7 +944,6 @@ def setup_inference_job_manager(
 
     job_db = CsvJobDatabase(path=job_tracking_csv)
     if not job_db.exists():
-
         logger.info("Job tracking file does not exist, creating new jobs.")
 
         if isinstance(production_grid, Path):
@@ -879,9 +962,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
+            assert attr in production_gdf.columns, (
+                f"The production grid must contain a '{attr}' column."
+            )
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 

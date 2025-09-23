@@ -3,8 +3,8 @@ are interracting with the methods here are defined in the `worldcereal.job`
 sub-module.
 """
 
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 import openeo
 from openeo import DataCube
@@ -14,6 +14,7 @@ from openeo_gfmap.preprocessing.scaling import compress_uint8, compress_uint16
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
+    EmbeddingsParameters,
     PostprocessParameters,
     WorldCerealProductType,
 )
@@ -64,13 +65,13 @@ def _cropland_map(
         ],
     )
 
-
     # Run model inference on features
     inference_parameters = cropland_parameters.classifier_parameters.model_dump()
 
     inference_udf = openeo.UDF.from_file(
         path=Path(__file__).resolve().parent / "inference.py",
-        context=inference_parameters)
+        context=inference_parameters,
+    )
 
     classes = features.apply_neighborhood(
         process=inference_udf,
@@ -155,11 +156,13 @@ def _croptype_map(
         ],
     )
 
-
     # Run model inference on features
     inference_parameters = croptype_parameters.classifier_parameters.model_dump()
 
-    inference_udf = openeo.UDF.from_file(path=Path(__file__).resolve().parent / "inference.py", context=inference_parameters)
+    inference_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "inference.py",
+        context=inference_parameters,
+    )
 
     classes = features.apply_neighborhood(
         process=inference_udf,
@@ -202,6 +205,65 @@ def _croptype_map(
     return classes
 
 
+def _embeddings_map(
+    inputs: DataCube,
+    temporal_extent: TemporalContext,
+    embeddings_parameters: EmbeddingsParameters,
+    scale_uint16: bool = True,
+) -> DataCube:
+    """Method to produce embeddings map from preprocessed inputs, using
+    a Prometheo feature extractor.
+
+    Parameters
+    ----------
+    inputs : DataCube
+        Preprocessed input cube.
+    temporal_extent : TemporalContext
+        Temporal extent of the input cube.
+    embeddings_parameters : EmbeddingsParameters
+        Parameters for the embeddings product inference pipeline.
+    scale_uint16 : bool, optional
+        Whether to scale the embeddings to uint16 for memory optimization, by default True.
+
+    Returns
+    -------
+    DataCube
+        Embeddings as a DataCube.
+    """
+
+    # Run feature computer
+    feature_parameters = embeddings_parameters.feature_parameters.model_dump()
+
+    feature_udf = openeo.UDF.from_file(
+        path=Path(__file__).resolve().parent / "feature_extractor.py",
+        context=feature_parameters,
+    )
+
+    embeddings = inputs.apply_neighborhood(
+        process=feature_udf,
+        size=[
+            {"dimension": "x", "unit": "px", "value": 128},
+            {"dimension": "y", "unit": "px", "value": 128},
+        ],
+        overlap=[
+            {"dimension": "x", "unit": "px", "value": 0},
+            {"dimension": "y", "unit": "px", "value": 0},
+        ],
+    )
+
+    # Get rid of temporal dimension
+    embeddings = embeddings.reduce_dimension(dimension="t", reducer="mean")
+
+    # Cast to uint16
+    if scale_uint16:
+        offset = -6
+        scale = 0.0002
+        embeddings = (embeddings - offset) / scale
+        embeddings = embeddings.linear_scale_range(0, 65534, 0, 65534)
+
+    return embeddings
+
+
 def _postprocess(
     classes: DataCube,
     postprocess_parameters: "PostprocessParameters",
@@ -227,16 +289,15 @@ def _postprocess(
     parameters = postprocess_parameters.model_dump()
     parameters.update({"classifier_url": classifier_url})
 
-
     postprocess_udf = openeo.UDF.from_file(
-        path=Path(__file__).resolve().parent / "postprocess.py",
-        context=parameters)
+        path=Path(__file__).resolve().parent / "postprocess.py", context=parameters
+    )
 
     postprocessed_classes = classes.apply_neighborhood(
         process=postprocess_udf,
         size=[
             {"dimension": "x", "unit": "px", "value": 128},
-            {"dimension": "y", "unit": "px", "value": 128}
+            {"dimension": "y", "unit": "px", "value": 128},
         ],
         overlap=[
             {"dimension": "x", "unit": "px", "value": 0},

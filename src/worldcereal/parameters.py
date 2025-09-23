@@ -4,11 +4,13 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+
 class WorldCerealProductType(Enum):
     """Enum to define the different WorldCereal products."""
 
     CROPLAND = "cropland"
     CROPTYPE = "croptype"
+    EMBEDDINGS = "embeddings"
 
 
 class FeaturesParameters(BaseModel):
@@ -76,20 +78,16 @@ class BaseParameters(BaseModel):
     """Base class for shared parameter logic."""
 
     @staticmethod
-    def create_feature_parameters(
-        rescale_s1: bool,
-        presto_model_url: str,
-        compile_presto: bool,
-        temporal_prediction: bool,
-        target_date: Optional[str],
-    ):
-        return FeaturesParameters(
-            rescale_s1=rescale_s1,
-            presto_model_url=presto_model_url,
-            compile_presto=compile_presto,
-            temporal_prediction=temporal_prediction,
-            target_date=target_date,
-        )
+    def create_feature_parameters(**kwargs):
+        defaults = {
+            "rescale_s1": False,
+            "presto_model_url": "",
+            "compile_presto": False,
+            "temporal_prediction": False,
+            "target_date": None,
+        }
+        defaults.update(kwargs)
+        return FeaturesParameters(**defaults)
 
     @staticmethod
     def create_classifier_parameters(classifier_url: str):
@@ -177,6 +175,53 @@ class CropTypeParameters(BaseParameters):
         if not self.mask_cropland and self.save_mask:
             raise ValidationError("Cannot save mask if mask_cropland is disabled.")
         return self
+
+
+class EmbeddingsParameters(BaseParameters):
+    """Parameters for the embeddings product inference pipeline. Types are
+    enforced by Pydantic.
+
+    Attributes
+    ----------
+    feature_parameters : FeaturesParameters
+        Parameters for the feature extraction UDF. Will be serialized into a
+        dictionary and passed in the process graph.
+    classifier_parameters : ClassifierParameters
+        Parameters for the classifier UDF. Will be serialized into a dictionary
+        and passed in the process graph.
+    """
+
+    @staticmethod
+    def _default_feature_parameters() -> FeaturesParameters:
+        """Internal helper returning the default feature parameters instance.
+
+        Centralizes the defaults so they are declared only once.
+        """
+        return BaseParameters.create_feature_parameters(
+            rescale_s1=False,
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
+            compile_presto=False,
+            temporal_prediction=False,
+            target_date=None,
+        )
+
+    feature_parameters: FeaturesParameters = Field(
+        # Wrap staticmethod call so pydantic receives a true zero-arg callable
+        default_factory=lambda: EmbeddingsParameters._default_feature_parameters()
+    )
+
+    def __init__(self, presto_model_url: Optional[str] = None, **kwargs):
+        """Allow initialization with a custom Presto model URL without
+        duplicating the default argument list.
+
+        Users may still pass an explicit `feature_parameters` to override all
+        aspects; in that case `presto_model_url` is ignored.
+        """
+        if "feature_parameters" not in kwargs and presto_model_url is not None:
+            fp = self._default_feature_parameters().model_copy()
+            fp.presto_model_url = presto_model_url  # type: ignore[attr-defined]
+            kwargs["feature_parameters"] = fp
+        super().__init__(**kwargs)
 
 
 class PostprocessParameters(BaseModel):

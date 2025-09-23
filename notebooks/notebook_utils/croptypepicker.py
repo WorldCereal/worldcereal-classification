@@ -216,7 +216,7 @@ class CropTypePicker:
         # First get the legend
         self.full_legend = get_legend()
         self.full_legend["ewoc_code"] = (
-            self.full_legend["ewoc_code"].str.replace("-", "").astype(int)
+            self.full_legend["ewoc_code"].str.replace("-", "").astype(np.int64)
         )
         self.full_legend = self.full_legend.set_index("ewoc_code")
 
