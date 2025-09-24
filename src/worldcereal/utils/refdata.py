@@ -587,7 +587,11 @@ def process_extractions_df(
     The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
 
-    from worldcereal.utils.timeseries import TimeSeriesProcessor, process_parquet
+    from worldcereal.utils.timeseries import (
+        DataFrameValidator,
+        TimeSeriesProcessor,
+        process_parquet,
+    )
 
     logger.info("Processing selected samples ...")
 
@@ -605,15 +609,8 @@ def process_extractions_df(
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-    # make sure the timestamp, valid_time, start and end dates are datetime objects
-    df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"])
-    for date_col in ["valid_time", "start_date", "end_date"]:
-        df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = (
-            df_raw[date_col]
-            .dt.tz_localize(None)
-            .dt.tz_localize(df_raw["timestamp"].dt.tz)
-        )
+    # make sure the timestamp and valid_time are datetime objects with no timezone
+    df_raw = DataFrameValidator.validate_datetime_columns(df_raw)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -636,6 +633,10 @@ def process_extractions_df(
         middle_index = len(date_range) // 2 - 1
         processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month
+
+        # calculate the start and end dates of available extractions per sample
+        df_raw["start_date"] = df_raw["sample_id"].map(df_raw.groupby(["sample_id"])["timestamp"].min())
+        df_raw["end_date"] = df_raw["sample_id"].map(df_raw.groupby(["sample_id"])["timestamp"].max())
 
         # get a lighter subset with only the necessary columns
         sample_dates = (
@@ -698,9 +699,9 @@ def process_extractions_df(
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
         # temporary fix to deal with tz-aware datetime objects
-        df_processed["valid_time"] = (
-            df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-        )
+        # df_processed["valid_time"] = (
+        #     df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
+        # )
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
