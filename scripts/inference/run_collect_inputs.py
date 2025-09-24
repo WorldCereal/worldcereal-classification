@@ -17,6 +17,7 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 
 from worldcereal.job import create_inputs_process_graph
+from worldcereal.utils.argparser import parse_job_options_from_args
 
 MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds
@@ -242,13 +243,9 @@ def main(
     extractions_start_date: Optional[str] = None,
     extractions_end_date: Optional[str] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    memory: Optional[str] = None,
-    python_memory: Optional[str] = None,
-    max_executors: Optional[int] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    image_name: Optional[str] = None,
-    organization_id: Optional[int] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -268,24 +265,16 @@ def main(
     s1_orbit_state : Literal['ASCENDING', 'DESCENDING'], optional
         If specified, only Sentinel-1 data from the given orbit state will be used.
         If None, it will be automatically determined but we want it fixed here.
-    memory : str, optional
-        Memory to allocate for the executor.
-        If not specified, the default value is used, depending on type of collection.
-    python_memory : str, optional
-        Memory to allocate for the python processes as well as OrfeoToolbox in the executors,
-        If not specified, the default value is used, depending on type of collection.
-    max_executors : int, optional
-        Number of executors to run.
-        If not specified, the default value is used, depending on type of collection.
     parallel_jobs : int, optional
         The maximum number of parallel jobs to run at the same time, by default 10
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
-    image_name : str, optional
-        Specific openEO image name to use for the jobs, by default None
-    organization_id : int, optional
-        ID of the organization to use for the job, by default None in which case
-        the active organization for the user is used
+    job_options : dict, optional
+        A dictionary of job options to customize the jobs.
+        If None, default options will be used.
+        Recognized keys:
+            executor-memory, python-memory, max-executors, image-name, etl_organization_id.
+            See worldcereal.utils.argparser.DEFAULT_JOB_OPTIONS for defaults.
 
     Returns
     -------
@@ -313,19 +302,6 @@ def main(
             extractions_start_date=extractions_start_date,
             extractions_end_date=extractions_end_date,
         )
-
-    # Compile custom job options
-    job_options: Optional[Dict[str, Union[str, int]]] = {
-        key: value
-        for key, value in {
-            "executor-memory": memory,
-            "python-memory": python_memory,
-            "max-executors": max_executors,
-            "image-name": image_name,
-            "etl_organization_id": organization_id,
-        }.items()
-        if value is not None
-    } or None
 
     # Retry loop starts here
     attempt = 0
@@ -447,6 +423,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    job_options = parse_job_options_from_args(args)
+
     main(
         grid_path=args.grid_path,
         extractions_start_date=args.extractions_start_date,
@@ -454,11 +432,7 @@ if __name__ == "__main__":
         output_folder=args.output_folder,
         overwrite_job_df=args.overwrite_job_df,
         s1_orbit_state=args.s1_orbit_state,
-        memory=args.memory,
-        python_memory=args.python_memory,
-        max_executors=args.max_executors,
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
-        image_name=args.image_name,
-        organization_id=args.organization_id,
+        job_options=job_options,
     )
