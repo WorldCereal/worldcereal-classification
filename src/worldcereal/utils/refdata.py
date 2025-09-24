@@ -2,7 +2,7 @@ import glob
 import importlib.resources
 import json
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import duckdb
 import geopandas as gpd
@@ -608,7 +608,8 @@ def process_extractions_df(
             raise ValueError(error_msg)
 
     # make sure the timestamp and valid_time are datetime objects with no timezone
-    df_raw = DataFrameValidator.validate_datetime_columns(df_raw)
+    df_raw = DataFrameValidator.validate_and_fix_dt_cols(df_raw)
+    df_raw = cast(Union[pd.DataFrame, gpd.GeoDataFrame], df_raw)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -632,9 +633,9 @@ def process_extractions_df(
         processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month
 
-        # calculate the start and end dates of available extractions per sample
-        df_raw["start_date"] = df_raw["sample_id"].map(df_raw.groupby(["sample_id"])["timestamp"].min())
-        df_raw["end_date"] = df_raw["sample_id"].map(df_raw.groupby(["sample_id"])["timestamp"].max())
+        # # calculate the start and end dates of available extractions per sample
+        df_raw["start_date"] = df_raw.groupby("sample_id")["timestamp"].transform("min")
+        df_raw["end_date"] = df_raw.groupby("sample_id")["timestamp"].transform("max")
 
         # get a lighter subset with only the necessary columns
         sample_dates = (
@@ -689,9 +690,7 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
-    df_processed = process_parquet(
-        df_raw, freq=freq, use_valid_time=True
-    )
+    df_processed = process_parquet(df_raw, freq=freq, use_valid_time=True)
 
     if processing_period is not None:
         # put back the true valid_time
