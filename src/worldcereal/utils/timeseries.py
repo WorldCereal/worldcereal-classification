@@ -53,6 +53,17 @@ EXPECTED_DISTANCES = {"month": 31, "dekad": 10}
 
 class DataFrameValidator:
     @staticmethod
+    def validate_and_fix_dt_cols(df_long: pd.DataFrame) -> None:
+        # make sure the timestamp and valid_time are datetime objects with no timezone
+        df_long["timestamp"] = pd.to_datetime(df_long["timestamp"])
+        df_long["timestamp"] = df_long["timestamp"].dt.tz_localize(None)
+        df_long["timestamp"] = df_long["timestamp"].dt.floor("D") # trim to date only
+        if "valid_time" in df_long.columns:
+            df_long["valid_time"] = pd.to_datetime(df_long["valid_time"])
+            df_long["valid_time"] = df_long["valid_time"].dt.tz_localize(None)
+        return df_long
+
+    @staticmethod
     def validate_required_columns(df_long: pd.DataFrame) -> None:
         missing_columns = [
             col for col in REQUIRED_COLUMNS if col not in df_long.columns
@@ -867,6 +878,7 @@ def process_parquet(
     # Validate input
     validator = DataFrameValidator()
     validator.validate_required_columns(df)
+    validator.validate_and_fix_dt_cols(df)
     validator.validate_timestamps(df, freq)
     df = validator.check_median_distance(df, freq)
 
@@ -941,12 +953,8 @@ def process_parquet(
 
     df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
 
-    df_pivot["start_date"] = (
-        df_pivot["start_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-    )
-    df_pivot["end_date"] = (
-        df_pivot["end_date"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-    )
+    df_pivot["start_date"] = df_pivot["start_date"].dt.strftime("%Y-%m-%d")
+    df_pivot["end_date"] = df_pivot["end_date"].dt.strftime("%Y-%m-%d")
 
     df_pivot = df_pivot.set_index("sample_id")
 
