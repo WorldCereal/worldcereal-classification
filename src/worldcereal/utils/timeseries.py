@@ -41,7 +41,6 @@ COLUMN_RENAMES: Dict[str, str] = {
     "S2-L2A-B8A": "OPTICAL-B8A",
     "S2-L2A-B11": "OPTICAL-B11",
     "S2-L2A-B12": "OPTICAL-B12",
-    "valid_date": "valid_time",
     "AGERA5-PRECIP": "METEO-precipitation_flux",
     "AGERA5-TMEAN": "METEO-temperature_mean",
     "slope": "DEM-slo-20m",
@@ -938,7 +937,6 @@ def process_parquet(
         df_pivot["valid_time"] = (
             df_pivot["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
         )
-        df_pivot["valid_date"] = df_pivot["valid_time"].copy()
         df_pivot = validator.check_faulty_samples(df_pivot, min_edge_buffer)
 
     df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)

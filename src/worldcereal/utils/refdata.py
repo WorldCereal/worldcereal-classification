@@ -701,7 +701,6 @@ def process_extractions_df(
         df_processed["valid_time"] = (
             df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
         )
-        df_processed["valid_date"] = df_processed["valid_time"].copy()
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
