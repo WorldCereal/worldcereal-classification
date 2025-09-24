@@ -2,16 +2,15 @@ from unittest import TestCase
 
 import numpy as np
 import pandas as pd
+from prometheo.predictors import NODATAVALUE
 
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
 from worldcereal.utils.timeseries import (
     FEATURE_COLUMNS,
     _dekad_startdate_from_date,
     _dekad_timestamps,
     process_parquet,
 )
-
-MIN_EDGE_BUFFER = 2
-NODATAVALUE = 65535
 
 
 class TestProcessParquet(TestCase):
@@ -144,11 +143,20 @@ class TestProcessParquet(TestCase):
         # valid_date too close to end_date, with little room to maneuver
         sample_5_data_month = {
             "sample_id": ["sample_5"] * self.min_timesteps_month,
-            "timestamp": pd.date_range(start=self.start_date, end=(self.start_date+pd.DateOffset(months=self.min_timesteps_month-1)), freq="MS"),
+            "timestamp": pd.date_range(
+                start=self.start_date,
+                end=(
+                    self.start_date + pd.DateOffset(months=self.min_timesteps_month - 1)
+                ),
+                freq="MS",
+            ),
             "start_date": [self.start_date] * self.min_timesteps_month,
-            "valid_time": [self.start_date+pd.DateOffset(months=self.min_timesteps_month-1)]
+            "valid_time": [
+                self.start_date + pd.DateOffset(months=self.min_timesteps_month - 1)
+            ]
             * self.min_timesteps_month,
-            "elevation": [np.random.randint(1000, size=1)[0]] * self.min_timesteps_month,
+            "elevation": [np.random.randint(1000, size=1)[0]]
+            * self.min_timesteps_month,
             "slope": [np.random.randint(1000, size=1)[0]] * self.min_timesteps_month,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.min_timesteps_month),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.min_timesteps_month),
@@ -170,29 +178,45 @@ class TestProcessParquet(TestCase):
 
         # not enough timesteps
         sample_6_data_month = {
-            "sample_id": ["sample_6"] * (self.min_timesteps_month-1),
-            "timestamp": pd.date_range(start=self.start_date, end=(self.start_date+pd.DateOffset(months=self.min_timesteps_month-2)), freq="MS"),
-            "start_date": [self.start_date] * (self.min_timesteps_month-1),
+            "sample_id": ["sample_6"] * (self.min_timesteps_month - 1),
+            "timestamp": pd.date_range(
+                start=self.start_date,
+                end=(
+                    self.start_date + pd.DateOffset(months=self.min_timesteps_month - 2)
+                ),
+                freq="MS",
+            ),
+            "start_date": [self.start_date] * (self.min_timesteps_month - 1),
             "valid_time": [self.start_date + pd.DateOffset(months=9)]
-            * (self.min_timesteps_month-1),
-            "elevation": [np.random.randint(1000, size=1)[0]] * (self.min_timesteps_month-1),
-            "slope": [np.random.randint(1000, size=1)[0]] * (self.min_timesteps_month-1),
-            "S1-SIGMA0-VV": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S1-SIGMA0-VH": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B02": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B03": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B04": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B05": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B06": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B07": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B08": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B11": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "S2-L2A-B12": np.random.randint(1000, size=(self.min_timesteps_month-1)),
-            "AGERA5-PRECIP": np.random.randint(100, size=(self.min_timesteps_month-1)),
-            "AGERA5-TMEAN": np.random.randint(30, size=(self.min_timesteps_month-1)),
-            "CROPTYPE_LABEL": [1102] * (self.min_timesteps_month-1),
-            "lat": [np.random.uniform(-90, 90, size=1)[0]] * (self.min_timesteps_month-1),
-            "lon": [np.random.uniform(-180, 180, size=1)[0]] * (self.min_timesteps_month-1),
+            * (self.min_timesteps_month - 1),
+            "elevation": [np.random.randint(1000, size=1)[0]]
+            * (self.min_timesteps_month - 1),
+            "slope": [np.random.randint(1000, size=1)[0]]
+            * (self.min_timesteps_month - 1),
+            "S1-SIGMA0-VV": np.random.randint(
+                1000, size=(self.min_timesteps_month - 1)
+            ),
+            "S1-SIGMA0-VH": np.random.randint(
+                1000, size=(self.min_timesteps_month - 1)
+            ),
+            "S2-L2A-B02": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B03": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B04": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B05": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B06": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B07": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B08": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B11": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "S2-L2A-B12": np.random.randint(1000, size=(self.min_timesteps_month - 1)),
+            "AGERA5-PRECIP": np.random.randint(
+                100, size=(self.min_timesteps_month - 1)
+            ),
+            "AGERA5-TMEAN": np.random.randint(30, size=(self.min_timesteps_month - 1)),
+            "CROPTYPE_LABEL": [1102] * (self.min_timesteps_month - 1),
+            "lat": [np.random.uniform(-90, 90, size=1)[0]]
+            * (self.min_timesteps_month - 1),
+            "lon": [np.random.uniform(-180, 180, size=1)[0]]
+            * (self.min_timesteps_month - 1),
         }
 
         self.df_month = pd.concat(
@@ -334,7 +358,13 @@ class TestProcessParquet(TestCase):
             "sample_id": ["sample_5"] * self.min_timesteps_dekad,
             "timestamp": [
                 _dekad_startdate_from_date(t)
-                for t in _dekad_timestamps(self.start_date, (self.start_date+pd.DateOffset(days=10*self.min_timesteps_dekad)))
+                for t in _dekad_timestamps(
+                    self.start_date,
+                    (
+                        self.start_date
+                        + pd.DateOffset(days=10 * self.min_timesteps_dekad)
+                    ),
+                )
             ],
             "start_date": [self.start_date] * self.min_timesteps_dekad,
             "valid_time": [
@@ -344,7 +374,8 @@ class TestProcessParquet(TestCase):
                 )
             ]
             * self.min_timesteps_dekad,
-            "elevation": [np.random.randint(1000, size=1)[0]] * self.min_timesteps_dekad,
+            "elevation": [np.random.randint(1000, size=1)[0]]
+            * self.min_timesteps_dekad,
             "slope": [np.random.randint(1000, size=1)[0]] * self.min_timesteps_dekad,
             "S1-SIGMA0-VV": np.random.randint(1000, size=self.min_timesteps_dekad),
             "S1-SIGMA0-VH": np.random.randint(1000, size=self.min_timesteps_dekad),
@@ -367,37 +398,53 @@ class TestProcessParquet(TestCase):
         # not enough timesteps; for dekad, we need to subtract at least 3 steps,
         # since months with incomplete dekads are still rounded up to full months
         sample_6_data_dekad = {
-            "sample_id": ["sample_6"] * (self.min_timesteps_dekad-3),
+            "sample_id": ["sample_6"] * (self.min_timesteps_dekad - 3),
             "timestamp": [
                 _dekad_startdate_from_date(t)
-                for t in _dekad_timestamps(self.start_date, (self.start_date+pd.DateOffset(days=10*(self.min_timesteps_dekad-3))))
+                for t in _dekad_timestamps(
+                    self.start_date,
+                    (
+                        self.start_date
+                        + pd.DateOffset(days=10 * (self.min_timesteps_dekad - 3))
+                    ),
+                )
             ],
-            "start_date": [self.start_date] * (self.min_timesteps_dekad-3),
+            "start_date": [self.start_date] * (self.min_timesteps_dekad - 3),
             "valid_time": [
                 _dekad_startdate_from_date(
                     pd.to_datetime(self.start_date)
                     + pd.DateOffset(days=10 * (MIN_EDGE_BUFFER // 2))
                 )
             ]
-            * (self.min_timesteps_dekad-3),
-            "elevation": [np.random.randint(1000, size=1)[0]] * (self.min_timesteps_dekad-3),
-            "slope": [np.random.randint(1000, size=1)[0]] * (self.min_timesteps_dekad-3),
-            "S1-SIGMA0-VV": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S1-SIGMA0-VH": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B02": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B03": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B04": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B05": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B06": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B07": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B08": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B11": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "S2-L2A-B12": np.random.randint(1000, size=(self.min_timesteps_dekad-3)),
-            "AGERA5-PRECIP": np.random.randint(100, size=(self.min_timesteps_dekad-3)),
-            "AGERA5-TMEAN": np.random.randint(30, size=(self.min_timesteps_dekad-3)),
-            "CROPTYPE_LABEL": [1102] * (self.min_timesteps_dekad-3),
-            "lat": [np.random.uniform(-90, 90, size=1)[0]] * (self.min_timesteps_dekad-3),
-            "lon": [np.random.uniform(-180, 180, size=1)[0]] * (self.min_timesteps_dekad-3),
+            * (self.min_timesteps_dekad - 3),
+            "elevation": [np.random.randint(1000, size=1)[0]]
+            * (self.min_timesteps_dekad - 3),
+            "slope": [np.random.randint(1000, size=1)[0]]
+            * (self.min_timesteps_dekad - 3),
+            "S1-SIGMA0-VV": np.random.randint(
+                1000, size=(self.min_timesteps_dekad - 3)
+            ),
+            "S1-SIGMA0-VH": np.random.randint(
+                1000, size=(self.min_timesteps_dekad - 3)
+            ),
+            "S2-L2A-B02": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B03": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B04": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B05": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B06": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B07": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B08": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B11": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "S2-L2A-B12": np.random.randint(1000, size=(self.min_timesteps_dekad - 3)),
+            "AGERA5-PRECIP": np.random.randint(
+                100, size=(self.min_timesteps_dekad - 3)
+            ),
+            "AGERA5-TMEAN": np.random.randint(30, size=(self.min_timesteps_dekad - 3)),
+            "CROPTYPE_LABEL": [1102] * (self.min_timesteps_dekad - 3),
+            "lat": [np.random.uniform(-90, 90, size=1)[0]]
+            * (self.min_timesteps_dekad - 3),
+            "lon": [np.random.uniform(-180, 180, size=1)[0]]
+            * (self.min_timesteps_dekad - 3),
         }
 
         self.df_dekad = pd.concat(
@@ -442,8 +489,12 @@ class TestProcessParquet(TestCase):
             # Remove n timestamps to create missing timestamps scenario
             # Make sure not to remove first or last timestamp for each sample
             n = 20
-            df["start_date"] = df["sample_id"].map(df.groupby(["sample_id"])["timestamp"].min())
-            df["end_date"] = df["sample_id"].map(df.groupby(["sample_id"])["timestamp"].max())
+            df["start_date"] = df["sample_id"].map(
+                df.groupby(["sample_id"])["timestamp"].min()
+            )
+            df["end_date"] = df["sample_id"].map(
+                df.groupby(["sample_id"])["timestamp"].max()
+            )
             rows_to_remove = df[
                 (df["timestamp"] != df["start_date"])
                 & (df["timestamp"] != df["end_date"])
@@ -485,7 +536,7 @@ class TestProcessParquet(TestCase):
             )
             self.assertIsInstance(result, pd.DataFrame)
             self.assertFalse("sample_4" in result.index.unique())
-    
+
     def test_process_parquet_wild_timestamps(self):
         # TODO: Implement test when wild timestamp(s) are injected into the dataframe
         for freq in self.allowed_freqs:
@@ -549,7 +600,7 @@ class TestProcessParquet(TestCase):
                     + pd.DateOffset(days=-10 * (MIN_EDGE_BUFFER // 2 + 1))
                 )
                 expected_available_timesteps = self.n_dekads + MIN_EDGE_BUFFER
-            
+
             obtained_start_date = pd.to_datetime(result.loc["sample_2", "start_date"])
             obtained_available_timesteps = result.loc["sample_2", "available_timesteps"]
 
@@ -709,8 +760,12 @@ class TestProcessParquet(TestCase):
     def test_datetime_handling(self):
         """Test handling of datetime objects in timestamp columns"""
         test_df = self.df_month.copy()
-        test_df["timestamp"] = pd.to_datetime(test_df["timestamp"]).dt.tz_localize('UTC')
-        test_df["valid_time"] = pd.to_datetime(test_df["valid_time"]).dt.strftime('%Y-%m-%d')
+        test_df["timestamp"] = pd.to_datetime(test_df["timestamp"]).dt.tz_localize(
+            "UTC"
+        )
+        test_df["valid_time"] = pd.to_datetime(test_df["valid_time"]).dt.strftime(
+            "%Y-%m-%d"
+        )
 
         result = process_parquet(test_df)
         self.assertIsInstance(result, pd.DataFrame)

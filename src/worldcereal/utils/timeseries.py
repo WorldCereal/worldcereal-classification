@@ -5,12 +5,12 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from loguru import logger
+from prometheo.predictors import NODATAVALUE
 
 from worldcereal.train.datasets import MIN_EDGE_BUFFER
 
 STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
-NODATAVALUE = 65535
 
 BAND_MAPPINGS = {
     "10m": ["OPTICAL-B02", "OPTICAL-B03", "OPTICAL-B04", "OPTICAL-B08"],
