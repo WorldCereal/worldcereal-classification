@@ -58,7 +58,7 @@ class DataFrameValidator:
         # make sure the timestamp and valid_time are datetime objects with no timezone
         df_long["timestamp"] = pd.to_datetime(df_long["timestamp"])
         df_long["timestamp"] = df_long["timestamp"].dt.tz_localize(None)
-        df_long["timestamp"] = df_long["timestamp"].dt.floor("D") # trim to date only
+        df_long["timestamp"] = df_long["timestamp"].dt.floor("D")  # trim to date only
         if "valid_time" in df_long.columns:
             df_long["valid_time"] = pd.to_datetime(df_long["valid_time"])
             df_long["valid_time"] = df_long["valid_time"].dt.tz_localize(None)
