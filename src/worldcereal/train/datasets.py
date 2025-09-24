@@ -20,6 +20,9 @@ from pyproj import Transformer
 from torch import nn
 from torch.utils.data import Dataset, WeightedRandomSampler
 
+# minimum distance from valid_position to the edges when augmenting
+# we need to define it globally so that it can be used in process_parquet as well
+MIN_EDGE_BUFFER = 2
 
 def get_class_weights(
     labels: np.ndarray[Any],
@@ -138,14 +141,14 @@ class WorldCerealDataset(Dataset):
     def get_timestep_positions(
         self,
         row_d: Dict,
-        MIN_EDGE_BUFFER: int = 2,
+        min_edge_buffer: int = MIN_EDGE_BUFFER,
     ) -> Tuple[List[int], int]:
         available_timesteps = int(row_d["available_timesteps"])
         valid_position = int(row_d["valid_position"])
 
         # Get the center point to use for extracting a sequence of timesteps
         center_point = self._get_center_point(
-            available_timesteps, valid_position, self.augment, MIN_EDGE_BUFFER
+            available_timesteps, valid_position, self.augment, min_edge_buffer
         )
 
         # Determine the timestep positions to extract
