@@ -441,10 +441,12 @@ class TestProcessParquet(TestCase):
 
             # Remove n timestamps to create missing timestamps scenario
             # Make sure not to remove first or last timestamp for each sample
-            n = 5
+            n = 20
+            df["start_date"] = df["sample_id"].map(df.groupby(["sample_id"])["timestamp"].min())
+            df["end_date"] = df["sample_id"].map(df.groupby(["sample_id"])["timestamp"].max())
             rows_to_remove = df[
-                (df["timestamp"] != self.start_date)
-                & (df["timestamp"] != self.end_date)
+                (df["timestamp"] != df["start_date"])
+                & (df["timestamp"] != df["end_date"])
                 & (df["timestamp"] != df["valid_time"])
                 & (df["timestamp"] != df["valid_time"])
             ].sample(n)
