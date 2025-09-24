@@ -16,7 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
-from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
