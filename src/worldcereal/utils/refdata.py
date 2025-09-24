@@ -560,8 +560,8 @@ def process_extractions_df(
     Parameters
     ----------
     df_raw : Union[pd.DataFrame, gpd.GeoDataFrame]
-        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time',
-        'start_date', 'end_date', and 'timestamp' columns.
+        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time'
+        and 'timestamp' columns.
     processing_period : TemporalContext, optional
         User-defined temporal context to align samples with. If provided, samples that do not fit
         within this temporal extent will be removed. Default is None (no temporal filtering).
@@ -598,8 +598,6 @@ def process_extractions_df(
     # check for essential attributes
     required_columns = [
         "valid_time",
-        "start_date",
-        "end_date",
         "timestamp",
         "sample_id",
     ]
