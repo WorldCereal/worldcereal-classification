@@ -6,10 +6,11 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
+
 STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
 NODATAVALUE = 65535
-MIN_EDGE_BUFFER = 2
 
 BAND_MAPPINGS = {
     "10m": ["OPTICAL-B02", "OPTICAL-B03", "OPTICAL-B04", "OPTICAL-B08"],
@@ -816,7 +817,7 @@ def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
-    min_edge_buffer: int = 2,  # only used if valid_time is used
+    min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
@@ -832,7 +833,7 @@ def process_parquet(
         Frequency of the time series data.
     use_valid_time : bool, default=True
         Whether to calculate and use valid time positions in the time series.
-    min_edge_buffer : int, default=2
+    min_edge_buffer : int, default = MIN_EDGE_BUFFER
         Minimum number of timesteps to include as buffer at the edges
         when calculating valid positions. Only used if use_valid_time is True.
     return_after_fill : bool, default=False
