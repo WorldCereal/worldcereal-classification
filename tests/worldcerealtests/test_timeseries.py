@@ -705,3 +705,13 @@ class TestProcessParquet(TestCase):
         self.assertTrue(all(isinstance(d, str) for d in result["start_date"]))
         self.assertTrue(all(isinstance(d, str) for d in result["end_date"]))
         self.assertTrue(all(isinstance(d, str) for d in result["valid_time"]))
+
+    def test_datetime_handling(self):
+        """Test handling of datetime objects in timestamp columns"""
+        test_df = self.df_month.copy()
+        test_df["timestamp"] = pd.to_datetime(test_df["timestamp"]).dt.tz_localize('UTC')
+        test_df["valid_time"] = pd.to_datetime(test_df["valid_time"]).dt.strftime('%Y-%m-%d')
+
+        result = process_parquet(test_df)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertFalse(result.empty)
