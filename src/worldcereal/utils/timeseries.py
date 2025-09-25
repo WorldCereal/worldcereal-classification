@@ -165,16 +165,19 @@ class DataFrameValidator:
             min_center_point > max_center_point
         ) & ~validtime_outside_range
 
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
+
         if validtime_outside_range.sum() > 0:
             logger.warning(
-                f"Dropping {validtime_outside_range.sum()} samples with valid_time outside the expected range. \n"
+                f"{ref_id}: Dropping {validtime_outside_range.sum()} samples with valid_time outside the expected range. \n"
                 f"Reason: Valid time must be within the range of available timesteps. Samples with the following dates are affected:\n"
                 f"{df_wide[validtime_outside_range][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
 
         if faulty_samples.sum() > 0:
             logger.warning(
-                f"Dropping {faulty_samples.sum()} faulty sample(s). \n"
+                f"{ref_id}: Dropping {faulty_samples.sum()} faulty sample(s). \n"
                 f"Reason: Could not establish a valid center point with the given \n"
                 f"min_edge_buffer of {min_edge_buffer} for the following date ranges:\n"
                 f"{df_wide[faulty_samples][['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
@@ -217,15 +220,18 @@ class DataFrameValidator:
         samples_with_too_few_ts = (
             df_wide["available_timesteps"] < required_min_timesteps
         )
+
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
         if samples_with_too_few_ts.sum() > 0:
             logger.warning(
-                f"Dropping {samples_with_too_few_ts.sum()} sample(s) with \
+                f"{ref_id}: Dropping {samples_with_too_few_ts.sum()} sample(s) with \
 number of available timesteps less than {required_min_timesteps}."
             )
         df_wide = df_wide[~samples_with_too_few_ts]
         if len(df_wide) == 0:
             raise ValueError(
-                f"Left with an empty DataFrame! \
+                f"{ref_id}: Left with an empty DataFrame! \
 All samples have fewer timesteps than required ({required_min_timesteps})."
             )
         else:
@@ -299,9 +305,11 @@ All samples have fewer timesteps than required ({required_min_timesteps})."
         else:
             raise NotImplementedError(f"Frequency {freq} not supported")
 
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
         if len(samples_with_mismatching_distance) > 0:
             logger.warning(
-                f"Found {len(samples_with_mismatching_distance)} samples with median distance \
+                f"{ref_id}: Found {len(samples_with_mismatching_distance)} samples with median distance \
 between observations not corresponding to {freq}. \
 Removing them from the dataset."
             )
@@ -315,7 +323,7 @@ observations not corresponding to {freq}."
                 )
         else:
             logger.info(
-                f"Expected observations frequency: {freq}; \
+                f"{ref_id}: Expected observations frequency: {freq}; \
 Median observed distance between observations: {median_distance.unique()} days"
             )
 
@@ -489,12 +497,17 @@ class TimeSeriesProcessor:
             != expected_observations_df["expected_n_observations"]
         ]["sample_id"].unique()
 
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+
         if samples_to_fill.size == 0:
-            logger.info("All samples have the expected number of observations.")
+            logger.info(
+                f"{ref_id}: All samples have the expected number of observations."
+            )
             return df_long
         else:
             logger.warning(
-                f"{len(samples_to_fill)} samples have missing observations. \
+                f"{ref_id}: {len(samples_to_fill)} samples have missing observations. \
 Filling them with NODATAVALUE."
             )
             df_subset = df_long[df_long["sample_id"].isin(samples_to_fill)]
@@ -561,9 +574,12 @@ Filling them with NODATAVALUE."
         )
 
         faulty_end = summary[summary["distance_to_end"] < min_edge_buffer]
+
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
         if not faulty_end.empty:
             logger.warning(
-                f"Dropping {len(faulty_end)} samples with valid_time too close to the end of the time series. \n"
+                f"{ref_id}: Dropping {len(faulty_end)} samples with valid_time too close to the end of the time series. \n"
                 f"Reason: Minimum edge buffer of {min_edge_buffer} not satisfied. Samples with the following date ranges are affected:\n"
                 f"{faulty_end[['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
@@ -574,13 +590,16 @@ Filling them with NODATAVALUE."
         ]
         if not faulty_start.empty:
             logger.warning(
-                f"Dropping {len(faulty_start)} samples with valid_time too close to the start of the time series. \n"
+                f"{ref_id}: Dropping {len(faulty_start)} samples with valid_time too close to the start of the time series. \n"
                 f"Reason: Minimum edge buffer of {min_edge_buffer} not satisfied. Samples with the following date ranges are affected:\n"
                 f"{faulty_start[['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
 
         to_drop = faulty_end.index.union(faulty_start.index)
         if to_drop.empty:
+            logger.info(
+                f"{ref_id}: All samples' valid_time satisfy the min_edge_buffer requirement."
+            )
             return df_long
 
         return df_long[~df_long["sample_id"].isin(to_drop)]
@@ -637,10 +656,12 @@ class ColumnProcessor:
         missing_features = [
             col for col in FEATURE_COLUMNS if col not in df_long.columns
         ]
+        # best effort to identify the dataset being processed, purely for logging
+        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
         if len(missing_features) > 0:
             df_long[missing_features] = NODATAVALUE
             logger.warning(
-                f"The following features are missing and are filled \
+                f"{ref_id}: The following features are missing and are filled \
 with NODATAVALUE: {missing_features}"
             )
         return df_long
@@ -652,11 +673,13 @@ with NODATAVALUE: {missing_features}"
         sar_cols = ["SAR-VV", "SAR-VH"]
         faulty_sar_observations = (df_long[sar_cols] == 0.0).sum().sum()
         if faulty_sar_observations > 0:
+            # best effort to identify the dataset being processed, purely for logging
+            ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
             affected_samples = df_long[(df_long[sar_cols] == 0.0).any(axis=1)][
                 "sample_id"
             ].nunique()
             logger.warning(
-                f"Found {faulty_sar_observations} SAR observation(s) \
+                f"{ref_id}: Found {faulty_sar_observations} SAR observation(s) \
 equal to 0 across {affected_samples} sample(s). \
 Replacing them with NODATAVALUE."
             )
@@ -863,10 +886,12 @@ def process_parquet(
     to_drop = []
     for col in index_columns:
         if df[col].nunique() > nsamples:
+            # best effort to identify the dataset being processed, purely for logging
+            ref_id = "_".join(df["sample_id"].iloc[0].split("_")[:-1])
             df = df.drop(col, axis=1)
             to_drop.append(col)
             logger.warning(
-                f"Column {col} has more unique values than samples. This may cause issues, column has been dropped!"
+                f"{ref_id}: Column {col} has more unique values than samples. This may cause issues, column has been dropped!"
             )
     index_columns = [col for col in index_columns if col not in to_drop]
 
