@@ -508,122 +508,81 @@ Filling them with NODATAVALUE."
             return pd.concat([df_long, df_subset], ignore_index=True)
 
     @staticmethod
-    def add_dummy_timestamps(
+    def check_vt_closeness(
         df_long: pd.DataFrame, min_edge_buffer: int, freq: str
     ) -> pd.DataFrame:
         """
-        Add dummy timestamps to a time series DataFrame to ensure minimum buffer before and after valid observations.
-
-        This function adds dummy timestamps with NODATAVALUE for features to ensure there are at least
-        `min_edge_buffer` timestamps before the first valid observation and after the last valid observation
-        for each sample. Samples with valid times outside the start and end dates will be removed.
+        Check valid_time closeness to the edges of the time series.
+        Essential for downstream processing at the Dataset level.
+        Samples that fail this check will be removed.
 
         Parameters
         ----------
         df_long : pd.DataFrame
-            Longitudinal DataFrame containing time series data with columns including 'sample_id',
+            Long-format DataFrame containing time series data with columns including 'sample_id',
             'timestamp', 'valid_position', 'timestamp_ind', and feature columns.
         min_edge_buffer : int
             Minimum number of timestamps required as buffer before the first valid observation
             and after the last valid observation.
+            Must be consistent with what is used at the Dataset level.
         freq : str
             Frequency of time series data, either 'month' or 'dekad' (10-day period).
 
         Returns
         -------
         pd.DataFrame
-            DataFrame with added dummy timestamps where needed to satisfy the minimum edge buffer
-            requirement. The returned DataFrame has recalculated timestamp indices, start/end dates,
-            and valid positions.
-
-        Notes
-        -----
-        - The function will remove samples where the valid time is before the start date or after the end date.
-        - For each sample requiring buffer, dummy rows with NODATAVALUE for features are added.
-        - The function recalculates temporal indices and positions after adding dummy timestamps.
+            DataFrame with only those samples that satisfy the minimum edge buffer
+            requirement.
         """
 
-        def create_dummy_rows(samples_to_add, n_ts_to_add, direction, freq):
-            dummy_df = df_long[
-                df_long["sample_id"].isin(samples_to_add)
-                & (
-                    df_long["timestamp_ind"]
-                    == (0 if direction == "before" else df_long["timestamp_ind"].max())
-                )
-            ].copy()
-
-            if freq == "month":
-                offset = pd.DateOffset(
-                    months=n_ts_to_add * (1 if direction == "after" else -1)
-                )
-                dummy_df["timestamp"] += offset
-            elif freq == "dekad":
-                offset = pd.DateOffset(
-                    days=n_ts_to_add * (10 if direction == "after" else -10)
-                )
-                dummy_df["timestamp"] = dummy_df["timestamp"] + offset
-                dummy_df["timestamp"] = dummy_df["timestamp"].apply(
-                    _dekad_startdate_from_date
-                )
-
-            # dummy_df["timestamp"] += offset
-            dummy_df[FEATURE_COLUMNS] = NODATAVALUE
-            return dummy_df
-
-        if min_edge_buffer < 1:
-            logger.info("min_edge_buffer < 1, skipping addition of dummy timestamps.")
+        if df_long.empty:
             return df_long
 
-        latest_obs_position = df_long.groupby("sample_id")[
-            ["valid_position", "timestamp_ind", "valid_position_diff"]
-        ].max()
-
-        intermediate_dummy_df = pd.concat(
-            [
-                create_dummy_rows(
-                    latest_obs_position[
-                        (min_edge_buffer - latest_obs_position["valid_position"])
-                        >= -n_ts_to_add
-                    ].index,
-                    n_ts_to_add,
-                    "before",
-                    freq,
-                )
-                for n_ts_to_add in range(1, min_edge_buffer + 1)
-            ]
-            + [
-                create_dummy_rows(
-                    latest_obs_position[
-                        (min_edge_buffer - latest_obs_position["valid_position_diff"])
-                        >= n_ts_to_add
-                    ].index,
-                    n_ts_to_add,
-                    "after",
-                    freq,
-                )
-                for n_ts_to_add in range(1, min_edge_buffer + 1)
-            ]
+        # Summarise per sample to evaluate distance from the valid time to window edges.
+        summary = (
+            df_long.groupby("sample_id")
+            .agg(
+                start_date=("start_date", "first"),
+                end_date=("end_date", "first"),
+                valid_time=("valid_time", "first"),
+                first_timestamp_ind=("timestamp_ind", "min"),
+                last_timestamp_ind=("timestamp_ind", "max"),
+                valid_position=("valid_position", "first"),
+            )
+            .copy()
         )
 
-        if not intermediate_dummy_df.empty:
+        summary["distance_to_start"] = (
+            summary["valid_position"] - summary["first_timestamp_ind"]
+        )
+        summary["distance_to_end"] = (
+            summary["last_timestamp_ind"] - summary["valid_position"]
+        )
+
+        faulty_end = summary[summary["distance_to_end"] < min_edge_buffer]
+        if not faulty_end.empty:
             logger.warning(
-                f"Added {intermediate_dummy_df['timestamp'].nunique()} dummy timestamp(s) on edges \
-for {intermediate_dummy_df['sample_id'].nunique()} samples to fill in the found gaps."
+                f"Dropping {len(faulty_end)} samples with valid_time too close to the end of the time series. \n"
+                f"Reason: Minimum edge buffer of {min_edge_buffer} not satisfied. Samples with the following date ranges are affected:\n"
+                f"{faulty_end[['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
             )
 
-        df_long = pd.concat([df_long, intermediate_dummy_df])
+        remaining_summary = summary.drop(index=faulty_end.index, errors="ignore")
+        faulty_start = remaining_summary[
+            remaining_summary["distance_to_start"] < min_edge_buffer
+        ]
+        if not faulty_start.empty:
+            logger.warning(
+                f"Dropping {len(faulty_start)} samples with valid_time too close to the start of the time series. \n"
+                f"Reason: Minimum edge buffer of {min_edge_buffer} not satisfied. Samples with the following date ranges are affected:\n"
+                f"{faulty_start[['start_date', 'valid_time', 'end_date']].drop_duplicates().to_string(index=False)}"
+            )
 
-        # re-initilize all dates and positions with respect to potentially added new timestamps
-        df_long["timestamp_ind"] = (
-            df_long.groupby("sample_id")["timestamp"].rank().astype(int) - 1
-        )
-        df_long["start_date"] = df_long.groupby("sample_id")["timestamp"].transform(
-            "min"
-        )
-        df_long["end_date"] = df_long.groupby("sample_id")["timestamp"].transform("max")
-        df_long = TimeSeriesProcessor.calculate_valid_position(df_long)
+        to_drop = faulty_end.index.union(faulty_start.index)
+        if to_drop.empty:
+            return df_long
 
-        return df_long
+        return df_long[~df_long["sample_id"].isin(to_drop)]
 
 
 class ColumnProcessor:
@@ -923,7 +882,7 @@ def process_parquet(
         df = processor.calculate_valid_position(df)
         index_columns.append("valid_position")
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
-        df = processor.add_dummy_timestamps(df, min_edge_buffer, freq)
+        df = processor.check_vt_closeness(df, min_edge_buffer, freq)
 
     df["available_timesteps"] = df["sample_id"].map(
         df.groupby("sample_id")["timestamp"].nunique().astype(int)
