@@ -430,7 +430,7 @@ def _save_attention_visualizations(
     for idx in range(num_samples):
         sample_att = att[idx][None, :]
         ax = axes[idx] if rows == 1 else axes[0, idx]
-        im = ax.imshow(sample_att, aspect="auto", cmap="viridis")
+        im = ax.imshow(sample_att, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
         ax.set_title(f"Sample {idx}")
         ax.set_yticks([])
         ax.set_xticks(np.linspace(0, time_steps - 1, min(time_steps, 5)).astype(int))
@@ -450,7 +450,9 @@ def _save_attention_visualizations(
         if prior_array is not None:
             sample_prior = prior_array[idx][None, :]
             pax = axes[1, idx]
-            im2 = pax.imshow(sample_prior, aspect="auto", cmap="magma")
+            im2 = pax.imshow(
+                sample_prior, aspect="auto", cmap="magma", vmin=0.0, vmax=1.0
+            )
             pax.set_title(f"Prior {idx}")
             pax.set_yticks([])
             pax.set_xticks(
@@ -686,11 +688,14 @@ def run_finetuning(
                         raw_attn = raw_attr
 
                 if raw_attn is not None:
-                    entropy = -(
-                        raw_attn.clamp_min(1e-8)
-                        * raw_attn.clamp_min(1e-8).log()
-                    ).sum(dim=-1).mean()
-                    loss_sum = loss_sum - attention_entropy_weight * entropy * weight_sum
+                    entropy = (
+                        -(raw_attn.clamp_min(1e-8) * raw_attn.clamp_min(1e-8).log())
+                        .sum(dim=-1)
+                        .mean()
+                    )
+                    loss_sum = (
+                        loss_sum - attention_entropy_weight * entropy * weight_sum
+                    )
                     if head is not None:
                         setattr(head, "_last_attention_raw", None)
 
