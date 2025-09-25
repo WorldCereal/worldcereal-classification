@@ -39,6 +39,7 @@ class TemporalAttentionHead(nn.Module):
         self.att_score = nn.Linear(hidden_size, 1)
         self.classifier = nn.Linear(hidden_size, num_outputs)
         self.register_buffer("_last_attention", None, persistent=False)
+        self._last_attention_raw: Optional[torch.Tensor] = None
 
     def forward(
         self,
@@ -62,6 +63,7 @@ class TemporalAttentionHead(nn.Module):
 
         alpha = torch.softmax(scores, dim=-1)
         self._last_attention = alpha.detach()
+        self._last_attention_raw = alpha
 
         pooled = torch.sum(alpha.unsqueeze(-1) * x, dim=-2)
         logits = self.classifier(pooled)  # [B, H, W, num_outputs]

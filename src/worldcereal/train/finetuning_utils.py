@@ -354,9 +354,28 @@ def _split_batch_with_temporal_weights(batch):
     return predictors, weights, extra
 
 
+def _extract_valid_time_mask(targets: torch.Tensor) -> Optional[torch.Tensor]:
+    """Reduce label tensor to a [B, T] mask of supervised timesteps."""
+
+    if targets.numel() == 0:
+        return None
+
+    mask = targets != NODATAVALUE
+    if mask.dim() >= 2:
+        mask = mask.any(dim=-1)
+
+    while mask.dim() > 2:
+        mask = mask.any(dim=1)
+
+    if mask.dim() != 2:
+        return None
+    return mask
+
+
 def _save_attention_visualizations(
     attention: torch.Tensor,
     prior: Optional[torch.Tensor],
+    valid_mask: Optional[torch.Tensor],
     epoch: int,
     output_dir: Path,
     max_samples: int = 4,
@@ -369,22 +388,37 @@ def _save_attention_visualizations(
     attention_dir = Path(output_dir) / "attention_maps"
     attention_dir.mkdir(parents=True, exist_ok=True)
 
-    att = attention.detach().cpu()
-    att = att.reshape(-1, att.shape[-1])
-    if att.size(0) == 0:
+    att = attention.detach().cpu().numpy().reshape(-1, attention.shape[-1])
+    if att.shape[0] == 0:
         return
 
-    num_samples = min(max_samples, att.size(0))
-    time_steps = att.size(-1)
+    num_samples = min(max_samples, att.shape[0])
+    time_steps = att.shape[-1]
 
     prior_array = None
     if prior is not None and prior.numel() > 0:
-        p = prior.detach().cpu()
-        if p.dim() == 5 and p.size(-1) == 1:
-            p = p.squeeze(-1)
+        p = prior.detach().cpu().numpy()
+        if p.ndim == 5 and p.shape[-1] == 1:
+            p = np.squeeze(p, axis=-1)
         p = p.reshape(-1, p.shape[-1])
         prior_array = p
         num_samples = min(num_samples, prior_array.shape[0])
+
+    valid_array = None
+    if valid_mask is not None:
+        valid_array = valid_mask.detach().cpu().numpy()
+        num_samples = min(num_samples, valid_array.shape[0])
+
+    centre_positions: list[Optional[int]] = []
+    if prior_array is not None:
+        centre_positions = prior_array.argmax(axis=1).tolist()
+    elif valid_array is not None:
+        for row in valid_array:
+            idxs = np.flatnonzero(row > 0)
+            if idxs.size > 0:
+                centre_positions.append(int(np.round(idxs.mean())))
+            else:
+                centre_positions.append(None)
 
     rows = 2 if prior_array is not None else 1
     fig, axes = plt.subplots(
@@ -403,6 +437,16 @@ def _save_attention_visualizations(
         if idx == num_samples - 1:
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
+        if centre_positions:
+            centre = centre_positions[idx] if idx < len(centre_positions) else None
+            if centre is not None:
+                ax.axvline(centre, color="white", linestyle="--", linewidth=1.0)
+
+        if valid_array is not None:
+            valid_indices = np.where(valid_array[idx] > 0)[0]
+            for pos in valid_indices:
+                ax.axvline(pos, color="red", linestyle="--", linewidth=1.0)
+
         if prior_array is not None:
             sample_prior = prior_array[idx][None, :]
             pax = axes[1, idx]
@@ -414,6 +458,16 @@ def _save_attention_visualizations(
             )
             if idx == num_samples - 1:
                 fig.colorbar(im2, ax=pax, fraction=0.046, pad=0.04)
+
+            if centre_positions:
+                centre = centre_positions[idx] if idx < len(centre_positions) else None
+                if centre is not None:
+                    pax.axvline(centre, color="white", linestyle="--", linewidth=1.0)
+
+            if valid_array is not None:
+                valid_indices = np.where(valid_array[idx] > 0)[0]
+                for pos in valid_indices:
+                    pax.axvline(pos, color="red", linestyle="--", linewidth=1.0)
 
     for ax in np.array(axes).flatten():
         ax.set_xlabel("Timestep")
@@ -538,6 +592,7 @@ def run_finetuning(
     freeze_layers: Optional[List[str]] = None,
     unfreeze_epoch: Optional[int] = None,
     visualize_attention_every: Optional[int] = 5,
+    attention_entropy_weight: float = 0.0,
 ):
     """Fine-tune a Presto model with optional temporally weighted supervision.
 
@@ -548,6 +603,8 @@ def run_finetuning(
             uniform-in-time weighting.
         visualize_attention_every: Plot attention snapshots every N epochs
             (set to ``None`` or ``0`` to disable).
+        attention_entropy_weight: Strength of entropy regularisation on temporal
+            attention (0 disables it).
     """
 
     output_dir = Path(output_dir)
@@ -620,6 +677,23 @@ def run_finetuning(
             if weight_sum <= 0:
                 continue
 
+            if attention_entropy_weight > 0:
+                raw_attn: Optional[torch.Tensor] = None
+                head = getattr(model, "classification_head", None)
+                if head is not None and hasattr(head, "_last_attention_raw"):
+                    raw_attr = getattr(head, "_last_attention_raw")
+                    if isinstance(raw_attr, torch.Tensor):
+                        raw_attn = raw_attr
+
+                if raw_attn is not None:
+                    entropy = -(
+                        raw_attn.clamp_min(1e-8)
+                        * raw_attn.clamp_min(1e-8).log()
+                    ).sum(dim=-1).mean()
+                    loss_sum = loss_sum - attention_entropy_weight * entropy * weight_sum
+                    if head is not None:
+                        setattr(head, "_last_attention_raw", None)
+
             loss = loss_sum / weight_sum
             loss.backward()
             optimizer.step()
@@ -648,6 +722,7 @@ def run_finetuning(
 
         attention_snapshot: Optional[torch.Tensor] = None
         prior_snapshot: Optional[torch.Tensor] = None
+        valid_mask_snapshot: Optional[torch.Tensor] = None
         capture_attention = (
             visualize_attention_every is not None
             and visualize_attention_every > 0
@@ -696,6 +771,9 @@ def run_finetuning(
                         attention_snapshot = attn_snapshot.detach().cpu()
                         if prior_tensor is not None:
                             prior_snapshot = prior_tensor.detach().cpu()
+                        valid_mask_tensor = _extract_valid_time_mask(targets)
+                        if valid_mask_tensor is not None:
+                            valid_mask_snapshot = valid_mask_tensor.detach().cpu()
 
         if val_weight_sum > 0:
             current_val_loss = (val_loss_sum / val_weight_sum).item()
@@ -705,7 +783,11 @@ def run_finetuning(
 
         if capture_attention and attention_snapshot is not None:
             _save_attention_visualizations(
-                attention_snapshot, prior_snapshot, epoch, output_dir
+                attention_snapshot,
+                prior_snapshot,
+                valid_mask_snapshot,
+                epoch,
+                output_dir,
             )
 
         def _log_temporal_monitor(prefix: str, stats: dict):

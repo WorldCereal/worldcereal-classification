@@ -111,6 +111,15 @@ def main(args):
             time_kernel,
         )
 
+    freeze_layers = None
+    unfreeze_epoch = None
+    if args.freeze_encoder_epochs > 0:
+        freeze_layers = ["encoder"]
+        unfreeze_epoch = args.freeze_encoder_epochs
+        logger.info(
+            f"Freezing encoder for the first {args.freeze_encoder_epochs} epoch(s)"
+        )
+
     # Experiment signature
     timestamp_ind = datetime.now().strftime("%Y%m%d%H%M")
 
@@ -272,6 +281,9 @@ def main(args):
         hyperparams=hyperparams,
         setup_logging=False,
         apply_temporal_weights=apply_temporal_weights,
+        attention_entropy_weight=0.01,
+        freeze_layers=freeze_layers,
+        unfreeze_epoch=unfreeze_epoch,
     )
 
     # Evaluate the finetuned model
@@ -354,6 +366,12 @@ def parse_args(arg_list=None):
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--use_balancing", action="store_true")
     parser.add_argument("--temporal_attention", action="store_true")
+    parser.add_argument(
+        "--freeze_encoder_epochs",
+        type=int,
+        default=0,
+        help="Freeze encoder weights for this many initial epochs (0 disables freezing)",
+    )
     parser.add_argument(
         "--time_kernel",
         type=str,
