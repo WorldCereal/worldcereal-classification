@@ -695,10 +695,7 @@ def process_extractions_df(
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
-        # temporary fix to deal with tz-aware datetime objects
-        # df_processed["valid_time"] = (
-        #     df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-        # )
+        df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
