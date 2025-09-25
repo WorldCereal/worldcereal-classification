@@ -947,9 +947,7 @@ def process_parquet(
 
     if use_valid_time:
         df_pivot["year"] = df_pivot["valid_time"].dt.year
-        df_pivot["valid_time"] = (
-            df_pivot["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-        )
+        df_pivot["valid_time"] = df_pivot["valid_time"].dt.strftime("%Y-%m-%d")
         df_pivot = validator.check_faulty_samples(df_pivot, min_edge_buffer)
 
     df_pivot = validator.check_min_timesteps(df_pivot, required_min_timesteps)
