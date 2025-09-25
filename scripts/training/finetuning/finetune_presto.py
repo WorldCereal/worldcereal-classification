@@ -384,38 +384,35 @@ def parse_args(arg_list=None):
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
 
-    # parser.add_argument(
-    #     type=str,
-    #     choices=["none", "fixed", "random"],
-    #     default="random",
-
-    # parser.add_argument(
-    #     type=str,
-    #     choices=["none", "fixed", "random"],
-    #     default="fixed",
-
     args = parser.parse_args(arg_list)
 
     return args
 
 
 if __name__ == "__main__":
-    # manual_args = [
-    #     "--experiment_tag",
-    #     "debug-run",
-    #     "--timestep_freq",
-    #     "month",
-    #     "--time_explicit",
-    #     "--label_jitter",
-    #     "1",
-    #     "--augment",
-    #     "--finetune_classes",
-    #     "CROPTYPE20",  # LANDCOVER14
-    #     "--use_balancing",
-    #     "--debug",
-
-    # ]
-    manual_args = None
+    manual_args = [
+        "--experiment_tag",
+        "debug-run",
+        "--timestep_freq",
+        "month",
+        "--augment",
+        "--time_explicit",
+        "--temporal_attention",
+        "--time_kernel",
+        "gaussian",
+        "--time_kernel_bandwidth",
+        "1.0",
+        "--label_window",
+        "1",
+        "--label_jitter",
+        "1",
+        "--augment",
+        "--finetune_classes",
+        "CROPTYPE27",  # LANDCOVER10
+        "--use_balancing",
+        "--debug",
+    ]
+    # manual_args = None
 
     args = parse_args(manual_args)
     main(args)

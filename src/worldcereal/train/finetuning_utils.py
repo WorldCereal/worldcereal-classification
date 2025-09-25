@@ -591,7 +591,7 @@ def run_finetuning(
     setup_logging: bool = False,
     freeze_layers: Optional[List[str]] = None,
     unfreeze_epoch: Optional[int] = None,
-    visualize_attention_every: Optional[int] = 5,
+    visualize_attention_every: Optional[int] = 1,
     attention_entropy_weight: float = 0.0,
 ):
     """Fine-tune a Presto model with optional temporally weighted supervision.
@@ -686,11 +686,14 @@ def run_finetuning(
                         raw_attn = raw_attr
 
                 if raw_attn is not None:
-                    entropy = -(
-                        raw_attn.clamp_min(1e-8)
-                        * raw_attn.clamp_min(1e-8).log()
-                    ).sum(dim=-1).mean()
-                    loss_sum = loss_sum - attention_entropy_weight * entropy * weight_sum
+                    entropy = (
+                        -(raw_attn.clamp_min(1e-8) * raw_attn.clamp_min(1e-8).log())
+                        .sum(dim=-1)
+                        .mean()
+                    )
+                    loss_sum = (
+                        loss_sum - attention_entropy_weight * entropy * weight_sum
+                    )
                     if head is not None:
                         setattr(head, "_last_attention_raw", None)
 
