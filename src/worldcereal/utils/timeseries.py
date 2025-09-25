@@ -341,8 +341,9 @@ class TimeSeriesProcessor:
         Fill missing dates in a DataFrame with NODATAVALUE for feature columns based
         on expected frequency.
 
-    add_dummy_timestamps(df_long, min_edge_buffer, freq)
-        Add dummy timestamps to ensure minimum buffer before and after valid observations.
+    check_vt_closeness(df_long, min_edge_buffer, freq)
+        Check valid_time closeness to the edges of the time series and remove samples
+        that do not satisfy the minimum edge buffer requirement.
 
     The class is designed to work with pandas DataFrames containing time series data
     with specific expected columns including 'sample_id', 'timestamp', and temporal
