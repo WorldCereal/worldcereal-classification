@@ -593,7 +593,7 @@ def run_finetuning(
     setup_logging: bool = False,
     freeze_layers: Optional[List[str]] = None,
     unfreeze_epoch: Optional[int] = None,
-    visualize_attention_every: Optional[int] = 5,
+    visualize_attention_every: Optional[int] = 1,
     attention_entropy_weight: float = 0.0,
 ):
     """Fine-tune a Presto model with optional temporally weighted supervision.
