@@ -48,7 +48,6 @@ MANIFEST
 experimental/**
 
 # By default don't track notebooks
-notebooks/**
 notebooks/*.ipynb
 
 # Misc
@@ -195,3 +194,4 @@ notebooks/download/*
 notebooks/extractions/*
 notebooks/runs/*
 notebooks/bbox/*
+notebooks/results/*

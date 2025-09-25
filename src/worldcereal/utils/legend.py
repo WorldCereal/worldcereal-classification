@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 import requests
 from loguru import logger
@@ -285,7 +286,7 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
     """
 
     legend = get_legend()
-    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
+    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(np.int64)
     legend = legend.set_index("ewoc_code")
     columns_to_keep = [
         "label_full",

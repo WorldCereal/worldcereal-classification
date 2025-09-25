@@ -1,3 +1,25 @@
+"""Utility functions to generate Presto embeddings and train CatBoost classifiers.
+
+This module provides a light-weight, notebook friendly pipeline to:
+
+1. Align raw reference data extractions to a user defined season (``TemporalContext``).
+2. Generate 128‑D Presto embeddings (either globally pooled or time‑explicit at the valid
+     timestep) ready for downstream ML.
+3. Train and evaluate a CatBoost classifier (multiclass crop type or binary cropland).
+
+Design principles
+-----------------
+* Keep dependencies minimal inside the notebook environment.
+* Preserve original metadata columns in the returned DataFrames whenever possible.
+* Make temporal behaviour (augmentation vs time explicit embedding) explicit in the
+    docstrings so that downstream interpretation of model features is unambiguous.
+
+Notes
+-----
+The embedding dimensionality is currently fixed at 128 (``presto_ft_0`` .. ``presto_ft_127``).
+If the upstream Presto model changes dimensionality this file should be updated accordingly.
+"""
+
 from typing import List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -37,37 +59,76 @@ def compute_training_features(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
+    time_explicit: bool = False,
 ) -> pd.DataFrame:
-    """Compute features for training a crop classification model.
-    This function processes the time series in the input dataframe to align
-    them with the specified temporal context (season) and computes
-    Presto embeddings based on the extracted time series.
+    """Generate a training dataframe with Presto embeddings and labels.
+
+    The pipeline performs three steps: (1) temporal alignment of extraction rows to the
+    user provided ``season`` (with a safety buffer), (2) embedding inference with a
+    pretrained *Presto* model (optionally using temporal augmentation), and (3) light
+    harmonisation / renaming of the target column.
+
+    Temporal representation modes
+    -----------------------------
+    ``time_explicit=False`` (default)
+        One 128‑D embedding is produced per sample via internal global pooling over the
+        (possibly jittered) temporal slice. Augmentation changes which timesteps
+        contribute to the pooled summary.
+
+    ``time_explicit=True``
+        No global pooling: the embedding at the *valid* timestep (``valid_position``)
+        is selected after alignment / augmentation. There is still one 128‑D vector per
+        sample but it represents the state at the valid time instead of an aggregate.
+
+    Augmentation interaction
+    ------------------------
+    ``augment=True`` introduces horizontal (temporal) jitter. For pooled embeddings this
+    changes the window being summarised. For time explicit mode the absolute real-world
+    valid timestep stays the same; only its relative index inside the extracted window may shift.
+
+    Output schema
+    -------------
+    The returned dataframe preserves original metadata and adds the following columns:
+
+    * ``presto_ft_0`` .. ``presto_ft_127`` : float32 embedding features.
+    * ``ewoc_code`` : final class label (copied / renamed from temporary ``downstream_class``).
+    * ``year`` : year parsed from ``ref_id`` (added for simple diagnostics).
 
     Parameters
     ----------
-    df : pd.DataFrame
-        Input dataframe containing the training data.
+    df : pandas.DataFrame
+        Raw extraction rows containing at minimum ``ewoc_code`` and ``ref_id``.
     season : TemporalContext
-        Temporal context defining the season of interest.
-    freq : Literal["month", "dekad"], optional
-        Frequency of the data, by default "month".
-    valid_time_buffer : int, optional
-        Buffer in months to apply when aligning available extractions
-        with user-defined temporal extent.
-        Determines how close we allow the true valid_time of the sample
-        to be to the edge of the processing period, by default MIN_EDGE_BUFFER.
-    batch_size : int, optional
-        Batch size for processing, by default 256.
-    task_type : str, optional
-        Type of task (e.g., "croptype"), by default "croptype".
-    augment : bool, optional
-        If True, temporal jittering is enabled, by default True.
+        Target temporal context defining the modelling season.
+    freq : {'month', 'dekad'}, default='month'
+        Resampling / alignment frequency.
+    valid_time_buffer : int, default=MIN_EDGE_BUFFER
+        Minimum distance (in time units compatible with ``freq``) required between the
+        sample's original valid time and the edges of ``season``.
+    batch_size : int, default=256
+        Batch size used during embedding inference.
+    task_type : {'croptype', 'cropland'}, default='croptype'
+        Determines which pretrained Presto weights to load and multiclass vs binary mode.
+    augment : bool, default=True
+        Enable temporal jitter data augmentation.
+    time_explicit : bool, default=False
+        Switch from globally pooled sequence embeddings to valid timestep embeddings.
 
     Returns
     -------
-    pd.DataFrame
-        Dataframe containing the computed 128 Presto embeddings,
-        along with ewoc_code (crop type label).
+    pandas.DataFrame
+        Aligned samples with embedding columns and ``ewoc_code`` label. A warning is
+        logged if fewer than 2 unique classes remain.
+
+    Raises
+    ------
+    ValueError
+        If ``task_type`` is invalid (propagated from downstream functions).
+
+    Notes
+    -----
+    This function does not perform train/test splitting; it only produces features.
+    Use :func:`train_classifier` for modelling.
     """
 
     # Align the samples with the season of interest
@@ -83,6 +144,7 @@ def compute_training_features(
         batch_size=batch_size,
         task_type=task_type,
         augment=augment,
+        time_explicit=time_explicit,
     )
 
     # Report on contents of the resulting dataframe here
@@ -112,29 +174,39 @@ def compute_presto_embeddings(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
+    time_explicit: bool = False,
 ) -> pd.DataFrame:
-    """Method to generate a training dataframe with Presto embeddings for downstream Catboost training.
+    """Run pretrained *Presto* model to attach 128‑D embeddings to each sample.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        input dataframe with required input features for Presto
-    batch_size : int, optional
-        by default 256
-    task_type : str, optional
-        cropland or croptype task, by default "croptype"
-    augment : bool, optional
-        if True, temporal jittering is enabled, by default True
+    df : pandas.DataFrame
+        Temporally aligned dataframe (see :func:`compute_training_features`).
+    batch_size : int, default=256
+        Inference batch size.
+    task_type : {'croptype', 'cropland'}, default='croptype'
+        Selects pretrained weights and multiclass vs binary configuration.
+    augment : bool, default=True
+        Whether the underlying dataset applies temporal jitter.
+    time_explicit : bool, default=False
+        When ``True`` selects the embedding at ``valid_position`` instead of a pooled
+        sequence representation.
 
     Returns
     -------
-    pd.DataFrame
-        output training dataframe for downstream training
+    pandas.DataFrame
+        Copy of ``df`` with columns ``presto_ft_0`` .. ``presto_ft_127`` appended.
 
     Raises
     ------
     ValueError
-        if an unknown tasktype is specified
+        If ``task_type`` is not one of the supported values.
+
+    Notes
+    -----
+    This function *does not* modify the target column: it only adds features. A temporary
+    column named ``downstream_class`` is expected by the dataset wrapper prior to renaming
+    in :func:`compute_training_features`.
     """
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
@@ -165,6 +237,7 @@ def compute_presto_embeddings(
         ds,
         presto_model,
         batch_size=batch_size,
+        time_explicit=time_explicit,
     )
 
     logger.info("Done.")
@@ -178,33 +251,44 @@ def train_classifier(
     balance_classes: bool = False,
     show_confusion_matrix: Optional[Literal["absolute", "relative"]] = "relative",
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
-    """Method to train a custom CatBoostClassifier on a training dataframe.
+    """Fit and evaluate a CatBoost classifier on Presto embeddings.
 
     Parameters
     ----------
-    training_dataframe : pd.DataFrame
-        training dataframe containing inputs and targets
-    class_names : Optional[List[str]], optional
-        class names to use, by default None
-    balance_classes : bool, optional
-        if True, class weights are used during training to balance the classes, by default False
-    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
-        if 'absolute', the confusion matrix is shown as absolute values,
-        if 'relative', the confusion matrix is shown as relative values,
-        if None, no confusion matrix is shown,
-        by default 'relative'
+    training_dataframe : pandas.DataFrame
+        DataFrame containing feature columns ``presto_ft_0``..``presto_ft_127`` and
+        a target column named ``downstream_class``.
+    class_names : list of str, optional
+        Explicit class ordering passed to CatBoost. If ``None`` the unique labels in
+        the training split are used.
+    balance_classes : bool, default=False
+        When ``True`` compute inverse-frequency class weights and pass them as sample
+        weights to CatBoost.
+    show_confusion_matrix : {'absolute', 'relative', None}, default='relative'
+        Display a confusion matrix after training. ``'relative'`` normalizes per true row.
 
     Returns
     -------
-    Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]
-        The trained CatBoost model, the classification report, and the confusion matrix
+    tuple
+        ``(model, report, cm)`` where:
+
+        * ``model`` is the trained ``CatBoostClassifier``.
+        * ``report`` is the string output of :func:`sklearn.metrics.classification_report`.
+        * ``cm`` is the raw (non-normalized) confusion matrix ``numpy.ndarray``.
 
     Raises
     ------
     ValueError
-        When not enough classes are present in the training dataframe to train a model
+        If fewer than 2 unique classes are available for training.
+
+    Notes
+    -----
+    Embedding semantics depend on how they were produced:
+    * Time pooled (``time_explicit=False``): represents the whole (possibly jittered) window.
+    * Time explicit (``time_explicit=True``): represents the state at the valid timestep.
     """
 
+    # Split into train and test set
     logger.info("Split train/test ...")
     samples_train, samples_test = train_test_split(
         training_dataframe,
@@ -288,16 +372,70 @@ def train_classifier(
     )
 
     # Make predictions
-    pred = custom_downstream_model.predict(samples_test[bands]).flatten()
+    report, cm, _ = apply_classifier(
+        samples_test,
+        custom_downstream_model,
+        show_confusion_matrix=show_confusion_matrix,
+    )
 
-    report = classification_report(samples_test["downstream_class"], pred)
-    cm = confusion_matrix(samples_test["downstream_class"], pred)
+    return custom_downstream_model, report, cm
+
+
+def apply_classifier(
+    df: pd.DataFrame,
+    model: CatBoostClassifier,
+    show_confusion_matrix: Optional[Literal["absolute", "relative"]] = None,
+    print_report: bool = True,
+    target_attribute: str = "downstream_class",
+) -> pd.DataFrame:
+    """Method to apply a trained CatBoostClassifier to a dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        input dataframe containing the features to apply the model on
+    model : CatBoostClassifier
+        trained CatBoost model
+    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
+        if 'absolute', the confusion matrix is shown as absolute values,
+        if 'relative', the confusion matrix is shown as relative values,
+        if None, no confusion matrix is shown,
+        by default None
+    print_report : bool, optional
+        if True, the classification report is printed to the console,
+        by default True
+    target_attribute : str, optional
+        name of the attribute in the dataframe containing the true class labels,
+        by default "downstream_class"
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe with additional columns "predicted_class" and "predicted_proba"
+    """
+
+    # Make predictions
+    bands = [f"presto_ft_{i}" for i in range(128)]
+    pred = model.predict(df[bands]).flatten()
+
+    # Classification report
+    report_dict = classification_report(df[target_attribute], pred, output_dict=True)
+    if print_report:
+        report = classification_report(df[target_attribute], pred)
+        logger.info("Classification report:")
+        print(report)
+
+    # Confusion matrix
+    cm = confusion_matrix(df[target_attribute], pred)
 
     # Show confusion matrix if requested
     if show_confusion_matrix is not None:
         assert show_confusion_matrix in ["absolute", "relative"]
 
-        labels = np.sort(training_dataframe["downstream_class"].unique())
+        # Get list of unique labels
+        pred_labels = np.unique(pred)
+        true_labels = np.unique(df[target_attribute])
+        labels = sorted(np.unique(np.concatenate((pred_labels, true_labels))))
 
         if show_confusion_matrix == "relative":
             # normalize CM
@@ -328,4 +466,4 @@ def train_classifier(
         plt.tight_layout()
         plt.show()
 
-    return custom_downstream_model, report, cm
+    return report_dict, cm, pred
