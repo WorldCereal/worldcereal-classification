@@ -594,25 +594,7 @@ class TestProcessParquet(TestCase):
             self.assertIsInstance(result, pd.DataFrame)
             self.assertFalse(result.empty)
 
-            if freq == "month":
-                expected_start_date = pd.to_datetime(self.start_date) + pd.DateOffset(
-                    months=-(MIN_EDGE_BUFFER // 2 + 1)
-                )
-                expected_available_timesteps = self.n_months + MIN_EDGE_BUFFER
-            elif freq == "dekad":
-                expected_start_date = _dekad_startdate_from_date(
-                    pd.to_datetime(self.start_date)
-                    + pd.DateOffset(days=-10 * (MIN_EDGE_BUFFER // 2 + 1))
-                )
-                expected_available_timesteps = self.n_dekads + MIN_EDGE_BUFFER
-
-            obtained_start_date = pd.to_datetime(result.loc["sample_2", "start_date"])
-            obtained_available_timesteps = result.loc["sample_2", "available_timesteps"]
-
-            self.assertTrue(obtained_start_date == expected_start_date)
-            self.assertTrue(
-                obtained_available_timesteps == expected_available_timesteps
-            )
+            self.assertNotIn("sample_2", result.index.unique())
 
     def test_process_parquet_valid_time_close_to_end(self):
         for freq in self.allowed_freqs:
@@ -629,25 +611,7 @@ class TestProcessParquet(TestCase):
             self.assertIsInstance(result, pd.DataFrame)
             self.assertFalse(result.empty)
 
-            if freq == "month":
-                expected_last_timestep = pd.to_datetime(self.end_date) + pd.DateOffset(
-                    months=(MIN_EDGE_BUFFER // 2)
-                )
-                expected_available_timesteps = self.n_months + MIN_EDGE_BUFFER - 1
-            elif freq == "dekad":
-                expected_last_timestep = _dekad_startdate_from_date(
-                    pd.to_datetime(self.end_date)
-                    + pd.DateOffset(days=10 * (MIN_EDGE_BUFFER // 2))
-                )
-                expected_available_timesteps = self.n_dekads + MIN_EDGE_BUFFER - 1
-
-            obtained_last_timestep = pd.to_datetime(result.loc["sample_3", "end_date"])
-            obtained_available_timesteps = result.loc["sample_3", "available_timesteps"]
-
-            self.assertTrue(obtained_last_timestep == expected_last_timestep)
-            self.assertTrue(
-                obtained_available_timesteps == expected_available_timesteps
-            )
+            self.assertNotIn("sample_3", result.index.unique())
 
     def test_process_parquet_invalid_input(self):
         for freq in self.allowed_freqs:
