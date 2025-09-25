@@ -486,23 +486,28 @@ class TestProcessParquet(TestCase):
                 else self.df_dekad if freq == "dekad" else None
             )
 
-            # Remove n timestamps to create missing timestamps scenario
-            # Make sure not to remove first or last timestamp for each sample
-            n = 20
+            # Remove a single eligible timestamp per sample to create missing timestamps scenario
+            # without forcing the sample to be dropped by the median-distance check.
             df["start_date"] = df["sample_id"].map(
                 df.groupby(["sample_id"])["timestamp"].min()
             )
             df["end_date"] = df["sample_id"].map(
                 df.groupby(["sample_id"])["timestamp"].max()
             )
-            rows_to_remove = df[
-                (df["timestamp"] != df["start_date"])
-                & (df["timestamp"] != df["end_date"])
-                & (df["timestamp"] != df["valid_time"])
-                & (df["timestamp"] != df["valid_time"])
-            ].sample(n)
 
-            df_missing = df.drop(rows_to_remove.index)
+            rows_to_remove_idx = []
+            for sample_id, sample_df in df.groupby("sample_id"):
+                eligible_idx = sample_df[
+                    (sample_df["timestamp"] != sample_df["start_date"])
+                    & (sample_df["timestamp"] != sample_df["end_date"])
+                    & (sample_df["timestamp"] != sample_df["valid_time"])
+                ].index
+                if not eligible_idx.empty:
+                    rows_to_remove_idx.append(np.random.choice(eligible_idx))
+
+            rows_to_remove = df.loc[rows_to_remove_idx]
+
+            df_missing = df.drop(rows_to_remove_idx)
             result = process_parquet(
                 df_missing,
                 freq=freq,
