@@ -315,8 +315,14 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         time_explicit: bool = False,
         augment: bool = False,
         label_jitter: int = 0,  # ± timesteps to jitter true label pos, for time_explicit only
-        label_window: int = 0,  # ± timesteps to expand around label pos (true or moved), for time_explicit only
+        label_window: Optional[
+            int
+        ] = None,  # ± timesteps to expand around label pos (true or moved)
+        *,
         return_sample_id: bool = False,
+        return_time_weights: bool = False,
+        time_kernel: Literal["delta", "gaussian", "triangular"] = "delta",
+        time_kernel_bandwidth: Optional[float] = None,
         **kwargs,
     ):
         """Labelled version of WorldCerealDataset for supervised training.
@@ -335,9 +341,25 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         label_jitter : int, optional
             ± timesteps to jitter true label pos, for time_explicit only, by default 0.
             Only used if `time_explicit` is True.
-        label_window : int, optional
-            ± timesteps to expand around label pos (true or moved), for time_explicit only, by default 0.
-            Only used if `time_explicit` is True.
+        label_window : Optional[int], optional
+            ± timesteps to expand around the labelled timestep. ``None`` lets the
+            dataset infer a suitable radius (default 0 for ``delta`` kernels, ≥1 for
+            soft kernels). Provide a non-negative integer to control the window
+            radius explicitly.
+        return_time_weights : bool, optional
+            Whether to compute temporal kernel weights and return them alongside the predictors.
+            When True, each item yields a tuple `(Predictors, weights)` (and optional `sample_id`).
+            Default is False.
+        time_kernel : Literal["delta", "gaussian", "triangular"], optional
+            Temporal kernel used to soften supervision around the event time.
+            `"delta"` reproduces the previous behaviour (only the labelled index
+            is supervised). `"gaussian"` and `"triangular"` decay the weight with
+            distance from the event time. Default is "delta".
+        time_kernel_bandwidth : float, optional
+            Kernel bandwidth expressed in timesteps. Interpreted as standard
+            deviation for `"gaussian"` or half-width for `"triangular"`. If not
+            provided the value defaults to `max(1, label_window)` when available,
+            otherwise 1.
         return_sample_id : bool, optional
             whether to return the sample_id in the output, by default False.
             If True, the sample_id will be included in the output as a separate element.
@@ -356,8 +378,56 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         self.classes_list = classes_list
         self.time_explicit = time_explicit
         self.label_jitter = label_jitter
-        self.label_window = label_window
+        if label_window is not None and label_window < 0:
+            raise ValueError("label_window must be non-negative")
+        self._label_window_specified = label_window is not None
+        self.label_window = int(label_window) if label_window is not None else 0
         self.return_sample_id = return_sample_id
+        self.return_time_weights = return_time_weights
+
+        allowed_kernels = {"delta", "gaussian", "triangular"}
+        if time_kernel not in allowed_kernels:
+            raise ValueError(
+                f"Unsupported time_kernel '{time_kernel}'. Expected one of {allowed_kernels}."
+            )
+
+        self.time_kernel: Literal["delta", "gaussian", "triangular"] = time_kernel
+        self.time_kernel_bandwidth: Optional[float] = time_kernel_bandwidth
+
+        if time_kernel != "delta":
+            inferred_window = self.label_window
+            inferred_bandwidth = time_kernel_bandwidth
+
+            if (
+                inferred_bandwidth is not None
+                and inferred_bandwidth > 0
+                and inferred_window <= 0
+            ):
+                inferred_window = max(1, int(round(inferred_bandwidth)))
+
+            if inferred_window <= 0:
+                inferred_window = 1
+                logger.info(
+                    f"time_kernel='{time_kernel}' with label_window<=0 → setting label_window={inferred_window}"
+                )
+            elif not self._label_window_specified and inferred_window > 0:
+                logger.info(
+                    "time_kernel='%s' → using inferred label_window=%s",
+                    time_kernel,
+                    inferred_window,
+                )
+
+            self.label_window = int(inferred_window)
+
+            if inferred_bandwidth is None or inferred_bandwidth <= 0:
+                inferred_bandwidth = float(self.label_window)
+                logger.info(
+                    f"time_kernel='{time_kernel}' missing bandwidth; using label_window={self.label_window} as bandwidth"
+                )
+
+            self.time_kernel_bandwidth = float(inferred_bandwidth)
+        else:
+            self.time_kernel_bandwidth = time_kernel_bandwidth
 
         if self.return_sample_id and "sample_id" not in self.dataframe.columns:
             raise ValueError(
@@ -368,20 +438,31 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
         inputs = self.get_inputs(row, timestep_positions)
+        rel_valid_position = valid_position - timestep_positions[0]
         label = self.get_label(
             row,
             task_type=self.task_type,
             classes_list=self.classes_list,
-            valid_position=valid_position - timestep_positions[0],
+            valid_position=rel_valid_position,
+        )
+
+        time_weights = (
+            self.get_label_time_weights(row, valid_position=rel_valid_position)
+            if self.return_time_weights
+            else None
         )
 
         predictors = Predictors(**inputs, label=label)
 
         if self.return_sample_id:
             sample_id = row["sample_id"]
-            return predictors, sample_id
-        else:
+            if time_weights is None:
+                return predictors, sample_id
+            return predictors, time_weights, sample_id
+
+        if time_weights is None:
             return predictors
+        return predictors, time_weights
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -392,6 +473,79 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         )  # [H, W, T or 1, 1]
 
         return label
+
+    def initialize_time_weights(self) -> np.ndarray:
+        tsteps = self.num_timesteps if self.time_explicit else 1
+        weights = np.zeros(
+            (1, 1, tsteps, 1),
+            dtype=np.float32,
+        )
+        return weights
+
+    def _resolve_label_indices(
+        self, valid_position: Optional[Union[int, Sequence[int]]]
+    ) -> Tuple[np.ndarray, Optional[float]]:
+        """Determine supervised indices and an optional kernel centre."""
+
+        T = self.num_timesteps if self.time_explicit else 1
+
+        if not self.time_explicit:
+            return np.array([0], dtype=int), 0.0
+
+        if valid_position is None:
+            return np.arange(T, dtype=int), None
+
+        centre: Optional[float]
+
+        if isinstance(valid_position, (list, tuple, np.ndarray)):
+            if isinstance(valid_position, np.ndarray):
+                seq = valid_position.astype(int).tolist()
+            else:
+                seq = [int(x) for x in valid_position]
+
+            if not seq:
+                return np.arange(T, dtype=int), None
+
+            if self.label_jitter > 0 and self.label_window > 0:
+                apply_jitter = bool(np.random.choice([True, False]))
+            else:
+                apply_jitter = self.label_jitter > 0
+
+            if apply_jitter:
+                shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
+                seq = [int(np.clip(p + shift, 0, T - 1)) for p in seq]
+                base_idxs = seq
+            elif self.label_window > 0:
+                mn = max(0, min(seq) - self.label_window)
+                mx = min(T - 1, max(seq) + self.label_window)
+                base_idxs = list(range(mn, mx + 1))
+            else:
+                base_idxs = seq
+
+            centre = float(np.mean(base_idxs)) if base_idxs else None
+
+        else:
+            if not isinstance(valid_position, (int, np.integer)):
+                raise TypeError(
+                    f"Expected valid_position to be int or sequence, got {type(valid_position)}"
+                )
+
+            p = int(valid_position)
+            if self.label_jitter > 0:
+                shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
+                p = int(np.clip(p + shift, 0, T - 1))
+
+            if self.label_window > 0:
+                start = max(0, p - self.label_window)
+                end = min(T - 1, p + self.label_window)
+                base_idxs = list(range(start, end + 1))
+                centre = float((start + end) / 2.0)
+            else:
+                base_idxs = [p]
+                centre = float(p)
+
+        base_idxs = sorted({int(np.clip(idx, 0, T - 1)) for idx in base_idxs})
+        return np.array(base_idxs, dtype=int), centre
 
     def get_label(
         self,
@@ -429,60 +583,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         """
 
         label = self.initialize_label()
-        T = self.num_timesteps
-
-        # 1) determine base position (single int) or all-positions if not time_explicit
-        base_idxs: List[int]
-        if not self.time_explicit:
-            base_idxs = [0]
-        else:
-            if valid_position is None:
-                # putting label at every timestep
-                base_idxs = list(range(T))
-            elif isinstance(valid_position, (list, tuple, np.ndarray)):
-                # bring into a flat Python list of ints
-                if isinstance(valid_position, np.ndarray):
-                    seq: List[int] = valid_position.astype(int).tolist()
-                else:
-                    seq = [int(x) for x in valid_position]
-                # Apply either jittering or label_window, but not both
-                if self.label_jitter > 0 and self.label_window > 0:
-                    apply_jitter = np.random.choice([True, False])
-                else:
-                    apply_jitter = self.label_jitter > 0
-
-                if apply_jitter:
-                    # one global jitter shift
-                    shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
-                    seq = [int(np.clip(p + shift, 0, T - 1)) for p in seq]
-                elif self.label_window > 0:
-                    # one contiguous window around the min→max of seq
-                    mn = min(seq)
-                    mx = max(seq)
-                    start = max(0, mn - self.label_window)
-                    end = min(T - 1, mx + self.label_window)
-                    base_idxs = list(range(start, end + 1))
-                else:
-                    base_idxs = seq
-            else:
-                # apply jitter
-                # scalar valid_position must be an int here
-                assert isinstance(valid_position, int), (
-                    f"Expected single int valid_position, got {type(valid_position)}"
-                )
-                p = valid_position
-                if self.label_jitter > 0:
-                    shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
-                    p = int(np.clip(p + shift, 0, T - 1))
-                # apply window expansion
-                if self.label_window > 0:
-                    start = max(0, p - self.label_window)
-                    end = min(T - 1, p + self.label_window)
-                    base_idxs = list(range(start, end + 1))
-                else:
-                    base_idxs = [p]
-
-        valid_idx = np.array(base_idxs, dtype=int)
+        valid_idx, _ = self._resolve_label_indices(valid_position)
 
         # 2) set the labels at those indices
         if task_type == "binary":
@@ -495,6 +596,58 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             label[0, 0, valid_idx, 0] = classes_list.index(row_d["finetune_class"])
 
         return label
+
+    def get_label_time_weights(
+        self,
+        row_d: Dict,
+        valid_position: Optional[Union[int, Sequence[int]]] = None,
+    ) -> np.ndarray:
+        """Compute temporal weights for the supervised timesteps."""
+
+        weights = self.initialize_time_weights()
+        valid_idx, centre = self._resolve_label_indices(valid_position)
+
+        if not self.time_explicit:
+            weights[0, 0, 0, 0] = 1.0
+            return weights
+
+        t_axis = np.arange(self.num_timesteps, dtype=np.float32)
+
+        if centre is None or self.time_kernel == "delta":
+            if len(valid_idx) == 0:
+                weights[0, 0, :, 0] = 0.0
+            else:
+                weights[0, 0, valid_idx, 0] = 1.0 / len(valid_idx)
+            return weights
+
+        bandwidth = self.time_kernel_bandwidth
+        if bandwidth is None or bandwidth <= 0:
+            if self.label_window > 0:
+                bandwidth = float(max(1, self.label_window))
+            else:
+                bandwidth = 1.0
+
+        if self.time_kernel == "gaussian":
+            kernel = np.exp(-0.5 * ((t_axis - centre) / bandwidth) ** 2)
+        elif self.time_kernel == "triangular":
+            kernel = np.clip(
+                1.0 - np.abs(t_axis - centre) / bandwidth, a_min=0.0, a_max=None
+            )
+        else:
+            kernel = np.zeros_like(t_axis)
+            kernel[valid_idx] = 1.0
+
+        total = kernel.sum()
+        if total <= 0:
+            kernel = np.zeros_like(t_axis)
+            kernel[valid_idx] = 1.0
+            total = kernel.sum()
+
+        if total > 0:
+            kernel /= total
+
+        weights[0, 0, :, 0] = kernel
+        return weights
 
     def get_balanced_sampler(
         self,

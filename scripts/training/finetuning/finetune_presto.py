@@ -7,12 +7,9 @@ from typing import Literal
 import matplotlib.pyplot as plt
 import torch
 from loguru import logger
-from prometheo.finetune import Hyperparams, run_finetuning
-from prometheo.models import Presto
+from prometheo.finetune import Hyperparams
 from prometheo.models.presto import param_groups_lrd
-from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
-from torch import nn
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 
@@ -21,7 +18,9 @@ from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.finetuning_utils import (
     evaluate_finetuned_model,
     prepare_training_datasets,
+    run_finetuning,
 )
+from worldcereal.train.models import build_worldcereal_presto
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
@@ -65,27 +64,55 @@ def main(args):
     time_explicit = args.time_explicit
     debug = args.debug
     use_balancing = args.use_balancing  # If True, use class balancing for training
+    temporal_attention = args.temporal_attention
 
     # ± timesteps to jitter true label pos, for time_explicit only; will only be set for training
     label_jitter = args.label_jitter
 
     # ± timesteps to expand around label pos (true or moved), for time_explicit only; will only be set for training
-    label_window = args.label_window
+    raw_label_window = args.label_window
+    time_kernel = args.time_kernel
+    time_kernel_bandwidth = args.time_kernel_bandwidth
+    if temporal_attention and not time_explicit:
+        logger.info(
+            "Temporal attention requires time-explicit supervision; enabling time_explicit mode"
+        )
+        time_explicit = True
 
-    # # In-season masking parameters
-    # masking_strategy_train = args.masking_strategy_train
-    # masking_strategy_val = args.masking_strategy_val
+    if temporal_attention and time_kernel == "delta":
+        logger.info(
+            "Temporal attention requires temporal kernel weighting; switching to 'gaussian' kernel"
+        )
+        time_kernel = "gaussian"
+
+    if temporal_attention and raw_label_window == 0:
+        raw_label_window = 1
+        logger.info(
+            "Temporal attention → setting label_window=1 to provide supervision window"
+        )
+
+    temporal_kernel_active = time_explicit and time_kernel != "delta"
+    needs_time_weights = temporal_kernel_active or temporal_attention
+    apply_temporal_weights = temporal_kernel_active
+
+    if not apply_temporal_weights and raw_label_window != 0:
+        logger.info(
+            "Disabling label_window expansion (set to 0) because temporal loss weighting is off"
+        )
+        raw_label_window = 0
+
+    if needs_time_weights and time_kernel != "delta" and time_kernel_bandwidth is None:
+        time_kernel_bandwidth = max(
+            1.0, float(raw_label_window) if raw_label_window > 0 else 1.0
+        )
+        logger.info(
+            "Setting default time_kernel_bandwidth={} for kernel '{}'",
+            time_kernel_bandwidth,
+            time_kernel,
+        )
 
     # Experiment signature
     timestamp_ind = datetime.now().strftime("%Y%m%d%H%M")
-
-    # # Update experiment name to include masking info
-    # if masking_strategy_train.mode == "random":
-    #     masking_info = f"random-masked-from-{masking_strategy_train.from_position}"
-    # elif masking_strategy_train.mode == "fixed":
-    #     masking_info = f"masked-from-{masking_strategy_train.from_position}"
-    # else:
-    #     masking_info = "no-masking"
 
     experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-{finetune_classes}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-run={timestamp_ind}"
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
@@ -152,7 +179,9 @@ def main(args):
     # Use type casting to specify to mypy that task_type is a valid Literal value
     task_type_literal: Literal["binary", "multiclass"] = task_type  # type: ignore
 
-    # Construct training and validation datasets with masking parameters
+    # Construct training and validation datasets
+    label_window = raw_label_window if raw_label_window > 0 else None
+
     train_ds, val_ds, test_ds = prepare_training_datasets(
         train_df,
         val_df,
@@ -164,29 +193,32 @@ def main(args):
         task_type=task_type_literal,
         num_outputs=num_outputs,
         classes_list=classes_list,
-        # masking_strategy_train=masking_strategy_train,
-        # masking_strategy_val=masking_strategy_val,
         label_jitter=label_jitter,
         label_window=label_window,
+        return_time_weights=needs_time_weights,
+        time_kernel=time_kernel,
+        time_kernel_bandwidth=time_kernel_bandwidth,
     )
 
+    if temporal_attention:
+        logger.info(
+            "Temporal attention head enabled; using temporal priors as soft bias"
+        )
+
+    if apply_temporal_weights:
+        logger.info(
+            f"Temporal kernel weighting enabled (kernel={time_kernel}, bandwidth={time_kernel_bandwidth})"
+        )
+    elif needs_time_weights:
+        logger.info("Temporal priors provided to the model (without loss weighting)")
+
     # Construct the finetuning model based on the pretrained model
-    model = Presto(
+    model = build_worldcereal_presto(
         num_outputs=num_outputs,
         regression=False,
         pretrained_model_path=pretrained_model_path,
+        temporal_attention=temporal_attention,
     ).to(device)
-
-    # Define the loss function based on the task type
-    if task_type == "binary":
-        loss_fn = nn.BCEWithLogitsLoss()
-    elif task_type == "multiclass":
-        loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
-    else:
-        raise ValueError(
-            f"Task type {task_type} is not supported. "
-            f"Supported task types are 'binary' and 'multiclass'."
-        )
 
     # Set the parameters
     hyperparams = Hyperparams(
@@ -234,11 +266,12 @@ def main(args):
         val_dl=val_dl,
         experiment_name=experiment_name,
         output_dir=output_dir,
-        loss_fn=loss_fn,
+        task_type=task_type,
         optimizer=optimizer,
         scheduler=scheduler,
         hyperparams=hyperparams,
-        setup_logging=False,  # Already setup logging
+        setup_logging=False,
+        apply_temporal_weights=apply_temporal_weights,
     )
 
     # Evaluate the finetuned model
@@ -320,37 +353,30 @@ def parse_args(arg_list=None):
     parser.add_argument("--time_explicit", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--use_balancing", action="store_true")
+    parser.add_argument("--temporal_attention", action="store_true")
+    parser.add_argument(
+        "--time_kernel",
+        type=str,
+        choices=["delta", "gaussian", "triangular"],
+        default="delta",
+    )
+    parser.add_argument("--time_kernel_bandwidth", type=float, default=None)
 
     # Label timing (for time_explicit only)
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
 
-    # # Masking strategy
     # parser.add_argument(
-    #     "--masking_train_mode",
     #     type=str,
     #     choices=["none", "fixed", "random"],
     #     default="random",
-    # )
-    # parser.add_argument("--masking_train_from", type=int, default=5)
 
     # parser.add_argument(
-    #     "--masking_val_mode",
     #     type=str,
     #     choices=["none", "fixed", "random"],
     #     default="fixed",
-    # )
-    # parser.add_argument("--masking_val_from", type=int, default=6)
 
     args = parser.parse_args(arg_list)
-
-    # # Compose masking strategy objects
-    # args.masking_strategy_train = MaskingStrategy(
-    #     mode=args.masking_train_mode, from_position=args.masking_train_from
-    # )
-    # args.masking_strategy_val = MaskingStrategy(
-    #     mode=args.masking_val_mode, from_position=args.masking_val_from
-    # )
 
     return args
 
@@ -369,14 +395,7 @@ if __name__ == "__main__":
     #     "CROPTYPE20",  # LANDCOVER14
     #     "--use_balancing",
     #     "--debug",
-    #     # "--masking_train_mode",
-    #     # "random",
-    #     # "--masking_train_from",
-    #     # "15",
-    #     # "--masking_val_mode",
-    #     # "fixed",
-    #     # "--masking_val_from",
-    #     # "18",
+
     # ]
     manual_args = None
 

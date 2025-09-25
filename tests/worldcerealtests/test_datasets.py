@@ -222,6 +222,31 @@ class TestWorldCerealDataset(unittest.TestCase):
         valid_values = (item.label != NODATAVALUE).sum()
         self.assertEqual(valid_values, 1)
 
+    def test_temporal_kernel_enforces_window(self):
+        """Temporal kernels should expand supervision when needed."""
+        ds = WorldCerealLabelledDataset(
+            self.df,
+            task_type="binary",
+            num_outputs=1,
+            time_explicit=True,
+            label_window=0,
+            return_time_weights=True,
+            time_kernel="gaussian",
+            time_kernel_bandwidth=1.0,
+        )
+
+        predictors, weights = ds[0]
+        label = predictors.label
+
+        valid_mask = label[0, 0, :, 0] != NODATAVALUE
+        self.assertGreater(int(valid_mask.sum()), 1)
+        self.assertTrue(valid_mask[6])
+        self.assertGreaterEqual(ds.label_window, 1)
+
+        flat_weights = weights[0, 0, :, 0]
+        self.assertAlmostEqual(float(flat_weights.sum()), 1.0, places=5)
+        self.assertEqual(int(flat_weights.argmax()), 6)
+
     def test_get_timestamps(self):
         row = pd.Series.to_dict(self.base_ds.dataframe.iloc[0, :])
         ref_timestamps = np.array(
@@ -667,8 +692,46 @@ class TestGetLabel(unittest.TestCase):
         # values all ==1
         self.assertTrue((lbl[0, 0, non_na, 0] == 1).all())
 
+    def test_time_weight_delta(self):
+        ds = WorldCerealLabelledDataset(
+            self.df_bin,
+            task_type="binary",
+            num_outputs=1,
+            time_explicit=True,
+            num_timesteps=7,
+            label_jitter=0,
+            label_window=0,
+            return_time_weights=True,
+            time_kernel="delta",
+        )
+        weights = ds.get_label_time_weights({}, valid_position=3)
+        self.assertEqual(weights.shape, (1, 1, 7, 1))
+        self.assertAlmostEqual(float(weights.sum()), 1.0, places=6)
+        peak_idx = int(np.argmax(weights[0, 0, :, 0]))
+        self.assertEqual(peak_idx, 3)
+
+    def test_time_weight_gaussian(self):
+        bandwidth = 1
+        ds = WorldCerealLabelledDataset(
+            self.df_bin,
+            task_type="binary",
+            num_outputs=1,
+            time_explicit=True,
+            num_timesteps=7,
+            label_jitter=0,
+            label_window=0,
+            return_time_weights=True,
+            time_kernel="gaussian",
+            time_kernel_bandwidth=bandwidth,
+        )
+        weights = ds.get_label_time_weights({}, valid_position=3)
+        self.assertAlmostEqual(float(weights.sum()), 1.0, places=6)
+        active = np.where(weights[0, 0, :, 0] > 0)[0]
+        self.assertGreater(len(active), 1)
+        peak_idx = int(np.argmax(weights[0, 0, :, 0]))
+        self.assertEqual(peak_idx, 3)
+
     def test_time_explicit_multiclass(self):
-        # multiclass label at a single position
         df = self.df_multi.iloc[[1]].copy()
         ds = WorldCerealLabelledDataset(
             df,

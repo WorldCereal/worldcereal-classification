@@ -1,9 +1,20 @@
+from copy import deepcopy
+from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
+from loguru import logger
+from prometheo.finetune import Hyperparams
+from prometheo.finetune import _setup as _prometheo_setup
 from prometheo.predictors import NODATAVALUE, Predictors
+from prometheo.utils import device, seed_everything
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from worldcereal.train.datasets import WorldCerealLabelledDataset
 
@@ -19,10 +30,11 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    # masking_strategy_train: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
-    # masking_strategy_val: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
     label_jitter=0,
-    label_window=0,
+    label_window: Optional[int] = None,
+    return_time_weights: bool = False,
+    time_kernel: Literal["delta", "gaussian", "triangular"] = "delta",
+    time_kernel_bandwidth: Optional[float] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -53,14 +65,18 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_strategy_train : MaskingStrategy, default=askingMode.NONE
-        Masking strategy for training dataset.
-    masking_strategy_val : MaskingStrategy, default=MaskingMode.NONE
-        Masking strategy for validation and test datasets.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
-    label_window : int, default=0
-        Expanding true label in the neighboring window. If 0, no windowing is applied.
+    label_window : Optional[int], default=None
+        Radius of the supervised window. ``None`` lets the dataset decide
+        (default 0 for delta kernels, ≥1 for soft kernels). Provide a non-negative
+        integer to override the inferred value.
+    return_time_weights : bool, default=False
+        When True, the training dataset yields temporal kernel weights alongside the predictors.
+    time_kernel : Literal["delta", "gaussian", "triangular"], default="delta"
+        Shape of the temporal weighting kernel applied around the valid timestep.
+    time_kernel_bandwidth : float, optional
+        Kernel bandwidth in timesteps. Used as the Gaussian sigma or triangular half-width.
 
     Returns
     -------
@@ -76,9 +92,11 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        # masking_strategy=masking_strategy_train,
         label_jitter=label_jitter,
         label_window=label_window,
+        return_time_weights=return_time_weights,
+        time_kernel=time_kernel,
+        time_kernel_bandwidth=time_kernel_bandwidth,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -89,9 +107,11 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
-        # masking_strategy=masking_strategy_val,
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
+        return_time_weights=False,
+        time_kernel=time_kernel,
+        time_kernel_bandwidth=time_kernel_bandwidth,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -102,9 +122,11 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
-        # masking_strategy=masking_strategy_val,
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
+        return_time_weights=False,
+        time_kernel=time_kernel,
+        time_kernel_bandwidth=time_kernel_bandwidth,
     )
     return train_ds, val_ds, test_ds
 
@@ -116,7 +138,6 @@ def evaluate_finetuned_model(
     batch_size: int,
     time_explicit: bool = False,
     classes_list: Optional[List[str]] = None,
-    # mask_positions: Optional[Sequence[int]] = None,
     return_uncertainty: bool = False,
 ):
     """
@@ -151,64 +172,9 @@ def evaluate_finetuned_model(
     ValueError : If the task type in the test dataset is not supported (must be 'binary' or 'multiclass').
     """
     from sklearn.metrics import ConfusionMatrixDisplay, classification_report
-    from torch.utils.data import DataLoader
 
     # storage for full distributions if we need entropy
     all_probs_full: list[np.ndarray] = [] if return_uncertainty else []
-
-    # if mask_positions is not None:
-    #     # for each mask‐from position, run the full classification_report,
-    #     # tag it with k, then concatenate
-    #     dfs = []
-    #     for k in mask_positions:
-    #         ds_k = InSeasonLabelledDataset(
-    #             test_ds.dataframe,
-    #             task_type=cast(Literal["binary", "multiclass"], test_ds.task_type),
-    #             num_outputs=cast(int, test_ds.num_outputs),
-    #             num_timesteps=test_ds.num_timesteps,
-    #             timestep_freq=test_ds.timestep_freq,
-    #             time_explicit=time_explicit,
-    #             classes_list=classes_list or [],
-    #             augment=False,
-    #             masking_strategy=MaskingStrategy(MaskingMode.FIXED, from_position=k),
-    #             label_jitter=0,
-    #             label_window=0,
-    #         )
-    #         df_k, cm, cm_norm = evaluate_finetuned_model(
-    #             finetuned_model,
-    #             ds_k,
-    #             num_workers,
-    #             batch_size,
-    #             time_explicit,
-    #             classes_list,
-    #             mask_positions=None,  # disable recursion
-    #             return_uncertainty=return_uncertainty,
-    #         )
-    #         df_k["masked_ts_from_pos"] = k
-    #         # Get the timestamp for this mask position
-    #         if ds_k.timestep_freq == "month":
-    #             # Get the first sample's timestamps (assume all samples aligned)
-    #             ts = ds_k[0].timestamps
-    #             # k is 1-based, so subtract 1 for index
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             import calendar
-
-    #             month_label = calendar.month_abbr[month_num]
-    #         elif ds_k.timestep_freq == "dekad":
-    #             ts = ds_k[0].timestamps
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             day_num = int(ts[month_idx, 0])
-    #             import calendar
-
-    #             month_label = f"{calendar.month_abbr[month_num]} {day_num:02d}"
-    #         else:
-    #             month_label = "Unknown"
-
-    #         df_k["masked_ts_month_label"] = month_label
-    #         dfs.append(df_k)
-    #     return pd.concat(dfs, ignore_index=True), None, None
 
     # Put model in eval mode
     finetuned_model.eval()
@@ -357,3 +323,444 @@ def evaluate_finetuned_model(
         results_df["avg_entropy"] = ent.mean() if ent.size > 0 else np.nan
 
     return results_df, cm, cm_norm
+
+
+def _split_batch_with_temporal_weights(batch):
+    """Unpack a DataLoader batch into Predictors and optional temporal weights."""
+
+    weights = None
+    extra = None
+
+    if isinstance(batch, Predictors):
+        predictors = batch
+    elif isinstance(batch, dict):
+        predictors = Predictors(**batch)
+    elif isinstance(batch, (list, tuple)):
+        if not batch:
+            raise ValueError("Received empty batch tuple")
+        predictors = batch[0]
+        if len(batch) >= 2:
+            weights = batch[1]
+        if len(batch) >= 3:
+            extra = batch[2]
+        if isinstance(predictors, dict):
+            predictors = Predictors(**predictors)
+    else:
+        predictors = batch
+
+    if isinstance(predictors, dict):
+        predictors = Predictors(**predictors)
+
+    return predictors, weights, extra
+
+
+def _save_attention_visualizations(
+    attention: torch.Tensor,
+    prior: Optional[torch.Tensor],
+    epoch: int,
+    output_dir: Path,
+    max_samples: int = 4,
+) -> None:
+    """Save heatmap snapshots of attention (and priors) for qualitative monitoring."""
+
+    if attention.numel() == 0:
+        return
+
+    attention_dir = Path(output_dir) / "attention_maps"
+    attention_dir.mkdir(parents=True, exist_ok=True)
+
+    att = attention.detach().cpu()
+    att = att.reshape(-1, att.shape[-1])
+    if att.size(0) == 0:
+        return
+
+    num_samples = min(max_samples, att.size(0))
+    time_steps = att.size(-1)
+
+    prior_array = None
+    if prior is not None and prior.numel() > 0:
+        p = prior.detach().cpu()
+        if p.dim() == 5 and p.size(-1) == 1:
+            p = p.squeeze(-1)
+        p = p.reshape(-1, p.shape[-1])
+        prior_array = p
+        num_samples = min(num_samples, prior_array.shape[0])
+
+    rows = 2 if prior_array is not None else 1
+    fig, axes = plt.subplots(
+        rows, num_samples, figsize=(3 * num_samples, 3 * rows), sharey=True
+    )
+    if rows == 1:
+        axes = np.atleast_1d(axes)
+
+    for idx in range(num_samples):
+        sample_att = att[idx][None, :]
+        ax = axes[idx] if rows == 1 else axes[0, idx]
+        im = ax.imshow(sample_att, aspect="auto", cmap="viridis")
+        ax.set_title(f"Sample {idx}")
+        ax.set_yticks([])
+        ax.set_xticks(np.linspace(0, time_steps - 1, min(time_steps, 5)).astype(int))
+        if idx == num_samples - 1:
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        if prior_array is not None:
+            sample_prior = prior_array[idx][None, :]
+            pax = axes[1, idx]
+            im2 = pax.imshow(sample_prior, aspect="auto", cmap="magma")
+            pax.set_title(f"Prior {idx}")
+            pax.set_yticks([])
+            pax.set_xticks(
+                np.linspace(0, time_steps - 1, min(time_steps, 5)).astype(int)
+            )
+            if idx == num_samples - 1:
+                fig.colorbar(im2, ax=pax, fraction=0.046, pad=0.04)
+
+    for ax in np.array(axes).flatten():
+        ax.set_xlabel("Timestep")
+
+    plt.tight_layout()
+    fig_path = attention_dir / f"epoch_{epoch:03d}.png"
+    fig.savefig(fig_path)
+    plt.close(fig)
+    logger.info(f"Saved attention snapshot to {fig_path}")
+
+
+def _prepare_weight_tensor(weights, reference, device_):
+    if weights is None:
+        return torch.ones_like(reference, dtype=torch.float32, device=device_)
+    if isinstance(weights, np.ndarray):
+        weights_tensor = torch.from_numpy(weights)
+    else:
+        weights_tensor = torch.as_tensor(weights)
+    return weights_tensor.to(device=device_, dtype=torch.float32)
+
+
+def _compute_temporal_loss(preds, targets, weights):
+    weights = weights.to(targets.device)
+
+    if preds.dim() > 1 and preds.size(-1) > 1:
+        targets = targets.long().squeeze(-1)
+        weights = weights.squeeze(-1)
+        mask = targets != NODATAVALUE
+        if not mask.any():
+            zero = torch.tensor(0.0, device=targets.device)
+            metrics = {
+                key: torch.tensor(0.0, device=targets.device)
+                for key in [
+                    "weight_sum",
+                    "weighted_idx_sum",
+                    "weighted_sq_idx_sum",
+                    "support_sum",
+                    "support_count",
+                ]
+            }
+            return zero, zero, metrics
+        loss_terms = F.cross_entropy(
+            preds[mask],
+            targets[mask],
+            reduction="none",
+        )
+        weight_vals = weights[mask]
+    else:
+        targets = targets.float()
+        mask = targets != NODATAVALUE
+        if not mask.any():
+            zero = torch.tensor(0.0, device=targets.device)
+            metrics = {
+                key: torch.tensor(0.0, device=targets.device)
+                for key in [
+                    "weight_sum",
+                    "weighted_idx_sum",
+                    "weighted_sq_idx_sum",
+                    "support_sum",
+                    "support_count",
+                ]
+            }
+            return zero, zero, metrics
+        logits = preds[mask]
+        target_vals = targets[mask]
+        weight_vals = weights[mask]
+        loss_terms = F.binary_cross_entropy_with_logits(
+            logits,
+            target_vals,
+            reduction="none",
+        )
+
+    weighted_sum = (loss_terms * weight_vals).sum()
+    total_weight = weight_vals.sum()
+
+    w_monitor = weights
+    if w_monitor.dim() > 0 and w_monitor.shape[-1] == 1:
+        w_monitor = w_monitor.squeeze(-1)
+    if w_monitor.dim() == 1:
+        w_monitor = w_monitor.unsqueeze(0)
+    else:
+        w_monitor = w_monitor.reshape(-1, w_monitor.shape[-1])
+
+    idx = torch.arange(w_monitor.shape[-1], device=weights.device, dtype=torch.float32)
+    weighted_idx_sum = (w_monitor * idx).sum(dim=-1)
+    weighted_sq_idx_sum = (w_monitor * (idx**2)).sum(dim=-1)
+    weight_sum_seq = w_monitor.sum(dim=-1)
+    support_seq = (w_monitor > 0).sum(dim=-1).float()
+    valid = weight_sum_seq > 0
+    metrics = {
+        "weight_sum": weight_sum_seq[valid].sum()
+        if valid.any()
+        else torch.tensor(0.0, device=weights.device),
+        "weighted_idx_sum": weighted_idx_sum[valid].sum()
+        if valid.any()
+        else torch.tensor(0.0, device=weights.device),
+        "weighted_sq_idx_sum": weighted_sq_idx_sum[valid].sum()
+        if valid.any()
+        else torch.tensor(0.0, device=weights.device),
+        "support_sum": support_seq[valid].sum()
+        if valid.any()
+        else torch.tensor(0.0, device=weights.device),
+        "support_count": valid.sum().float(),
+    }
+
+    return weighted_sum, total_weight, metrics
+
+
+def run_finetuning(
+    model: torch.nn.Module,
+    train_dl: DataLoader,
+    val_dl: DataLoader,
+    experiment_name: str,
+    output_dir: str | Path,
+    task_type: Literal["binary", "multiclass"],
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    hyperparams: Hyperparams,
+    *,
+    apply_temporal_weights: bool = True,
+    setup_logging: bool = False,
+    freeze_layers: Optional[List[str]] = None,
+    unfreeze_epoch: Optional[int] = None,
+    visualize_attention_every: Optional[int] = 5,
+):
+    """Fine-tune a Presto model with optional temporally weighted supervision.
+
+    Args:
+        apply_temporal_weights: When ``True`` the temporal kernel weights are
+            folded into the loss; when ``False`` the priors are still passed to
+            the model (e.g. for attention MIL) but the loss defaults to
+            uniform-in-time weighting.
+        visualize_attention_every: Plot attention snapshots every N epochs
+            (set to ``None`` or ``0`` to disable).
+    """
+
+    output_dir = Path(output_dir)
+    _prometheo_setup(output_dir, experiment_name, setup_logging)
+    seed_everything()
+
+    train_loss_history: list[float] = []
+    val_loss_history: list[float] = []
+    best_loss: Optional[float] = None
+    best_state_dict = None
+    epochs_since_improvement = 0
+
+    originally_frozen = set()
+    if freeze_layers:
+        for name, param in model.named_parameters():
+            if any(layer in name for layer in freeze_layers):
+                if not param.requires_grad:
+                    originally_frozen.add(name)
+                param.requires_grad = False
+                logger.info(f"Freezing layer: {name}")
+
+    for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
+        model.train()
+
+        if freeze_layers and unfreeze_epoch is not None and epoch == unfreeze_epoch:
+            for name, param in model.named_parameters():
+                if name not in originally_frozen and any(
+                    layer in name for layer in freeze_layers
+                ):
+                    param.requires_grad = True
+                    logger.info(f"Unfreezing layer: {name}")
+
+        train_weight_sum = torch.tensor(0.0, device=device)
+        train_loss_sum = torch.tensor(0.0, device=device)
+        train_monitor = {
+            "weight_sum": 0.0,
+            "weighted_idx_sum": 0.0,
+            "weighted_sq_idx_sum": 0.0,
+            "support_sum": 0.0,
+            "support_count": 0.0,
+        }
+
+        for batch in tqdm(train_dl, desc="Training", leave=False):
+            optimizer.zero_grad()
+            predictors, weights, _ = _split_batch_with_temporal_weights(batch)
+            targets = predictors.label.to(device)
+
+            prior_tensor = (
+                _prepare_weight_tensor(weights, targets, device)
+                if weights is not None
+                else None
+            )
+            loss_weights = (
+                prior_tensor
+                if (apply_temporal_weights and prior_tensor is not None)
+                else _prepare_weight_tensor(None, targets, device)
+            )
+
+            preds = model(predictors, time_weights=prior_tensor)
+
+            loss_sum, weight_sum, metrics = _compute_temporal_loss(
+                preds, targets, loss_weights
+            )
+
+            if prior_tensor is not None and not apply_temporal_weights:
+                _, _, metrics_prior = _compute_temporal_loss(
+                    preds.detach(), targets, prior_tensor
+                )
+                metrics = metrics_prior
+            if weight_sum <= 0:
+                continue
+
+            loss = loss_sum / weight_sum
+            loss.backward()
+            optimizer.step()
+
+            train_weight_sum += weight_sum.detach()
+            train_loss_sum += loss_sum.detach()
+            for key, value in metrics.items():
+                train_monitor[key] += float(value.detach().cpu())
+
+        if train_weight_sum > 0:
+            train_epoch_loss = (train_loss_sum / train_weight_sum).item()
+        else:
+            train_epoch_loss = 0.0
+        train_loss_history.append(train_epoch_loss)
+
+        model.eval()
+        val_loss_sum = torch.tensor(0.0, device=device)
+        val_weight_sum = torch.tensor(0.0, device=device)
+        val_monitor = {
+            "weight_sum": 0.0,
+            "weighted_idx_sum": 0.0,
+            "weighted_sq_idx_sum": 0.0,
+            "support_sum": 0.0,
+            "support_count": 0.0,
+        }
+
+        attention_snapshot: Optional[torch.Tensor] = None
+        prior_snapshot: Optional[torch.Tensor] = None
+        capture_attention = (
+            visualize_attention_every is not None
+            and visualize_attention_every > 0
+            and (epoch % visualize_attention_every == 0)
+        )
+
+        with torch.no_grad():
+            for batch in val_dl:
+                predictors, weights, _ = _split_batch_with_temporal_weights(batch)
+                targets = predictors.label.to(device)
+
+                prior_tensor = (
+                    _prepare_weight_tensor(weights, targets, device)
+                    if weights is not None
+                    else None
+                )
+                loss_weights = (
+                    prior_tensor
+                    if (apply_temporal_weights and prior_tensor is not None)
+                    else _prepare_weight_tensor(None, targets, device)
+                )
+
+                preds = model(predictors, time_weights=prior_tensor)
+                loss_sum, weight_sum, metrics = _compute_temporal_loss(
+                    preds, targets, loss_weights
+                )
+
+                if prior_tensor is not None and not apply_temporal_weights:
+                    _, _, metrics_prior = _compute_temporal_loss(
+                        preds.detach(), targets, prior_tensor
+                    )
+                    metrics = metrics_prior
+                val_loss_sum += loss_sum
+                val_weight_sum += weight_sum
+                for key, value in metrics.items():
+                    val_monitor[key] += float(value.detach().cpu())
+
+                if capture_attention and attention_snapshot is None:
+                    head = getattr(model, "classification_head", None)
+                    attn_snapshot = (
+                        getattr(head, "_last_attention", None)
+                        if head is not None
+                        else None
+                    )
+                    if attn_snapshot is not None:
+                        attention_snapshot = attn_snapshot.detach().cpu()
+                        if prior_tensor is not None:
+                            prior_snapshot = prior_tensor.detach().cpu()
+
+        if val_weight_sum > 0:
+            current_val_loss = (val_loss_sum / val_weight_sum).item()
+        else:
+            current_val_loss = 0.0
+        val_loss_history.append(current_val_loss)
+
+        if capture_attention and attention_snapshot is not None:
+            _save_attention_visualizations(
+                attention_snapshot, prior_snapshot, epoch, output_dir
+            )
+
+        def _log_temporal_monitor(prefix: str, stats: dict):
+            if stats["weight_sum"] > 0 and stats["support_count"] > 0:
+                mean_idx = stats["weighted_idx_sum"] / stats["weight_sum"]
+                variance = max(
+                    stats["weighted_sq_idx_sum"] / stats["weight_sum"] - mean_idx**2,
+                    0.0,
+                )
+                std_idx = variance**0.5
+                avg_support = stats["support_sum"] / stats["support_count"]
+                msg = f"{prefix} temporal weights → mean_idx={mean_idx:.2f}, std_idx={std_idx:.2f}, avg_support={avg_support:.2f}"
+                # logger.debug(msg)
+                tqdm.write(msg)
+
+        _log_temporal_monitor("Train", train_monitor)
+        _log_temporal_monitor("Val", val_monitor)
+
+        if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(current_val_loss)
+        else:
+            scheduler.step()
+
+        if best_loss is None or current_val_loss < best_loss:
+            best_loss = current_val_loss
+            best_state_dict = deepcopy(model.state_dict())
+            epochs_since_improvement = 0
+        else:
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= hyperparams.patience:
+                logger.info("Early stopping")
+                break
+
+        description = (
+            f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
+            f"Train Loss: {train_epoch_loss:.4f} | "
+            f"Val Loss: {current_val_loss:.4f} | "
+            f"Best Loss: {best_loss:.4f}"
+        )
+        if epochs_since_improvement > 0:
+            description += f" (no improvement for {epochs_since_improvement} epochs)"
+        else:
+            description += " (improved)"
+        pbar.set_description(description)
+        if hasattr(scheduler, "get_last_lr"):
+            pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        logger.info(
+            f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
+        )
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+    model.eval()
+    return model
+
+
+# Backwards compatibility: keep the old entry point name available.
+run_temporal_kernel_finetuning = run_finetuning
