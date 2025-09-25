@@ -17,7 +17,7 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 
 from worldcereal.job import create_inputs_process_graph
-from worldcereal.utils.argparser import parse_job_options_from_args
+from worldcereal.utils import parse_job_options_from_args
 
 MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds

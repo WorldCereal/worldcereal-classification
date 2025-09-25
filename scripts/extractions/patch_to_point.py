@@ -17,7 +17,7 @@ from worldcereal.extract.patch_to_point_worldcereal import (
     generate_output_path_patch_to_point_worldcereal,
     post_job_action_point_worldcereal,
 )
-from worldcereal.utils.argparser import parse_job_options_from_args
+from worldcereal.utils import parse_job_options_from_args
 
 
 class PatchToPointJobManager(MultiBackendJobManager):
