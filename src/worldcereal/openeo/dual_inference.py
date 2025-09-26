@@ -367,7 +367,6 @@ class PrestoFeatureExtractor:
         return features.sel(t=target_dt, method="nearest")
 
 
-# Simplify ONNXClassifier similarly
 class ONNXClassifier:
     """Handles ONNX model inference for classification."""
     
@@ -429,19 +428,45 @@ class ONNXClassifier:
 # =============================================================================
 # MAIN UDF FUNCTIONS
 # =============================================================================
-def combine_results(croptype_result: xr.DataArray, cropland_mask: xr.DataArray) -> xr.DataArray:
-    """Combine crop type results with cropland mask."""
-    # Convert cropland mask to uint16
-    cropland_mask_uint16 = cropland_mask.astype(np.uint16)
+
+def run_single_workflow(input_array: xr.DataArray, epsg: int, parameters: Dict, mask: Optional[xr.DataArray] = None) -> xr.DataArray:
+    """Run a single classification workflow with optional masking."""
+    # Apply mask if provided
+    if mask is not None and parameters.get('mask_cropland', True):
+        input_array = input_array.where(mask, NODATA_VALUE)
+        logger.info("Applied cropland mask")
     
-    # Stack all bands: classification, probabilities, cropland_mask
-    combined_bands = list(croptype_result.bands.values) + ['cropland_mask']
+    # Preprocess data
+    if parameters.get("rescale_s1", True):
+        input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
+    
+    # Extract features
+    feature_extractor = PrestoFeatureExtractor(parameters)
+    features = feature_extractor.extract(input_array, epsg)
+    
+    # Classify
+    classifier = ONNXClassifier(parameters)
+    return classifier.predict(features)
+
+def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray) -> xr.DataArray:
+    """Combine crop type results with ALL cropland classification bands."""
+    
+    # Rename cropland bands to avoid conflicts
+    cropland_bands_renamed = [f"cropland_{band}" for band in cropland_result.bands.values]
+    cropland_result = cropland_result.assign_coords(bands=cropland_bands_renamed)
+    
+    # Rename croptype bands for clarity
+    croptype_bands_renamed = [f"croptype_{band}" for band in croptype_result.bands.values]
+    croptype_result = croptype_result.assign_coords(bands=croptype_bands_renamed)
+    
+    # Combine all bands from both results
+    combined_bands = list(croptype_bands_renamed) + list(cropland_bands_renamed)
     combined_data = np.concatenate([
         croptype_result.values,
-        cropland_mask_uint16.expand_dims('bands').values
+        cropland_result.values
     ], axis=0)
     
-    return xr.DataArray(
+    result = xr.DataArray(
         combined_data,
         dims=["bands", "y", "x"],
         coords={
@@ -450,7 +475,13 @@ def combine_results(croptype_result: xr.DataArray, cropland_mask: xr.DataArray) 
             "x": croptype_result.x,
         }
     )
-# Update the main UDF function to handle both workflows
+    
+    logger.info(f"Combined results: {len(combined_bands)} total bands")
+    logger.info(f"Bands: {combined_bands}")
+    
+    return result
+
+
 def apply_udf_data(udf_data: UdfData) -> UdfData:
     """Main UDF entry point - expects cropland_params and croptype_params in context."""
     input_cube = udf_data.datacube_list[0]
@@ -472,14 +503,19 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
         logger.info("Running dual workflow: cropland + croptype")
         
         # DEBUG: Log what parameters we actually have
-        logger.info(f"Cropland params keys: {list(cropland_params.keys())}")
-        logger.info(f"Croptype params keys: {list(croptype_params.keys())}")
+        logger.info("Cropland params:")
+        for k, v in cropland_params.items():
+            logger.info(f"  {k}: {v}")
+
+        logger.info("Croptype params:")
+        for k, v in croptype_params.items():
+            logger.info(f"  {k}: {v}")
         
         # Run cropland classification - pass the FLAT parameters
         logger.info("Running cropland classification...")
         cropland_result = run_single_workflow(input_array, epsg, cropland_params)
         
-        # Extract cropland mask
+        # Extract cropland mask for masking the crop type classification
         cropland_mask = cropland_result.sel(bands='classification') > 0
         logger.info(f"Cropland mask: {np.sum(cropland_mask.values)} cropland pixels")
         
@@ -487,8 +523,8 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
         logger.info("Running crop type classification...")
         croptype_result = run_single_workflow(input_array, epsg, croptype_params, cropland_mask)
         
-        # Combine results
-        result = combine_results(croptype_result, cropland_mask)
+        # Combine ALL bands from both results
+        result = combine_results(croptype_result, cropland_result)
         result_cube = XarrayDataCube(result)
         
     else:
@@ -501,43 +537,45 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     return udf_data
 
 
-def run_single_workflow(input_array: xr.DataArray, epsg: int, parameters: Dict, mask: Optional[xr.DataArray] = None) -> xr.DataArray:
-    """Run a single classification workflow with optional masking."""
-    # Apply mask if provided
-    if mask is not None and parameters.get('mask_cropland', True):
-        input_array = input_array.where(mask, NODATA_VALUE)
-        logger.info("Applied cropland mask")
-    
-    # Preprocess data
-    if parameters.get("rescale_s1", True):
-        input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
-    
-    # Extract features
-    feature_extractor = PrestoFeatureExtractor(parameters)
-    features = feature_extractor.extract(input_array, epsg)
-    
-    # Classify
-    classifier = ONNXClassifier(parameters)
-    return classifier.predict(features)
-
-
 def apply_metadata(metadata, context: Dict) -> Any:
-    """Update collection metadata for combined output."""
+    """Update collection metadata for combined output with ALL bands."""
     try:
-        # Use croptype model to get band names, add cropland_mask at the end
-        if 'croptype_params' in context:
-            classifier_url = context['croptype_params'].get('classifier_url')
+        # For dual workflow, combine band names from both models
+        if 'croptype_params' in context and 'cropland_params' in context:
+            # Get croptype band names
+            croptype_classifier_url = context['croptype_params'].get('classifier_url')
+            if croptype_classifier_url:
+                _, croptype_lut = load_and_prepare_model(croptype_classifier_url)
+                croptype_bands = [f"croptype_{band}" for band in get_output_labels(croptype_lut)]
+            else:
+                raise ValueError("No croptype LUT found")
+            
+            # Get cropland band names  
+            cropland_classifier_url = context['cropland_params'].get('classifier_url')
+            if cropland_classifier_url:
+                _, cropland_lut = load_and_prepare_model(cropland_classifier_url)
+                cropland_bands = [f"cropland_{band}" for band in get_output_labels(cropland_lut)]
+            else:
+                raise ValueError("No cropland LUT found")
+            
+            output_labels = croptype_bands + cropland_bands
+            
         else:
+            # Single workflow
             classifier_url = context.get('classifier_url')
-        
-        if classifier_url:
-            _, lut_sorted = load_and_prepare_model(classifier_url)
-            output_labels = get_output_labels(lut_sorted) + ['cropland_mask']
-        else:
-            raise ValueError("No classifier URL found in context")
+            if classifier_url:
+                _, lut_sorted = load_and_prepare_model(classifier_url)
+                output_labels = get_output_labels(lut_sorted)
+            else:
+                raise ValueError("No classifier URL found in context")
             
     except Exception as e:
         logger.warning(f"Could not load model in metadata context: {e}")
-        output_labels = ["classification", "probability", "probability_class1", "probability_class2", "cropland_mask"]
+       
     
     return metadata.rename_labels(dimension="bands", target=output_labels)
+
+
+
+
+
