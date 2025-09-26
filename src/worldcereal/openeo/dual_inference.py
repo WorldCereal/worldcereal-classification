@@ -4,8 +4,7 @@ import functools
 import logging
 import random
 import sys
-import urllib.request
-import zipfile
+import functools
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
@@ -15,7 +14,6 @@ import requests
 from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 from pyproj import Transformer
-from pyproj.crs import CRS
 from scipy.ndimage import convolve, zoom
 from shapely.geometry import Point
 from shapely.ops import transform
@@ -45,28 +43,101 @@ sys.path.append("feature_deps")
 sys.path.append("onnx_deps")
 import onnxruntime as ort
 
+_MODEL_CACHE = {}
+_PROMETHEO_INSTALLED = False
+
+
 # =============================================================================
 # STANDALONE FUNCTIONS (Work in both apply_udf_data and apply_metadata contexts)
 # =============================================================================
-
-@functools.lru_cache(maxsize=1)
-def load_and_prepare_model(model_url: str) -> Tuple[Any, Dict]:
-    """Load ONNX model and extract metadata - works in both contexts."""
-    logger.info(f"Loading ONNX model from {model_url}")
+def _ensure_prometheo_dependencies():
+    """Non-cached dependency check."""
+    global _PROMETHEO_INSTALLED
     
+    if _PROMETHEO_INSTALLED:
+        return
+        
+    try:
+        # Try to import first
+        import prometheo
+        _PROMETHEO_INSTALLED = True
+        return
+    except ImportError:
+        pass
+    
+    # Installation required
+    logger.info("Prometheo not available, installing...")
+    _install_prometheo()
+    global prometheo, Presto, load_presto_weights, run_model_inference, PoolingMethods
+    import prometheo
+    from prometheo.models import Presto
+    from prometheo.models.presto.wrapper import load_presto_weights
+    from prometheo.datasets.worldcereal import run_model_inference
+    from prometheo.models.pooling import PoolingMethods
+    _PROMETHEO_INSTALLED = True
+
+def _install_prometheo():
+    """Non-cached installation function."""
+    import tempfile
+    import urllib.request
+    import zipfile
+    import shutil
+    
+    temp_dir = Path(tempfile.mkdtemp())
+    try:
+        # Download wheel
+        wheel_path, _ = urllib.request.urlretrieve(PROMETHEO_WHL_URL)
+        
+        # Extract to temp directory
+        with zipfile.ZipFile(wheel_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Add to Python path
+        sys.path.append(str(temp_dir))
+        logger.info(f"Prometheo installed to {temp_dir}")
+        
+    except Exception as e:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        logger.error(f"Failed to install prometheo: {e}")
+        raise
+    
+def load_onnx_model(model_url: str):
+    """ONNX loading is fine since it's pure (no side effects)."""
+    if model_url in _MODEL_CACHE:
+        logger.info(f"ONNX model cache hit for {model_url}")
+        return _MODEL_CACHE[model_url]
+    
+    logger.info(f"Loading ONNX model from {model_url}")
     response = requests.get(model_url, timeout=120)
     model = ort.InferenceSession(response.content)
     
     metadata = model.get_modelmeta().custom_metadata_map
     class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
     
-    if "class_names" not in class_params or "class_to_label" not in class_params:
-        raise ValueError("Invalid model metadata: missing class_names or class_to_label")
-    
     lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
     sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
     
-    return model, sorted_lut
+    result = (model, sorted_lut)
+    _MODEL_CACHE[model_url] = result
+    return result
+
+def load_presto_weights_cached(presto_model_url: str):
+    """Manual caching for Presto weights with dependency check."""
+    if presto_model_url in _MODEL_CACHE:
+        logger.info(f"Presto model cache hit for {presto_model_url}")
+        return _MODEL_CACHE[presto_model_url]
+    
+    # Ensure dependencies are available (not cached)
+    _ensure_prometheo_dependencies()
+    
+    logger.info(f"Loading Presto weights from: {presto_model_url}")
+    
+    model = Presto()
+    result = load_presto_weights(model, presto_model_url)
+    
+    _MODEL_CACHE[presto_model_url] = result
+    return result
 
 
 def get_output_labels(lut_sorted: dict) -> list:
@@ -75,19 +146,6 @@ def get_output_labels(lut_sorted: dict) -> list:
     return ["classification", "probability"] + [
         f"probability_{name}" for name in class_names
     ]
-
-
-@functools.lru_cache(maxsize=1)
-def unpack_prometheo_wheel(wheel_url: str = PROMETHEO_WHL_URL) -> Path:
-    """Download and unpack Prometheo wheel - works in both contexts."""
-    destination_dir = Path.cwd() / "dependencies" / "prometheo"
-    destination_dir.mkdir(exist_ok=True, parents=True)
-
-    modelfile, _ = urllib.request.urlretrieve(wheel_url)
-    with zipfile.ZipFile(modelfile, "r") as zip_ref:
-        zip_ref.extractall(destination_dir)
-    
-    return destination_dir
 
 
 # =============================================================================
@@ -103,7 +161,9 @@ class SlopeCalculator:
         dem_arr = SlopeCalculator._prepare_dem_array(elevation_data)
         dem_downsampled = SlopeCalculator._downsample_to_20m(dem_arr, resolution)
         slope = SlopeCalculator._compute_slope_gradient(dem_downsampled)
-        return SlopeCalculator._upsample_to_original(slope, dem_arr.shape, resolution)
+        result =  SlopeCalculator._upsample_to_original(slope, dem_arr.shape, resolution)
+        return result
+
     
     @staticmethod
     def _prepare_dem_array(dem: np.ndarray) -> np.ndarray:
@@ -280,7 +340,7 @@ class PrestoFeatureExtractor:
         return self._run_presto_inference(inarr, epsg)
     
     def _validate_inputs(self, inarr: xr.DataArray, epsg: int) -> None:
-        """Validate input parameters and array - SIMPLIFIED to only check top level."""
+        """Validate input parameters and array"""
         if epsg is None:
             raise ValueError("EPSG code required for Presto feature extraction")
         
@@ -301,7 +361,8 @@ class PrestoFeatureExtractor:
         new_bands = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
         inarr = inarr.assign_coords(bands=new_bands)
         
-        DataPreprocessor.log_array_statistics(inarr)
+        #TODO commented out to minimize loggingfs
+        #DataPreprocessor.log_array_statistics(inarr)
         return inarr.fillna(NODATA_VALUE)
     
     def _add_slope_band(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
@@ -320,28 +381,24 @@ class PrestoFeatureExtractor:
         return xr.concat([inarr.astype("float32"), slope_da], dim="bands")
     
     def _run_presto_inference(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-        """Run Presto model inference."""
-        # Ensure dependencies are available FIRST
-        if not self.parameters.get("ignore_dependencies", False):
-            deps_dir = unpack_prometheo_wheel(self.parameters.get("prometheo_wheel_url", PROMETHEO_WHL_URL))
-            sys.path.insert(0, str(deps_dir))
-
-        from prometheo.datasets.worldcereal import run_model_inference
-        from prometheo.models import Presto
-        from prometheo.models.pooling import PoolingMethods
-        from prometheo.models.presto.wrapper import load_presto_weights
+        """Run Presto model inference with safe dependency handling."""
+        # Dependencies are now handled by load_presto_weights_cached
+        _ensure_prometheo_dependencies()
         
-        # Get presto_model_url from top level
         presto_model_url = self.parameters['presto_model_url']
-        model = load_presto_weights(Presto(), presto_model_url)
+    
+        model = load_presto_weights_cached(presto_model_url)
         
+        # Import here to ensure dependencies are available
         pooling_method = PoolingMethods.TIME if self.parameters.get("temporal_prediction") else PoolingMethods.GLOBAL
         
+        logger.info("Running presto inference")
         features = run_model_inference(
             inarr, model, epsg=epsg,
             batch_size=self.parameters.get("batch_size", 256),
             pooling_method=pooling_method
         )
+        logger.info("Inference completed")
         
         if self.parameters.get("temporal_prediction"):
             features = self._select_temporal_features(features)
@@ -380,13 +437,13 @@ class ONNXClassifier:
             logger.error(f"Missing classifier_url. Available keys: {list(self.parameters.keys())}")
             raise ValueError('Missing required parameter "classifier_url"')
         
-        session, lut = load_and_prepare_model(classifier_url)
+        session, lut = load_onnx_model(classifier_url)
         features_flat = self._prepare_features(features)
         
-        logger.info(f"Classification input shape: {features_flat.shape}")
+        logger.info("run onnx model")
         predictions = self._run_inference(session, lut, features_flat)
-        logger.info(f"Classification output shape: {predictions.shape}")
-        
+        logger.info("run onnx model done")
+
         return self._reshape_predictions(predictions, features, lut)
     
     def _prepare_features(self, features: xr.DataArray) -> np.ndarray:
@@ -434,18 +491,23 @@ def run_single_workflow(input_array: xr.DataArray, epsg: int, parameters: Dict, 
     # Apply mask if provided
     if mask is not None and parameters.get('mask_cropland', True):
         input_array = input_array.where(mask, NODATA_VALUE)
-        logger.info("Applied cropland mask")
     
     # Preprocess data
     if parameters.get("rescale_s1", True):
+        logger.info("rescale s1")
         input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
     
     # Extract features
+    logger.info("Extract Presto features")
     feature_extractor = PrestoFeatureExtractor(parameters)
     features = feature_extractor.extract(input_array, epsg)
+    logger.info("Presto features done")
     
     # Classify
+    logger.info("Onnx classification")
     classifier = ONNXClassifier(parameters)
+    logger.info("Onnx classification done")
+
     return classifier.predict(features)
 
 def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray) -> xr.DataArray:
@@ -476,8 +538,6 @@ def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray
         }
     )
     
-    logger.info(f"Combined results: {len(combined_bands)} total bands")
-    logger.info(f"Bands: {combined_bands}")
     
     return result
 
@@ -487,9 +547,6 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     input_cube = udf_data.datacube_list[0]
     parameters = udf_data.user_context.copy()
     epsg = udf_data.proj["EPSG"] if udf_data.proj else None
-    
-    logger.info(f"Processing with EPSG: {epsg}")
-    logger.info(f"Received parameter keys: {list(parameters.keys())}")
     
     # Prepare input array
     input_array = input_cube.get_array().transpose("bands", "t", "y", "x")
@@ -502,27 +559,19 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     if cropland_params and croptype_params:
         logger.info("Running dual workflow: cropland + croptype")
         
-        # DEBUG: Log what parameters we actually have
-        logger.info("Cropland params:")
-        for k, v in cropland_params.items():
-            logger.info(f"  {k}: {v}")
-
-        logger.info("Croptype params:")
-        for k, v in croptype_params.items():
-            logger.info(f"  {k}: {v}")
         
         # Run cropland classification - pass the FLAT parameters
-        logger.info("Running cropland classification...")
+        logger.info("Running cropland classification")
         cropland_result = run_single_workflow(input_array, epsg, cropland_params)
-        
+        logger.info("cropland classification done")
         # Extract cropland mask for masking the crop type classification
         cropland_mask = cropland_result.sel(bands='classification') > 0
-        logger.info(f"Cropland mask: {np.sum(cropland_mask.values)} cropland pixels")
         
         # Run crop type classification with mask
-        logger.info("Running crop type classification...")
+        logger.info("Running crop type classification")
         croptype_result = run_single_workflow(input_array, epsg, croptype_params, cropland_mask)
-        
+        logger.info("croptype classification done")
+
         # Combine ALL bands from both results
         result = combine_results(croptype_result, cropland_result)
         result_cube = XarrayDataCube(result)
@@ -545,7 +594,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Get croptype band names
             croptype_classifier_url = context['croptype_params'].get('classifier_url')
             if croptype_classifier_url:
-                _, croptype_lut = load_and_prepare_model(croptype_classifier_url)
+                _, croptype_lut = load_onnx_model(croptype_classifier_url)
                 croptype_bands = [f"croptype_{band}" for band in get_output_labels(croptype_lut)]
             else:
                 raise ValueError("No croptype LUT found")
@@ -553,7 +602,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Get cropland band names  
             cropland_classifier_url = context['cropland_params'].get('classifier_url')
             if cropland_classifier_url:
-                _, cropland_lut = load_and_prepare_model(cropland_classifier_url)
+                _, cropland_lut = load_onnx_model(cropland_classifier_url)
                 cropland_bands = [f"cropland_{band}" for band in get_output_labels(cropland_lut)]
             else:
                 raise ValueError("No cropland LUT found")
@@ -564,7 +613,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Single workflow
             classifier_url = context.get('classifier_url')
             if classifier_url:
-                _, lut_sorted = load_and_prepare_model(classifier_url)
+                _, lut_sorted = load_onnx_model(classifier_url)
                 output_labels = get_output_labels(lut_sorted)
             else:
                 raise ValueError("No classifier URL found in context")
