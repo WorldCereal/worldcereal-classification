@@ -110,8 +110,8 @@ def prepare_training_datasets(
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
         return_time_weights=False,
-        time_kernel=time_kernel,
-        time_kernel_bandwidth=time_kernel_bandwidth,
+        time_kernel="delta",
+        # time_kernel_bandwidth=time_kernel_bandwidth,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -125,10 +125,27 @@ def prepare_training_datasets(
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
         return_time_weights=False,
-        time_kernel=time_kernel,
-        time_kernel_bandwidth=time_kernel_bandwidth,
+        time_kernel="delta",
+        # time_kernel_bandwidth=time_kernel_bandwidth,
     )
-    return train_ds, val_ds, test_ds
+
+    diagnostic_ds = WorldCerealLabelledDataset(
+        val_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type=task_type,
+        num_outputs=num_outputs,
+        time_explicit=time_explicit,
+        classes_list=classes_list if classes_list is not None else [],
+        augment=augment,  # Apply augmentation for diagnostics
+        label_jitter=0,  # No jittering for diagnostics
+        label_window=0,  # No windowing for diagnostics
+        return_time_weights=False,
+        time_kernel="delta",
+        # time_kernel_bandwidth=time_kernel_bandwidth,
+    )
+
+    return train_ds, val_ds, test_ds, diagnostic_ds
 
 
 def evaluate_finetuned_model(
@@ -430,12 +447,10 @@ def _save_attention_visualizations(
     for idx in range(num_samples):
         sample_att = att[idx][None, :]
         ax = axes[idx] if rows == 1 else axes[0, idx]
-        im = ax.imshow(sample_att, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
-        ax.set_title(f"Sample {idx}")
+        ax.imshow(sample_att, aspect="auto", cmap="viridis")
+        ax.set_title(f"Attention distribution Sample {idx}")
         ax.set_yticks([])
         ax.set_xticks(np.linspace(0, time_steps - 1, min(time_steps, 5)).astype(int))
-        if idx == num_samples - 1:
-            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
         if centre_positions:
             centre = centre_positions[idx] if idx < len(centre_positions) else None
@@ -450,16 +465,12 @@ def _save_attention_visualizations(
         if prior_array is not None:
             sample_prior = prior_array[idx][None, :]
             pax = axes[1, idx]
-            im2 = pax.imshow(
-                sample_prior, aspect="auto", cmap="magma", vmin=0.0, vmax=1.0
-            )
+            pax.imshow(sample_prior, aspect="auto", cmap="magma", vmin=0.0, vmax=1.0)
             pax.set_title(f"Prior {idx}")
             pax.set_yticks([])
             pax.set_xticks(
                 np.linspace(0, time_steps - 1, min(time_steps, 5)).astype(int)
             )
-            if idx == num_samples - 1:
-                fig.colorbar(im2, ax=pax, fraction=0.046, pad=0.04)
 
             if centre_positions:
                 centre = centre_positions[idx] if idx < len(centre_positions) else None
@@ -478,7 +489,6 @@ def _save_attention_visualizations(
     fig_path = attention_dir / f"epoch_{epoch:03d}.png"
     fig.savefig(fig_path)
     plt.close(fig)
-    logger.info(f"Saved attention snapshot to {fig_path}")
 
 
 def _prepare_weight_tensor(weights, reference, device_):
@@ -582,6 +592,7 @@ def run_finetuning(
     model: torch.nn.Module,
     train_dl: DataLoader,
     val_dl: DataLoader,
+    diag_dl: DataLoader,
     experiment_name: str,
     output_dir: str | Path,
     task_type: Literal["binary", "multiclass"],
@@ -717,16 +728,8 @@ def run_finetuning(
         model.eval()
         val_loss_sum = torch.tensor(0.0, device=device)
         val_weight_sum = torch.tensor(0.0, device=device)
-        val_monitor = {
-            "weight_sum": 0.0,
-            "weighted_idx_sum": 0.0,
-            "weighted_sq_idx_sum": 0.0,
-            "support_sum": 0.0,
-            "support_count": 0.0,
-        }
 
         attention_snapshot: Optional[torch.Tensor] = None
-        prior_snapshot: Optional[torch.Tensor] = None
         valid_mask_snapshot: Optional[torch.Tensor] = None
         capture_attention = (
             visualize_attention_every is not None
@@ -739,46 +742,40 @@ def run_finetuning(
                 predictors, weights, _ = _split_batch_with_temporal_weights(batch)
                 targets = predictors.label.to(device)
 
-                prior_tensor = (
-                    _prepare_weight_tensor(weights, targets, device)
-                    if weights is not None
-                    else None
-                )
-                loss_weights = (
-                    prior_tensor
-                    if (apply_temporal_weights and prior_tensor is not None)
-                    else _prepare_weight_tensor(None, targets, device)
+                # In current validation config (label_window=0, no time weights)
+                # only one timestep per sample is labeled; others are NODATAVALUE.
+                # Thus temporal weighting == uniform after masking.
+                assert weights is None, (
+                    "Validation loader unexpectedly provided time weights."
                 )
 
-                preds = model(predictors, time_weights=prior_tensor)
+                loss_weights = _prepare_weight_tensor(weights, targets, device)
+                preds = model(predictors, time_weights=None)
+
                 loss_sum, weight_sum, metrics = _compute_temporal_loss(
                     preds, targets, loss_weights
                 )
 
-                if prior_tensor is not None and not apply_temporal_weights:
-                    _, _, metrics_prior = _compute_temporal_loss(
-                        preds.detach(), targets, prior_tensor
-                    )
-                    metrics = metrics_prior
+                if weight_sum <= 0:
+                    continue
+
                 val_loss_sum += loss_sum
                 val_weight_sum += weight_sum
-                for key, value in metrics.items():
-                    val_monitor[key] += float(value.detach().cpu())
 
-                if capture_attention and attention_snapshot is None:
-                    head = getattr(model, "classification_head", None)
-                    attn_snapshot = (
-                        getattr(head, "_last_attention", None)
-                        if head is not None
-                        else None
-                    )
-                    if attn_snapshot is not None:
-                        attention_snapshot = attn_snapshot.detach().cpu()
-                        if prior_tensor is not None:
-                            prior_snapshot = prior_tensor.detach().cpu()
-                        valid_mask_tensor = _extract_valid_time_mask(targets)
-                        if valid_mask_tensor is not None:
-                            valid_mask_snapshot = valid_mask_tensor.detach().cpu()
+            # Use diagnostic loader to capture attention snapshots
+            if capture_attention:
+                batch = next(iter(diag_dl))
+                predictors, _, _ = _split_batch_with_temporal_weights(batch)
+                targets = predictors.label.to(device)
+                _ = model(predictors, time_weights=None)
+                attn_snapshot = (
+                    getattr(head, "_last_attention", None) if head is not None else None
+                )
+                if attn_snapshot is not None:
+                    attention_snapshot = attn_snapshot.detach().cpu()
+                    valid_mask_tensor = _extract_valid_time_mask(targets)
+                    if valid_mask_tensor is not None:
+                        valid_mask_snapshot = valid_mask_tensor.detach().cpu()
 
         if val_weight_sum > 0:
             current_val_loss = (val_loss_sum / val_weight_sum).item()
@@ -789,10 +786,10 @@ def run_finetuning(
         if capture_attention and attention_snapshot is not None:
             _save_attention_visualizations(
                 attention_snapshot,
-                prior_snapshot,
-                valid_mask_snapshot,
-                epoch,
-                output_dir,
+                prior=None,  # no prior in validation
+                valid_mask=valid_mask_snapshot,
+                epoch=epoch,
+                output_dir=output_dir,
             )
 
         def _log_temporal_monitor(prefix: str, stats: dict):
@@ -809,7 +806,6 @@ def run_finetuning(
                 tqdm.write(msg)
 
         _log_temporal_monitor("Train", train_monitor)
-        _log_temporal_monitor("Val", val_monitor)
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)

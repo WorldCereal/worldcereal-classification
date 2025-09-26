@@ -191,7 +191,7 @@ def main(args):
     # Construct training and validation datasets
     label_window = raw_label_window if raw_label_window > 0 else None
 
-    train_ds, val_ds, test_ds = prepare_training_datasets(
+    train_ds, val_ds, test_ds, diagnostic_ds = prepare_training_datasets(
         train_df,
         val_df,
         test_df,
@@ -252,7 +252,7 @@ def main(args):
             generator=generator,
             sampling_class="finetune_class",
             method="log",
-            clip_range=(0.2, 10),
+            # clip_range=(0.2, 10),
         )
         if use_balancing
         else None,
@@ -267,12 +267,20 @@ def main(args):
         num_workers=hyperparams.num_workers,
     )
 
+    diag_dl = DataLoader(
+        diagnostic_ds,
+        batch_size=hyperparams.batch_size,
+        shuffle=False,
+        num_workers=hyperparams.num_workers,
+    )
+
     # Run the finetuning
     logger.info("Starting finetuning...")
     finetuned_model = run_finetuning(
         model=model,
         train_dl=train_dl,
         val_dl=val_dl,
+        diag_dl=diag_dl,
         experiment_name=experiment_name,
         output_dir=output_dir,
         task_type=task_type,
@@ -281,7 +289,7 @@ def main(args):
         hyperparams=hyperparams,
         setup_logging=False,
         apply_temporal_weights=apply_temporal_weights,
-        attention_entropy_weight=0.01,
+        attention_entropy_weight=0.02,
         freeze_layers=freeze_layers,
         unfreeze_epoch=unfreeze_epoch,
     )
@@ -390,29 +398,29 @@ def parse_args(arg_list=None):
 
 
 if __name__ == "__main__":
-    manual_args = [
-        "--experiment_tag",
-        "debug-run",
-        "--timestep_freq",
-        "month",
-        "--augment",
-        "--time_explicit",
-        "--temporal_attention",
-        "--time_kernel",
-        "gaussian",
-        "--time_kernel_bandwidth",
-        "1.0",
-        "--label_window",
-        "1",
-        "--label_jitter",
-        "1",
-        "--augment",
-        "--finetune_classes",
-        "CROPTYPE27",  # LANDCOVER10
-        "--use_balancing",
-        "--debug",
-    ]
-    # manual_args = None
+    # manual_args = [
+    #     "--experiment_tag",
+    #     "debug-run",
+    #     "--timestep_freq",
+    #     "month",
+    #     "--augment",
+    #     "--time_explicit",
+    #     "--temporal_attention",
+    #     "--time_kernel",
+    #     "gaussian",
+    #     "--time_kernel_bandwidth",
+    #     "1.0",
+    #     "--label_window",
+    #     "1",
+    #     "--label_jitter",
+    #     "1",
+    #     "--augment",
+    #     "--finetune_classes",
+    #     "CROPTYPE27",  # LANDCOVER10
+    #     "--use_balancing",
+    #     "--debug",
+    # ]
+    manual_args = None
 
     args = parse_args(manual_args)
     main(args)
