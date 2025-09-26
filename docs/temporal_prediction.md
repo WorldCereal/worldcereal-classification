@@ -4,10 +4,10 @@ This document explains how to configure and use temporal vs non-temporal predict
 
 ## Overview
 
-WorldCereal now supports two modes of feature extraction and prediction:
+WorldCereal supports two modes for handling the temporal dimension during inference. In both cases the finetuning head emits per-timestep logits; the difference lies in how a single supervision timestep is chosen for map generation:
 
-1. **Non-Temporal Prediction** (Default): Features are pooled across the time dimension, resulting in a single feature vector per pixel
-2. **Temporal Prediction**: Features preserve the time dimension, and a specific timestep is selected based on a target date
+1. **Non-Temporal Prediction** (Default): Per-timestep logits are produced internally, but downstream evaluation collapses them to a single timestep (defaulting to the middle of the sequence when no explicit target is provided).
+2. **Temporal Prediction**: Per-timestep logits are preserved explicitly and a labelled timestep (e.g. provided via a target date) is used for supervision and reporting.
 
 ## Configuration
 
@@ -89,7 +89,7 @@ cropland_params = CropLandParameters(
 )
 ```
 
-**Result**: Features are pooled across time → Single feature vector per pixel → Standard classification
+**Result**: Per-timestep logits are produced, and the middle timestep is selected downstream → Standard classification
 
 ### 2. Temporal Prediction with Specific Target Date
 
@@ -109,7 +109,7 @@ croptype_params = CropTypeParameters(
 )
 ```
 
-**Result**: Features preserve time dimension → Select timestep closest to 2024-07-01 → Classification
+**Result**: The logits for each timestep remain accessible → Select timestep closest to 2024-07-01 → Classification
 
 ### 3. Temporal Prediction with Middle Timestep
 
@@ -129,7 +129,7 @@ croptype_params = CropTypeParameters(
 )
 ```
 
-**Result**: Features preserve time dimension → Select middle timestep (6/12) → Classification
+**Result**: The logits for each timestep remain accessible → Select middle timestep (6/12) → Classification
 
 ## Implementation Details
 
@@ -138,10 +138,8 @@ croptype_params = CropTypeParameters(
 The `feature_extractor.py` has been updated with the following changes:
 
 1. **New Parameters**: Added support for `temporal_prediction` and `target_date` parameters
-2. **Pooling Method Selection**: Automatically selects the appropriate pooling method:
-   - `PoolingMethods.GLOBAL` for non-temporal prediction
-   - `PoolingMethods.TIME` for temporal prediction
-3. **Timestep Selection**: New function `select_timestep_from_temporal_features()` handles timestep selection
+2. **Temporal Embeddings**: Presto is always queried with `PoolingMethods.TIME` so that the downstream head can emit logits for every timestep.
+3. **Timestep Selection**: The helper `select_timestep_from_temporal_features()` identifies the timestep used when a single prediction is required (e.g. for exporting rasters).
 
 ### Key Functions
 
@@ -167,10 +165,10 @@ def select_timestep_from_temporal_features(features: xr.DataArray, target_date: 
 
 #### Non-Temporal Mode (Default)
 ```
-Input Array (12 timesteps) 
-→ Presto Feature Extraction (PoolingMethods.GLOBAL)
-→ Features pooled across time
-→ Single feature vector per pixel
+Input Array (12 timesteps)
+→ Presto Feature Extraction (PoolingMethods.TIME)
+→ Per-timestep logits from finetuning head
+→ Select middle timestep (if no target date)
 → Classification
 ```
 
@@ -178,8 +176,7 @@ Input Array (12 timesteps)
 ```
 Input Array (12 timesteps)
 → Presto Feature Extraction (PoolingMethods.TIME)
-→ Features with time dimension preserved
-→ Select timestep based on target_date
-→ Features for selected timestep
-→ Classification
+→ Per-timestep logits from finetuning head
+→ Select timestep based on target_date or kernel centre
+→ Classification + temporal diagnostics
 ```

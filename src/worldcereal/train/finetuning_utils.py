@@ -216,7 +216,11 @@ def evaluate_finetuned_model(
             if isinstance(batch, dict):
                 batch = Predictors(**batch)
 
-            model_output = finetuned_model(batch)
+            outputs = finetuned_model(batch)
+            if isinstance(outputs, tuple):
+                model_output, _ = outputs
+            else:
+                model_output = outputs
             targets = batch.label.cpu().numpy().astype(int)
 
             if test_ds.task_type == "binary":
@@ -491,14 +495,62 @@ def _save_attention_visualizations(
     plt.close(fig)
 
 
-def _prepare_weight_tensor(weights, reference, device_):
+def _prepare_weight_tensor(
+    weights,
+    reference: torch.Tensor,
+    device_,
+    *,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Cast optional temporal weights to a tensor aligned with the targets."""
+
     if weights is None:
-        return torch.ones_like(reference, dtype=torch.float32, device=device_)
-    if isinstance(weights, np.ndarray):
-        weights_tensor = torch.from_numpy(weights)
+        weights_tensor = torch.ones_like(reference, dtype=torch.float32, device=device_)
     else:
-        weights_tensor = torch.as_tensor(weights)
-    return weights_tensor.to(device=device_, dtype=torch.float32)
+        if isinstance(weights, np.ndarray):
+            weights_tensor = torch.from_numpy(weights)
+        else:
+            weights_tensor = torch.as_tensor(weights)
+        weights_tensor = weights_tensor.to(device=device_, dtype=torch.float32)
+
+        if weights_tensor.dim() == reference.dim() - 1:
+            weights_tensor = weights_tensor.unsqueeze(-1)
+
+        if weights_tensor.shape != reference.shape:
+            weights_tensor = weights_tensor.expand(reference.shape)
+
+    mask = (reference != NODATAVALUE).to(dtype=weights_tensor.dtype)
+    weights_tensor = weights_tensor * mask
+
+    if normalize:
+        time_dim = -2 if reference.dim() >= 4 else -1
+        sums = weights_tensor.sum(dim=time_dim, keepdim=True)
+        weights_tensor = torch.where(
+            sums > 0,
+            weights_tensor / sums.clamp_min(1e-8),
+            weights_tensor,
+        )
+
+    return weights_tensor
+
+
+def _flatten_temporal_distribution(tensor: torch.Tensor) -> torch.Tensor:
+    """Reshape a temporal distribution to [N, T] without losing ordering."""
+
+    if tensor.dim() == 0:
+        return tensor.view(1, 1)
+
+    squeezed = tensor
+    if squeezed.dim() >= 1 and squeezed.shape[-1] == 1:
+        squeezed = squeezed.squeeze(-1)
+
+    if squeezed.dim() == 1:
+        return squeezed.view(1, -1)
+
+    while squeezed.dim() > 2:
+        squeezed = squeezed.reshape(-1, squeezed.shape[-1])
+
+    return squeezed
 
 
 def _compute_temporal_loss(preds, targets, weights):
@@ -605,7 +657,9 @@ def run_finetuning(
     freeze_layers: Optional[List[str]] = None,
     unfreeze_epoch: Optional[int] = None,
     visualize_attention_every: Optional[int] = 1,
-    attention_entropy_weight: float = 0.0,
+    attn_kl_weight: float = 0.0,
+    attn_entropy_weight: float = 0.0,
+    attn_warmup_epochs: int = 0,
 ):
     """Fine-tune a Presto model with optional temporally weighted supervision.
 
@@ -616,8 +670,12 @@ def run_finetuning(
             uniform-in-time weighting.
         visualize_attention_every: Plot attention snapshots every N epochs
             (set to ``None`` or ``0`` to disable).
-        attention_entropy_weight: Strength of entropy regularisation on temporal
+        attn_kl_weight: Strength of KL regularisation between attention weights
+            and the temporal supervision kernel.
+        attn_entropy_weight: Strength of entropy regularisation on temporal
             attention (0 disables it).
+        attn_warmup_epochs: Delay (in epochs) before enabling attention
+            regularisation terms.
     """
 
     output_dir = Path(output_dir)
@@ -665,57 +723,63 @@ def run_finetuning(
             predictors, weights, _ = _split_batch_with_temporal_weights(batch)
             targets = predictors.label.to(device)
 
-            prior_tensor = (
-                _prepare_weight_tensor(weights, targets, device)
-                if weights is not None
-                else None
-            )
+            kernel_tensor = _prepare_weight_tensor(weights, targets, device)
             loss_weights = (
-                prior_tensor
-                if (apply_temporal_weights and prior_tensor is not None)
+                kernel_tensor
+                if apply_temporal_weights
                 else _prepare_weight_tensor(None, targets, device)
             )
 
-            preds = model(predictors, time_weights=prior_tensor)
+            outputs = model(
+                predictors,
+                time_weights=kernel_tensor if weights is not None else None,
+            )
+            if isinstance(outputs, tuple):
+                preds, attn = outputs
+            else:
+                preds, attn = outputs, None
 
             loss_sum, weight_sum, metrics = _compute_temporal_loss(
                 preds, targets, loss_weights
             )
-
-            if prior_tensor is not None and not apply_temporal_weights:
-                _, _, metrics_prior = _compute_temporal_loss(
-                    preds.detach(), targets, prior_tensor
-                )
-                metrics = metrics_prior
             if weight_sum <= 0:
                 continue
 
-            if attention_entropy_weight > 0:
-                raw_attn: Optional[torch.Tensor] = None
-                head = getattr(model, "classification_head", None)
-                if head is not None and hasattr(head, "_last_attention_raw"):
-                    raw_attr = getattr(head, "_last_attention_raw")
-                    if isinstance(raw_attr, torch.Tensor):
-                        raw_attn = raw_attr
+            aux_loss = torch.tensor(0.0, device=device)
+            if (
+                attn is not None
+                and (attn_kl_weight > 0 or attn_entropy_weight > 0)
+                and epoch >= attn_warmup_epochs
+            ):
+                attn_flat = _flatten_temporal_distribution(attn)
+                kernel_flat = _flatten_temporal_distribution(kernel_tensor)
+                if attn_flat.shape == kernel_flat.shape:
+                    valid_rows = kernel_flat.sum(dim=-1) > 0
+                    if valid_rows.any():
+                        attn_valid = attn_flat[valid_rows]
+                        kernel_valid = kernel_flat[valid_rows]
+                        eps = 1e-8
+                        if attn_kl_weight > 0:
+                            kl_terms = attn_valid * (
+                                attn_valid.clamp_min(eps).log()
+                                - kernel_valid.clamp_min(eps).log()
+                            )
+                            kl_loss = kl_terms.sum(dim=-1).mean()
+                            aux_loss = aux_loss + attn_kl_weight * kl_loss
+                        if attn_entropy_weight > 0:
+                            entropy_terms = -(
+                                attn_valid.clamp_min(eps)
+                                * attn_valid.clamp_min(eps).log()
+                            ).sum(dim=-1)
+                            entropy_loss = entropy_terms.mean()
+                            aux_loss = aux_loss + attn_entropy_weight * entropy_loss
 
-                if raw_attn is not None:
-                    entropy = (
-                        -(raw_attn.clamp_min(1e-8) * raw_attn.clamp_min(1e-8).log())
-                        .sum(dim=-1)
-                        .mean()
-                    )
-                    loss_sum = (
-                        loss_sum - attention_entropy_weight * entropy * weight_sum
-                    )
-                    if head is not None:
-                        setattr(head, "_last_attention_raw", None)
-
-            loss = loss_sum / weight_sum
-            loss.backward()
+            total_loss = loss_sum / weight_sum + aux_loss
+            total_loss.backward()
             optimizer.step()
 
             train_weight_sum += weight_sum.detach()
-            train_loss_sum += loss_sum.detach()
+            train_loss_sum += (loss_sum + aux_loss * weight_sum).detach()
             for key, value in metrics.items():
                 train_monitor[key] += float(value.detach().cpu())
 
@@ -731,6 +795,7 @@ def run_finetuning(
 
         attention_snapshot: Optional[torch.Tensor] = None
         valid_mask_snapshot: Optional[torch.Tensor] = None
+        prior_snapshot: Optional[torch.Tensor] = None
         capture_attention = (
             visualize_attention_every is not None
             and visualize_attention_every > 0
@@ -750,7 +815,11 @@ def run_finetuning(
                 )
 
                 loss_weights = _prepare_weight_tensor(weights, targets, device)
-                preds = model(predictors, time_weights=None)
+                outputs = model(predictors, time_weights=None)
+                if isinstance(outputs, tuple):
+                    preds, _ = outputs
+                else:
+                    preds = outputs
 
                 loss_sum, weight_sum, metrics = _compute_temporal_loss(
                     preds, targets, loss_weights
@@ -767,12 +836,14 @@ def run_finetuning(
                 batch = next(iter(diag_dl))
                 predictors, _, _ = _split_batch_with_temporal_weights(batch)
                 targets = predictors.label.to(device)
-                _ = model(predictors, time_weights=None)
-                attn_snapshot = (
-                    getattr(head, "_last_attention", None) if head is not None else None
-                )
+                diag_outputs = model(predictors, time_weights=None)
+                attn_snapshot = None
+                if isinstance(diag_outputs, tuple):
+                    _, attn_snapshot = diag_outputs
                 if attn_snapshot is not None:
                     attention_snapshot = attn_snapshot.detach().cpu()
+                    prior_tensor = _prepare_weight_tensor(None, targets, device)
+                    prior_snapshot = prior_tensor.detach().cpu()
                     valid_mask_tensor = _extract_valid_time_mask(targets)
                     if valid_mask_tensor is not None:
                         valid_mask_snapshot = valid_mask_tensor.detach().cpu()
@@ -784,9 +855,41 @@ def run_finetuning(
         val_loss_history.append(current_val_loss)
 
         if capture_attention and attention_snapshot is not None:
+            if valid_mask_snapshot is not None:
+                attn_arr = attention_snapshot.numpy().reshape(
+                    -1, attention_snapshot.shape[-1]
+                )
+                valid_arr = valid_mask_snapshot.numpy().reshape(
+                    -1, valid_mask_snapshot.shape[-1]
+                )
+                valid_rows = valid_arr.sum(axis=1) > 0
+                if np.any(valid_rows):
+                    attn_sel = attn_arr[valid_rows]
+                    valid_sel = valid_arr[valid_rows]
+                    gt_centre = np.array(
+                        [
+                            row.nonzero()[0].mean()
+                            if row.nonzero()[0].size > 0
+                            else np.nan
+                            for row in valid_sel
+                        ]
+                    )
+                    finite = ~np.isnan(gt_centre)
+                    if np.any(finite):
+                        argmax_pos = attn_sel.argmax(axis=1)
+                        diffs = np.abs(argmax_pos - gt_centre)
+                        entropies = -np.sum(
+                            attn_sel * np.log(np.clip(attn_sel, 1e-8, None)), axis=1
+                        )
+                        tqdm.write(
+                            "Diag attention stats → |argmax-valid| mean="
+                            f"{np.nanmean(diffs[finite]):.2f}, median={np.nanmedian(diffs[finite]):.2f}, "
+                            f"entropy mean={np.mean(entropies[finite]):.2f}"
+                        )
+
             _save_attention_visualizations(
                 attention_snapshot,
-                prior=None,  # no prior in validation
+                prior=prior_snapshot,
                 valid_mask=valid_mask_snapshot,
                 epoch=epoch,
                 output_dir=output_dir,

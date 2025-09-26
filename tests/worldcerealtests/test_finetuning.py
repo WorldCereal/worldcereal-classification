@@ -45,6 +45,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
     ):
         train_dl = DataLoader(train_ds, batch_size=2, shuffle=True)
         val_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
+        diag_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
 
         model = build_worldcereal_presto(
             num_outputs=num_outputs,
@@ -63,6 +64,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
             model,
             train_dl,
             val_dl,
+            diag_dl,
             experiment_name=f"{task_type}-test",
             output_dir=output_dir,
             task_type=task_type,
@@ -86,6 +88,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
     ):
         train_dl = DataLoader(train_ds, batch_size=2, shuffle=True)
         val_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
+        diag_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
 
         model = build_worldcereal_presto(
             num_outputs=num_outputs,
@@ -104,6 +107,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
             model=model,
             train_dl=train_dl,
             val_dl=val_dl,
+            diag_dl=diag_dl,
             experiment_name=f"{task_type}-temporal-test",
             output_dir=output_dir,
             task_type=task_type,
@@ -270,6 +274,7 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
     ):
         train_dl = DataLoader(train_ds, batch_size=2, shuffle=True)
         val_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
+        diag_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
 
         model = build_worldcereal_presto(
             num_outputs=num_outputs,
@@ -287,6 +292,7 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
             model,
             train_dl,
             val_dl,
+            diag_dl,
             experiment_name=f"{task_type}-test",
             output_dir=output_dir,
             task_type=task_type,

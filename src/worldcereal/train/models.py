@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import os
 import torch
 from einops import rearrange
 from torch import nn
 
-from prometheo.models.presto.single_file_presto import FinetuningHead
 from prometheo.models.presto.wrapper import (
     PoolingMethods,
     PretrainedPrestoWrapper,
@@ -17,8 +16,41 @@ from prometheo.models.presto.wrapper import (
 from prometheo.predictors import Predictors
 
 
-class TemporalAttentionHead(nn.Module):
-    """Attention-based multiple-instance head with optional temporal priors."""
+class _BaseTemporalHead(nn.Module):
+    """Base class for temporal heads returning per-timestep logits."""
+
+    def __init__(self, hidden_size: int, num_outputs: int, regression: bool) -> None:
+        super().__init__()
+        if regression:
+            raise ValueError("Temporal heads currently support classification only")
+        self.classifier = nn.Linear(hidden_size, num_outputs)
+
+    def _validate_inputs(self, x: torch.Tensor) -> None:
+        if x.dim() != 5:
+            raise ValueError(
+                "Temporal heads expect input of shape [B, H, W, T, D], got "
+                f"{tuple(x.shape)}"
+            )
+
+
+class TemporalLinearHead(_BaseTemporalHead):
+    """Simple per-timestep classifier without attention."""
+
+    def __init__(self, hidden_size: int, num_outputs: int, regression: bool) -> None:
+        super().__init__(hidden_size, num_outputs, regression)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        time_weights: Optional[torch.Tensor] = None,  # noqa: ARG002 - kept for API parity
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        self._validate_inputs(x)
+        logits = self.classifier(x)
+        return logits, None
+
+
+class TemporalAttentionHead(_BaseTemporalHead):
+    """Attention-based head that keeps attention auxiliary to per-timestep logits."""
 
     def __init__(
         self,
@@ -28,29 +60,21 @@ class TemporalAttentionHead(nn.Module):
         use_prior: bool = True,
         eps: float = 1e-6,
     ) -> None:
-        super().__init__()
-        if regression:
-            raise ValueError("TemporalAttentionHead currently supports classification only")
+        super().__init__(hidden_size, num_outputs, regression)
         self.use_prior = use_prior
         self.eps = eps
 
         self.att_proj = nn.Linear(hidden_size, hidden_size)
         self.att_act = nn.Tanh()
         self.att_score = nn.Linear(hidden_size, 1)
-        self.classifier = nn.Linear(hidden_size, num_outputs)
         self.register_buffer("_last_attention", None, persistent=False)
-        self._last_attention_raw: Optional[torch.Tensor] = None
 
     def forward(
         self,
         x: torch.Tensor,
         time_weights: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        if x.dim() != 5:
-            raise ValueError(
-                "TemporalAttentionHead expects input of shape [B, H, W, T, D], got "
-                f"{tuple(x.shape)}"
-            )
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        self._validate_inputs(x)
 
         scores = self.att_score(self.att_act(self.att_proj(x))).squeeze(-1)
 
@@ -63,12 +87,9 @@ class TemporalAttentionHead(nn.Module):
 
         alpha = torch.softmax(scores, dim=-1)
         self._last_attention = alpha.detach()
-        self._last_attention_raw = alpha
 
-        pooled = torch.sum(alpha.unsqueeze(-1) * x, dim=-2)
-        logits = self.classifier(pooled)  # [B, H, W, num_outputs]
-        logits = logits.unsqueeze(-2).expand(-1, -1, -1, x.shape[-2], -1)
-        return logits
+        logits = self.classifier(x)
+        return logits, alpha
 
 
 class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
@@ -96,7 +117,7 @@ class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
         hidden_size = self.encoder.embedding_size
         self._regression = regression
         self._temporal_attention = temporal_attention
-        self._default_pooling = PoolingMethods.TIME if temporal_attention else PoolingMethods.GLOBAL
+        self._default_pooling = PoolingMethods.TIME
 
         if temporal_attention:
             self.classification_head: nn.Module = TemporalAttentionHead(
@@ -106,7 +127,7 @@ class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
                 use_prior=attention_use_prior,
             )
         else:
-            self.classification_head = FinetuningHead(
+            self.classification_head = TemporalLinearHead(
                 hidden_size=hidden_size,
                 num_outputs=num_outputs,
                 regression=regression,
@@ -115,7 +136,7 @@ class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
     def forward(
         self,
         x: Predictors,
-        eval_pooling: Union[PoolingMethods, None] = PoolingMethods.GLOBAL,
+        eval_pooling: Union[PoolingMethods, None] = PoolingMethods.TIME,
         time_weights: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         s1_s2_era5_srtm, mask, dynamic_world, latlon, timestamps, h, w = (
@@ -125,12 +146,7 @@ class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
         inferred_pooling: Union[PoolingMethods, None] = eval_pooling
 
         if x.label is not None:
-            if x.label.shape[3] == dynamic_world.shape[1]:
-                inferred_pooling = PoolingMethods.TIME
-            else:
-                if x.label.shape[1] != 1:
-                    raise ValueError(f"Unexpected label shape {x.label.shape}")
-                inferred_pooling = PoolingMethods.GLOBAL
+            inferred_pooling = PoolingMethods.TIME
 
         if inferred_pooling is None:
             inferred_pooling = self._default_pooling
@@ -149,24 +165,26 @@ class WorldCerealPretrainedPresto(PretrainedPrestoWrapper):
             eval_pooling=inferred_pooling.value if inferred_pooling is not None else None,
         )
 
-        if inferred_pooling == PoolingMethods.GLOBAL:
-            b = int(embeddings.shape[0] / (h * w))
-            embeddings = rearrange(embeddings, "(b h w) d -> b h w d", b=b, h=h, w=w)
-            embeddings = torch.unsqueeze(embeddings, 3)
-        elif inferred_pooling == PoolingMethods.TIME:
-            b = int(embeddings.shape[0] / (h * w))
-            embeddings = rearrange(
-                embeddings, "(b h w) t d -> b h w t d", b=b, h=h, w=w
+        if inferred_pooling != PoolingMethods.TIME:
+            raise ValueError(
+                "WorldCereal finetuning expects temporal embeddings (PoolingMethods.TIME)"
             )
-        else:
-            if (h != 1) or (w != 1):
-                raise ValueError("h w != 1 unsupported for SSL")
 
-        if self._temporal_attention:
-            logits = self.classification_head(embeddings, time_weights=time_weights)
-        else:
-            logits = self.classification_head(embeddings)
-        return logits
+        b = int(embeddings.shape[0] / (h * w))
+        embeddings = rearrange(
+            embeddings, "(b h w) t d -> b h w t d", b=b, h=h, w=w
+        )
+
+        head_input = embeddings
+        head_time_weights = time_weights
+        if head_time_weights is not None:
+            head_time_weights = head_time_weights.to(embeddings.device)
+
+        logits, attn = self.classification_head(
+            head_input,
+            time_weights=head_time_weights,
+        )
+        return logits, attn
 
 
 def build_worldcereal_presto(

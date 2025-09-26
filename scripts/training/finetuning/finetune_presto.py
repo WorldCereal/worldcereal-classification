@@ -65,6 +65,9 @@ def main(args):
     debug = args.debug
     use_balancing = args.use_balancing  # If True, use class balancing for training
     temporal_attention = args.temporal_attention
+    attn_kl_weight = args.attn_kl_weight
+    attn_entropy_weight = args.attn_entropy_weight
+    attn_warmup_epochs = args.attn_warmup_epochs
 
     # ± timesteps to jitter true label pos, for time_explicit only; will only be set for training
     label_jitter = args.label_jitter
@@ -213,6 +216,10 @@ def main(args):
         logger.info(
             "Temporal attention head enabled; using temporal priors as soft bias"
         )
+    else:
+        attn_kl_weight = 0.0
+        attn_entropy_weight = 0.0
+        attn_warmup_epochs = 0
 
     if apply_temporal_weights:
         logger.info(
@@ -289,7 +296,9 @@ def main(args):
         hyperparams=hyperparams,
         setup_logging=False,
         apply_temporal_weights=apply_temporal_weights,
-        attention_entropy_weight=0.02,
+        attn_kl_weight=attn_kl_weight,
+        attn_entropy_weight=attn_entropy_weight,
+        attn_warmup_epochs=attn_warmup_epochs,
         freeze_layers=freeze_layers,
         unfreeze_epoch=unfreeze_epoch,
     )
@@ -379,6 +388,24 @@ def parse_args(arg_list=None):
         type=int,
         default=0,
         help="Freeze encoder weights for this many initial epochs (0 disables freezing)",
+    )
+    parser.add_argument(
+        "--attn-kl-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the KL term between attention and temporal kernel (temporal attention only)",
+    )
+    parser.add_argument(
+        "--attn-entropy-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the attention entropy regulariser (temporal attention only)",
+    )
+    parser.add_argument(
+        "--attn-warmup-epochs",
+        type=int,
+        default=0,
+        help="Number of epochs to delay attention regularisation (temporal attention only)",
     )
     parser.add_argument(
         "--time_kernel",

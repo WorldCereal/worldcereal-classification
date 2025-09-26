@@ -74,4 +74,4 @@ For croptype mapping:
 
 For cropland mapping:
 - `CropLandParameters()` - No target_date needed
-- Features are pooled across time (`temporal_prediction=False`)
+- Per-timestep logits are generated internally; with `temporal_prediction=False` the workflow selects the middle timestep downstream.

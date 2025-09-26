@@ -23,6 +23,7 @@ In order to run classification jobs on CDSE, users can get started with [monthly
 - **Powerful classification pipeline**: WorldCereal builds upon [Presto](https://arxiv.org/abs/2304.14065), a pretrained transformer-based model, leveraging global self-supervised learning of multimodal input timeseries, leading to better accuracies and higher generalizability in space and time of downstream crop classification models. The Presto backbone of WorldCereal classification pipelines is developed [here](https://github.com/WorldCereal/presto-worldcereal).
 - **Customizable**: Users can pick any region or temporal range and apply either default models or train their own and produce custom maps, interacting with publicly available training data.
 - **Easy to Use**: Integrates into Jupyter notebooks and other Python environments.
+- **Temporal logits with auxiliary attention**: Finetuned heads always emit per-timestep logits, while temporal attention weights remain optional diagnostics and can be regularised via auxiliary losses.
 
 ## Quick Start
 
