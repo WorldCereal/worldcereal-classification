@@ -849,11 +849,11 @@ def _trim_timesteps(
             df = df[~df["sample_id"].isin(samples_too_few)]
         elif len(samples_too_few) == len(sample_counts):
             raise ValueError(
-                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start} - {trim_end}. Check your date range."
+                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start.strftime('%Y-%m-%d')} - {trim_end.strftime('%Y-%m-%d')}. Check your date range."
             )
         else:
             logger.info(
-                f"Applied max_timesteps_trim date range {trim_start} - {trim_end}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
+                f"Applied max_timesteps_trim date range {trim_start.strftime('%Y-%m-%d')} - {trim_end.strftime('%Y-%m-%d')}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
             )
         # Recompute basics
         df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
