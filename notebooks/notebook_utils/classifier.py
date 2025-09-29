@@ -59,7 +59,7 @@ def compute_training_features(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
-    time_explicit: bool = False,
+    time_explicit: bool = True,
 ) -> pd.DataFrame:
     """Generate a training dataframe with Presto embeddings and labels.
 
@@ -70,12 +70,12 @@ def compute_training_features(
 
     Temporal representation modes
     -----------------------------
-    ``time_explicit=False`` (default)
+    ``time_explicit=False``
         One 128‑D embedding is produced per sample via internal global pooling over the
         (possibly jittered) temporal slice. Augmentation changes which timesteps
         contribute to the pooled summary.
 
-    ``time_explicit=True``
+    ``time_explicit=True`` (default)
         No global pooling: the embedding at the *valid* timestep (``valid_position``)
         is selected after alignment / augmentation. There is still one 128‑D vector per
         sample but it represents the state at the valid time instead of an aggregate.
@@ -111,7 +111,7 @@ def compute_training_features(
         Determines which pretrained Presto weights to load and multiclass vs binary mode.
     augment : bool, default=True
         Enable temporal jitter data augmentation.
-    time_explicit : bool, default=False
+    time_explicit : bool, default=True
         Switch from globally pooled sequence embeddings to valid timestep embeddings.
 
     Returns
@@ -174,7 +174,7 @@ def compute_presto_embeddings(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
-    time_explicit: bool = False,
+    time_explicit: bool = True,
 ) -> pd.DataFrame:
     """Run pretrained *Presto* model to attach 128‑D embeddings to each sample.
 
@@ -188,7 +188,7 @@ def compute_presto_embeddings(
         Selects pretrained weights and multiclass vs binary configuration.
     augment : bool, default=True
         Whether the underlying dataset applies temporal jitter.
-    time_explicit : bool, default=False
+    time_explicit : bool, default=True
         When ``True`` selects the embedding at ``valid_position`` instead of a pooled
         sequence representation.
 
