@@ -20,6 +20,10 @@ from pyproj import Transformer
 from torch import nn
 from torch.utils.data import Dataset, WeightedRandomSampler
 
+# minimum distance from valid_position to the edges when augmenting
+# we need to define it globally so that it can be used in process_parquet as well
+MIN_EDGE_BUFFER = 2
+
 
 def get_class_weights(
     labels: np.ndarray[Any],
@@ -138,14 +142,14 @@ class WorldCerealDataset(Dataset):
     def get_timestep_positions(
         self,
         row_d: Dict,
-        MIN_EDGE_BUFFER: int = 2,
+        min_edge_buffer: int = MIN_EDGE_BUFFER,
     ) -> Tuple[List[int], int]:
         available_timesteps = int(row_d["available_timesteps"])
         valid_position = int(row_d["valid_position"])
 
         # Get the center point to use for extracting a sequence of timesteps
         center_point = self._get_center_point(
-            available_timesteps, valid_position, self.augment, MIN_EDGE_BUFFER
+            available_timesteps, valid_position, self.augment, min_edge_buffer
         )
 
         # Determine the timestep positions to extract
@@ -163,9 +167,9 @@ class WorldCerealDataset(Dataset):
             )
 
         # Sanity check to make sure valid_position is still within the extracted timesteps
-        assert valid_position in timestep_positions, (
-            f"Valid position {valid_position} not in timestep positions {timestep_positions}"
-        )
+        assert (
+            valid_position in timestep_positions
+        ), f"Valid position {valid_position} not in timestep positions {timestep_positions}"
 
         return timestep_positions, valid_position
 
@@ -342,9 +346,10 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             whether to return the sample_id in the output, by default False.
             If True, the sample_id will be included in the output as a separate element.
         """
-        assert task_type in ["binary", "multiclass"], (
-            f"Invalid task type `{task_type}` for labelled dataset"
-        )
+        assert task_type in [
+            "binary",
+            "multiclass",
+        ], f"Invalid task type `{task_type}` for labelled dataset"
 
         super().__init__(
             dataframe,
@@ -467,9 +472,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             else:
                 # apply jitter
                 # scalar valid_position must be an int here
-                assert isinstance(valid_position, int), (
-                    f"Expected single int valid_position, got {type(valid_position)}"
-                )
+                assert isinstance(
+                    valid_position, int
+                ), f"Expected single int valid_position, got {type(valid_position)}"
                 p = valid_position
                 if self.label_jitter > 0:
                     shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
