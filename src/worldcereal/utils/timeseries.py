@@ -903,7 +903,11 @@ def _trim_timesteps(
 
     before_unique = df["timestamp_ind"].nunique()
 
-    inds_to_drop = df[["sample_id", "timestamp_ind", "valid_position"]].groupby("sample_id", group_keys=False).apply(_trim_sample).values
+    ind_cols = ["sample_id", "timestamp_ind"]
+    if use_valid_time:
+        ind_cols.append("valid_position")
+        
+    inds_to_drop = df[ind_cols].groupby("sample_id", group_keys=False).apply(_trim_sample).values
     inds_to_drop = np.concatenate(inds_to_drop)
     df.drop(index=inds_to_drop, inplace=True)
     gc.collect()
