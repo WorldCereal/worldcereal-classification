@@ -764,6 +764,21 @@ class TestProcessParquet(TestCase):
         # Still meets required minimum
         self.assertTrue((result_trim["available_timesteps"] >= self.min_timesteps_month).all())
 
+    def test_max_timesteps_trim_date_range(self):
+        """Test trimming within a specific date range."""
+        trim_start = pd.Timestamp("2021-01-01")
+        trim_end = pd.Timestamp("2022-01-31")
+        result_trim = process_parquet(
+            self.df_month,
+            freq="month",
+            use_valid_time=True,
+            max_timesteps_trim=(trim_start, trim_end),
+        )
+        self.assertTrue((result_trim["available_timesteps"] >= self.min_timesteps_month).all())
+        self.assertTrue((result_trim["available_timesteps"] <= 13).all())  # Jan 2021 to Jan 2022 inclusive = 13 months
+        self.assertTrue((result_trim["start_date"] >= "2021-01-01").all())
+        self.assertTrue((result_trim["end_date"] <= "2022-01-31").all())
+
     def test_max_timesteps_trim_no_valid_time(self):
         """Trimming should also work when valid_time logic disabled (center on midpoint)."""
         target_max = self.min_timesteps_month
