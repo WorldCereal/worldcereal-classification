@@ -43,6 +43,8 @@ EPSG_HARMONIZED_NAME = "GEO-EPSG"
 S1_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH", "S1-SIGMA0-HV", "S1-SIGMA0-HH"]
 NODATA_VALUE = 65535
 
+NUM_THREADS = 2 
+
 sys.path.append("feature_deps")
 sys.path.append("onnx_deps")
 import onnxruntime as ort
@@ -69,7 +71,7 @@ def _ensure_prometheo_dependencies():
     try:
         # Try to import first
         import prometheo
-        optimize_pytorch_cpu_performance()
+        optimize_pytorch_cpu_performance(NUM_THREADS)
         _PROMETHEO_INSTALLED = True
         return
     except ImportError:
@@ -78,7 +80,7 @@ def _ensure_prometheo_dependencies():
     # Installation required
     logger.info("Prometheo not available, installing...")
     _install_prometheo()
-    optimize_pytorch_cpu_performance()
+    optimize_pytorch_cpu_performance(NUM_THREADS)
     
     global prometheo, Presto, load_presto_weights, run_model_inference, PoolingMethods
 
@@ -126,7 +128,7 @@ def load_onnx_model_cached(model_url: str):
     logger.info(f"Loading ONNX model from {model_url}")
     response = requests.get(model_url, timeout=120)
 
-    session_options, providers = optimize_onnx_cpu_performance()
+    session_options, providers = optimize_onnx_cpu_performance(NUM_THREADS)
 
     model = ort.InferenceSession(response.content, session_options, providers=providers)
     
@@ -165,31 +167,20 @@ def get_output_labels(lut_sorted: dict) -> list:
         f"probability_{name}" for name in class_names
     ]
 
-def _apply_early_optimizations():
-    """Apply performance optimizations at module import."""
-    # Set environment variables early
-    if 'OMP_NUM_THREADS' not in os.environ:
-        num_cores = os.cpu_count()
-        num_threads = max(1, num_cores - 2) if num_cores else 4
-        
-        os.environ['OMP_NUM_THREADS'] = str(num_threads)
-        os.environ['MKL_NUM_THREADS'] = str(num_threads)
-        os.environ['OPENBLAS_NUM_THREADS'] = str(num_threads)
-        
-        logger.info(f"Set CPU thread env vars: {num_threads} threads")
 
-def optimize_pytorch_cpu_performance():
+def optimize_pytorch_cpu_performance(num_threads):
     """CPU-specific optimizations for Prometheo."""
     import torch
     
     # Thread configuration
-    num_physical_cores = os.cpu_count()
-    num_threads = max(1, num_physical_cores - 2)
     
     torch.set_num_threads(num_threads)
-    torch.set_num_interop_threads(num_threads)
+    torch.set_num_interop_threads(num_threads) #TODO test setting to 4 due to parallel slope cal ect
+    os.environ['OMP_NUM_THREADS'] = str(num_threads)
+    os.environ['MKL_NUM_THREADS'] = str(num_threads)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(num_threads)
     
-    logger.info(f"PyTorch CPU: {num_physical_cores} cores, using {num_threads} threads")
+    logger.info(f"PyTorch CPU:  using {num_threads} threads")
     
     # CPU-specific optimizations
     if hasattr(torch.backends, 'mkldnn'):
@@ -199,15 +190,12 @@ def optimize_pytorch_cpu_performance():
     
     return num_threads
 
-def optimize_onnx_cpu_performance():
+def optimize_onnx_cpu_performance(num_threads):
     """CPU-specific ONNX optimizations."""
     session_options = ort.SessionOptions()
-    
-    num_physical_cores = os.cpu_count()
-    num_threads = max(1, num_physical_cores - 2)
-    
+        
     session_options.intra_op_num_threads = num_threads
-    session_options.inter_op_num_threads = min(2, num_threads // 4)  # Conservative
+    session_options.inter_op_num_threads = num_threads #TODO test setting to 1 due to sequential nature 
     
     # CPU-specific optimizations
     session_options.enable_cpu_mem_arena = True
@@ -218,10 +206,6 @@ def optimize_onnx_cpu_performance():
     providers = ['CPUExecutionProvider']
     
     return session_options, providers
-
-
-
-
 
 
 
@@ -629,8 +613,6 @@ def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray
 
 def apply_udf_data(udf_data: UdfData) -> UdfData:
     """Main UDF entry point - expects cropland_params and croptype_params in context."""
-
-    _apply_early_optimizations()
 
     input_cube = udf_data.datacube_list[0]
     parameters = udf_data.user_context.copy()
