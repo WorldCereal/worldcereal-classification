@@ -21,6 +21,10 @@ from shapely.ops import transform
 # Configure logging
 logger = logging.getLogger(__name__)
 
+if 'onnxruntime' not in sys.modules:
+    logger.info("initilizing empty cache")
+    _MODEL_CACHE = {}
+
 # Constants
 PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.2-py3-none-any.whl"
 
@@ -43,7 +47,6 @@ sys.path.append("feature_deps")
 sys.path.append("onnx_deps")
 import onnxruntime as ort
 
-_MODEL_CACHE = {}
 _PROMETHEO_INSTALLED = False
 
 
@@ -68,7 +71,6 @@ def _ensure_prometheo_dependencies():
     # Installation required
     logger.info("Prometheo not available, installing...")
     _install_prometheo()
-    global prometheo, Presto, load_presto_weights, run_model_inference, PoolingMethods
     import prometheo
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
@@ -102,7 +104,7 @@ def _install_prometheo():
         logger.error(f"Failed to install prometheo: {e}")
         raise
     
-def load_onnx_model(model_url: str):
+def load_onnx_model_cached(model_url: str):
     """ONNX loading is fine since it's pure (no side effects)."""
     if model_url in _MODEL_CACHE:
         logger.info(f"ONNX model cache hit for {model_url}")
@@ -127,15 +129,22 @@ def load_presto_weights_cached(presto_model_url: str):
     if presto_model_url in _MODEL_CACHE:
         logger.info(f"Presto model cache hit for {presto_model_url}")
         return _MODEL_CACHE[presto_model_url]
-    
+
     # Ensure dependencies are available (not cached)
     _ensure_prometheo_dependencies()
-    
+
+    import torch
+    if torch.get_num_threads() == 0 or torch.get_num_threads() == 1:
+        logger.info(f"{torch.get_num_threads()} - {torch.get_num_interop_threads()} threads, setting to 4")
+        torch.set_num_threads(4)
+        torch.set_num_interop_threads(4)
+
+
     logger.info(f"Loading Presto weights from: {presto_model_url}")
-    
+
     model = Presto()
     result = load_presto_weights(model, presto_model_url)
-    
+
     _MODEL_CACHE[presto_model_url] = result
     return result
 
@@ -437,7 +446,7 @@ class ONNXClassifier:
             logger.error(f"Missing classifier_url. Available keys: {list(self.parameters.keys())}")
             raise ValueError('Missing required parameter "classifier_url"')
         
-        session, lut = load_onnx_model(classifier_url)
+        session, lut = load_onnx_model_cached(classifier_url)
         features_flat = self._prepare_features(features)
         
         logger.info("run onnx model")
@@ -594,7 +603,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Get croptype band names
             croptype_classifier_url = context['croptype_params'].get('classifier_url')
             if croptype_classifier_url:
-                _, croptype_lut = load_onnx_model(croptype_classifier_url)
+                _, croptype_lut = load_onnx_model_cached(croptype_classifier_url)
                 croptype_bands = [f"croptype_{band}" for band in get_output_labels(croptype_lut)]
             else:
                 raise ValueError("No croptype LUT found")
@@ -602,7 +611,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Get cropland band names  
             cropland_classifier_url = context['cropland_params'].get('classifier_url')
             if cropland_classifier_url:
-                _, cropland_lut = load_onnx_model(cropland_classifier_url)
+                _, cropland_lut = load_onnx_model_cached(cropland_classifier_url)
                 cropland_bands = [f"cropland_{band}" for band in get_output_labels(cropland_lut)]
             else:
                 raise ValueError("No cropland LUT found")
