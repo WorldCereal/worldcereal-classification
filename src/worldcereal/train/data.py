@@ -1,10 +1,12 @@
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
 from prometheo.models import Presto
+from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
@@ -21,18 +23,22 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         # Get the sample
         sample = super().__getitem__(idx)
         row = self.dataframe.iloc[idx, :]
-
+        timestep_positions, valid_position = self.get_timestep_positions(row)
+        valid_position = valid_position - timestep_positions[0]
         attrs = [
             "lat",
             "lon",
             "ref_id",
             "sample_id",
             "downstream_class",
+            "valid_time",
         ]
 
         attrs = [attr for attr in attrs if attr in row.index]
+        attrs = row[attrs].to_dict()
+        attrs["valid_position"] = valid_position
 
-        return sample, row[attrs].to_dict()
+        return sample, attrs
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
@@ -47,6 +53,7 @@ def get_training_df(
     presto_model: Presto,
     batch_size: int = 2048,
     num_workers: int = 0,
+    time_explicit: bool = False,
 ) -> pd.DataFrame:
     """Function to extract Presto embeddings, targets and relevant
     auxiliary attributes from a dataset.
@@ -61,12 +68,20 @@ def get_training_df(
         by default 2048
     num_workers : int, optional
         number of workers to use in DataLoader, by default 0
+    time_explicit : bool, optional
+        Switch from globally pooled sequence embeddings to
+        valid timestep embeddings, by default False
 
     Returns
     -------
     pd.DataFrame
         training dataframe that can be used for training downstream classifier
     """
+
+    if time_explicit:
+        logger.info("Computing time-explicit Presto embeddings ...")
+    else:
+        logger.info("Computing time-agnostic Presto embeddings ...")
 
     # Make sure model is in eval mode and moved to the correct device
     presto_model.eval().to(device)
@@ -87,7 +102,19 @@ def get_training_df(
     for predictors, attrs in tqdm(dl):
         # Compute Presto embeddings
         with torch.no_grad():
-            encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
+            if not time_explicit:
+                encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
+            else:
+                encodings = (
+                    presto_model(predictors, eval_pooling=PoolingMethods.TIME)
+                    .cpu()
+                    .numpy()
+                    .reshape((-1, dataset.num_timesteps, 128))
+                )
+                # Cut out the correct position in the time series
+                encodings = encodings[
+                    np.arange(encodings.shape[0]), attrs["valid_position"], :
+                ]
 
         # Convert to dataframe
         attrs = pd.DataFrame.from_dict(attrs)

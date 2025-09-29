@@ -8,6 +8,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
+from rasterio.mask import mask
+import geopandas as gpd
 from loguru import logger
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
@@ -227,3 +229,78 @@ def visualize_product(
 
     # Display the plot
     plt.show()
+
+
+def extract_zonal_stats(
+    gdf: gpd.GeoDataFrame,
+    raster_path: str,
+    band: int = 1,
+    stats: list = ["mean"],
+    nodata_value: Optional[int] = None,
+):
+    """Extract zonal statistics using rasterio mask.
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame containing the field geometries.
+    raster_path : str
+        Path to the raster file.
+    band : int, optional
+        Band number to extract statistics from. Default is 1.
+    stats : list, optional
+        List of statistics to calculate. Supported statistics are 'mean', 'sum', 'count',
+        'std', 'min', 'max'. Default is ['mean'].
+    nodata_value : int, optional
+        Value to ignore in the raster data. If None, uses the raster's nodata value.
+    Returns
+    -------
+    results : list of dict
+        List of dictionaries containing the calculated statistics for each field."""
+
+    results = []
+
+    with rasterio.open(raster_path) as src:
+        # Ensure fields are in same CRS as raster
+        fields_reprojected = gdf.to_crs(src.crs)
+
+        for idx, row in fields_reprojected.iterrows():
+            try:
+                # Mask raster with field geometry
+                masked_data, masked_transform = mask(
+                    src, [row.geometry], crop=True, nodata=src.nodata
+                )
+
+                # Get the specific band
+                band_data = masked_data[band - 1]  # bands are 1-indexed
+
+                # Remove nodata values
+                valid_data = band_data[band_data != src.nodata]
+                if nodata_value is not None:
+                    valid_data = valid_data[valid_data != nodata_value]
+
+                if len(valid_data) == 0:
+                    results.append({stat: np.nan for stat in stats})
+                    continue
+
+                # Calculate statistics
+                stat_dict = {}
+                for stat in stats:
+                    if stat == "mean":
+                        stat_dict[stat] = np.mean(valid_data)
+                    elif stat == "sum":
+                        stat_dict[stat] = np.sum(valid_data)
+                    elif stat == "count":
+                        stat_dict[stat] = len(valid_data)
+                    elif stat == "std":
+                        stat_dict[stat] = np.std(valid_data)
+                    elif stat == "min":
+                        stat_dict[stat] = np.min(valid_data)
+                    elif stat == "max":
+                        stat_dict[stat] = np.max(valid_data)
+
+                results.append(stat_dict)
+
+            except Exception:
+                results.append({stat: np.nan for stat in stats})
+
+    return results

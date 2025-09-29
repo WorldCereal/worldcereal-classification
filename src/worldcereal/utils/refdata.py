@@ -2,7 +2,7 @@ import glob
 import importlib.resources
 import json
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import duckdb
 import geopandas as gpd
@@ -16,7 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
-from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -560,8 +560,8 @@ def process_extractions_df(
     Parameters
     ----------
     df_raw : Union[pd.DataFrame, gpd.GeoDataFrame]
-        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time',
-        'start_date', 'end_date', and 'timestamp' columns.
+        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time'
+        and 'timestamp' columns.
     processing_period : TemporalContext, optional
         User-defined temporal context to align samples with. If provided, samples that do not fit
         within this temporal extent will be removed. Default is None (no temporal filtering).
@@ -587,15 +587,17 @@ def process_extractions_df(
     The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
 
-    from worldcereal.utils.timeseries import TimeSeriesProcessor, process_parquet
+    from worldcereal.utils.timeseries import (
+        DataFrameValidator,
+        TimeSeriesProcessor,
+        process_parquet,
+    )
 
     logger.info("Processing selected samples ...")
 
     # check for essential attributes
     required_columns = [
         "valid_time",
-        "start_date",
-        "end_date",
         "timestamp",
         "sample_id",
     ]
@@ -605,15 +607,9 @@ def process_extractions_df(
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-    # make sure the timestamp, valid_time, start and end dates are datetime objects
-    df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"])
-    for date_col in ["valid_time", "start_date", "end_date"]:
-        df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = (
-            df_raw[date_col]
-            .dt.tz_localize(None)
-            .dt.tz_localize(df_raw["timestamp"].dt.tz)
-        )
+    # make sure the timestamp and valid_time are datetime objects with no timezone
+    df_raw = DataFrameValidator.validate_and_fix_dt_cols(df_raw)
+    df_raw = cast(Union[pd.DataFrame, gpd.GeoDataFrame], df_raw)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -636,6 +632,10 @@ def process_extractions_df(
         middle_index = len(date_range) // 2 - 1
         processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month
+
+        # # calculate the start and end dates of available extractions per sample
+        df_raw["start_date"] = df_raw.groupby("sample_id")["timestamp"].transform("min")
+        df_raw["end_date"] = df_raw.groupby("sample_id")["timestamp"].transform("max")
 
         # get a lighter subset with only the necessary columns
         sample_dates = (
@@ -690,18 +690,12 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
-    df_processed = process_parquet(
-        df_raw, freq=freq, use_valid_time=True
-    )
+    df_processed = process_parquet(df_raw, freq=freq, use_valid_time=True)
 
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
-        # temporary fix to deal with tz-aware datetime objects
-        df_processed["valid_time"] = (
-            df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-        )
-        df_processed["valid_date"] = df_processed["valid_time"].copy()
+        df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
