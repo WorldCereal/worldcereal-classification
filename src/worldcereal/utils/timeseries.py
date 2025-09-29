@@ -798,7 +798,7 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
 
 def _trim_timesteps(
     df: pd.DataFrame,
-    max_timesteps_trim: Union[int, None],
+    max_timesteps_trim: Union[int, None, tuple[str, str]],
     required_min_timesteps: int,
     min_edge_buffer: int,
     use_valid_time: bool,
@@ -826,8 +826,47 @@ def _trim_timesteps(
             raise ValueError(
                 "Unsupported string for max_timesteps_trim. Use 'auto' or provide an int."
             )
+    
+    if isinstance(max_timesteps_trim, tuple):  # type: ignore
+        # check that tuple elements are valid dates
+        trim_start, trim_end = max_timesteps_trim  # type: ignore
+        try:
+            trim_start = pd.to_datetime(trim_start)
+            trim_end = pd.to_datetime(trim_end)
+        except Exception as e:
+            raise ValueError("If max_timesteps_trim is a tuple, it must contain valid date strings.") from e
+        if trim_start >= trim_end:
+            raise ValueError("In max_timesteps_trim tuple, start date must be before end date.")
+        # filter df to only include timestamps within the specified range
+        df = df[(df["timestamp"] >= trim_start) & (df["timestamp"] <= trim_end)]
+        # After filtering, we need to ensure that all samples still meet the required minimum timesteps
+        sample_counts = df["sample_id"].value_counts()
+        samples_too_few = sample_counts[sample_counts < required_min_timesteps].index
+        if len(samples_too_few) > 0 and len(samples_too_few) < len(sample_counts):
+            logger.warning(
+                f"Dropping {len(samples_too_few)} samples that have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range."
+            )
+            df = df[~df["sample_id"].isin(samples_too_few)]
+        elif len(samples_too_few) == len(sample_counts):
+            raise ValueError(
+                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start} - {trim_end}. Check your date range."
+            )
+        else:
+            logger.info(
+                f"Applied max_timesteps_trim date range {trim_start} - {trim_end}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
+            )
+        # Recompute basics
+        df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+        df["start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+        df["end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+        if use_valid_time:
+            df = TimeSeriesProcessor.calculate_valid_position(df)
+            df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+        return df
+
     if not isinstance(max_timesteps_trim, int):  # type: ignore
         raise TypeError("max_timesteps_trim must be int, 'auto', or None")
+    
     if max_timesteps_trim < required_min_timesteps:
         raise ValueError(
             f"max_timesteps_trim ({max_timesteps_trim}) cannot be smaller than required minimum timesteps ({required_min_timesteps})."
@@ -868,8 +907,6 @@ def _trim_timesteps(
     inds_to_drop = np.concatenate(inds_to_drop)
     df.drop(index=inds_to_drop, inplace=True)
     gc.collect()
-
-    # df = df.groupby("sample_id", group_keys=False).apply(_trim_sample).reset_index(drop=True)  # type: ignore
 
     # Recompute basics
     df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
