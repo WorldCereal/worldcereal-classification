@@ -1,6 +1,7 @@
 """openEO UDF to compute Presto/Prometheo features with clean code structure."""
 
 import functools
+import os
 import logging
 import random
 import sys
@@ -21,9 +22,8 @@ from shapely.ops import transform
 # Configure logging
 logger = logging.getLogger(__name__)
 
-if 'onnxruntime' not in sys.modules:
-    logger.info("initilizing empty cache")
-    _MODEL_CACHE = {}
+_MODULE_CACHE_KEY = f"__model_cache_{__name__}"
+
 
 # Constants
 PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.2-py3-none-any.whl"
@@ -53,6 +53,12 @@ _PROMETHEO_INSTALLED = False
 # =============================================================================
 # STANDALONE FUNCTIONS (Work in both apply_udf_data and apply_metadata contexts)
 # =============================================================================
+def get_model_cache():
+    """Get or create module-specific cache."""
+    if not hasattr(sys, _MODULE_CACHE_KEY):
+        setattr(sys, _MODULE_CACHE_KEY, {})
+    return getattr(sys, _MODULE_CACHE_KEY)
+
 def _ensure_prometheo_dependencies():
     """Non-cached dependency check."""
     global _PROMETHEO_INSTALLED
@@ -63,6 +69,7 @@ def _ensure_prometheo_dependencies():
     try:
         # Try to import first
         import prometheo
+        optimize_pytorch_cpu_performance()
         _PROMETHEO_INSTALLED = True
         return
     except ImportError:
@@ -71,6 +78,10 @@ def _ensure_prometheo_dependencies():
     # Installation required
     logger.info("Prometheo not available, installing...")
     _install_prometheo()
+    optimize_pytorch_cpu_performance()
+    
+    global prometheo, Presto, load_presto_weights, run_model_inference, PoolingMethods
+
     import prometheo
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
@@ -106,13 +117,18 @@ def _install_prometheo():
     
 def load_onnx_model_cached(model_url: str):
     """ONNX loading is fine since it's pure (no side effects)."""
-    if model_url in _MODEL_CACHE:
+
+    cache = get_model_cache()
+    if model_url in cache:
         logger.info(f"ONNX model cache hit for {model_url}")
-        return _MODEL_CACHE[model_url]
+        return cache[model_url]
     
     logger.info(f"Loading ONNX model from {model_url}")
     response = requests.get(model_url, timeout=120)
-    model = ort.InferenceSession(response.content)
+
+    session_options, providers = optimize_onnx_cpu_performance()
+
+    model = ort.InferenceSession(response.content, session_options, providers=providers)
     
     metadata = model.get_modelmeta().custom_metadata_map
     class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
@@ -121,33 +137,26 @@ def load_onnx_model_cached(model_url: str):
     sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
     
     result = (model, sorted_lut)
-    _MODEL_CACHE[model_url] = result
+    cache[model_url] = result
     return result
 
 def load_presto_weights_cached(presto_model_url: str):
     """Manual caching for Presto weights with dependency check."""
-    if presto_model_url in _MODEL_CACHE:
+    cache = get_model_cache()
+    if presto_model_url in cache:
         logger.info(f"Presto model cache hit for {presto_model_url}")
-        return _MODEL_CACHE[presto_model_url]
+        return cache[presto_model_url]
 
     # Ensure dependencies are available (not cached)
     _ensure_prometheo_dependencies()
-
-    import torch
-    if torch.get_num_threads() == 0 or torch.get_num_threads() == 1:
-        logger.info(f"{torch.get_num_threads()} - {torch.get_num_interop_threads()} threads, setting to 4")
-        torch.set_num_threads(4)
-        torch.set_num_interop_threads(4)
-
 
     logger.info(f"Loading Presto weights from: {presto_model_url}")
 
     model = Presto()
     result = load_presto_weights(model, presto_model_url)
 
-    _MODEL_CACHE[presto_model_url] = result
+    cache[presto_model_url] = result
     return result
-
 
 def get_output_labels(lut_sorted: dict) -> list:
     """Generate output band names from LUT - works in both contexts."""
@@ -155,6 +164,65 @@ def get_output_labels(lut_sorted: dict) -> list:
     return ["classification", "probability"] + [
         f"probability_{name}" for name in class_names
     ]
+
+def _apply_early_optimizations():
+    """Apply performance optimizations at module import."""
+    # Set environment variables early
+    if 'OMP_NUM_THREADS' not in os.environ:
+        num_cores = os.cpu_count()
+        num_threads = max(1, num_cores - 2) if num_cores else 4
+        
+        os.environ['OMP_NUM_THREADS'] = str(num_threads)
+        os.environ['MKL_NUM_THREADS'] = str(num_threads)
+        os.environ['OPENBLAS_NUM_THREADS'] = str(num_threads)
+        
+        logger.info(f"Set CPU thread env vars: {num_threads} threads")
+
+def optimize_pytorch_cpu_performance():
+    """CPU-specific optimizations for Prometheo."""
+    import torch
+    
+    # Thread configuration
+    num_physical_cores = os.cpu_count()
+    num_threads = max(1, num_physical_cores - 2)
+    
+    torch.set_num_threads(num_threads)
+    torch.set_num_interop_threads(num_threads)
+    
+    logger.info(f"PyTorch CPU: {num_physical_cores} cores, using {num_threads} threads")
+    
+    # CPU-specific optimizations
+    if hasattr(torch.backends, 'mkldnn'):
+        torch.backends.mkldnn.enabled = True
+    
+    torch.set_grad_enabled(False)  # Disable gradients for inference
+    
+    return num_threads
+
+def optimize_onnx_cpu_performance():
+    """CPU-specific ONNX optimizations."""
+    session_options = ort.SessionOptions()
+    
+    num_physical_cores = os.cpu_count()
+    num_threads = max(1, num_physical_cores - 2)
+    
+    session_options.intra_op_num_threads = num_threads
+    session_options.inter_op_num_threads = min(2, num_threads // 4)  # Conservative
+    
+    # CPU-specific optimizations
+    session_options.enable_cpu_mem_arena = True
+    session_options.enable_mem_pattern = True
+    session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    
+    providers = ['CPUExecutionProvider']
+    
+    return session_options, providers
+
+
+
+
+
 
 
 # =============================================================================
@@ -392,6 +460,8 @@ class PrestoFeatureExtractor:
     def _run_presto_inference(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
         """Run Presto model inference with safe dependency handling."""
         # Dependencies are now handled by load_presto_weights_cached
+        import torch
+        import gc
         _ensure_prometheo_dependencies()
         
         presto_model_url = self.parameters['presto_model_url']
@@ -402,17 +472,23 @@ class PrestoFeatureExtractor:
         pooling_method = PoolingMethods.TIME if self.parameters.get("temporal_prediction") else PoolingMethods.GLOBAL
         
         logger.info("Running presto inference")
-        features = run_model_inference(
-            inarr, model, epsg=epsg,
-            batch_size=self.parameters.get("batch_size", 256),
-            pooling_method=pooling_method
-        )
-        logger.info("Inference completed")
+        try:
+            with torch.inference_mode():
+                features = run_model_inference(
+                    inarr, model, epsg=epsg,
+                    batch_size=self.parameters.get("batch_size", 256), #TODO optimize?
+                    pooling_method=pooling_method
+                )
+            logger.info("Inference completed")
+            
+            if self.parameters.get("temporal_prediction"):
+                features = self._select_temporal_features(features)
+            return features.transpose("bands", "y", "x")
         
-        if self.parameters.get("temporal_prediction"):
-            features = self._select_temporal_features(features)
+        finally:
+            gc.collect()
         
-        return features.transpose("bands", "y", "x")
+        
     
     def _select_temporal_features(self, features: xr.DataArray) -> xr.DataArray:
         """Select specific timestep from temporal features."""
@@ -553,6 +629,9 @@ def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray
 
 def apply_udf_data(udf_data: UdfData) -> UdfData:
     """Main UDF entry point - expects cropland_params and croptype_params in context."""
+
+    _apply_early_optimizations()
+
     input_cube = udf_data.datacube_list[0]
     parameters = udf_data.user_context.copy()
     epsg = udf_data.proj["EPSG"] if udf_data.proj else None
@@ -622,7 +701,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Single workflow
             classifier_url = context.get('classifier_url')
             if classifier_url:
-                _, lut_sorted = load_onnx_model(classifier_url)
+                _, lut_sorted = load_onnx_model_cached(classifier_url)
                 output_labels = get_output_labels(lut_sorted)
             else:
                 raise ValueError("No classifier URL found in context")
