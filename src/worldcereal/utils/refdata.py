@@ -587,6 +587,7 @@ def process_extractions_df(
     The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
 
+    from worldcereal.utils.legend import ewoc_code_to_label
     from worldcereal.utils.timeseries import (
         DataFrameValidator,
         TimeSeriesProcessor,
@@ -696,6 +697,14 @@ def process_extractions_df(
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
         df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
+
+    # Enrich resulting dataframe with full and sampling string labels
+    df_processed["label_full"] = ewoc_code_to_label(
+        df_processed["ewoc_code"], label_type="full"
+    )
+    df_processed["sampling_label"] = ewoc_code_to_label(
+        df_processed["ewoc_code"], label_type="sampling"
+    )
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."

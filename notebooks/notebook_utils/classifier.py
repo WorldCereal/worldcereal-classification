@@ -38,8 +38,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
 from worldcereal.utils.refdata import process_extractions_df
-from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
 
 def get_input(label):
