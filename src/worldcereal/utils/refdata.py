@@ -690,7 +690,12 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
-    df_processed = process_parquet(df_raw, freq=freq, use_valid_time=True)
+    df_processed = process_parquet(
+        df_raw, 
+        freq=freq,
+        use_valid_time=True,
+        max_timesteps_trim="auto",
+        )
 
     if processing_period is not None:
         # put back the true valid_time
