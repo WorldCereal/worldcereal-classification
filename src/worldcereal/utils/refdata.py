@@ -700,10 +700,10 @@ def process_extractions_df(
 
     # Enrich resulting dataframe with full and sampling string labels
     df_processed["label_full"] = ewoc_code_to_label(
-        df_processed["ewoc_code"], type="full"
+        df_processed["ewoc_code"], label_type="full"
     )
     df_processed["sampling_label"] = ewoc_code_to_label(
-        df_processed["ewoc_code"], type="sampling"
+        df_processed["ewoc_code"], label_type="sampling"
     )
 
     logger.info(

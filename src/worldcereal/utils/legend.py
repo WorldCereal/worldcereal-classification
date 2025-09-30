@@ -319,7 +319,7 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
 
 
 def ewoc_code_to_label(
-    ewoc_codes: list[int], type: Literal["full", "sampling"] = "full"
+    ewoc_codes: list[int], label_type: Literal["full", "sampling"] = "full"
 ) -> list[str]:
     """Translate EWOC codes to their corresponding full or sampling label in the WorldCereal legend.
 
@@ -327,7 +327,7 @@ def ewoc_code_to_label(
     ----------
     ewoc_codes : list[int]
         List of EWOC codes to be translated.
-    type : Literal["full", "sampling"], optional
+    label_type : Literal["full", "sampling"], optional
         Type of label to return, by default "full"
 
     Returns
@@ -343,7 +343,7 @@ def ewoc_code_to_label(
         if code not in df.index:
             result.append("Unknown")
         else:
-            if type == "sampling":
+            if label_type == "sampling":
                 result.append(df.loc[code, "sampling_label"])
             else:
                 result.append(df.loc[code, "label_full"])
