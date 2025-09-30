@@ -673,7 +673,7 @@ def process_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
-        df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
+        df_raw = df_raw.loc[~df_raw["sample_id"].isin(invalid_samples)].copy()
 
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
