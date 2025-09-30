@@ -810,7 +810,7 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
 
 def _trim_timesteps(
     df: pd.DataFrame,
-    max_timesteps_trim: Union[int, None, tuple[str, str]],
+    max_timesteps_trim: Union[int, str, None, tuple[str, str]],
     required_min_timesteps: int,
     min_edge_buffer: int,
     use_valid_time: bool,
@@ -838,19 +838,25 @@ def _trim_timesteps(
             raise ValueError(
                 "Unsupported string for max_timesteps_trim. Use 'auto' or provide an int."
             )
-    
+
     if isinstance(max_timesteps_trim, tuple):  # type: ignore
         # check that tuple elements are valid dates
-        trim_start, trim_end = max_timesteps_trim  # type: ignore
+        raw_start, raw_end = max_timesteps_trim  # type: ignore
         try:
-            trim_start = pd.to_datetime(trim_start)
-            trim_end = pd.to_datetime(trim_end)
+            trim_start_dt: pd.Timestamp = pd.to_datetime(raw_start)  # type: ignore[assignment]
+            trim_end_dt: pd.Timestamp = pd.to_datetime(raw_end)  # type: ignore[assignment]
         except Exception as e:
-            raise ValueError("If max_timesteps_trim is a tuple, it must contain valid date strings.") from e
-        if trim_start >= trim_end:
-            raise ValueError("In max_timesteps_trim tuple, start date must be before end date.")
-        # filter df to only include timestamps within the specified range
-        df = df[(df["timestamp"] >= trim_start) & (df["timestamp"] <= trim_end)]
+            raise ValueError(
+                "If max_timesteps_trim is a tuple, it must contain valid date strings."
+            ) from e
+        if trim_start_dt >= trim_end_dt:
+            raise ValueError(
+                "In max_timesteps_trim tuple, start date must be before end date."
+            )
+        # filter df to only include timestamps within the specified range (force a copy to avoid SettingWithCopyWarning)
+        df = df.loc[
+            (df["timestamp"] >= trim_start_dt) & (df["timestamp"] <= trim_end_dt)
+        ].copy()
         # After filtering, we need to ensure that all samples still meet the required minimum timesteps
         sample_counts = df["sample_id"].value_counts()
         samples_too_few = sample_counts[sample_counts < required_min_timesteps].index
@@ -861,16 +867,18 @@ def _trim_timesteps(
             df = df[~df["sample_id"].isin(samples_too_few)]
         elif len(samples_too_few) == len(sample_counts):
             raise ValueError(
-                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start.strftime('%Y-%m-%d')} - {trim_end.strftime('%Y-%m-%d')}. Check your date range."
+                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}. Check your date range."
             )
         else:
             logger.info(
-                f"Applied max_timesteps_trim date range {trim_start.strftime('%Y-%m-%d')} - {trim_end.strftime('%Y-%m-%d')}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
+                f"Applied max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
             )
         # Recompute basics
-        df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
-        df["start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
-        df["end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+        df.loc[:, "timestamp_ind"] = (
+            df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+        )
+        df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+        df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
         if use_valid_time:
             df = TimeSeriesProcessor.calculate_valid_position(df)
             df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
@@ -878,7 +886,7 @@ def _trim_timesteps(
 
     if not isinstance(max_timesteps_trim, int):  # type: ignore
         raise TypeError("max_timesteps_trim must be int, 'auto', or None")
-    
+
     if max_timesteps_trim < required_min_timesteps:
         raise ValueError(
             f"max_timesteps_trim ({max_timesteps_trim}) cannot be smaller than required minimum timesteps ({required_min_timesteps})."
@@ -906,10 +914,12 @@ def _trim_timesteps(
         if window_size > max_timesteps_trim:
             # remove excess from side furthest from center
             if right - center > center - left:
-                right -= (window_size - max_timesteps_trim)
+                right -= window_size - max_timesteps_trim
             else:
-                left += (window_size - max_timesteps_trim)
-        index_to_drop = g.index[~((g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right))].to_list()
+                left += window_size - max_timesteps_trim
+        index_to_drop = g.index[
+            ~((g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right))
+        ].to_list()
 
         return index_to_drop
 
@@ -918,21 +928,21 @@ def _trim_timesteps(
     ind_cols = ["sample_id", "timestamp_ind"]
     if use_valid_time:
         ind_cols.append("valid_position")
-        
+
     group_cols = [col for col in ind_cols if col != "sample_id"]
     inds_to_drop = (
-        df.groupby("sample_id", group_keys=False)[group_cols]
-        .apply(_trim_sample)
-        .values
+        df.groupby("sample_id", group_keys=False)[group_cols].apply(_trim_sample).values
     )
     inds_to_drop = np.concatenate(inds_to_drop)
     df.drop(index=inds_to_drop, inplace=True)
     gc.collect()
 
     # Recompute basics
-    df["timestamp_ind"] = df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
-    df["start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
-    df["end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+    df.loc[:, "timestamp_ind"] = (
+        df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+    )
+    df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+    df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
     if use_valid_time:
         df = TimeSeriesProcessor.calculate_valid_position(df)
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
@@ -951,7 +961,9 @@ def process_parquet(
     use_valid_time: bool = True,
     min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
-    max_timesteps_trim: Union[int, str, None] = None,  # optionally trim width before pivot
+    max_timesteps_trim: Union[
+        int, str, None, tuple[str, str]
+    ] = None,  # optionally trim width before pivot
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a DataFrame or GeoDataFrame with time series data by filling missing timestamps,
@@ -972,7 +984,7 @@ def process_parquet(
     return_after_fill : bool, default=False
         If True, returns the DataFrame after filling missing dates
         but before pivoting. Used for debugging purposes.
-    max_timesteps_trim : Union[int, str, None], default=None
+    max_timesteps_trim : Union[int, str, None, tuple[str, str]], default=None
         Optional maximum number of timesteps to retain (after dummy timestamp handling) per sample
         prior to pivoting. When provided, each sample's observations are trimmed to a centered
         window around the valid position (if use_valid_time=True) or around the series midpoint

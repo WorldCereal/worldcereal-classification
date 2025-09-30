@@ -29,8 +29,8 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
+    resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
+    CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
 
     return CLASS_MAPPINGS
 
@@ -691,11 +691,11 @@ def process_extractions_df(
         )
 
     df_processed = process_parquet(
-        df_raw, 
+        df_raw,
         freq=freq,
         use_valid_time=True,
         max_timesteps_trim="auto",
-        )
+    )
 
     if processing_period is not None:
         # put back the true valid_time
