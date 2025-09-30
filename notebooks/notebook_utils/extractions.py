@@ -270,6 +270,7 @@ def visualize_timeseries(
     band: str = "NDVI",
     outfile: Optional[Path] = None,
     sample_ids: Optional[List] = None,
+    random_seed: Optional[int] = None,
 ) -> None:
     """Function to visaulize the timeseries for one band and random or specific samples
     from an extractions dataframe.
@@ -288,6 +289,9 @@ def visualize_timeseries(
     sample_ids : List, optional
         sample ids for which the time series needs to be visualized,
         by default None meaning a random subset will be visualized
+    random_seed : Optional[int], optional
+        Seed for reproducible random sampling of sample_ids when sample_ids is None.
+        If None, sampling will be non-deterministic.
 
     Returns
     -------
@@ -317,7 +321,8 @@ def visualize_timeseries(
     # Sample the data
     if sample_ids is None:
         sample_ids = extractions_gdf["sample_id"].unique()
-        selected_ids = np.random.choice(sample_ids, nsamples, replace=False)
+        rng = np.random.default_rng(random_seed)
+        selected_ids = rng.choice(sample_ids, nsamples, replace=False)
     else:
         selected_ids = sample_ids
 
@@ -411,7 +416,7 @@ def query_extractions(
             print("PUBLIC EXTRACTIONS")
             print("************")
             print(
-                f'Found {public_df["sample_id"].nunique()} unique samples in the public data, spread across {public_df["ref_id"].nunique()} unique reference datasets.'
+                f"Found {public_df['sample_id'].nunique()} unique samples in the public data, spread across {public_df['ref_id'].nunique()} unique reference datasets."
             )
             print("Public datasets:")
             for ds in sorted(list(public_df["ref_id"].unique())):
@@ -436,7 +441,7 @@ def query_extractions(
             print("PRIVATE EXTRACTIONS")
             print("************")
             print(
-                f'Found {private_df["sample_id"].nunique()} unique samples in the private data, spread across {private_df["ref_id"].nunique()} unique reference datasets.'
+                f"Found {private_df['sample_id'].nunique()} unique samples in the private data, spread across {private_df['ref_id'].nunique()} unique reference datasets."
             )
             print("Private datasets:")
             for ds in sorted(list(private_df["ref_id"].unique())):
@@ -451,7 +456,7 @@ def query_extractions(
     else:
         raise ValueError("No extractions found in the provided area.")
 
-    print(f'Total number of extracted samples: {merged_df["sample_id"].nunique()}')
+    print(f"Total number of extracted samples: {merged_df['sample_id'].nunique()}")
 
     # Quick check on how many different crop types are present in the data
     all_crops = list(merged_df["ewoc_code"].unique())
