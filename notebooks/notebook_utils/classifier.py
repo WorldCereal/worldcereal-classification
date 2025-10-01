@@ -130,6 +130,7 @@ def compute_training_features(
     This function does not perform train/test splitting; it only produces features.
     Use :func:`train_classifier` for modelling.
     """
+    from worldcereal.utils.legend import ewoc_code_to_label
 
     # Align the samples with the season of interest
     df = process_extractions_df(df, season, freq, valid_time_buffer)
@@ -165,6 +166,10 @@ def compute_training_features(
         logger.warning(
             "Not enough crop types found in the remaining data to train a model, cannot continue with model training!"
         )
+
+    # Enrich resulting dataframe with full and sampling string labels
+    df["label_full"] = ewoc_code_to_label(df["ewoc_code"], label_type="full")
+    df["sampling_label"] = ewoc_code_to_label(df["ewoc_code"], label_type="sampling")
 
     return df
 
