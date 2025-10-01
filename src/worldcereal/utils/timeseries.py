@@ -52,6 +52,18 @@ COLUMN_RENAMES: Dict[str, str] = {
 EXPECTED_DISTANCES = {"month": 31, "dekad": 10}
 
 
+def get_ref_id(df: pd.DataFrame) -> str:
+    """Best effort to identify the dataset being processed, used for logging."""
+    if "ref_id" in df.columns:
+        ref_ids = df["ref_id"].unique()
+    else:
+        ref_ids = df["sample_id"].apply(lambda x: "_".join(x.split("_")[:-1])).unique()
+    if len(ref_ids) == 1:
+        return ref_ids[0]
+    else:
+        return f"Multiple ref_ids ({len(ref_ids)})"
+
+
 class DataFrameValidator:
     @staticmethod
     def validate_and_fix_dt_cols(df_long: pd.DataFrame) -> None:
@@ -166,7 +178,7 @@ class DataFrameValidator:
         ) & ~validtime_outside_range
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_wide)
 
         if validtime_outside_range.sum() > 0:
             logger.warning(
@@ -222,7 +234,7 @@ class DataFrameValidator:
         )
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_wide)
         if samples_with_too_few_ts.sum() > 0:
             logger.warning(
                 f"{ref_id}: Dropping {samples_with_too_few_ts.sum()} sample(s) with \
@@ -306,7 +318,7 @@ All samples have fewer timesteps than required ({required_min_timesteps})."
             raise NotImplementedError(f"Frequency {freq} not supported")
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if len(samples_with_mismatching_distance) > 0:
             logger.warning(
                 f"{ref_id}: Found {len(samples_with_mismatching_distance)} samples with median distance \
@@ -498,7 +510,7 @@ class TimeSeriesProcessor:
         ]["sample_id"].unique()
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
 
         if samples_to_fill.size == 0:
             logger.info(
@@ -576,7 +588,7 @@ Filling them with NODATAVALUE."
         faulty_end = summary[summary["distance_to_end"] < min_edge_buffer]
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if not faulty_end.empty:
             logger.warning(
                 f"{ref_id}: Dropping {len(faulty_end)} samples with valid_time too close to the end of the time series. \n"
@@ -657,7 +669,7 @@ class ColumnProcessor:
             col for col in FEATURE_COLUMNS if col not in df_long.columns
         ]
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if len(missing_features) > 0:
             df_long[missing_features] = NODATAVALUE
             logger.warning(
@@ -674,7 +686,7 @@ with NODATAVALUE: {missing_features}"
         faulty_sar_observations = (df_long[sar_cols] == 0.0).sum().sum()
         if faulty_sar_observations > 0:
             # best effort to identify the dataset being processed, purely for logging
-            ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+            ref_id = get_ref_id(df_long)
             affected_samples = df_long[(df_long[sar_cols] == 0.0).any(axis=1)][
                 "sample_id"
             ].nunique()
@@ -796,12 +808,162 @@ def generate_month_sequence(start_date: datetime, end_date: datetime) -> np.ndar
     return timestamps
 
 
+def _trim_timesteps(
+    df: pd.DataFrame,
+    max_timesteps_trim: Union[int, str, None, tuple[str, str]],
+    required_min_timesteps: int,
+    min_edge_buffer: int,
+    use_valid_time: bool,
+    freq: str,
+) -> pd.DataFrame:
+    """Trim per-sample timesteps to reduce width prior to pivot.
+
+    Centering strategy:
+      - If use_valid_time: center window on valid_position.
+      - Else: center window on midpoint of series (floor(available/2)).
+
+    After trimming, timestamp_ind, start/end_date, and (if applicable) valid_position
+    + valid_position_diff are recomputed.
+    """
+    import gc
+
+    if max_timesteps_trim is None:
+        return df
+
+    # Resolve 'auto'
+    if isinstance(max_timesteps_trim, str):
+        if max_timesteps_trim.lower() == "auto":
+            max_timesteps_trim = required_min_timesteps + 2 * min_edge_buffer
+        else:
+            raise ValueError(
+                "Unsupported string for max_timesteps_trim. Use 'auto' or provide an int."
+            )
+
+    if isinstance(max_timesteps_trim, tuple):  # type: ignore
+        # check that tuple elements are valid dates
+        raw_start, raw_end = max_timesteps_trim  # type: ignore
+        try:
+            trim_start_dt: pd.Timestamp = pd.to_datetime(raw_start)  # type: ignore[assignment]
+            trim_end_dt: pd.Timestamp = pd.to_datetime(raw_end)  # type: ignore[assignment]
+        except Exception as e:
+            raise ValueError(
+                "If max_timesteps_trim is a tuple, it must contain valid date strings."
+            ) from e
+        if trim_start_dt >= trim_end_dt:
+            raise ValueError(
+                "In max_timesteps_trim tuple, start date must be before end date."
+            )
+        # filter df to only include timestamps within the specified range (force a copy to avoid SettingWithCopyWarning)
+        df = df.loc[
+            (df["timestamp"] >= trim_start_dt) & (df["timestamp"] <= trim_end_dt)
+        ].copy()
+        # After filtering, we need to ensure that all samples still meet the required minimum timesteps
+        sample_counts = df["sample_id"].value_counts()
+        samples_too_few = sample_counts[sample_counts < required_min_timesteps].index
+        if len(samples_too_few) > 0 and len(samples_too_few) < len(sample_counts):
+            logger.warning(
+                f"Dropping {len(samples_too_few)} samples that have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range."
+            )
+            df = df[~df["sample_id"].isin(samples_too_few)]
+        elif len(samples_too_few) == len(sample_counts):
+            raise ValueError(
+                f"All samples have fewer than the required minimum timesteps ({required_min_timesteps}) after applying max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}. Check your date range."
+            )
+        else:
+            logger.info(
+                f"Applied max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
+            )
+        # Recompute basics
+        df.loc[:, "timestamp_ind"] = (
+            df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+        )
+        df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+        df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+        if use_valid_time:
+            df = TimeSeriesProcessor.calculate_valid_position(df)
+            df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+        return df
+
+    if not isinstance(max_timesteps_trim, int):  # type: ignore
+        raise TypeError("max_timesteps_trim must be int, 'auto', or None")
+
+    if max_timesteps_trim < required_min_timesteps:
+        raise ValueError(
+            f"max_timesteps_trim ({max_timesteps_trim}) cannot be smaller than required minimum timesteps ({required_min_timesteps})."
+        )
+
+    def _trim_sample(g: pd.DataFrame) -> pd.DataFrame:
+        total_ts = g["timestamp_ind"].nunique()
+        if total_ts <= max_timesteps_trim:  # nothing to trim
+            return []
+        if use_valid_time:
+            center = int(g["valid_position"].iloc[0])
+        else:
+            center = total_ts // 2
+        half = max_timesteps_trim // 2
+        left = center - half
+        right = left + max_timesteps_trim - 1
+        if left < 0:
+            right += -left
+            left = 0
+        if right >= total_ts:
+            shift = right - (total_ts - 1)
+            right = total_ts - 1
+            left = max(0, left - shift)
+        window_size = right - left + 1
+        if window_size > max_timesteps_trim:
+            # remove excess from side furthest from center
+            if right - center > center - left:
+                right -= window_size - max_timesteps_trim
+            else:
+                left += window_size - max_timesteps_trim
+        index_to_drop = g.index[
+            ~((g["timestamp_ind"] >= left) & (g["timestamp_ind"] <= right))
+        ].to_list()
+
+        return index_to_drop
+
+    before_unique = df["timestamp_ind"].nunique()
+
+    ind_cols = ["sample_id", "timestamp_ind"]
+    if use_valid_time:
+        ind_cols.append("valid_position")
+
+    group_cols = [col for col in ind_cols if col != "sample_id"]
+    inds_to_drop = (
+        df.groupby("sample_id", group_keys=False)[group_cols].apply(_trim_sample).values
+    )
+    inds_to_drop = np.concatenate(inds_to_drop)
+    df.drop(index=inds_to_drop, inplace=True)
+    gc.collect()
+
+    # Recompute basics
+    df.loc[:, "timestamp_ind"] = (
+        df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+    )
+    df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+    df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+    if use_valid_time:
+        df = TimeSeriesProcessor.calculate_valid_position(df)
+        df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+
+    after_unique = df["timestamp_ind"].nunique()
+    if after_unique < before_unique:
+        logger.info(
+            f"Trimmed timesteps (global unique indices {before_unique} -> {after_unique}) using max_timesteps_trim={max_timesteps_trim}."
+        )
+    return df
+
+
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
     use_valid_time: bool = True,
     min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
+    max_timesteps_trim: Union[
+        int, str, None, tuple[str, str]
+    ] = None,  # optionally trim width before pivot
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a DataFrame or GeoDataFrame with time series data by filling missing timestamps,
@@ -822,6 +984,17 @@ def process_parquet(
     return_after_fill : bool, default=False
         If True, returns the DataFrame after filling missing dates
         but before pivoting. Used for debugging purposes.
+    max_timesteps_trim : Union[int, str, None, tuple[str, str]], default=None
+        Optional maximum number of timesteps to retain (after dummy timestamp handling) per sample
+        prior to pivoting. When provided, each sample's observations are trimmed to a centered
+        window around the valid position (if use_valid_time=True) or around the series midpoint
+        (if use_valid_time=False). Accepted values:
+          - None: (default) No trimming; preserves current behaviour.
+          - 'auto': Uses required_min_timesteps + 2 * min_edge_buffer.
+          - int: Explicit maximum; must be >= required_min_timesteps.
+        After trimming, timestamp indices, start/end dates, and (if applicable) valid_position
+        and derived relative positions are recomputed. This reduces memory footprint for global
+        models where very long sequences are unnecessary.
 
     Returns
     -------
@@ -887,7 +1060,7 @@ def process_parquet(
     for col in index_columns:
         if df[col].nunique() > nsamples:
             # best effort to identify the dataset being processed, purely for logging
-            ref_id = "_".join(df["sample_id"].iloc[0].split("_")[:-1])
+            ref_id = get_ref_id(df)
             df = df.drop(col, axis=1)
             to_drop.append(col)
             logger.warning(
@@ -909,6 +1082,19 @@ def process_parquet(
         index_columns.append("valid_position")
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
         df = processor.check_vt_closeness(df, min_edge_buffer, freq)
+
+    if max_timesteps_trim is not None:
+        logger.info(
+            f"Trimming to max_timesteps_trim={max_timesteps_trim} per sample prior to pivot."
+        )
+        df = _trim_timesteps(
+            df=df,
+            max_timesteps_trim=max_timesteps_trim,
+            required_min_timesteps=required_min_timesteps,
+            min_edge_buffer=min_edge_buffer,
+            use_valid_time=use_valid_time,
+            freq=freq,
+        )
 
     df["available_timesteps"] = df["sample_id"].map(
         df.groupby("sample_id")["timestamp"].nunique().astype(int)
