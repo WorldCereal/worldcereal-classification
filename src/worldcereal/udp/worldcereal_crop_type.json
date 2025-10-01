@@ -1736,7 +1736,7 @@
   "default_job_options": {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "1g",
+    "executor-memoryOverhead": "2g",
     "python-memory": "3g",
     "soft-errors": 0.1,
     "udf-dependency-archives": [
