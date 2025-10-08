@@ -1,9 +1,20 @@
+from copy import deepcopy
+from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
+from loguru import logger
+from prometheo.finetune import Hyperparams
+from prometheo.finetune import _setup as _prometheo_setup
 from prometheo.predictors import NODATAVALUE, Predictors
+from prometheo.utils import device, seed_everything
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from worldcereal.train.datasets import WorldCerealLabelledDataset
 
@@ -19,10 +30,11 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    # masking_strategy_train: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
-    # masking_strategy_val: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
     label_jitter=0,
-    label_window=0,
+    label_window: Optional[int] = None,
+    return_time_weights: bool = False,
+    time_kernel: Literal["delta", "gaussian", "triangular"] = "delta",
+    time_kernel_bandwidth: Optional[float] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -53,14 +65,18 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_strategy_train : MaskingStrategy, default=askingMode.NONE
-        Masking strategy for training dataset.
-    masking_strategy_val : MaskingStrategy, default=MaskingMode.NONE
-        Masking strategy for validation and test datasets.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
-    label_window : int, default=0
-        Expanding true label in the neighboring window. If 0, no windowing is applied.
+    label_window : Optional[int], default=None
+        Radius of the supervised window. ``None`` lets the dataset decide
+        (default 0 for delta kernels, ≥1 for soft kernels). Provide a non-negative
+        integer to override the inferred value.
+    return_time_weights : bool, default=False
+        When True, the training dataset yields temporal kernel weights alongside the predictors.
+    time_kernel : Literal["delta", "gaussian", "triangular"], default="delta"
+        Shape of the temporal weighting kernel applied around the valid timestep.
+    time_kernel_bandwidth : float, optional
+        Kernel bandwidth in timesteps. Used as the Gaussian sigma or triangular half-width.
 
     Returns
     -------
@@ -76,9 +92,11 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        # masking_strategy=masking_strategy_train,
         label_jitter=label_jitter,
         label_window=label_window,
+        return_time_weights=return_time_weights,
+        time_kernel=time_kernel,
+        time_kernel_bandwidth=time_kernel_bandwidth,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -89,7 +107,6 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
-        # masking_strategy=masking_strategy_val,
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
     )
@@ -102,10 +119,10 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
-        # masking_strategy=masking_strategy_val,
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
     )
+
     return train_ds, val_ds, test_ds
 
 
@@ -116,7 +133,6 @@ def evaluate_finetuned_model(
     batch_size: int,
     time_explicit: bool = False,
     classes_list: Optional[List[str]] = None,
-    # mask_positions: Optional[Sequence[int]] = None,
     return_uncertainty: bool = False,
 ):
     """
@@ -151,64 +167,9 @@ def evaluate_finetuned_model(
     ValueError : If the task type in the test dataset is not supported (must be 'binary' or 'multiclass').
     """
     from sklearn.metrics import ConfusionMatrixDisplay, classification_report
-    from torch.utils.data import DataLoader
 
     # storage for full distributions if we need entropy
     all_probs_full: list[np.ndarray] = [] if return_uncertainty else []
-
-    # if mask_positions is not None:
-    #     # for each mask‐from position, run the full classification_report,
-    #     # tag it with k, then concatenate
-    #     dfs = []
-    #     for k in mask_positions:
-    #         ds_k = InSeasonLabelledDataset(
-    #             test_ds.dataframe,
-    #             task_type=cast(Literal["binary", "multiclass"], test_ds.task_type),
-    #             num_outputs=cast(int, test_ds.num_outputs),
-    #             num_timesteps=test_ds.num_timesteps,
-    #             timestep_freq=test_ds.timestep_freq,
-    #             time_explicit=time_explicit,
-    #             classes_list=classes_list or [],
-    #             augment=False,
-    #             masking_strategy=MaskingStrategy(MaskingMode.FIXED, from_position=k),
-    #             label_jitter=0,
-    #             label_window=0,
-    #         )
-    #         df_k, cm, cm_norm = evaluate_finetuned_model(
-    #             finetuned_model,
-    #             ds_k,
-    #             num_workers,
-    #             batch_size,
-    #             time_explicit,
-    #             classes_list,
-    #             mask_positions=None,  # disable recursion
-    #             return_uncertainty=return_uncertainty,
-    #         )
-    #         df_k["masked_ts_from_pos"] = k
-    #         # Get the timestamp for this mask position
-    #         if ds_k.timestep_freq == "month":
-    #             # Get the first sample's timestamps (assume all samples aligned)
-    #             ts = ds_k[0].timestamps
-    #             # k is 1-based, so subtract 1 for index
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             import calendar
-
-    #             month_label = calendar.month_abbr[month_num]
-    #         elif ds_k.timestep_freq == "dekad":
-    #             ts = ds_k[0].timestamps
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             day_num = int(ts[month_idx, 0])
-    #             import calendar
-
-    #             month_label = f"{calendar.month_abbr[month_num]} {day_num:02d}"
-    #         else:
-    #             month_label = "Unknown"
-
-    #         df_k["masked_ts_month_label"] = month_label
-    #         dfs.append(df_k)
-    #     return pd.concat(dfs, ignore_index=True), None, None
 
     # Put model in eval mode
     finetuned_model.eval()
@@ -357,3 +318,271 @@ def evaluate_finetuned_model(
         results_df["avg_entropy"] = ent.mean() if ent.size > 0 else np.nan
 
     return results_df, cm, cm_norm
+
+
+def _split_batch_with_temporal_weights(batch):
+    """Unpack a DataLoader batch into Predictors and optional temporal weights."""
+
+    weights = None
+    extra = None
+
+    if isinstance(batch, Predictors):
+        predictors = batch
+    elif isinstance(batch, dict):
+        predictors = Predictors(**batch)
+    elif isinstance(batch, (list, tuple)):
+        if not batch:
+            raise ValueError("Received empty batch tuple")
+        predictors = batch[0]
+        if len(batch) >= 2:
+            weights = batch[1]
+        if len(batch) >= 3:
+            extra = batch[2]
+        if isinstance(predictors, dict):
+            predictors = Predictors(**predictors)
+    else:
+        predictors = batch
+
+    if isinstance(predictors, dict):
+        predictors = Predictors(**predictors)
+
+    return predictors, weights, extra
+
+
+def _extract_valid_time_mask(targets: torch.Tensor) -> Optional[torch.Tensor]:
+    """Reduce label tensor to a [B, T] mask of supervised timesteps."""
+
+    if targets.numel() == 0:
+        return None
+
+    mask = targets != NODATAVALUE
+    if mask.dim() >= 2:
+        mask = mask.any(dim=-1)
+
+    while mask.dim() > 2:
+        mask = mask.any(dim=1)
+
+    if mask.dim() != 2:
+        return None
+    return mask
+
+
+def _prepare_weight_tensor(weights, reference, device_):
+    if weights is None:
+        return torch.ones_like(reference, dtype=torch.float32, device=device_)
+    if isinstance(weights, np.ndarray):
+        weights_tensor = torch.from_numpy(weights)
+    else:
+        weights_tensor = torch.as_tensor(weights)
+    return weights_tensor.to(device=device_, dtype=torch.float32)
+
+
+def _compute_temporal_loss(preds, targets, weights):
+    weights = weights.to(targets.device)
+
+    if preds.dim() > 1 and preds.size(-1) > 1:
+        targets = targets.long().squeeze(-1)
+        weights = weights.squeeze(-1)
+        mask = targets != NODATAVALUE
+        if not mask.any():
+            zero = torch.tensor(0.0, device=targets.device)
+            return zero, zero
+        loss_terms = F.cross_entropy(
+            preds[mask],
+            targets[mask],
+            reduction="none",
+        )
+        weight_vals = weights[mask]
+    else:
+        targets = targets.float()
+        mask = targets != NODATAVALUE
+        if not mask.any():
+            zero = torch.tensor(0.0, device=targets.device)
+            return zero, zero
+        logits = preds[mask]
+        target_vals = targets[mask]
+        weight_vals = weights[mask]
+        loss_terms = F.binary_cross_entropy_with_logits(
+            logits,
+            target_vals,
+            reduction="none",
+        )
+
+    weighted_sum = (loss_terms * weight_vals).sum()
+    total_weight = weight_vals.sum()
+
+    w_monitor = weights
+    if w_monitor.dim() > 0 and w_monitor.shape[-1] == 1:
+        w_monitor = w_monitor.squeeze(-1)
+    if w_monitor.dim() == 1:
+        w_monitor = w_monitor.unsqueeze(0)
+    else:
+        w_monitor = w_monitor.reshape(-1, w_monitor.shape[-1])
+
+    return weighted_sum, total_weight
+
+
+def run_finetuning(
+    model: torch.nn.Module,
+    train_dl: DataLoader,
+    val_dl: DataLoader,
+    experiment_name: str,
+    output_dir: str | Path,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    hyperparams: Hyperparams,
+    *,
+    apply_temporal_weights: bool = True,
+    setup_logging: bool = False,
+    freeze_layers: Optional[List[str]] = None,
+    unfreeze_epoch: Optional[int] = None,
+):
+    """Fine-tune a Presto model
+
+    Args:
+        apply_temporal_weights: When ``True`` the temporal kernel weights are
+            folded into the loss; when ``False`` the priors are still passed to
+            the model (e.g. for attention MIL) but the loss defaults to
+            uniform-in-time weighting.
+    """
+
+    output_dir = Path(output_dir)
+    _prometheo_setup(output_dir, experiment_name, setup_logging)
+    seed_everything()
+
+    train_loss_history: list[float] = []
+    val_loss_history: list[float] = []
+    best_loss: Optional[float] = None
+    best_state_dict = None
+    epochs_since_improvement = 0
+
+    originally_frozen = set()
+    if freeze_layers:
+        for name, param in model.named_parameters():
+            if any(layer in name for layer in freeze_layers):
+                if not param.requires_grad:
+                    originally_frozen.add(name)
+                param.requires_grad = False
+                logger.info(f"Freezing layer: {name}")
+
+    for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
+        model.train()
+
+        if freeze_layers and unfreeze_epoch is not None and epoch == unfreeze_epoch:
+            for name, param in model.named_parameters():
+                if name not in originally_frozen and any(
+                    layer in name for layer in freeze_layers
+                ):
+                    param.requires_grad = True
+                    logger.info(f"Unfreezing layer: {name}")
+
+        train_weight_sum = torch.tensor(0.0, device=device)
+        train_loss_sum = torch.tensor(0.0, device=device)
+
+        for batch in tqdm(train_dl, desc="Training", leave=False):
+            optimizer.zero_grad()
+            predictors, weights, _ = _split_batch_with_temporal_weights(batch)
+            targets = predictors.label.to(device)
+
+            weight_tensor = (
+                _prepare_weight_tensor(weights, targets, device)
+                if weights is not None
+                else None
+            )
+            loss_weights = (
+                weight_tensor
+                if (apply_temporal_weights and weight_tensor is not None)
+                else _prepare_weight_tensor(None, targets, device)
+            )
+
+            preds = model(predictors)
+
+            loss_sum, weight_sum = _compute_temporal_loss(preds, targets, loss_weights)
+
+            if weight_sum <= 0:
+                continue
+
+            loss = loss_sum / weight_sum
+            loss.backward()
+            optimizer.step()
+
+            train_weight_sum += weight_sum.detach()
+            train_loss_sum += loss_sum.detach()
+
+        if train_weight_sum > 0:
+            train_epoch_loss = (train_loss_sum / train_weight_sum).item()
+        else:
+            train_epoch_loss = 0.0
+        train_loss_history.append(train_epoch_loss)
+
+        model.eval()
+        val_loss_sum = torch.tensor(0.0, device=device)
+        val_weight_sum = torch.tensor(0.0, device=device)
+
+        with torch.no_grad():
+            for batch in val_dl:
+                predictors, weights, _ = _split_batch_with_temporal_weights(batch)
+                targets = predictors.label.to(device)
+
+                # In current validation config (label_window=0, no time weights)
+                # only one timestep per sample is labeled; others are NODATAVALUE.
+                # Thus temporal weighting == uniform after masking.
+                assert weights is None, (
+                    "Validation loader unexpectedly provided time weights."
+                )
+
+                loss_weights = _prepare_weight_tensor(weights, targets, device)
+                preds = model(predictors)
+
+                loss_sum, weight_sum = _compute_temporal_loss(
+                    preds, targets, loss_weights
+                )
+
+                if weight_sum <= 0:
+                    continue
+
+                val_loss_sum += loss_sum
+                val_weight_sum += weight_sum
+
+        if val_weight_sum > 0:
+            current_val_loss = (val_loss_sum / val_weight_sum).item()
+        else:
+            current_val_loss = 0.0
+        val_loss_history.append(current_val_loss)
+
+        if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(current_val_loss)
+        else:
+            scheduler.step()
+
+        if best_loss is None or current_val_loss < best_loss:
+            best_loss = current_val_loss
+            best_state_dict = deepcopy(model.state_dict())
+            epochs_since_improvement = 0
+        else:
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= hyperparams.patience:
+                logger.info("Early stopping")
+                break
+
+        description = (
+            f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
+            f"Train Loss: {train_epoch_loss:.4f} | "
+            f"Val Loss: {current_val_loss:.4f} | "
+            f"Best Loss: {best_loss:.4f}"
+        )
+        if epochs_since_improvement > 0:
+            description += f" (no improvement for {epochs_since_improvement} epochs)"
+        else:
+            description += " (improved)"
+        pbar.set_description(description)
+        if hasattr(scheduler, "get_last_lr"):
+            pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        logger.info(
+            f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
+        )
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+    model.eval()
+    return model
