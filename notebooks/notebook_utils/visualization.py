@@ -3,6 +3,7 @@ import logging
 import random
 from pathlib import Path
 from typing import Optional
+from typing import Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -95,9 +96,8 @@ def scale_rgb(color):
 
 def visualize_product(
     path: Path,
-    product: str,
+    product: Literal["cropland", "croptype", "cropland-raw", "croptype-raw"],
     lut: Optional[dict] = None,
-    write: bool = False,
 ):
     """
     Visualize a WorldCereal map product using matplotlib.
@@ -106,14 +106,11 @@ def visualize_product(
     ----------
     path : str or Path
         Path to the raster file.
-    product : str
+    product : Literal["cropland", "croptype", "cropland-raw", "croptype-raw"]
         Name of the product to visualize.
     lut : dict, optional
         Lookup table for product classes, if available.
         If None, we assume the default cropland LUT.
-    write : bool, optional
-        If True, write the classification and probability rasters with colormap to disk.
-        Default is False.
     """
 
     if product not in ["cropland", "croptype", "cropland-raw", "croptype-raw"]:
@@ -155,27 +152,26 @@ def visualize_product(
     lut["no_data"] = nodata
     colormap[nodata] = (255, 255, 255, 255)  # no data color
 
-    if write:
-        # Write the classification raster with colormap
-        meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
-        outpath = path.parent / f"{path.stem}_classification.tif"
-        bandnames = ["classification"]
-        with rasterio.open(outpath, "w", **meta) as dst:
-            dst.write(classification, indexes=1)
-            dst.write_colormap(1, colormap)
-            for i, b in enumerate(bandnames):
-                dst.update_tags(i + 1, band_name=b)
-                dst.update_tags(i + 1, lut=lut)
-        # Write the probability raster with colormap
-        meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
-        outpath_prob = path.parent / f"{path.stem}_probability.tif"
-        bandnames = ["probability"]
-        with rasterio.open(outpath_prob, "w", **meta) as dst:
-            dst.write(probability, indexes=1)
-            dst.write_colormap(1, _get_colormap("probability"))
-            for i, b in enumerate(bandnames):
-                dst.update_tags(i + 1, band_name=b)
-        logger.info("Visualization saved")
+    # Write the classification raster with colormap
+    meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
+    outpath = path.parent / f"{path.stem}_classification.tif"
+    bandnames = ["classification"]
+    with rasterio.open(outpath, "w", **meta) as dst:
+        dst.write(classification, indexes=1)
+        dst.write_colormap(1, colormap)
+        for i, b in enumerate(bandnames):
+            dst.update_tags(i + 1, band_name=b)
+            dst.update_tags(i + 1, lut=lut)
+    # Write the probability raster with colormap
+    meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
+    outpath_prob = path.parent / f"{path.stem}_probability.tif"
+    bandnames = ["probability"]
+    with rasterio.open(outpath_prob, "w", **meta) as dst:
+        dst.write(probability, indexes=1)
+        dst.write_colormap(1, _get_colormap("probability"))
+        for i, b in enumerate(bandnames):
+            dst.update_tags(i + 1, band_name=b)
+    logger.info("Visualization saved")
 
     # Apply RGB scaling
     colormap = {key: scale_rgb(value) for key, value in colormap.items()}
