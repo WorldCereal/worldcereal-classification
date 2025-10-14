@@ -51,6 +51,7 @@ COLUMN_RENAMES: Dict[str, str] = {
 # Expected distances between observations for different frequencies, in days
 EXPECTED_DISTANCES = {"month": 31, "dekad": 10}
 
+
 def get_ref_id(df: pd.DataFrame) -> str:
     """Best effort to identify the dataset being processed, used for logging."""
     if "ref_id" in df.columns:
@@ -61,6 +62,7 @@ def get_ref_id(df: pd.DataFrame) -> str:
         return ref_ids[0]
     else:
         return f"Multiple ref_ids ({len(ref_ids)})"
+
 
 class DataFrameValidator:
     @staticmethod
