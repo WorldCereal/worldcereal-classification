@@ -62,6 +62,26 @@ class DataFrameValidator:
         if "valid_time" in df_long.columns:
             df_long["valid_time"] = pd.to_datetime(df_long["valid_time"])
             df_long["valid_time"] = df_long["valid_time"].dt.tz_localize(None)
+
+        return df_long
+
+    @staticmethod
+    def check_duplicate_rows(df_long: pd.DataFrame) -> None:
+        duplicates = df_long.duplicated(subset=["sample_id", "timestamp"], keep=False)
+        if duplicates.any():
+            duplicate_examples = (
+                df_long.loc[duplicates, ["sample_id", "timestamp"]]
+                .drop_duplicates()
+                .head(5)
+                .to_dict("records")
+            )
+            logger.warning(
+                f"{len(duplicate_examples)} duplicate sample_id/timestamp rows detected and will be un-duplicated. "
+                f"Examples: {duplicate_examples}"
+            )
+            df_long.drop_duplicates(
+                subset=["sample_id", "timestamp"], keep="first", inplace=True
+            )
         return df_long
 
     @staticmethod
@@ -863,6 +883,7 @@ def process_parquet(
     validator = DataFrameValidator()
     validator.validate_required_columns(df)
     validator.validate_and_fix_dt_cols(df)
+    df = validator.check_duplicate_rows(df)
     validator.validate_timestamps(df, freq)
     df = validator.check_median_distance(df, freq)
 

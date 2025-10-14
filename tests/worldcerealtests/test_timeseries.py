@@ -739,3 +739,13 @@ class TestProcessParquet(TestCase):
         result = process_parquet(test_df)
         self.assertIsInstance(result, pd.DataFrame)
         self.assertFalse(result.empty)
+
+    def test_duplicate_rows_handling(self):
+        """Test handling of duplicate rows"""
+        test_df = pd.concat([self.df_month, self.df_month.sample(5)], ignore_index=True)
+
+        result = process_parquet(test_df)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertFalse(result.empty)
+        # Check that duplicates are removed
+        self.assertEqual(result.index.nunique(), result.shape[0])
