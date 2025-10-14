@@ -946,7 +946,10 @@ def process_parquet(
 
     df_pivot = df_pivot.fillna(NODATAVALUE)
     if df_pivot.empty:
-        raise ValueError("Left with an empty DataFrame!")
+        logger.warning(
+            "All samples were dropped after processing! Returning empty DataFrame."
+        )
+        return df_pivot
 
     df_pivot.reset_index(inplace=True)
     df_pivot = ColumnProcessor.add_band_suffix(df_pivot)
