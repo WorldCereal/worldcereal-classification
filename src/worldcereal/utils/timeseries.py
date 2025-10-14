@@ -51,6 +51,16 @@ COLUMN_RENAMES: Dict[str, str] = {
 # Expected distances between observations for different frequencies, in days
 EXPECTED_DISTANCES = {"month": 31, "dekad": 10}
 
+def get_ref_id(df: pd.DataFrame) -> str:
+    """Best effort to identify the dataset being processed, used for logging."""
+    if "ref_id" in df.columns:
+        ref_ids = df["ref_id"].unique()
+    else:
+        ref_ids = df["sample_id"].apply(lambda x: "_".join(x.split("_")[:-1])).unique()
+    if len(ref_ids) == 1:
+        return ref_ids[0]
+    else:
+        return f"Multiple ref_ids ({len(ref_ids)})"
 
 class DataFrameValidator:
     @staticmethod
@@ -76,7 +86,7 @@ class DataFrameValidator:
                 .to_dict("records")
             )
             logger.warning(
-                f"{len(duplicate_examples)} duplicate sample_id/timestamp rows detected and will be un-duplicated. "
+                f"{get_ref_id(df_long)}: {sum(duplicates)} duplicate sample_id/timestamp rows detected and will be un-duplicated. "
                 f"Examples: {duplicate_examples}"
             )
             df_long.drop_duplicates(
@@ -186,7 +196,7 @@ class DataFrameValidator:
         ) & ~validtime_outside_range
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_wide)
 
         if validtime_outside_range.sum() > 0:
             logger.warning(
@@ -242,7 +252,7 @@ class DataFrameValidator:
         )
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_wide["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_wide)
         if samples_with_too_few_ts.sum() > 0:
             logger.warning(
                 f"{ref_id}: Dropping {samples_with_too_few_ts.sum()} sample(s) with \
@@ -326,7 +336,7 @@ All samples have fewer timesteps than required ({required_min_timesteps})."
             raise NotImplementedError(f"Frequency {freq} not supported")
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if len(samples_with_mismatching_distance) > 0:
             logger.warning(
                 f"{ref_id}: Found {len(samples_with_mismatching_distance)} samples with median distance \
@@ -518,7 +528,7 @@ class TimeSeriesProcessor:
         ]["sample_id"].unique()
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
 
         if samples_to_fill.size == 0:
             logger.info(
@@ -596,7 +606,7 @@ Filling them with NODATAVALUE."
         faulty_end = summary[summary["distance_to_end"] < min_edge_buffer]
 
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if not faulty_end.empty:
             logger.warning(
                 f"{ref_id}: Dropping {len(faulty_end)} samples with valid_time too close to the end of the time series. \n"
@@ -677,7 +687,7 @@ class ColumnProcessor:
             col for col in FEATURE_COLUMNS if col not in df_long.columns
         ]
         # best effort to identify the dataset being processed, purely for logging
-        ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+        ref_id = get_ref_id(df_long)
         if len(missing_features) > 0:
             df_long[missing_features] = NODATAVALUE
             logger.warning(
@@ -694,7 +704,7 @@ with NODATAVALUE: {missing_features}"
         faulty_sar_observations = (df_long[sar_cols] == 0.0).sum().sum()
         if faulty_sar_observations > 0:
             # best effort to identify the dataset being processed, purely for logging
-            ref_id = "_".join(df_long["sample_id"].iloc[0].split("_")[:-1])
+            ref_id = get_ref_id(df_long)
             affected_samples = df_long[(df_long[sar_cols] == 0.0).any(axis=1)][
                 "sample_id"
             ].nunique()
@@ -867,6 +877,9 @@ def process_parquet(
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
 
+    # best effort to identify the dataset being processed, purely for logging
+    ref_id = get_ref_id(df)
+
     # Determine required minimum timesteps based on frequency
     if freq == "dekad":
         required_min_timesteps = 36
@@ -907,8 +920,6 @@ def process_parquet(
     to_drop = []
     for col in index_columns:
         if df[col].nunique() > nsamples:
-            # best effort to identify the dataset being processed, purely for logging
-            ref_id = "_".join(df["sample_id"].iloc[0].split("_")[:-1])
             df = df.drop(col, axis=1)
             to_drop.append(col)
             logger.warning(
@@ -947,7 +958,7 @@ def process_parquet(
     df_pivot = df_pivot.fillna(NODATAVALUE)
     if df_pivot.empty:
         logger.warning(
-            "All samples were dropped after processing! Returning empty DataFrame."
+            f"{ref_id}: All samples were dropped after processing! Returning empty DataFrame."
         )
         return df_pivot
 
