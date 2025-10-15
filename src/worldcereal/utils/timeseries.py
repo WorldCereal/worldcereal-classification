@@ -74,6 +74,26 @@ class DataFrameValidator:
         if "valid_time" in df_long.columns:
             df_long["valid_time"] = pd.to_datetime(df_long["valid_time"])
             df_long["valid_time"] = df_long["valid_time"].dt.tz_localize(None)
+
+        return df_long
+
+    @staticmethod
+    def check_duplicate_rows(df_long: pd.DataFrame) -> None:
+        duplicates = df_long.duplicated(subset=["sample_id", "timestamp"], keep=False)
+        if duplicates.any():
+            duplicate_examples = (
+                df_long.loc[duplicates, ["sample_id", "timestamp"]]
+                .drop_duplicates()
+                .head(5)
+                .to_dict("records")
+            )
+            logger.warning(
+                f"{get_ref_id(df_long)}: {sum(duplicates)} duplicate sample_id/timestamp rows detected and will be un-duplicated. "
+                f"Examples: {duplicate_examples}"
+            )
+            df_long.drop_duplicates(
+                subset=["sample_id", "timestamp"], keep="first", inplace=True
+            )
         return df_long
 
     @staticmethod
@@ -1020,6 +1040,9 @@ def process_parquet(
     if df.empty:
         raise ValueError("Input DataFrame is empty!")
 
+    # best effort to identify the dataset being processed, purely for logging
+    ref_id = get_ref_id(df)
+
     # Determine required minimum timesteps based on frequency
     if freq == "dekad":
         required_min_timesteps = 36
@@ -1036,6 +1059,7 @@ def process_parquet(
     validator = DataFrameValidator()
     validator.validate_required_columns(df)
     validator.validate_and_fix_dt_cols(df)
+    df = validator.check_duplicate_rows(df)
     validator.validate_timestamps(df, freq)
     df = validator.check_median_distance(df, freq)
 
@@ -1111,7 +1135,10 @@ def process_parquet(
 
     df_pivot = df_pivot.fillna(NODATAVALUE)
     if df_pivot.empty:
-        raise ValueError("Left with an empty DataFrame!")
+        logger.warning(
+            f"{ref_id}: All samples were dropped after processing! Returning empty DataFrame."
+        )
+        return df_pivot
 
     df_pivot.reset_index(inplace=True)
     df_pivot = ColumnProcessor.add_band_suffix(df_pivot)
