@@ -2,6 +2,7 @@
 
 import copy
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -19,6 +20,9 @@ from tqdm import tqdm
 
 from worldcereal.extract.utils import get_job_nb_polygons, pipeline_log
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+
+WORLDCEREAL_BEGIN_DATE = datetime(2017, 1, 1)
+
 
 DEFAULT_JOB_OPTIONS_POINT_WORLDCEREAL = {
     "driver-memory": "2G",
@@ -122,6 +126,10 @@ def create_job_dataframe_point_worldcereal(
         # 9 months before and after the valid time
         start_date = (min_time - pd.Timedelta(days=275)).to_pydatetime()
         end_date = (max_time + pd.Timedelta(days=275)).to_pydatetime()
+
+        # Impose limits due to the data availability
+        start_date = max(start_date, WORLDCEREAL_BEGIN_DATE)
+        end_date = min(end_date, datetime.now())
 
         # ensure start date is 1st day of month, end date is last day of month
         start_date = start_date.replace(day=1)
