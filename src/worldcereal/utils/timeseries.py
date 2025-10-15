@@ -978,7 +978,7 @@ def _trim_timesteps(
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
-    required_min_timesteps: int = None,
+    required_min_timesteps=None,
     use_valid_time: bool = True,
     min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
