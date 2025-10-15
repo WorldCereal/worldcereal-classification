@@ -978,6 +978,7 @@ def _trim_timesteps(
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
+    required_min_timesteps: int = None,
     use_valid_time: bool = True,
     min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
@@ -1043,11 +1044,15 @@ def process_parquet(
     # best effort to identify the dataset being processed, purely for logging
     ref_id = get_ref_id(df)
 
-    # Determine required minimum timesteps based on frequency
-    if freq == "dekad":
-        required_min_timesteps = 36
-    if freq == "month":
-        required_min_timesteps = 12
+    # Determine required minimum timesteps based on frequency if not provided
+    if required_min_timesteps is None:
+        logger.info(
+            f"{ref_id}: required_min_timesteps not provided, setting based on freq='{freq}'"
+        )
+        if freq == "dekad":
+            required_min_timesteps = 36
+        if freq == "month":
+            required_min_timesteps = 12
 
     # `feature_index` is an openEO spefic column we should remove to avoid
     # it being treated as unique values which is not true after merging
