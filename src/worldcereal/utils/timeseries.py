@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -978,7 +978,7 @@ def _trim_timesteps(
 def process_parquet(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
     freq: Literal["month", "dekad"] = "month",
-    required_min_timesteps=None,
+    required_min_timesteps: Optional[int] = None,
     use_valid_time: bool = True,
     min_edge_buffer: int = MIN_EDGE_BUFFER,  # only used if valid_time is used
     return_after_fill: bool = False,  # added for debugging purposes
@@ -1055,8 +1055,10 @@ def process_parquet(
         )
         if freq == "dekad":
             required_min_timesteps = 36
-        if freq == "month":
+        elif freq == "month":
             required_min_timesteps = 12
+        else:
+            raise NotImplementedError(f"Frequency {freq} not supported")
 
     # `feature_index` is an openEO spefic column we should remove to avoid
     # it being treated as unique values which is not true after merging
