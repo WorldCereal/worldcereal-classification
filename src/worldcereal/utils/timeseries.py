@@ -997,6 +997,9 @@ def process_parquet(
         Must include 'sample_id' and 'timestamp' columns.
     freq : Literal["month", "dekad"], default="month"
         Frequency of the time series data.
+    required_min_timesteps : int
+        Optionally, a concrete integer with required timesteps can be provided.
+        If not, defaults will be inferred from provided frequency.
     use_valid_time : bool, default=True
         Whether to calculate and use valid time positions in the time series.
     min_edge_buffer : int, default = MIN_EDGE_BUFFER
@@ -1013,6 +1016,7 @@ def process_parquet(
           - None: (default) No trimming; preserves current behaviour.
           - 'auto': Uses required_min_timesteps + 2 * min_edge_buffer.
           - int: Explicit maximum; must be >= required_min_timesteps.
+          - dates tuple: Uses concrete date range for trimming. No centering is applied.
         After trimming, timestamp indices, start/end dates, and (if applicable) valid_position
         and derived relative positions are recomputed. This reduces memory footprint for global
         models where very long sequences are unnecessary.
