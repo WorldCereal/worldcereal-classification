@@ -6,6 +6,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import urllib.request
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
@@ -473,3 +474,21 @@ def query_extractions(
         merged_df = merged_df.drop(columns=["feature_index"])
 
     return merged_df
+
+
+def retrieve_extractions_extent() -> gpd.GeoDataFrame:
+    """Function to retrieve the extents of publicly available WorldCereal reference datasets
+    with satellite extractions.
+    """
+    # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
+    local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
+    local_file.parent.mkdir(parents=True, exist_ok=True)
+    url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/worldcereal_public_extractions_extent.parquet"
+    urllib.request.urlretrieve(url, local_file)
+
+    # Read with geopandas
+    gdf = gpd.read_parquet(local_file)
+    # Ignore global extents
+    gdf = gdf[~gdf.ref_id.str.contains("GLO")]
+
+    return gdf
