@@ -131,6 +131,12 @@ def create_job_dataframe_point_worldcereal(
         start_date = max(start_date, WORLDCEREAL_BEGIN_DATE)
         end_date = min(end_date, datetime.now())
 
+        # Clamp end_date to last day of the last complete month
+        last_complete_month_end = pd.Timestamp.today().normalize().replace(
+            day=1
+        ) - pd.Timedelta(days=1)
+        end_date = min(pd.Timestamp(end_date), last_complete_month_end)
+
         # ensure start date is 1st day of month, end date is last day of month
         start_date = start_date.replace(day=1)
         end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
