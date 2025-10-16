@@ -49,6 +49,7 @@ experimental/**
 
 # By default don't track notebooks
 notebooks/*.ipynb
+notebooks/trainings/*.ipynb
 
 # Misc
 scripts/docker
