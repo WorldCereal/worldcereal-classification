@@ -195,3 +195,9 @@ notebooks/extractions/*
 notebooks/runs/*
 notebooks/bbox/*
 notebooks/results/*
+notebooks/trainings/download/*
+notebooks/trainings/extractions/*
+notebooks/trainings/runs/*
+notebooks/trainings/bbox/*
+notebooks/trainings/results/*
+notebooks/trainings/catboost_info/*
