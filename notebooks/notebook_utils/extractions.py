@@ -18,6 +18,7 @@ from worldcereal.utils.refdata import (
     query_private_extractions,
     query_public_extractions,
 )
+from worldcereal.utils.legend import ewoc_code_to_label
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -332,6 +333,7 @@ def visualize_timeseries(
     for sample_id in selected_ids:
         sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
+        label_full = sample["label_full"].values[0]
 
         # Prepare the data to be shown
         if band == "NDVI":
@@ -348,7 +350,13 @@ def visualize_timeseries(
             values[values == NODATAVALUE] = np.nan
 
         # plot
-        ax.plot(sample["timestamp"], values, marker="o", linestyle="-", label=sample_id)
+        ax.plot(
+            sample["timestamp"],
+            values,
+            marker="o",
+            linestyle="-",
+            label=f"{label_full} ({sample_id})",
+        )
 
     plt.xlabel("Date")
     plt.ylabel(band)
@@ -468,6 +476,15 @@ def query_extractions(
             "Not enough crop types found in the extracted data to train a model. "
             "Expand your area of interest or add more reference data."
         )
+
+    # Translate ewoc codes to labels
+    merged_df["label_full"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="full"
+    )
+    merged_df["sampling_label"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="sampling"
+    )
+    print(f"Represented crop groups: {merged_df['sampling_label'].unique()}")
 
     # Explictily drop column "feature_index" if it exists
     if "feature_index" in merged_df.columns:
