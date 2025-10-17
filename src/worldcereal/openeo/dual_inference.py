@@ -116,6 +116,7 @@ def _install_prometheo():
             shutil.rmtree(temp_dir)
         logger.error(f"Failed to install prometheo: {e}")
         raise
+
     
 def load_onnx_model_cached(model_url: str):
     """ONNX loading is fine since it's pure (no side effects)."""
@@ -207,7 +208,47 @@ def optimize_onnx_cpu_performance(num_threads):
     
     return session_options, providers
 
+# =============================================================================
+# ERROR HANDLING - SIMPLE VERSION
+# =============================================================================
 
+def create_nan_output_array(inarr: xr.DataArray, num_outputs: int, error_info: str = "") -> xr.DataArray:
+    """Creates a NaN-filled output array with proper dimensions and coordinates.
+    
+    Parameters
+    ----------
+    inarr : xr.DataArray
+        Input array to derive dimensions from
+    num_outputs : int
+        Number of output bands/classes
+    error_info : str
+        Error information to include in attributes for debugging
+        
+    Returns
+    -------
+    xr.DataArray
+        NaN-filled array with proper structure
+    """
+    logger.error(f"Creating NaN output array due to error: {error_info}")
+    logger.error(f"Input array shape: {inarr.shape}, dims: {inarr.dims}")
+    logger.error(f"Input array coords - bands: {inarr.bands.values}, t: {len(inarr.t)}, x: {len(inarr.x)}, y: {len(inarr.y)}")
+    
+    # Create NaN array with same spatial dimensions
+    nan_array = np.full((num_outputs, len(inarr.y), len(inarr.x)), np.nan, dtype=np.float32)
+    
+    # Create output array with proper coordinates
+    output_array = xr.DataArray(
+        nan_array,
+        dims=["bands", "y", "x"],
+        coords={
+            "bands": list(range(num_outputs)),
+            "y": inarr.y,
+            "x": inarr.x,
+        },
+        attrs={"error": error_info}
+    )
+    
+    return output_array
 
 # =============================================================================
 # CLASSES (Main logic for apply_udf_data)
@@ -392,16 +433,6 @@ class PrestoFeatureExtractor:
     
     def extract(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
         """Extract Presto features from input array."""
-        self._validate_inputs(inarr, epsg)
-        inarr = self._preprocess_input(inarr)
-        
-        if "slope" not in inarr.bands:
-            inarr = self._add_slope_band(inarr, epsg)
-        
-        return self._run_presto_inference(inarr, epsg)
-    
-    def _validate_inputs(self, inarr: xr.DataArray, epsg: int) -> None:
-        """Validate input parameters and array"""
         if epsg is None:
             raise ValueError("EPSG code required for Presto feature extraction")
         
@@ -412,7 +443,23 @@ class PrestoFeatureExtractor:
             raise ValueError('Missing required parameter "presto_model_url"')
             
         if len(inarr.t) != 12:
-            raise ValueError(f"Presto requires 12 timesteps, got {len(inarr.t)}")
+            error_msg = f"Presto requires exactly 12 timesteps, but got {len(inarr.t)}. " \
+                       f"Available timesteps: {inarr.t.values}. " \
+                       f"Patch coordinates - x: {inarr.x.values.tolist()}, y: {inarr.y.values.tolist()}"
+            logger.error(error_msg)
+            
+            # Return NaN array instead of crashing
+            return create_nan_output_array(inarr, self.parameters['num_outputs'], error_msg)
+        
+
+        inarr = self._preprocess_input(inarr)
+        
+        if "slope" not in inarr.bands:
+            inarr = self._add_slope_band(inarr, epsg)
+        
+        return self._run_presto_inference(inarr, epsg)
+    
+
     
     def _preprocess_input(self, inarr: xr.DataArray) -> xr.DataArray:
         """Preprocess input array for Presto."""
