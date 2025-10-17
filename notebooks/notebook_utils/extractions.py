@@ -493,9 +493,18 @@ def query_extractions(
     return merged_df
 
 
-def retrieve_extractions_extent() -> gpd.GeoDataFrame:
+def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataFrame:
     """Function to retrieve the extents of publicly available WorldCereal reference datasets
     with satellite extractions.
+    Parameters
+    ----------
+    include_crop_types : bool, optional
+        Whether to only include datasets with crop type information, by default True
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the extents of publicly available WorldCereal reference datasets
+        with satellite extractions.
     """
     # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
     local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
@@ -507,5 +516,9 @@ def retrieve_extractions_extent() -> gpd.GeoDataFrame:
     gdf = gpd.read_parquet(local_file)
     # Ignore global extents
     gdf = gdf[~gdf.ref_id.str.contains("GLO")]
+    # Optionally filter on crop types
+    if include_crop_types:
+        # Drop datasets with "_100" or "_101" in the ref_id
+        gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
 
     return gdf
