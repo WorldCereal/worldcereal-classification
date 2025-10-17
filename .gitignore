@@ -195,6 +195,7 @@ notebooks/catboost_info/*
 notebooks/download/*
 notebooks/extractions/*
 notebooks/local_inference/*
+notebooks/preprocessed_inputs/*
 notebooks/results/*
 notebooks/runs/*
 notebooks/training_data/*
@@ -204,6 +205,7 @@ notebooks/trainings/catboost_info/*
 notebooks/trainings/download/*
 notebooks/trainings/extractions/*
 notebooks/trainings/local_inference/*
+notebooks/trainings/preprocessed_inputs/*
 notebooks/trainings/results/*
 notebooks/trainings/runs/*
 notebooks/trainings/training_data/*
