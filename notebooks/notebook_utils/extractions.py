@@ -6,6 +6,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import urllib.request
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
@@ -17,6 +18,7 @@ from worldcereal.utils.refdata import (
     query_private_extractions,
     query_public_extractions,
 )
+from worldcereal.utils.legend import ewoc_code_to_label
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -331,6 +333,7 @@ def visualize_timeseries(
     for sample_id in selected_ids:
         sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
+        label_full = sample["label_full"].values[0]
 
         # Prepare the data to be shown
         if band == "NDVI":
@@ -347,7 +350,13 @@ def visualize_timeseries(
             values[values == NODATAVALUE] = np.nan
 
         # plot
-        ax.plot(sample["timestamp"], values, marker="o", linestyle="-", label=sample_id)
+        ax.plot(
+            sample["timestamp"],
+            values,
+            marker="o",
+            linestyle="-",
+            label=f"{label_full} ({sample_id})",
+        )
 
     plt.xlabel("Date")
     plt.ylabel(band)
@@ -468,8 +477,48 @@ def query_extractions(
             "Expand your area of interest or add more reference data."
         )
 
+    # Translate ewoc codes to labels
+    merged_df["label_full"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="full"
+    )
+    merged_df["sampling_label"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="sampling"
+    )
+    print(f"Represented crop groups: {merged_df['sampling_label'].unique()}")
+
     # Explictily drop column "feature_index" if it exists
     if "feature_index" in merged_df.columns:
         merged_df = merged_df.drop(columns=["feature_index"])
 
     return merged_df
+
+
+def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataFrame:
+    """Function to retrieve the extents of publicly available WorldCereal reference datasets
+    with satellite extractions.
+    Parameters
+    ----------
+    include_crop_types : bool, optional
+        Whether to only include datasets with crop type information, by default True
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the extents of publicly available WorldCereal reference datasets
+        with satellite extractions.
+    """
+    # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
+    local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
+    local_file.parent.mkdir(parents=True, exist_ok=True)
+    url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/worldcereal_public_extractions_extent.parquet"
+    urllib.request.urlretrieve(url, local_file)
+
+    # Read with geopandas
+    gdf = gpd.read_parquet(local_file)
+    # Ignore global extents
+    gdf = gdf[~gdf.ref_id.str.contains("GLO")]
+    # Optionally filter on crop types
+    if include_crop_types:
+        # Drop datasets with "_100" or "_101" in the ref_id
+        gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
+
+    return gdf

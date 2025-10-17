@@ -3,6 +3,7 @@ import logging
 import random
 from pathlib import Path
 from typing import Optional
+from typing import Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -93,11 +94,15 @@ def scale_rgb(color):
     return tuple(c / 255 for c in color[:3])
 
 
+def rgb_to_hex(r, g, b):
+    return f"{r:02x}{g:02x}{b:02x}"
+
+
 def visualize_product(
     path: Path,
-    product: str,
+    product: Literal["cropland", "croptype", "cropland-raw", "croptype-raw"],
     lut: Optional[dict] = None,
-    write: bool = False,
+    interactive_mode: bool = False,
 ):
     """
     Visualize a WorldCereal map product using matplotlib.
@@ -106,14 +111,13 @@ def visualize_product(
     ----------
     path : str or Path
         Path to the raster file.
-    product : str
+    product : Literal["cropland", "croptype", "cropland-raw", "croptype-raw"]
         Name of the product to visualize.
     lut : dict, optional
         Lookup table for product classes, if available.
         If None, we assume the default cropland LUT.
-    write : bool, optional
-        If True, write the classification and probability rasters with colormap to disk.
-        Default is False.
+    interactive_mode : bool, optional
+        If True, display the plot interactively using leafmap. Default is False.
     """
 
     if product not in ["cropland", "croptype", "cropland-raw", "croptype-raw"]:
@@ -155,80 +159,133 @@ def visualize_product(
     lut["no_data"] = nodata
     colormap[nodata] = (255, 255, 255, 255)  # no data color
 
-    if write:
-        # Write the classification raster with colormap
-        meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
-        outpath = path.parent / f"{path.stem}_classification.tif"
-        bandnames = ["classification"]
-        with rasterio.open(outpath, "w", **meta) as dst:
-            dst.write(classification, indexes=1)
-            dst.write_colormap(1, colormap)
-            for i, b in enumerate(bandnames):
-                dst.update_tags(i + 1, band_name=b)
-                dst.update_tags(i + 1, lut=lut)
-        # Write the probability raster with colormap
-        meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
-        outpath_prob = path.parent / f"{path.stem}_probability.tif"
-        bandnames = ["probability"]
-        with rasterio.open(outpath_prob, "w", **meta) as dst:
-            dst.write(probability, indexes=1)
-            dst.write_colormap(1, _get_colormap("probability"))
-            for i, b in enumerate(bandnames):
-                dst.update_tags(i + 1, band_name=b)
-        logger.info("Visualization saved")
+    # Write the classification raster with colormap
+    meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
+    outpath = path.parent / f"{path.stem}_classification.tif"
+    bandnames = ["classification"]
+    with rasterio.open(outpath, "w", **meta) as dst:
+        dst.write(classification, indexes=1)
+        dst.write_colormap(1, colormap)
+        for i, b in enumerate(bandnames):
+            dst.update_tags(i + 1, band_name=b)
+            dst.update_tags(i + 1, lut=lut)
+    # Write the probability raster with colormap
+    meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
+    outpath_prob = path.parent / f"{path.stem}_probability.tif"
+    bandnames = ["probability"]
+    with rasterio.open(outpath_prob, "w", **meta) as dst:
+        dst.write(probability, indexes=1)
+        dst.write_colormap(1, _get_colormap("probability"))
+        for i, b in enumerate(bandnames):
+            dst.update_tags(i + 1, band_name=b)
+    logger.info("Visualization saved")
 
-    # Apply RGB scaling
-    colormap = {key: scale_rgb(value) for key, value in colormap.items()}
-
-    # Sort colormap according to keys
-    colormap = {key: colormap[key] for key in sorted(colormap.keys())}
-    codes = list(colormap.keys())
-
-    # Create a custom ListedColormap
-    cmap = mpl.colors.ListedColormap([colormap[key] for key in codes])
-
-    fig, ax = plt.subplots()
-
-    # create a second axes for the colorbar
-    ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
-
-    # Get class labels and set colorbar boundaries
-    # define boundaries halfway between each code:
-    bounds = [(a + b) / 2 for a, b in zip(codes, codes[1:])]
-    # extend for under/overflow:
-    bounds = [codes[0] - 0.5] + bounds + [codes[-1] + 0.5]
-
-    # Define a norm for the colormap
-    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-
-    # plot the raster
-    ax.imshow(classification, cmap=cmap, norm=norm)
-
-    # Create a colorbar with class labels
-    tick_positions = np.arange(len(codes)) + 0.5
-    uniform_bounds = np.arange(len(codes) + 1)  # [0, 1, 2, ..., len(codes)]
-    norm_cb = mpl.colors.BoundaryNorm(uniform_bounds, cmap.N)  # norm for colorbar
-    cb = mpl.colorbar.ColorbarBase(
-        ax2,
-        cmap=cmap,
-        norm=norm_cb,
-        spacing="uniform",
-        boundaries=uniform_bounds,
-        ticks=tick_positions,
-        format="%1i",
-    )
-
-    # Set the colorbar labels
     # invert lut
-    lut = {v: k for k, v in lut.items()}
-    classlabels = [str(lut.get(code, code)) for code in codes]
-    cb.set_ticklabels(classlabels)
+    lut_inverted = {v: k for k, v in lut.items()}
 
-    # Turn off axis
-    ax.axis("off")
+    if interactive_mode:
 
-    # Display the plot
-    plt.show()
+        # We plot using leafmap in interactive mode
+        # to allow for zooming and panning
+        import os
+        import leafmap
+
+        if os.environ.get("JUPYTERHUB_SERVICE_PREFIX") is not None:
+            if os.environ["JUPYTERHUB_SERVICE_PREFIX"].endswith("/"):
+                # For some reason, leafmap adds too many '/' to the url which is based on JUPYTERHUB_SERVICE_PREFIX
+                # We can fix this by simply updating the prefix!
+                os.environ["JUPYTERHUB_SERVICE_PREFIX"] = os.environ[
+                    "JUPYTERHUB_SERVICE_PREFIX"
+                ][:-1]
+            os.environ["LOCALTILESERVER_CLIENT_PREFIX"] = (
+                f"{os.environ['JUPYTERHUB_SERVICE_PREFIX']}proxy/{{port}}"
+            )
+
+        # Create the map
+        m = leafmap.Map(draw_control=False)
+        m.add_basemap("Esri.WorldImagery")
+        # Add classification product
+        m.add_raster(
+            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=8889
+        )
+        # Add probability product
+        m.add_raster(
+            str(outpath_prob),
+            indexes=[1],
+            layer_name=f"{product}-probability",
+            port=8889,
+        )
+
+        # Plot legend separately
+        legend_dict = {lut_inverted[k]: rgb_to_hex(*v[:3]) for k, v in colormap.items()}
+
+        m.add_legend(
+            title="Classification",
+            legend_dict=legend_dict,
+            bg_color="rgba(255, 255, 255, 0.5)",
+            position="bottomright",
+        )
+
+        # Return the map
+        return m
+
+    else:
+        # We plot using matplotlib in non-interactive mode
+        fig, ax = plt.subplots()
+
+        # create a second axes for the colorbar
+        ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
+
+        # Colorbar preparation
+        # Apply RGB scaling
+        colormap = {key: scale_rgb(value) for key, value in colormap.items()}
+
+        # Sort colormap according to keys
+        colormap = {key: colormap[key] for key in sorted(colormap.keys())}
+        codes = list(colormap.keys())
+
+        # Create a custom ListedColormap
+        cmap = mpl.colors.ListedColormap([colormap[key] for key in codes])
+
+        # Get class labels and set colorbar boundaries
+        # define boundaries halfway between each code:
+        bounds = [(a + b) / 2 for a, b in zip(codes, codes[1:])]
+        # extend for under/overflow:
+        bounds = [codes[0] - 0.5] + bounds + [codes[-1] + 0.5]
+
+        # Define a norm for the colormap
+        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+
+        # Define tick positions and labels for the colorbar
+        tick_positions = np.arange(len(codes)) + 0.5
+        uniform_bounds = np.arange(len(codes) + 1)  # [0, 1, 2, ..., len(codes)]
+        norm_cb = mpl.colors.BoundaryNorm(uniform_bounds, cmap.N)  # norm for colorbar
+        classlabels = [str(lut_inverted.get(code, code)) for code in codes]
+
+        # plot the raster
+        ax.imshow(classification, cmap=cmap, norm=norm)
+
+        # Create a colorbar with class labels
+        cb = mpl.colorbar.ColorbarBase(
+            ax2,
+            cmap=cmap,
+            norm=norm_cb,
+            spacing="uniform",
+            boundaries=uniform_bounds,
+            ticks=tick_positions,
+            format="%1i",
+        )
+
+        # Set the colorbar labels
+        cb.set_ticklabels(classlabels)
+
+        # Turn off axis
+        ax.axis("off")
+
+        # Display the plot
+        plt.show()
+
+        return fig
 
 
 def extract_zonal_stats(
