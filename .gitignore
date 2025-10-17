@@ -172,7 +172,6 @@ dmypy.json
 .pyre/
 download.zip
 catboost_info/*
-notebooks/catboost_info/*
 
 *.cbm
 *.pt
@@ -191,14 +190,24 @@ notebooks/catboost_info/*
 .local-presto-test/
 
 # output files of notebook runs
+notebooks/bbox/*
+notebooks/catboost_info/*
 notebooks/download/*
 notebooks/extractions/*
-notebooks/runs/*
-notebooks/bbox/*
+notebooks/local_inference/*
+notebooks/preprocessed_inputs/*
 notebooks/results/*
+notebooks/runs/*
+notebooks/training_data/*
+
+notebooks/trainings/bbox/*
+notebooks/trainings/catboost_info/*
 notebooks/trainings/download/*
 notebooks/trainings/extractions/*
-notebooks/trainings/runs/*
-notebooks/trainings/bbox/*
+notebooks/trainings/local_inference/*
+notebooks/trainings/preprocessed_inputs/*
 notebooks/trainings/results/*
-notebooks/trainings/catboost_info/*
+notebooks/trainings/runs/*
+notebooks/trainings/training_data/*
+
+
