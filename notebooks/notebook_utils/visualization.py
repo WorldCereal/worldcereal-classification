@@ -103,6 +103,7 @@ def visualize_product(
     product: Literal["cropland", "croptype", "cropland-raw", "croptype-raw"],
     lut: Optional[dict] = None,
     interactive_mode: bool = False,
+    port: int = 8889,
 ):
     """
     Visualize a WorldCereal map product using matplotlib.
@@ -118,6 +119,8 @@ def visualize_product(
         If None, we assume the default cropland LUT.
     interactive_mode : bool, optional
         If True, display the plot interactively using leafmap. Default is False.
+    port : int, optional
+        Port number for leafmap interactive display. Default is 8889.
     """
 
     if product not in ["cropland", "croptype", "cropland-raw", "croptype-raw"]:
@@ -206,14 +209,14 @@ def visualize_product(
         m.add_basemap("Esri.WorldImagery")
         # Add classification product
         m.add_raster(
-            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=8889
+            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=port
         )
         # Add probability product
         m.add_raster(
             str(outpath_prob),
             indexes=[1],
             layer_name=f"{product}-probability",
-            port=8889,
+            port=port,
         )
 
         # Plot legend separately
@@ -284,8 +287,6 @@ def visualize_product(
 
         # Display the plot
         plt.show()
-
-        return fig
 
 
 def extract_zonal_stats(
