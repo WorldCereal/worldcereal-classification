@@ -300,12 +300,15 @@ def create_job_dataframe_patch_to_point_worldcereal(
         start_date = epsg_codes[epsg]["start_date"]
         end_date = epsg_codes[epsg]["end_date"]
 
+        # Clamp end_date to last day of the last complete month to avoid compositing an incomplete month
+        last_complete_month_end = pd.Timestamp.today().normalize().replace(
+            day=1
+        ) - pd.Timedelta(days=1)
+        end_date = min(pd.Timestamp(end_date), last_complete_month_end)
+
         # ensure start date is 1st day of month, end date is last day of month
-        # Start a month later and end a month earlier to ensure the extractions cover this.
-        start_date = (start_date + pd.Timedelta(days=31)).replace(day=1)
-        end_date = (
-            end_date.replace(day=1) - pd.Timedelta(days=31) + pd.offsets.MonthEnd(0)
-        )
+        start_date = start_date.replace(day=1)
+        end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
 
         # Convert dates to string format
         start_date, end_date = (
