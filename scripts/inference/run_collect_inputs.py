@@ -73,6 +73,7 @@ def create_worldcereal_inputsjob(
     connection_provider,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
     Parameters
@@ -104,6 +105,7 @@ def create_worldcereal_inputsjob(
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
         target_epsg=int(row["epsg"]),
+        compositing_window=compositing_window,
     )
 
     # If no custom job options are provided, use these defaults
@@ -246,6 +248,7 @@ def main(
     parallel_jobs: int = 2,
     restart_failed: bool = False,
     job_options: Optional[Dict[str, Union[str, int]]] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -275,6 +278,8 @@ def main(
         Recognized keys:
             executor-memory, python-memory, max-executors, image-name, etl_organization_id.
             See worldcereal.utils.argparser.DEFAULT_JOB_OPTIONS for defaults.
+    compositing_window : Literal['month', 'dekad'], optional
+        The compositing window to use for the inputs, by default "month".
 
     Returns
     -------
@@ -322,6 +327,7 @@ def main(
                     s1_orbit_state=s1_orbit_state,
                     job_options=job_options,
                     connection=connection,
+                    compositing_window=compositing_window,
                 ),
                 job_db=job_db,
             )
