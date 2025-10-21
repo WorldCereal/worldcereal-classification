@@ -162,7 +162,7 @@ def create_job_dataframe_from_grid(
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
     assert all(
-        production_gdf.geometry.type == "Polygon"
+        production_gdf.geometry.type.isin(["Polygon", "MultiPolygon"])
     ), "All geometries in the grid file must be of type Polygon."
     assert production_gdf.crs is not None, "The grid file must have a defined CRS."
     assert (
@@ -360,22 +360,22 @@ if __name__ == "__main__":
         description="Collect preprocessed inputs for polygon patches."
     )
     parser.add_argument(
-        "grid_path",
+        "--grid_path",
         type=Path,
         help="Path to the grid file (GeoJSON or shapefile) defining the locations to extract.",
     )
     parser.add_argument(
-        "extractions_start_date",
+        "--extractions_start_date",
         type=str,
         help="Start date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "extractions_end_date",
+        "--extractions_end_date",
         type=str,
         help="End date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "output_folder", type=Path, help="The folder where to store the extracted data"
+        "--output_folder", type=Path, help="The folder where to store the extracted data"
     )
     parser.add_argument(
         "--overwrite_job_df",
@@ -389,18 +389,6 @@ if __name__ == "__main__":
         help="Specify the S1 orbit state to use for the jobs.",
     )
     parser.add_argument(
-        "--memory",
-        type=str,
-        default="1800m",
-        help="Memory to allocate for the executor.",
-    )
-    parser.add_argument(
-        "--python_memory",
-        type=str,
-        default="1900m",
-        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
-    )
-    parser.add_argument(
         "--max_executors", type=int, default=22, help="Number of executors to run."
     )
     parser.add_argument(
@@ -408,6 +396,37 @@ if __name__ == "__main__":
         type=int,
         default=2,
         help="The maximum number of parallel jobs to run at the same time.",
+    )
+    parser.add_argument(
+        "--driver_memory",
+        type=str,
+        default=None,
+        help="memory allocated to the Spark ‘driver’ JVM, which manages the execution of the batch job.",
+    )
+    parser.add_argument(
+        "--driver_memoryOverhead",
+        type=str,
+        default=None,
+        help="memory assigned to the spark ‘driver’ on top of JVM memory for Python processes.",
+    )
+    parser.add_argument(
+        "--executor_cores",
+        type=str,
+        default=None,
+        help="number of CPUs per worker (executor). The number of parallel tasks is calculated as executor-cores / task-cpus. \
+            Setting this value equal to task-cpus is recommended to avoid potential GDAL reading errors.",
+    )
+    parser.add_argument(
+        "--executor_memory",
+        type=str,
+        default=None,
+        help="memory allocated to the workers for the JVM that executes most predefined processes.",
+    )
+    parser.add_argument(
+        "--executor_memoryOverhead",
+        type=str,
+        default=None,
+        help="allocated in addition to the JVM, for example, to run UDFs.",
     )
     parser.add_argument(
         "--restart_failed",
@@ -426,6 +445,13 @@ if __name__ == "__main__":
         default=None,
         help="ID of the organization to use for the job.",
     )
+    parser.add_argument(
+        "--compositing_window",
+        type=str,
+        choices=["month", "dekad"],
+        default="month",
+        help="The compositing window to use for the inputs.",
+    )
 
     args = parser.parse_args()
 
@@ -441,4 +467,5 @@ if __name__ == "__main__":
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
         job_options=job_options,
+        compositing_window=args.compositing_window,
     )
