@@ -1,10 +1,12 @@
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
 from prometheo.models import Presto
+from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
@@ -21,18 +23,22 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         # Get the sample
         sample = super().__getitem__(idx)
         row = self.dataframe.iloc[idx, :]
-
+        timestep_positions, valid_position = self.get_timestep_positions(row)
+        valid_position = valid_position - timestep_positions[0]
         attrs = [
             "lat",
             "lon",
             "ref_id",
             "sample_id",
             "downstream_class",
+            "valid_time",
         ]
 
         attrs = [attr for attr in attrs if attr in row.index]
+        attrs = row[attrs].to_dict()
+        attrs["valid_position"] = valid_position
 
-        return sample, row[attrs].to_dict()
+        return sample, attrs
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
@@ -47,6 +53,7 @@ def get_training_df(
     presto_model: Presto,
     batch_size: int = 2048,
     num_workers: int = 0,
+    time_explicit: bool = False,
 ) -> pd.DataFrame:
     """Function to extract Presto embeddings, targets and relevant
     auxiliary attributes from a dataset.
@@ -61,12 +68,20 @@ def get_training_df(
         by default 2048
     num_workers : int, optional
         number of workers to use in DataLoader, by default 0
+    time_explicit : bool, optional
+        Switch from globally pooled sequence embeddings to
+        valid timestep embeddings, by default False
 
     Returns
     -------
     pd.DataFrame
         training dataframe that can be used for training downstream classifier
     """
+
+    if time_explicit:
+        logger.info("Computing time-explicit Presto embeddings ...")
+    else:
+        logger.info("Computing time-agnostic Presto embeddings ...")
 
     # Make sure model is in eval mode and moved to the correct device
     presto_model.eval().to(device)
@@ -87,7 +102,19 @@ def get_training_df(
     for predictors, attrs in tqdm(dl):
         # Compute Presto embeddings
         with torch.no_grad():
-            encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
+            if not time_explicit:
+                encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
+            else:
+                encodings = (
+                    presto_model(predictors, eval_pooling=PoolingMethods.TIME)
+                    .cpu()
+                    .numpy()
+                    .reshape((-1, dataset.num_timesteps, 128))
+                )
+                # Cut out the correct position in the time series
+                encodings = encodings[
+                    np.arange(encodings.shape[0]), attrs["valid_position"], :
+                ]
 
         # Convert to dataframe
         attrs = pd.DataFrame.from_dict(attrs)
@@ -130,6 +157,7 @@ def get_training_dfs_from_parquet(
     finetune_classes: str = "CROPLAND2",
     class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
     val_samples_file: Optional[Union[Path, str]] = None,
+    test_samples_file: Optional[Union[Path, str]] = None,
     debug: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -199,14 +227,16 @@ def get_training_dfs_from_parquet(
     # Remove classes with too few samples for stratification
     df = remove_small_classes(df, min_samples=10)
 
-    if val_samples_file is not None:
-        logger.info(f"Controlled train/test split based on: {val_samples_file}")
-        val_samples_df = pd.read_csv(val_samples_file)
+    if test_samples_file is not None:
+        logger.info(
+            f"Controlled `train/val` vs `test` split based on: {test_samples_file}"
+        )
+        test_samples_df = pd.read_csv(test_samples_file)
         trainval_df, test_df = split_df(
-            df, val_sample_ids=val_samples_df.sample_id.tolist()
+            df, val_sample_ids=test_samples_df.sample_id.tolist()
         )
     else:
-        logger.info("Random train/test split ...")
+        logger.info("Random `train/val` vs `test` split ...")
         # train_df, test_df = split_df(df, val_size=0.2)
         # TO DO: add possibility of per-class stratification to original split_df function
         trainval_df, test_df = train_test_split(
@@ -216,16 +246,25 @@ def get_training_dfs_from_parquet(
     # train_df, val_df = split_df(train_df, val_size=0.2)
     # Remove classes with too few samples for stratification, now on trainval_df
     trainval_df = remove_small_classes(trainval_df, min_samples=5)
-    train_df, val_df = train_test_split(
-        trainval_df,
-        test_size=0.2,
-        random_state=42,
-        stratify=trainval_df["finetune_class"],
-    )
 
-    if val_samples_file:
-        # With controlled validation set it's possible that either
-        # the validation set has unique classes not present in training
+    if val_samples_file is not None:
+        logger.info(f"Controlled `train` vs `val` split based on: {val_samples_file}")
+        val_samples_df = pd.read_csv(val_samples_file)
+        train_df, val_df = split_df(
+            trainval_df, val_sample_ids=val_samples_df.sample_id.tolist()
+        )
+    else:
+        logger.info("Random `train` vs `val` split ...")
+        train_df, val_df = train_test_split(
+            trainval_df,
+            test_size=0.2,
+            random_state=42,
+            stratify=trainval_df["finetune_class"],
+        )
+
+    if test_samples_file:
+        # With controlled test set it's possible that either
+        # the test set has unique classes not present in training
         # So we need to remove those classes in its totality
         train_classes = set(train_df["finetune_class"].unique())
         val_classes = set(val_df["finetune_class"].unique())

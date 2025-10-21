@@ -82,7 +82,8 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     print("*" * 40)
 
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
-    assert training_df.shape == (238, 246)
+    # adding 2 columns, since now we expect process_extractions_df to return label_full and sampling_labels
+    assert training_df.shape == (238, (245 + 2))
 
     # We keep original ewoc_code for this test
     training_df["downstream_class"] = training_df["ewoc_code"]
@@ -97,12 +98,14 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
 
     # Initialize dataset
     df = training_df.reset_index()
+
     ds = WorldCerealTrainingDataset(df, task_type="multiclass", augment=True)
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
         presto_model,
         batch_size=256,
+        time_explicit=True,  # Important for croptype
     )
     logger.info("Presto embeddings computed.")
 
