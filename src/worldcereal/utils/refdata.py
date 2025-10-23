@@ -194,8 +194,6 @@ def query_public_extractions(
     db.load_extension("spatial")
 
     metadata_s3_path = "s3://geoparquet/worldcereal_public_extractions_extent.parquet"
-    # update to local extent file for test!!!
-    # metadata_s3_path = "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_PUBLIC_EXTRACTIONS/worldcereal_public_extractions_extent.parquet"
 
     query_metadata = f"""
     SET s3_endpoint='s3.waw3-1.cloudferro.com';
