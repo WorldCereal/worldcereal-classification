@@ -381,7 +381,7 @@ def query_extractions(
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
     crop_types: Optional[List[int]] = None,
-    query_collateral_samples: bool = False,
+    query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
     """Wrapper function to query both public and private extractions in a given area.
 
