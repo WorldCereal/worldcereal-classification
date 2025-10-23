@@ -1,4 +1,5 @@
 import logging
+import urllib.request
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -6,19 +7,18 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import urllib.request
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import Polygon
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
+from worldcereal.utils.legend import ewoc_code_to_label
 from worldcereal.utils.refdata import (
     gdf_to_points,
     query_private_extractions,
     query_public_extractions,
 )
-from worldcereal.utils.legend import ewoc_code_to_label
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -381,6 +381,7 @@ def query_extractions(
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
     crop_types: Optional[List[int]] = None,
+    query_collateral_samples: bool = False,
 ) -> pd.DataFrame:
     """Wrapper function to query both public and private extractions in a given area.
 
@@ -399,6 +400,12 @@ def query_extractions(
     crop_types : Optional[List[int]], optional
             List of crop types to filter on, by default None
             If None, all crop types are included.
+    query_collateral_samples : bool, default=False
+        Whether to include collateral samples in the query.
+        Collateral samples are those samples that were not specifically marked for extraction,
+        but fell into the vicinity of such samples during the extraction process. While using
+        collateral samples will result in significant increase in amount of samples available for training,
+        it will also shift the distribution of the classes.
 
     Returns
     -------
@@ -415,6 +422,7 @@ def query_extractions(
             buffer=buffer,
             filter_cropland=filter_cropland,
             crop_types=crop_types,
+            query_collateral_samples=query_collateral_samples,
         )
 
         if len(public_df) > 0:

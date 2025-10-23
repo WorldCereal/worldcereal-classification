@@ -136,6 +136,7 @@ def query_public_extractions(
     buffer: int = 250000,
     filter_cropland: bool = True,
     crop_types: Optional[list[int]] = None,
+    query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
     """
     Query the WorldCereal global extractions database for reference data within a specified area.
@@ -159,6 +160,12 @@ def query_public_extractions(
     crop_types : Optional[List[int]], optional
         List of crop types to filter on, by default None
         If None, all crop types are included.
+    query_collateral_samples : bool, default=False
+        Whether to include collateral samples in the query.
+        Collateral samples are those samples that were not specifically marked for extraction,
+        but fell into the vicinity of such samples during the extraction process. While using
+        collateral samples will result in significant increase in amount of samples available for training,
+        it will also shift the distribution of the classes.
 
     Returns
     -------
@@ -187,6 +194,8 @@ def query_public_extractions(
     db.load_extension("spatial")
 
     metadata_s3_path = "s3://geoparquet/worldcereal_public_extractions_extent.parquet"
+    # update to local extent file for test!!!
+    # metadata_s3_path = "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_PUBLIC_EXTRACTIONS/worldcereal_public_extractions_extent.parquet"
 
     query_metadata = f"""
     SET s3_endpoint='s3.waw3-1.cloudferro.com';
@@ -241,6 +250,11 @@ AND ewoc_code > 1100000000
     else:
         cropland_filter_query_part = ""
 
+    if query_collateral_samples:
+        collateral_query_part = "AND extract >= 0"
+    else:
+        collateral_query_part = "AND extract >= 1"
+
     if crop_types is not None:
         ct_list_str = ",".join([str(x) for x in crop_types])
         cropland_filter_query_part += f"""
@@ -253,6 +267,7 @@ SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 {cropland_filter_query_part}
+{collateral_query_part}
 """
         if i == 0:
             main_query += query
