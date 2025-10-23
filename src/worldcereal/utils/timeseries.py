@@ -839,7 +839,8 @@ def _trim_timesteps(
     """Trim per-sample timesteps to reduce width prior to pivot.
 
     Centering strategy:
-      - If use_valid_time: center window on valid_position.
+      - If use_valid_time and max_timesteps_trim is 'auto' or integer: center window on valid_position.
+      - If use_valid_time and max_timesteps_trim is tuple of dates: no centering is done, but samples with valid_time outside the range are dropped.
       - Else: center window on midpoint of series (floor(available/2)).
 
     After trimming, timestamp_ind, start/end_date, and (if applicable) valid_position
@@ -877,6 +878,18 @@ def _trim_timesteps(
         df = df.loc[
             (df["timestamp"] >= trim_start_dt) & (df["timestamp"] <= trim_end_dt)
         ].copy()
+
+        # filter df to only include samples whose valid_time is within the specified range
+        if use_valid_time:
+            samples_with_outside_range = df[
+                (df["valid_time"] < trim_start_dt) | (df["valid_time"] > trim_end_dt)
+            ]["sample_id"].unique()
+            if len(samples_with_outside_range) > 0:
+                logger.warning(
+                    f"Dropping {len(samples_with_outside_range)} samples with valid_time outside the specified max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}."
+                )
+                df = df[~df["sample_id"].isin(samples_with_outside_range)]
+
         # After filtering, we need to ensure that all samples still meet the required minimum timesteps
         sample_counts = df["sample_id"].value_counts()
         samples_too_few = sample_counts[sample_counts < required_min_timesteps].index
@@ -905,7 +918,7 @@ def _trim_timesteps(
         return df
 
     if not isinstance(max_timesteps_trim, int):  # type: ignore
-        raise TypeError("max_timesteps_trim must be int, 'auto', or None")
+        raise TypeError("max_timesteps_trim must be int, 'auto', tuple, or None")
 
     if max_timesteps_trim < required_min_timesteps:
         raise ValueError(
