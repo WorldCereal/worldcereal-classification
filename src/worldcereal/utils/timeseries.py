@@ -848,6 +848,17 @@ def _trim_timesteps(
     """
     import gc
 
+    def _recompute_basics(df: pd.DataFrame, use_valid_time: bool) -> pd.DataFrame:
+        df.loc[:, "timestamp_ind"] = (
+            df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
+        )
+        df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
+        df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
+        if use_valid_time:
+            df = TimeSeriesProcessor.calculate_valid_position(df)
+            df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+        return df
+
     if max_timesteps_trim is None:
         return df
 
@@ -907,14 +918,7 @@ def _trim_timesteps(
                 f"Applied max_timesteps_trim date range {trim_start_dt.strftime('%Y-%m-%d')} - {trim_end_dt.strftime('%Y-%m-%d')}. All remaining samples meet the required minimum timesteps ({required_min_timesteps})."
             )
         # Recompute basics
-        df.loc[:, "timestamp_ind"] = (
-            df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
-        )
-        df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
-        df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
-        if use_valid_time:
-            df = TimeSeriesProcessor.calculate_valid_position(df)
-            df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+        df = _recompute_basics(df, use_valid_time)
         return df
 
     if not isinstance(max_timesteps_trim, int):  # type: ignore
@@ -971,14 +975,7 @@ def _trim_timesteps(
     gc.collect()
 
     # Recompute basics
-    df.loc[:, "timestamp_ind"] = (
-        df.groupby("sample_id")["timestamp"].rank().astype(int) - 1
-    )
-    df.loc[:, "start_date"] = df.groupby("sample_id")["timestamp"].transform("min")
-    df.loc[:, "end_date"] = df.groupby("sample_id")["timestamp"].transform("max")
-    if use_valid_time:
-        df = TimeSeriesProcessor.calculate_valid_position(df)
-        df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
+    df = _recompute_basics(df, use_valid_time)
 
     after_unique = df["timestamp_ind"].nunique()
     if after_unique < before_unique:
