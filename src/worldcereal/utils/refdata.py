@@ -29,8 +29,8 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
+    resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
+    CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
 
     return CLASS_MAPPINGS
 
@@ -687,7 +687,7 @@ def process_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
-        df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
+        df_raw = df_raw.loc[~df_raw["sample_id"].isin(invalid_samples)].copy()
 
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
@@ -704,7 +704,12 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
-    df_processed = process_parquet(df_raw, freq=freq, use_valid_time=True)
+    df_processed = process_parquet(
+        df_raw,
+        freq=freq,
+        use_valid_time=True,
+        max_timesteps_trim="auto",
+    )
 
     if processing_period is not None:
         # put back the true valid_time
