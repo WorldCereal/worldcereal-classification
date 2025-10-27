@@ -96,8 +96,8 @@ def main(
             "python-memory" : python_memory,
             "executor-memory": executor_memory,
             "driver-memory": driver_memory,
-            "executor-memory-overhead": executor_memory_overhead,
-            "driver-memory-overhead": driver_memory_overhead,
+            "executor-memoryOverhead": executor_memory_overhead,
+            "driver-memoryOverhead": driver_memory_overhead,
             "max-executors": max_executors,
             "image-name": image_name,
             "etl_organization_id": organization_id,
@@ -158,6 +158,12 @@ if __name__ == "__main__":
         type=int,
         default=500,
         help="The maximum number of locations to extract per job",
+    )
+    parser.add_argument(
+        "--python_memory",
+        type=str,
+        default="1800m",
+        help="memory assigned to Python UDFs, sar_backscatter or Sentinel-3 data loading tasks.",
     )
     parser.add_argument(
         "--driver_memory",
@@ -236,6 +242,7 @@ if __name__ == "__main__":
         samples_df_path=args.samples_df_path,
         ref_id=args.ref_id,
         max_locations_per_job=args.max_locations,
+        python_memory=args.python_memory,
         driver_memory=args.driver_memory,
         executor_memory=args.executor_memory,
         driver_memory_overhead=args.driver_memory_overhead,
