@@ -1,13 +1,8 @@
+from datetime import datetime
 from enum import Enum
-from typing import Type
+from typing import Optional
 
-from openeo_gfmap.features.feature_extractor import PatchFeatureExtractor
-from openeo_gfmap.inference.model_inference import ModelInference
 from pydantic import BaseModel, Field, ValidationError, model_validator
-
-from worldcereal.openeo.feature_extractor import PrestoFeatureExtractor
-from worldcereal.openeo.inference import CropClassifier
-from worldcereal.openeo.postprocess import PostProcessor
 
 
 class WorldCerealProductType(Enum):
@@ -15,6 +10,7 @@ class WorldCerealProductType(Enum):
 
     CROPLAND = "cropland"
     CROPTYPE = "croptype"
+    EMBEDDINGS = "embeddings"
 
 
 class FeaturesParameters(BaseModel):
@@ -29,16 +25,38 @@ class FeaturesParameters(BaseModel):
     presto_model_url : str
         Public URL to the Presto model used for feature extraction. The file
         should be a PyTorch serialized model.
-    use_valid_date_token : bool (default=False)
-        Whether to use the valid date/month token in the Presto encoder.
     compile_presto : bool (default=False)
         Whether to compile the Presto encoder for speeding up large-scale inference.
+    temporal_prediction : bool (default=False)
+        Whether to use temporal-explicit predictions. If True, the time dimension
+        is preserved in Presto features and a specific timestep is selected later.
+        If False, features are pooled across time (non-temporal prediction).
+    target_date : str (default=None)
+        Target date for temporal-explicit predictions in ISO format (YYYY-MM-DD).
+        Only used when temporal_prediction=True. If None, the middle timestep is used.
     """
 
     rescale_s1: bool
     presto_model_url: str
-    use_valid_date_token: bool
     compile_presto: bool
+    temporal_prediction: bool = Field(default=False)
+    target_date: Optional[str] = Field(default=None)
+
+    @model_validator(mode="after")
+    def check_temporal_parameters(self):
+        """Validates temporal prediction parameters."""
+        if self.target_date is not None and not self.temporal_prediction:
+            raise ValidationError(
+                "target_date can only be specified when temporal_prediction=True"
+            )
+
+        if self.target_date is not None:
+            try:
+                datetime.fromisoformat(self.target_date)
+            except ValueError:
+                raise ValidationError("target_date must be in ISO format (YYYY-MM-DD)")
+
+        return self
 
 
 class ClassifierParameters(BaseModel):
@@ -56,105 +74,154 @@ class ClassifierParameters(BaseModel):
     classifier_url: str
 
 
-class CropLandParameters(BaseModel):
+class BaseParameters(BaseModel):
+    """Base class for shared parameter logic."""
+
+    @staticmethod
+    def create_feature_parameters(**kwargs):
+        defaults = {
+            "rescale_s1": False,
+            "presto_model_url": "",
+            "compile_presto": False,
+            "temporal_prediction": False,
+            "target_date": None,
+        }
+        defaults.update(kwargs)
+        return FeaturesParameters(**defaults)
+
+    @staticmethod
+    def create_classifier_parameters(classifier_url: str):
+        return ClassifierParameters(classifier_url=classifier_url)
+
+
+class CropLandParameters(BaseParameters):
     """Parameters for the cropland product inference pipeline. Types are
     enforced by Pydantic.
 
     Attributes
     ----------
-    feature_extractor : PrestoFeatureExtractor
-        Feature extractor to use for the inference. This class must be a
-        subclass of GFMAP's `PatchFeatureExtractor` and returns float32
-        features.
     feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
-        dictionnary and passed in the process graph.
-    classifier : CropClassifier
-        Classifier to use for the inference. This class must be a subclass of
-        GFMAP's `ModelInference` and returns predictions/probabilities for
-        cropland.
+        dictionary and passed in the process graph.
     classifier_parameters : ClassifierParameters
-        Parameters for the classifier UDF. Will be serialized into a dictionnary
+        Parameters for the classifier UDF. Will be serialized into a dictionary
         and passed in the process graph.
     """
 
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
-    )
-    feature_parameters: FeaturesParameters = FeaturesParameters(
+    feature_parameters: FeaturesParameters = BaseParameters.create_feature_parameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_cropland_CROPLAND2_30D_random_time-token=none_balance=True_augment=True.pt",  # NOQA
-        use_valid_date_token=False,
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
         compile_presto=False,
+        temporal_prediction=False,
+        target_date=None,
     )
-    classifier: Type[ModelInference] = Field(default=CropClassifier)
-    classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_cropland_v006-ft-cropland-maxmaskratio05.onnx"  # NOQA
+    classifier_parameters: ClassifierParameters = BaseParameters.create_classifier_parameters(
+        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_temporary-crops_v001-debug.onnx"  # NOQA
     )
 
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PatchFeatureExtractor, got {self.feature_extractor}"
-            )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
 
-
-class CropTypeParameters(BaseModel):
+class CropTypeParameters(BaseParameters):
     """Parameters for the croptype product inference pipeline. Types are
     enforced by Pydantic.
 
     Attributes
     ----------
-    feature_extractor : PrestoFeatureExtractor
-        Feature extractor to use for the inference. This class must be a
-        subclass of GFMAP's `PatchFeatureExtractor` and returns float32
-        features.
     feature_parameters : FeaturesParameters
         Parameters for the feature extraction UDF. Will be serialized into a
-        dictionnary and passed in the process graph.
-    classifier : CropClassifier
-        Classifier to use for the inference. This class must be a subclass of
-        GFMAP's `ModelInference` and returns predictions/probabilities for
-        cropland classes.
+        dictionary and passed in the process graph.
     classifier_parameters : ClassifierParameters
-        Parameters for the classifier UDF. Will be serialized into a dictionnary
+        Parameters for the classifier UDF. Will be serialized into a dictionary
         and passed in the process graph.
+    mask_cropland : bool (default=True)
+        Whether or not to mask the cropland pixels before running crop type inference.
     save_mask : bool (default=False)
         Whether or not to save the cropland mask as an intermediate result.
     """
 
-    feature_extractor: Type[PatchFeatureExtractor] = Field(
-        default=PrestoFeatureExtractor
+    feature_parameters: FeaturesParameters = Field(
+        default_factory=lambda: BaseParameters.create_feature_parameters(
+            rescale_s1=False,
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DTrue-run%3D202507181013_encoder.pt",  # NOQA
+            compile_presto=False,
+            temporal_prediction=True,
+            target_date=None,  # By default take the middle date
+        )
     )
-    feature_parameters: FeaturesParameters = FeaturesParameters(
-        rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True.pt",  # NOQA
-        use_valid_date_token=True,
-        compile_presto=False,
+    classifier_parameters: ClassifierParameters = Field(
+        default_factory=lambda: BaseParameters.create_classifier_parameters(
+            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_croptype_v001-debug.onnx"
+        )
     )
-    classifier: Type[ModelInference] = Field(default=CropClassifier)
-    classifier_parameters: ClassifierParameters = ClassifierParameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/presto-ss-wc-ft-ct_croptype_CROPTYPE0_30D_random_time-token=month_balance=True_augment=True_CROPTYPE9.onnx"  # NOQA
-    )
+    mask_cropland: bool = Field(default=True)
     save_mask: bool = Field(default=False)
 
+    def __init__(self, target_date: Optional[str] = None, **kwargs):
+        feature_params = self.create_feature_parameters(
+            rescale_s1=False,
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DTrue-run%3D202507181013_encoder.pt",  # NOQA
+            compile_presto=False,
+            temporal_prediction=True,
+            target_date=target_date,
+        )
+
+        if "feature_parameters" not in kwargs:
+            kwargs["feature_parameters"] = feature_params
+
+        super().__init__(**kwargs)
+
     @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the FeatureExtractor and Classifier classes."""
-        if not issubclass(self.feature_extractor, PatchFeatureExtractor):
-            raise ValidationError(
-                f"Feature extractor must be a subclass of PrestoFeatureExtractor, got {self.feature_extractor}"
-            )
-        if not issubclass(self.classifier, ModelInference):
-            raise ValidationError(
-                f"Classifier must be a subclass of ModelInference, got {self.classifier}"
-            )
+    def check_mask_parameters(self):
+        """Validates the mask-related parameters."""
+        if not self.mask_cropland and self.save_mask:
+            raise ValidationError("Cannot save mask if mask_cropland is disabled.")
+        return self
+
+
+class EmbeddingsParameters(BaseParameters):
+    """Parameters for the embeddings product inference pipeline. Types are
+    enforced by Pydantic.
+
+    Attributes
+    ----------
+    feature_parameters : FeaturesParameters
+        Parameters for the feature extraction UDF. Will be serialized into a
+        dictionary and passed in the process graph.
+    classifier_parameters : ClassifierParameters
+        Parameters for the classifier UDF. Will be serialized into a dictionary
+        and passed in the process graph.
+    """
+
+    @staticmethod
+    def _default_feature_parameters() -> FeaturesParameters:
+        """Internal helper returning the default feature parameters instance.
+
+        Centralizes the defaults so they are declared only once.
+        """
+        return BaseParameters.create_feature_parameters(
+            rescale_s1=False,
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
+            compile_presto=False,
+            temporal_prediction=False,
+            target_date=None,
+        )
+
+    feature_parameters: FeaturesParameters = Field(
+        # Wrap staticmethod call so pydantic receives a true zero-arg callable
+        default_factory=lambda: EmbeddingsParameters._default_feature_parameters()
+    )
+
+    def __init__(self, presto_model_url: Optional[str] = None, **kwargs):
+        """Allow initialization with a custom Presto model URL without
+        duplicating the default argument list.
+
+        Users may still pass an explicit `feature_parameters` to override all
+        aspects; in that case `presto_model_url` is ignored.
+        """
+        if "feature_parameters" not in kwargs and presto_model_url is not None:
+            fp = self._default_feature_parameters().model_copy()
+            fp.presto_model_url = presto_model_url  # type: ignore[attr-defined]
+            kwargs["feature_parameters"] = fp
+        super().__init__(**kwargs)
 
 
 class PostprocessParameters(BaseModel):
@@ -180,17 +247,6 @@ class PostprocessParameters(BaseModel):
     kernel_size: int = Field(default=5)
     save_intermediate: bool = Field(default=False)
     keep_class_probs: bool = Field(default=False)
-
-    postprocessor: Type[ModelInference] = Field(default=PostProcessor)
-
-    @model_validator(mode="after")
-    def check_udf_types(self):
-        """Validates the PostProcessor class."""
-        if not issubclass(self.postprocessor, ModelInference):
-            raise ValidationError(
-                f"Postprocessor must be a subclass of PostProcessor, got {self.postprocessor}"
-            )
-        return self
 
     @model_validator(mode="after")
     def check_parameters(self):

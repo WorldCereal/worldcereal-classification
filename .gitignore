@@ -47,6 +47,14 @@ MANIFEST
 .noseids
 experimental/**
 
+# By default don't track notebooks
+notebooks/*.ipynb
+notebooks/trainings/*.ipynb
+
+# Misc
+scripts/docker
+scripts/other/**
+
 # don't track catboost training info
 src/worldcereal/train/catboost_info
 
@@ -164,12 +172,11 @@ dmypy.json
 .pyre/
 download.zip
 catboost_info/*
-notebooks/catboost_info/*
 
 *.cbm
 *.pt
 *.onnx
-*.nc
+# *.nc
 *.7z
 *.dmg
 *.gz
@@ -181,3 +188,26 @@ notebooks/catboost_info/*
 
 .notebook-tests/
 .local-presto-test/
+
+# output files of notebook runs
+notebooks/bbox/*
+notebooks/catboost_info/*
+notebooks/download/*
+notebooks/extractions/*
+notebooks/local_inference/*
+notebooks/preprocessed_inputs/*
+notebooks/results/*
+notebooks/runs/*
+notebooks/training_data/*
+
+notebooks/trainings/bbox/*
+notebooks/trainings/catboost_info/*
+notebooks/trainings/download/*
+notebooks/trainings/extractions/*
+notebooks/trainings/local_inference/*
+notebooks/trainings/preprocessed_inputs/*
+notebooks/trainings/results/*
+notebooks/trainings/runs/*
+notebooks/trainings/training_data/*
+
+

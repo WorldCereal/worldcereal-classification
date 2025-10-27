@@ -14,6 +14,7 @@ class ExtractionCollection(Enum):
     PATCH_WORLDCEREAL = "PATCH_WORLDCEREAL"
     POINT_WORLDCEREAL = "POINT_WORLDCEREAL"
     POINT_NPA = "POINT_NPA"
+    PATCH_TO_POINT = "PATCH_TO_POINT"
 
 
 # Define the sentinel 1 asset
@@ -66,13 +67,14 @@ SENTINEL2_ASSET = pystac.extensions.item_assets.AssetDefinition(
             {"name": "S2-L2A-B05"},
             {"name": "S2-L2A-B06"},
             {"name": "S2-L2A-B07"},
-            {"name": "S2-L2A-B8A"},
             {"name": "S2-L2A-B08"},
+            {"name": "S2-L2A-B8A"},
+            {"name": "S2-L2A-B09"},
             {"name": "S2-L2A-B11"},
             {"name": "S2-L2A-B12"},
             {"name": "S2-L2A-SCL"},
             {"name": "S2-L2A-SCL_DILATED_MASK"},
-            {"name": "S2-L2A-DISTANCE_TO_CLOUD"},
+            {"name": "S2-L2A-DISTANCE-TO-CLOUD"},
         ],
         "cube:variables": {
             "S2-L2A-B01": {"dimensions": ["time", "y", "x"], "type": "data"},
@@ -82,8 +84,9 @@ SENTINEL2_ASSET = pystac.extensions.item_assets.AssetDefinition(
             "S2-L2A-B05": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B06": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B07": {"dimensions": ["time", "y", "x"], "type": "data"},
-            "S2-L2A-B8A": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B08": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B8A": {"dimensions": ["time", "y", "x"], "type": "data"},
+            "S2-L2A-B09": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B11": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-B12": {"dimensions": ["time", "y", "x"], "type": "data"},
             "S2-L2A-SCL": {"dimensions": ["time", "y", "x"], "type": "data"},
@@ -91,7 +94,7 @@ SENTINEL2_ASSET = pystac.extensions.item_assets.AssetDefinition(
                 "dimensions": ["time", "y", "x"],
                 "type": "data",
             },
-            "S2-L2A-DISTANCE_TO_CLOUD": {
+            "S2-L2A-DISTANCE-TO-CLOUD": {
                 "dimensions": ["time", "y", "x"],
                 "type": "data",
             },
@@ -152,6 +155,12 @@ SENTINEL2_ASSET = pystac.extensions.item_assets.AssetDefinition(
                 "full_width_half_max": 0.033,
             },
             {
+                "name": "S2-L2A-B09",
+                "common_name": "nir09",
+                "center_wavelength": 0.945,
+                "full_width_half_max": 0.033,
+            },
+            {
                 "name": "S2-L2A-B11",
                 "common_name": "swir16",
                 "center_wavelength": 1.61,
@@ -173,7 +182,7 @@ SENTINEL2_ASSET = pystac.extensions.item_assets.AssetDefinition(
                 "name": "S2-L2A-SCL_DILATED_MASK",
             },
             {
-                "name": "S2-L2A-DISTANCE_TO_CLOUD",
+                "name": "S2-L2A-DISTANCE-TO-CLOUD",
             },
         ],
     }

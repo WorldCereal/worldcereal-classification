@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import pandas as pd
 from geojson import GeoJSON
@@ -19,18 +19,129 @@ from openeo_gfmap.preprocessing.compositing import mean_compositing, median_comp
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
+WORLDCEREAL_S2_BANDS = [
+    "S2-L2A-B02",
+    "S2-L2A-B03",
+    "S2-L2A-B04",
+    "S2-L2A-B05",
+    "S2-L2A-B06",
+    "S2-L2A-B07",
+    "S2-L2A-B08",
+    "S2-L2A-B8A",
+    "S2-L2A-B11",
+    "S2-L2A-B12",
+]
+
+WORLDCEREAL_S1_BANDS = [
+    "S1-SIGMA0-VH",
+    "S1-SIGMA0-VV",
+]
+
+WORLDCEREAL_DEM_BANDS = ["elevation", "slope"]
+
+WORLDCEREAL_METEO_BANDS = ["AGERA5-PRECIP", "AGERA5-TMEAN"]
+
+WORLDCEREAL_BANDS = {
+    "SENTINEL2": WORLDCEREAL_S2_BANDS,
+    "SENTINEL1": WORLDCEREAL_S1_BANDS,
+    "DEM": WORLDCEREAL_DEM_BANDS,
+    "METEO": WORLDCEREAL_METEO_BANDS,
+}
+
 
 class InvalidTemporalContextError(Exception):
     pass
 
 
-def raw_datacube_S2(
-    connection: Connection,
+def spatially_filter_cube(
+    connection: Connection, cube: DataCube, spatial_extent: Optional[SpatialContext]
+) -> DataCube:
+    """
+    Apply spatial filtering to a data cube based on the given spatial extent.
+
+
+    Parameters
+    ----------
+    connection : Connection
+        The connection object used to interact with the openEO backend.
+    cube : DataCube
+        The input data cube to be spatially filtered.
+    spatial_extent : Optional[SpatialContext]
+        The spatial extent used for filtering the data cube. It can be a BoundingBoxExtent,
+        a GeoJSON object, or a URL to a GeoJSON or Parquet file. If set to `None`,
+        no spatial filtering will be applied.
+
+    Returns
+    -------
+    DataCube
+        The spatially filtered data cube.
+
+    Raises
+    ------
+    ValueError
+        If the spatial_extent parameter is not of type BoundingBoxExtent, GeoJSON, or str.
+
+    """
+    if isinstance(spatial_extent, BoundingBoxExtent):
+        cube = cube.filter_bbox(dict(spatial_extent))
+    elif isinstance(spatial_extent, GeoJSON):
+        cube = cube.filter_spatial(spatial_extent)
+    elif isinstance(spatial_extent, str):
+        geometry = connection.load_url(
+            spatial_extent,
+            format=(
+                "Parquet"
+                if ".parquet" in spatial_extent or ".geoparquet" in spatial_extent
+                else "GeoJSON"
+            ),
+        )
+        cube = cube.filter_spatial(geometry)
+
+    return cube
+
+
+def select_best_s1_orbit_direction(
     backend_context: BackendContext,
     spatial_extent: SpatialContext,
     temporal_extent: TemporalContext,
+) -> str:
+    """Selects the best Sentinel-1 orbit direction based on the given spatio-temporal context.
+
+    Parameters
+    ----------
+    backend_context : BackendContext
+        The backend context for accessing the data.
+    spatial_extent : SpatialContext
+        The spatial extent of the data.
+    temporal_extent : TemporalContext
+        The temporal extent of the data.
+
+    Returns
+    -------
+    str
+        The selected orbit direction (either "ASCENDING" or "DESCENDING").
+    """
+    try:
+        orbit_direction = select_s1_orbitstate_vvvh(
+            backend_context, spatial_extent, temporal_extent
+        )
+    except UncoveredS1Exception as exc:
+        orbit_direction = "ASCENDING"
+        print(
+            f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
+            f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
+        )
+
+    return orbit_direction
+
+
+def raw_datacube_S2(
+    connection: Connection,
+    backend_context: BackendContext,
+    temporal_extent: TemporalContext,
     bands: List[str],
     fetch_type: FetchType,
+    spatial_extent: Optional[SpatialContext] = None,
     filter_tile: Optional[str] = None,
     distance_to_cloud_flag: Optional[bool] = True,
     additional_masks_flag: Optional[bool] = True,
@@ -49,15 +160,15 @@ def raw_datacube_S2(
         OpenEO connection instance.
     backend_context : BackendContext
         GFMAP Backend context to use for extraction.
-    spatial_extent : SpatialContext
-        Spatial context to extract data from, can be a GFMAP BoundingBoxExtent,
-        a GeoJSON dict or an URL to a publicly accessible GeoParquet file.
     temporal_extent : TemporalContext
         Temporal context to extract data from.
     bands : List[str]
         List of Sentinel-2 bands to extract.
     fetch_type : FetchType
         GFMAP Fetch type to use for extraction.
+    spatial_extent : Optional[SpatialContext], optional
+        Spatial context to extract data from, can be a GFMAP BoundingBoxExtent,
+        a GeoJSON dict or an URL to a publicly accessible GeoParquet file.
     filter_tile : Optional[str], optional
         Filter by tile ID, by default disabled. This forces the process to only
         one tile ID from the Sentinel-2 collection.
@@ -82,7 +193,6 @@ def raw_datacube_S2(
         collection_id="SENTINEL2_L2A",
         bands=["SCL"],
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        spatial_extent=dict(spatial_extent) if fetch_type == FetchType.TILE else None,
         properties=scl_cube_properties,
     )
 
@@ -120,12 +230,6 @@ def raw_datacube_S2(
 
         additional_masks = scl_dilated_mask.merge_cubes(distance_to_cloud)
 
-        # Try filtering using the geometry
-        if fetch_type == FetchType.TILE:
-            additional_masks = additional_masks.filter_spatial(
-                spatial_extent.to_geojson()
-            )
-
     if additional_masks_flag:
         extraction_parameters["pre_merge"] = additional_masks
 
@@ -141,23 +245,23 @@ def raw_datacube_S2(
             "featureflags": {"tilesize": tile_size}
         }
 
-    extractor = build_sentinel2_l2a_extractor(
+    s2_cube = build_sentinel2_l2a_extractor(
         backend_context,
         bands=bands,
         fetch_type=fetch_type,
         **extraction_parameters,
-    )
+    ).get_cube(connection, None, temporal_extent)
 
-    return extractor.get_cube(connection, spatial_extent, temporal_extent)
+    return s2_cube
 
 
 def raw_datacube_S1(
     connection: Connection,
     backend_context: BackendContext,
-    spatial_extent: SpatialContext,
     temporal_extent: TemporalContext,
     bands: List[str],
     fetch_type: FetchType,
+    spatial_extent: Optional[SpatialContext] = None,
     target_resolution: float = 20.0,
     orbit_direction: Optional[str] = None,
     tile_size: Optional[int] = None,
@@ -170,41 +274,23 @@ def raw_datacube_S1(
         OpenEO connection instance.
     backend_context : BackendContext
         GFMAP Backend context to use for extraction.
-    spatial_extent : SpatialContext
-        Spatial context to extract data from, can be a GFMAP BoundingBoxExtent,
-        a GeoJSON dict or an URL to a publicly accessible GeoParquet file.
     temporal_extent : TemporalContext
         Temporal context to extract data from.
     bands : List[str]
         List of Sentinel-1 bands to extract.
     fetch_type : FetchType
         GFMAP Fetch type to use for extraction.
+    spatial_extent : Optional[SpatialContext], optional
+        Spatial context to extract data from, can be a GFMAP BoundingBoxExtent,
+        a GeoJSON dict or an URL to a publicly accessible GeoParquet file.
     target_resolution : float, optional
         Target resolution to resample the data to, by default 20.0.
     orbit_direction : Optional[str], optional
-        Orbit direction to filter the data, by default None. If None and the
-        backend is in CDSE, then querries the catalogue for the best orbit
-        direction to use. In the case querrying is unavailable or fails, then
-        uses "ASCENDING" as a last resort.
+        Orbit direction to filter the data, by default None.
     """
     extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
     }
-    if orbit_direction is None and backend_context.backend in [
-        Backend.CDSE,
-        Backend.CDSE_STAGING,
-        Backend.FED,
-    ]:
-        try:
-            orbit_direction = select_s1_orbitstate_vvvh(
-                backend_context, spatial_extent, temporal_extent
-            )
-        except UncoveredS1Exception as exc:
-            orbit_direction = "ASCENDING"
-            print(
-                f"Could not find any Sentinel-1 data for the given spatio-temporal context. "
-                f"Using ASCENDING orbit direction as a last resort. Error: {exc}"
-            )
 
     if orbit_direction is not None:
         extractor_parameters["load_collection"] = {
@@ -221,25 +307,19 @@ def raw_datacube_S1(
             "featureflags": {"tilesize": tile_size}
         }
 
-    extractor = build_sentinel1_grd_extractor(
+    s1_cube = build_sentinel1_grd_extractor(
         backend_context, bands=bands, fetch_type=fetch_type, **extractor_parameters
-    )
+    ).get_cube(connection, None, temporal_extent)
 
-    return extractor.get_cube(connection, spatial_extent, temporal_extent)
+    return s1_cube
 
 
 def raw_datacube_DEM(
     connection: Connection,
     backend_context: BackendContext,
-    spatial_extent: SpatialContext,
     fetch_type: FetchType,
+    spatial_extent: Optional[SpatialContext] = None,
 ) -> DataCube:
-    extractor = build_generic_extractor(
-        backend_context=backend_context,
-        bands=["COP-DEM"],
-        fetch_type=fetch_type,
-        collection_name="COPERNICUS_30",
-    )
     """Method to get the DEM datacube from the backend.
     If running on CDSE backend, the slope is also loaded from the global
     slope collection and merged with the DEM cube.
@@ -250,19 +330,20 @@ def raw_datacube_DEM(
         openEO datacube with the DEM data (and slope if available).
     """
 
-    cube = extractor.get_cube(connection, spatial_extent, None)
+    extractor = build_generic_extractor(
+        backend_context=backend_context,
+        bands=["COP-DEM"],
+        fetch_type=fetch_type,
+        collection_name="COPERNICUS_30",
+    )
+
+    cube = extractor.get_cube(connection, None, None)
     cube = cube.rename_labels(dimension="bands", target=["elevation"])
 
-    if backend_context.backend == Backend.CDSE and fetch_type == FetchType.TILE:
+    if backend_context.backend in [Backend.CDSE, Backend.CDSE_STAGING]:
         # On CDSE we can load the slope from a global slope collection
-        # but this currently only works for tile fetching.
-
-        if isinstance(spatial_extent, BoundingBoxExtent):
-            spatial_extent = dict(spatial_extent)
-
         slope = connection.load_stac(
             "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE",
-            spatial_extent=spatial_extent,
             bands=["Slope"],
         ).rename_labels(dimension="bands", target=["slope"])
         # Client fix for CDSE, the openeo client might be unsynchronized with
@@ -281,9 +362,9 @@ def raw_datacube_DEM(
 def raw_datacube_METEO(
     connection: Connection,
     backend_context: BackendContext,
-    spatial_extent: SpatialContext,
     temporal_extent: TemporalContext,
     fetch_type: FetchType,
+    spatial_extent: Optional[SpatialContext] = None,
 ) -> DataCube:
     extractor = build_generic_extractor(
         backend_context=backend_context,
@@ -291,13 +372,16 @@ def raw_datacube_METEO(
         fetch_type=fetch_type,
         collection_name="AGERA5",
     )
-    return extractor.get_cube(connection, spatial_extent, temporal_extent)
+
+    meteo_cube = extractor.get_cube(connection, None, temporal_extent)
+
+    return meteo_cube
 
 
 def precomposited_datacube_METEO(
     connection: Connection,
     temporal_extent: TemporalContext,
-    spatial_extent: SpatialContext = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ) -> DataCube:
     """Extract the precipitation and temperature AGERA5 data from a
     pre-composited and pre-processed collection. The data is stored in the
@@ -307,20 +391,23 @@ def precomposited_datacube_METEO(
     Limitations:
         - Only monthly composited data is available.
         - Only two bands are available: precipitation-flux and temperature-mean.
-        - This function do not support fetching points or polygons, but only
-          tiles.
     """
     temporal_extent = [temporal_extent.start_date, temporal_extent.end_date]
-    if isinstance(spatial_extent, BoundingBoxExtent):
-        spatial_extent = dict(spatial_extent)
 
-    # Monthly composited METEO data
-    cube = connection.load_stac(
-        "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json",
-        spatial_extent=spatial_extent,
-        temporal_extent=temporal_extent,
-        bands=["precipitation-flux", "temperature-mean"],
-    )
+    if compositing_window == "month":
+        # Load precomposited monthly meteo data
+        cube = connection.load_stac(
+            url="https://stac.openeo.vito.be/collections/agera5_monthly",
+            temporal_extent=temporal_extent,
+            bands=["precipitation-flux", "temperature-mean"],
+        )
+    elif compositing_window == "dekad":
+        # Load precomposited dekadal meteo data
+        cube = connection.load_stac(
+            url="https://stac.openeo.vito.be/collections/agera5_dekad",
+            temporal_extent=temporal_extent,
+            bands=["precipitation-flux", "temperature-mean"],
+        )
 
     # cube.result_node().update_arguments(featureflags={"tilesize": 1})
     cube = cube.rename_labels(
@@ -340,9 +427,10 @@ def worldcereal_preprocessed_inputs(
     validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
-    compositing_window: str = "month",
+    s2_tile: Optional[str] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
-
     # First validate the temporal context
     if validate_temporal_context:
         _validate_temporal_context(temporal_extent)
@@ -357,26 +445,18 @@ def worldcereal_preprocessed_inputs(
     s2_data = raw_datacube_S2(
         connection=connection,
         backend_context=backend_context,
-        spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
-        bands=[
-            "S2-L2A-B02",
-            "S2-L2A-B03",
-            "S2-L2A-B04",
-            "S2-L2A-B05",
-            "S2-L2A-B06",
-            "S2-L2A-B07",
-            "S2-L2A-B08",
-            "S2-L2A-B11",
-            "S2-L2A-B12",
-        ],
+        bands=WORLDCEREAL_S2_BANDS,
         fetch_type=fetch_type,
-        filter_tile=None,
+        filter_tile=s2_tile,
         distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
         additional_masks_flag=False,
         apply_mask_flag=True,
         tile_size=tile_size,
     )
+
+    if target_epsg is not None:
+        s2_data = s2_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
     s2_data = median_compositing(s2_data, period=compositing_window)
 
@@ -386,20 +466,27 @@ def worldcereal_preprocessed_inputs(
     # Extraction of the S1 data
     # Decides on the orbit direction from the maximum overlapping area of
     # available products.
+    if s1_orbit_state is None and backend_context.backend in [
+        Backend.CDSE,
+        Backend.CDSE_STAGING,
+        Backend.FED,
+    ]:
+        s1_orbit_state = select_best_s1_orbit_direction(
+            backend_context, spatial_extent, temporal_extent
+        )
     s1_data = raw_datacube_S1(
         connection=connection,
         backend_context=backend_context,
-        spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
-        bands=[
-            "S1-SIGMA0-VH",
-            "S1-SIGMA0-VV",
-        ],
+        bands=WORLDCEREAL_S1_BANDS,
         fetch_type=fetch_type,
         target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
         tile_size=tile_size,
     )
+
+    if target_epsg is not None:
+        s1_data = s1_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
     s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
@@ -407,7 +494,6 @@ def worldcereal_preprocessed_inputs(
     dem_data = raw_datacube_DEM(
         connection=connection,
         backend_context=backend_context,
-        spatial_extent=spatial_extent,
         fetch_type=fetch_type,
     )
 
@@ -427,8 +513,8 @@ def worldcereal_preprocessed_inputs(
             )
         meteo_data = precomposited_datacube_METEO(
             connection=connection,
-            spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
+            compositing_window=compositing_window,
         )
 
         # Explicitly resample meteo with bilinear interpolation

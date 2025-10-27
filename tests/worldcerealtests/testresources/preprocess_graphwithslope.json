@@ -10,6 +10,7 @@
                 "B06",
                 "B07",
                 "B08",
+                "B8A",
                 "B11",
                 "B12"
             ],
@@ -30,14 +31,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -67,14 +61,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -157,6 +144,7 @@
                 "B06",
                 "B07",
                 "B08",
+                "B8A",
                 "B11",
                 "B12"
             ],
@@ -168,6 +156,7 @@
                 "S2-L2A-B06",
                 "S2-L2A-B07",
                 "S2-L2A-B08",
+                "S2-L2A-B8A",
                 "S2-L2A-B11",
                 "S2-L2A-B12"
             ]
@@ -284,14 +273,7 @@
                     }
                 }
             },
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
@@ -434,35 +416,6 @@
                             "data": {
                                 "from_parameter": "data"
                             },
-                            "index": 0
-                        }
-                    },
-                    "isnodata1": {
-                        "process_id": "is_nodata",
-                        "arguments": {
-                            "x": {
-                                "from_node": "arrayelement2"
-                            }
-                        }
-                    },
-                    "if1": {
-                        "process_id": "if",
-                        "arguments": {
-                            "accept": 1,
-                            "reject": {
-                                "from_node": "power1"
-                            },
-                            "value": {
-                                "from_node": "isnodata1"
-                            }
-                        }
-                    },
-                    "arrayelement3": {
-                        "process_id": "array_element",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            },
                             "index": 1
                         }
                     },
@@ -471,7 +424,7 @@
                         "arguments": {
                             "base": 10,
                             "x": {
-                                "from_node": "arrayelement3"
+                                "from_node": "arrayelement2"
                             }
                         }
                     },
@@ -511,44 +464,15 @@
                             }
                         }
                     },
-                    "arrayelement4": {
-                        "process_id": "array_element",
-                        "arguments": {
-                            "data": {
-                                "from_parameter": "data"
-                            },
-                            "index": 1
-                        }
-                    },
-                    "isnodata2": {
-                        "process_id": "is_nodata",
-                        "arguments": {
-                            "x": {
-                                "from_node": "arrayelement4"
-                            }
-                        }
-                    },
-                    "if2": {
-                        "process_id": "if",
-                        "arguments": {
-                            "accept": 1,
-                            "reject": {
-                                "from_node": "power2"
-                            },
-                            "value": {
-                                "from_node": "isnodata2"
-                            }
-                        }
-                    },
                     "arraycreate1": {
                         "process_id": "array_create",
                         "arguments": {
                             "data": [
                                 {
-                                    "from_node": "if1"
+                                    "from_node": "power1"
                                 },
                                 {
-                                    "from_node": "if2"
+                                    "from_node": "power2"
                                 }
                             ]
                         },
@@ -600,14 +524,6 @@
             "bands": [
                 "Slope"
             ],
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
             "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
         }
     },
@@ -652,14 +568,7 @@
                 "DEM"
             ],
             "id": "COPERNICUS_30",
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
+            "spatial_extent": null,
             "temporal_extent": null
         }
     },
@@ -778,19 +687,11 @@
                 "precipitation-flux",
                 "temperature-mean"
             ],
-            "spatial_extent": {
-                "west": 44.432274,
-                "south": 51.317362,
-                "east": 44.698802,
-                "north": 51.428224,
-                "crs": "EPSG:4326",
-                "srs": "EPSG:4326"
-            },
             "temporal_extent": [
                 "2018-03-01",
                 "2019-02-28"
             ],
-            "url": "https://s3.waw3-1.cloudferro.com/swift/v1/agera/stac/collection.json"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
         }
     },
     "renamelabels7": {

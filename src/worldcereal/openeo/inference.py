@@ -1,110 +1,175 @@
 """Model inference on Presto feature for binary classication"""
 
+import functools
+import sys
+import copy
+import logging
+
+from openeo.udf.udf_data import UdfData
+from openeo.udf import XarrayDataCube
+from openeo.metadata import CollectionMetadata
+import numpy as np
+
+import requests
 import xarray as xr
-from openeo_gfmap.inference.model_inference import ModelInference
+
+sys.path.append("onnx_deps")
+import onnxruntime as ort  # noqa: E402
+
+EPSG_HARMONIZED_NAME = "GEO-EPSG"
+
+logger = logging.getLogger(__name__)
+
+@functools.lru_cache(maxsize=1)
+def load_and_prepare_model(model_url: str):
+    """Function to be used instead the default GFMap load_ort_model function.
+    Loads the model, validates it and extracts LUT from the model metadata.
 
 
-class CropClassifier(ModelInference):
-    """Binary or multi-class crop classifier using ONNX to load a catboost model.
+    Parameters
+    ----------
+    model_url : str
+        Public URL to the ONNX classification model.
+    """
+    # Load the model
+    logger.info(f"Loading ONNX model from {model_url}")
+    response = requests.get(model_url, timeout=120)
+    model = ort.InferenceSession(response.content)
 
-    The classifier use the embeddings computed from the Presto Feature
-    Extractor.
+    # Validate the model
+    metadata = model.get_modelmeta().custom_metadata_map
 
-    Interesting UDF parameters:
-    - classifier_url: A public URL to the ONNX classification model. Default is
-      the public Presto model.
-    - lookup_table: A dictionary mapping class names to class labels, ordered by
-      model probability output. This is required for the model to map the output
-      probabilities to class names.
+    if "class_params" not in metadata:
+        raise ValueError("Could not find class names in the model metadata.")
+
+    class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
+
+    if "class_names" not in class_params:
+        raise ValueError("Could not find class names in the model metadata.")
+
+    if "class_to_label" not in class_params:
+        raise ValueError("Could not find class to labels in the model metadata.")
+
+    # Load model LUT
+    lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+    sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
+
+    return model, sorted_lut
+
+
+def get_output_labels(lut_sorted: dict) -> list:
+    """
+    Returns the output labels for the classification.
+
+    LUT needs to be explicitly sorted here as openEO does
+    not guarantee the order of a json object being preserved when decoding
+    a process graph in the backend.
+    """
+    class_names = lut_sorted.keys()
+
+    return ["classification", "probability"] + [
+        f"probability_{name}" for name in class_names
+    ]
+
+def predict(onnx_session: ort.InferenceSession, lut_sorted: dict, features: np.ndarray) -> np.ndarray:
+    """
+    Predicts labels using the provided features array.
+
+    LUT needs to be explicitly sorted here as openEO does
+    not guarantee the order of a json object being preserved when decoding
+    a process graph in the backend.
     """
 
-    import numpy as np
+    # Prepare input data for ONNX model
+    outputs = onnx_session.run(None, {"features": features})
 
-    def __init__(self):
-        super().__init__()
+    # Extract classes as INTs and probability of winning class values
+    labels = np.zeros((len(outputs[0]),), dtype=np.uint16)
+    probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)
+    for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
+        labels[i] = lut_sorted[label]
+        probabilities[i] = int(round(prob[label] * 100))
 
-        self.onnx_session = None
-
-    def dependencies(self) -> list:
-        return []  # Disable the dependencies from PIP install
-
-    def output_labels(self) -> list:
-        class_names = self._parameters["lookup_table"].keys()
-
-        return ["classification", "probability"] + [
-            f"probability_{name}" for name in class_names
-        ]
-
-    def predict(self, features: np.ndarray) -> np.ndarray:
-        """
-        Predicts labels using the provided features array.
-        """
-        import numpy as np
-
-        # Classes names to codes
-        lookup_table = self._parameters.get("lookup_table", None)
-
-        if lookup_table is None:
-            raise ValueError(
-                "Lookup table is not defined. Please provide lookup_table in the UDFs parameters."
-            )
-
-        if self.onnx_session is None:
-            raise ValueError("Model has not been loaded. Please load a model first.")
-
-        # Prepare input data for ONNX model
-        outputs = self.onnx_session.run(None, {"features": features})
-
-        # Extract classes as INTs and probability of winning class values
-        labels = np.zeros((len(outputs[0]),), dtype=np.uint16)
-        probabilities = np.zeros((len(outputs[0]),), dtype=np.uint8)
-        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
-            labels[i] = lookup_table[label]
-            probabilities[i] = int(round(prob[label] * 100))
-
-        # Extract per class probabilities
-        output_probabilities = []
-        for output_px in outputs[1]:
-            output_probabilities.append(
-                [output_px[label] for label in self._parameters["lookup_table"].keys()]
-            )
-
-        output_probabilities = (
-            (np.array(output_probabilities) * 100).round().astype(np.uint8)
+    # Extract per class probabilities
+    output_probabilities = []
+    for output_px in outputs[1]:
+        output_probabilities.append(
+            [output_px[label] for label in lut_sorted.keys()]
         )
 
-        return np.hstack(
-            [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]
-        ).transpose()
+    output_probabilities = (
+        (np.array(output_probabilities) * 100).round().astype(np.uint8)
+    )
 
-    def execute(self, inarr: xr.DataArray) -> xr.DataArray:
+    return np.hstack(
+        [labels[:, np.newaxis], probabilities[:, np.newaxis], output_probabilities]
+    ).transpose()
 
-        if "classifier_url" not in self._parameters:
-            raise ValueError('Missing required parameter "classifier_url"')
-        classifier_url = self._parameters.get("classifier_url")
-        self.logger.info(f'Loading classifier model from "{classifier_url}"')
+def apply_inference(inarr: xr.DataArray, parameters: dict, ) -> xr.DataArray:
 
-        # shape and indices for output ("xy", "bands")
-        x_coords, y_coords = inarr.x.values, inarr.y.values
-        inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()
+    if "classifier_url" not in parameters:
+        raise ValueError('Missing required parameter "classifier_url"')
+    classifier_url = parameters.get("classifier_url")
+    logger.info(f'Loading classifier model from "{classifier_url}"')
 
-        self.onnx_session = self.load_ort_session(classifier_url)
+    # shape and indices for output ("xy", "bands")
+    x_coords, y_coords = inarr.x.values, inarr.y.values
+    inarr = inarr.transpose("bands", "x", "y").stack(xy=["x", "y"]).transpose()  # Transpose to xy since CatBoost expects this
 
-        # Run catboost classification
-        self.logger.info("Catboost classification with input shape: %s", inarr.shape)
-        classification = self.predict(inarr.values)
-        self.logger.info("Classification done with shape: %s", inarr.shape)
+    onnx_session, lut_sorted = (
+        load_and_prepare_model(classifier_url)
+    )
 
-        output_labels = self.output_labels()
+    # Run catboost classification
+    logger.info("Catboost classification with input shape: %s", inarr.shape)
+    classification = predict(onnx_session=onnx_session, lut_sorted=lut_sorted, features=inarr.values)
+    logger.info("Classification done with shape: %s", inarr.shape)
 
-        classification_da = xr.DataArray(
-            classification.reshape((len(output_labels), len(x_coords), len(y_coords))),
-            dims=["bands", "x", "y"],
-            coords={
-                "bands": output_labels,
-                "x": x_coords,
-                "y": y_coords,
-            },
-        )
+    output_labels = get_output_labels(lut_sorted)
 
-        return classification_da
+    classification_da = xr.DataArray(
+        classification.reshape((len(output_labels), len(x_coords), len(y_coords))),
+        dims=["bands", "x", "y"],
+        coords={
+            "bands": output_labels,
+            "x": x_coords,
+            "y": y_coords,
+        },
+    ).transpose("bands", "y", "x")  # openEO expects yx order after the UDF
+
+    return classification_da
+
+# Below comes the actual UDF part
+
+# Apply the Inference UDF
+def apply_udf_data(udf_data: UdfData) -> UdfData:
+    """This is the actual openeo UDF that will be executed by the backend."""
+
+    cube = udf_data.datacube_list[0]
+    parameters = copy.deepcopy(udf_data.user_context)
+
+    proj = udf_data.proj
+    if proj is not None:
+        proj = proj.get("EPSG")
+
+    parameters[EPSG_HARMONIZED_NAME] = proj
+
+    arr = cube.get_array()
+    arr = apply_inference(
+        inarr=arr,
+        parameters=parameters,
+    )
+
+    cube = XarrayDataCube(arr)
+
+    udf_data.datacube_list = [cube]
+
+    return udf_data
+
+
+# Change band names, since the target labels are parameterized in the UDF
+def apply_metadata(metadata: CollectionMetadata, context: dict) -> CollectionMetadata:
+
+    _, lut_sorted = load_and_prepare_model(context["classifier_url"])
+
+    return metadata.rename_labels(dimension="bands", target=get_output_labels(lut_sorted))

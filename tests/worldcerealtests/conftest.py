@@ -49,3 +49,9 @@ def WorldCerealCroptypeClassification():
 def WorldCerealExtractionsDF():
     filepath = get_test_resource("test_public_extractions.parquet")
     return pd.read_parquet(filepath)
+
+
+@pytest.fixture
+def WorldCerealPrivateExtractionsPath():
+    filepath = get_test_resource("worldcereal_private_extractions_dummy.parquet")
+    return filepath

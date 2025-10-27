@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 
 from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
@@ -145,12 +146,13 @@ def doy_to_date_after(doy: int, after_date: datetime.datetime):
     """
 
     year = after_date.year
-    doy_date = pd.to_datetime(f"{year}-01-01") + pd.Timedelta(days=doy)
+    # DOY is 1-based so day 1 should correspond to January 1st
+    doy_date = pd.to_datetime(f"{year}-01-01") + pd.Timedelta(days=doy - 1)
 
     if doy_date >= after_date:
         pass
     else:
-        doy_date = pd.to_datetime(f"{year+1}-01-01") + pd.Timedelta(days=doy)
+        doy_date = pd.to_datetime(f"{year+1}-01-01") + pd.Timedelta(days=doy - 1)
 
     doy_date = doy_date.strftime("%Y-%m-%d")
     # logger.info(f'Inferred date from DOY: {doy_date}')
@@ -327,13 +329,21 @@ def get_season_dates_for_extent(
     # Check max seasonality difference
     seasonality_difference_sos = max_doy_difference(sos_doy)
     seasonality_difference_eos = max_doy_difference(eos_doy)
+    warning = False
     if seasonality_difference_sos > max_seasonality_difference:
-        raise SeasonMaxDiffError(
-            f"Seasonality difference for SOS too large: {seasonality_difference_sos} days"
+        logger.warning(
+            f"Seasonality difference for SOS is large: {seasonality_difference_sos} days"
         )
+        warning = True
     if seasonality_difference_eos > max_seasonality_difference:
-        raise SeasonMaxDiffError(
-            f"Seasonality difference for EOS too large: {seasonality_difference_eos} days"
+        logger.warning(
+            f"Seasonality difference for EOS is large: {seasonality_difference_eos} days"
+        )
+        warning = True
+
+    if warning:
+        logger.warning(
+            "Computation of median crop calendars will be inaccurate. Consider downsizing your area of interest for more accurate results."
         )
 
     # Compute median DOY

@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import boto3
 from boto3.s3.transfer import TransferConfig
+from openeo_gfmap import Backend
+from openeo_gfmap.backend import BACKEND_CONNECTIONS
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,7 @@ class S3URI:
                 return S3URI(bucket, "/".join(without_prefix_parts[1:]))
         else:
             raise ValueError(
-                "Input {uri} is not a valid S3 URI should be of form s3://<bucket>/<key>"
+                f"Input {uri} is not a valid S3 URI should be of form s3://<bucket>/<key>"
             )
 
 
@@ -90,6 +92,27 @@ class AWSSTSCredentials:
             )
         )
 
+    @classmethod
+    def from_openeo_backend(cls, backend: str) -> AWSSTSCredentials:
+        """
+        Takes an OpenEO backend identifier and returns temporary credentials to interact with S3
+        """
+
+        # Make a connection to the OpenEO backend
+        conn = BACKEND_CONNECTIONS[Backend[backend.upper()]]()
+
+        auth_token = conn.auth.bearer.split("/")
+        os.environ["AWS_ENDPOINT_URL_STS"] = cls.STS_ENDPOINT
+        sts = boto3.client("sts")
+        return AWSSTSCredentials._from_assume_role_response(
+            sts.assume_role_with_web_identity(
+                RoleArn="arn:aws:iam::000000000000:role/S3Access",
+                RoleSessionName=auth_token[1],
+                WebIdentityToken=auth_token[2],
+                DurationSeconds=43200,
+            )
+        )
+
     def get_user_hash(self) -> str:
         hash_object = hashlib.sha1(self.subject_from_web_identity_token.encode())
         return hash_object.hexdigest()
@@ -108,6 +131,11 @@ class OpenEOArtifactHelper:
     @classmethod
     def from_openeo_connection(cls, conn: Connection) -> OpenEOArtifactHelper:
         creds = AWSSTSCredentials.from_openeo_connection(conn)
+        return OpenEOArtifactHelper(creds)
+
+    @classmethod
+    def from_openeo_backend(cls, backend: str) -> OpenEOArtifactHelper:
+        creds = AWSSTSCredentials.from_openeo_backend(backend)
         return OpenEOArtifactHelper(creds)
 
     def get_s3_client(self):

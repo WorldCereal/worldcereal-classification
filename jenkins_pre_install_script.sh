@@ -19,10 +19,10 @@ dnf install git -y
 #   pip install .
 # "
 
-# For now only presto-worldcereal as gfmap is up to date on pypi
+# For now only prometheo as gfmap is up to date on pypi
 dir=$(pwd)
 
 su - jenkins -c "cd $dir && \
   source venv310/bin/activate && \
-  pip install git+https://github.com/WorldCereal/presto-worldcereal.git@croptype
+  pip install git+https://github.com/WorldCereal/prometheo.git
 "
