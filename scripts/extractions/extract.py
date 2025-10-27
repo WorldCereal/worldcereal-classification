@@ -17,8 +17,11 @@ def main(
     samples_df_path: Path,
     ref_id: str,
     max_locations_per_job: int = 500,
-    memory: Optional[str] = None,
     python_memory: Optional[str] = None,
+    driver_memory: Optional[str] = None,
+    executor_memory: Optional[str] = None,
+    driver_memory_overhead: Optional[str] = None,
+    executor_memory_overhead: Optional[str] = None,
     max_executors: Optional[int] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
@@ -44,11 +47,20 @@ def main(
         Official ref_id of the source dataset
     max_locations_per_job : int, optional
         The maximum number of locations to extract per job, by default 500
-    memory : str, optional
-        Memory to allocate for the executor.
-        If not specified, the default value is used, depending on type of collection.
     python_memory : str, optional
-        Memory to allocate for the python processes as well as OrfeoToolbox in the executors,
+        memory assigned to Python UDFs, sar_backscatter or Sentinel-3 data loading tasks.
+        If not specified, the default is to derive this from executor-memoryOverhead.
+    driver_memory : str, optional
+        memory allocated to the Spark ‘driver’ JVM, which manages the execution of the batch job.
+        If not specified, the default value is used, depending on type of collection.
+    executor_memory : str, optional
+        memory allocated to the workers for the JVM that executes most predefined processes.
+        If not specified, the default value is used, depending on type of collection.
+    driver_memory_overhead : str, optional
+        memory assigned to the spark ‘driver’ on top of JVM memory for Python processes.
+        If not specified, the default value is used, depending on type of collection.
+    executor_memory_overhead : str, optional
+        allocated in addition to the JVM, for example, to run UDFs.
         If not specified, the default value is used, depending on type of collection.
     max_executors : int, optional
         Number of executors to run.
@@ -81,8 +93,11 @@ def main(
     job_options: Optional[Dict[str, Union[str, int]]] = {
         key: value
         for key, value in {
-            "executor-memory": memory,
-            "python-memory": python_memory,
+            "python-memory" : python_memory,
+            "executor-memory": executor_memory,
+            "driver-memory": driver_memory,
+            "executor-memory-overhead": executor_memory_overhead,
+            "driver-memory-overhead": driver_memory_overhead,
             "max-executors": max_executors,
             "image-name": image_name,
             "etl_organization_id": organization_id,
@@ -145,16 +160,28 @@ if __name__ == "__main__":
         help="The maximum number of locations to extract per job",
     )
     parser.add_argument(
-        "--memory",
+        "--driver_memory",
         type=str,
-        default="1800m",
-        help="Memory to allocate for the executor.",
+        default="2G",
+        help="memory allocated to the Spark ‘driver’ JVM, which manages the execution of the batch job.",
     )
     parser.add_argument(
-        "--python_memory",
+        "--driver_memory_overhead",
         type=str,
-        default="1900m",
-        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
+        default="1G",
+        help="memory assigned to the spark ‘driver’ on top of JVM memory for Python processes.",
+    )
+    parser.add_argument(
+        "--executor_memory",
+        type=str,
+        default="2G",
+        help="memory allocated to the workers for the JVM that executes most predefined processes.",
+    )
+    parser.add_argument(
+        "--executor_memory_overhead",
+        type=str,
+        default="1800m",
+        help="allocated in addition to the JVM, for example, to run UDFs.",
     )
     parser.add_argument(
         "--max_executors", type=int, default=22, help="Number of executors to run."
@@ -209,8 +236,10 @@ if __name__ == "__main__":
         samples_df_path=args.samples_df_path,
         ref_id=args.ref_id,
         max_locations_per_job=args.max_locations,
-        memory=args.memory,
-        python_memory=args.python_memory,
+        driver_memory=args.driver_memory,
+        executor_memory=args.executor_memory,
+        driver_memory_overhead=args.driver_memory_overhead,
+        executor_memory_overhead=args.executor_memory_overhead,
         max_executors=args.max_executors,
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
