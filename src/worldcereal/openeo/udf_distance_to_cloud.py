@@ -1,3 +1,9 @@
+# /// script
+# dependencies = [
+#   "scikit-image",
+# ]
+# ///
+
 import numpy as np
 import xarray as xr
 from openeo.udf import XarrayDataCube
