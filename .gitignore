@@ -211,3 +211,5 @@ notebooks/trainings/runs/*
 notebooks/trainings/training_data/*
 
 
+scripts/extractions/extract_patches_s1.sh
+scripts/extractions/extract_patches_s2.sh
