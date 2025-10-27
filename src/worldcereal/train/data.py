@@ -1,13 +1,16 @@
+import gc
+import glob
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+import duckdb
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
 from prometheo.models import Presto
 from prometheo.models.pooling import PoolingMethods
-from prometheo.predictors import Predictors
+from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
@@ -153,12 +156,16 @@ def remove_small_classes(df, min_samples):
 
 def get_training_dfs_from_parquet(
     parquet_files: Union[Union[Path, str], List[Union[Path, str]]],
+    wide_parquet_output_path: Union[Path, str],
     timestep_freq: Literal["month", "dekad"] = "month",
+    max_timesteps_trim: Union[str, int, tuple] = "auto",
+    use_valid_time: bool = True,
     finetune_classes: str = "CROPLAND2",
     class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
     val_samples_file: Optional[Union[Path, str]] = None,
     test_samples_file: Optional[Union[Path, str]] = None,
     debug: bool = False,
+    overwrite: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -171,8 +178,16 @@ def get_training_dfs_from_parquet(
     ----------
     parquet_files : List[Union[Path, str]]
         List of local paths to parquet files.
+    wide_parquet_output_path : Union[Path, str]
+        Path to save the processed wide-format parquet file.
     timestep_freq : str, default="month"
         Frequency of timesteps. Can be "month" or "dekad".
+    max_timesteps_trim : Union[str, int, tuple], default="auto"
+        Maximum number of timesteps to retain after trimming. 
+        If "auto", it will be determined based on the timestep_freq and MIN_EDGE_BUFFER.
+    use_valid_time : bool, default=True
+        Whether to use the 'valid_time' column for processing timesteps.
+        If True, centering and filtering of samples will be based on 'valid_time'.
     finetune_classes (str):
         The set of fine-tuning classes to use from CLASS_MAPPINGS.
         This should be one of the keys in CLASS_MAPPINGS.
@@ -186,6 +201,8 @@ def get_training_dfs_from_parquet(
         If None, a random train/test split will be performed.
     debug : bool, default=False
         If True, a maximum of one file will be processed for quick testing.
+    overwrite : bool, default=False
+        If True, overwrite existing wide parquet file.
 
     Returns
     -------
@@ -206,21 +223,67 @@ def get_training_dfs_from_parquet(
         parquet_files = parquet_files[:1]
         logger.warning("Debug mode is enabled.")
 
-    df = None
-    for f in parquet_files:
-        logger.info(f"Processing {f}")
-        _data = pd.read_parquet(f, engine="fastparquet")
-        _data = _data[_data["sample_id"].notnull()]
-        _data["ewoc_code"] = _data["ewoc_code"].astype(int)
+    db = duckdb.connect()
+    db.sql("INSTALL spatial")
+    db.load_extension("spatial")
 
-        for tcol in ["valid_time", "start_time", "end_time", "timestamp"]:
-            if tcol in _data.columns:
-                _data[tcol] = pd.to_datetime(_data[tcol], utc=True)
-                _data[tcol] = _data[tcol].dt.tz_localize(None)
+    STRING_COLS = ["sample_id", "timestamp",  "h3_l3_cell", "valid_time", "start_date", "end_date"]
+    INT_COLS = [
+        "extract", "quality_score_ct", "quality_score_lc", "ewoc_code", 
+        "S2-L2A-B02", "S2-L2A-B03", "S2-L2A-B04", "S2-L2A-B05", "S2-L2A-B06", 
+        "S2-L2A-B07", "S2-L2A-B08", "S2-L2A-B8A", "S2-L2A-B11", "S2-L2A-B12",
+        "S1-SIGMA0-VH", "S1-SIGMA0-VV", "slope", "elevation", 
+        "AGERA5-PRECIP", "AGERA5-TMEAN"
+    ]
+    FLOAT_COLS = ["lon", "lat"]
+    REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
-        _data_pivot = process_parquet(_data, freq=timestep_freq)
-        _data_pivot.reset_index(inplace=True)
-        df = _data_pivot if df is None else pd.concat([df, _data_pivot])
+    if overwrite or not wide_parquet_output_path.exists():
+        db_path = Path(f"{str(wide_parquet_output_path).split('.')[0]}.duckdb")
+        table_name = "merged_parquets_wide"
+        wide_parquet_output_path.unlink(missing_ok=True)
+        db_path.unlink(missing_ok=True)
+
+        con = duckdb.connect(db_path)
+        con.execute("PRAGMA memory_limit='4GB'")
+        # If the DB existed and table might be present, ensure a clean start:
+        con.execute(f"DROP TABLE IF EXISTS {table_name}")
+        initialized = False
+        for f in tqdm(parquet_files, desc="Processing long parquet files"):
+            _data = pd.read_parquet(f, engine="fastparquet")
+            _ref_id = Path(f).stem
+            _data["ref_id"] = _ref_id
+            _data = _data[REQUIRED_COLS]
+            _data_pivot = process_parquet(
+                _data,
+                freq=timestep_freq,
+                use_valid_time=use_valid_time, 
+                max_timesteps_trim=max_timesteps_trim,
+                )
+            _data_pivot = _data_pivot.reset_index()
+            _data_pivot = _data_pivot.fillna(NODATAVALUE)
+            con.register("pivot_batch", _data_pivot)
+            if not initialized:
+                con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM pivot_batch")
+                initialized = True
+            else:
+                con.execute(f"INSERT INTO {table_name} BY NAME SELECT * FROM pivot_batch")
+            con.unregister("pivot_batch")
+            # --- force flush to disk & keep WAL small ---
+            con.execute("CHECKPOINT")   # forces a checkpoint so data is on disk, WAL rotated
+            # --- drop big Python objects ASAP ---
+            del _data_pivot, _data
+            gc.collect()
+        
+        # write a single Parquet file
+        con.execute(f"""
+            COPY (SELECT * FROM {table_name})
+            TO '{wide_parquet_output_path}'
+            (FORMAT PARQUET, COMPRESSION SNAPPY)
+        """)
+
+    # Load the merged Parquet
+    df = pd.read_parquet(wide_parquet_output_path)
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
