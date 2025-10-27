@@ -54,6 +54,8 @@ def main(args):
 
     experiment_tag = args.experiment_tag
     timestep_freq = args.timestep_freq  # "month" or "dekad"
+    max_timesteps_trim = args.max_timesteps_trim  # "auto", int or tuple of string dates
+    use_valid_time = args.use_valid_time
 
     # Path to the training data
     parquet_files = get_parquet_file_list(timestep_freq)
@@ -91,6 +93,9 @@ def main(args):
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # setup path for processed wide parquet file so that it can be reused across experiments
+    wide_parquet_output_path = Path("/projects/worldcereal/merged_parquets_wide.parquet")
+
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 100
@@ -110,11 +115,15 @@ def main(args):
     # Get the train/val/test dataframes
     train_df, val_df, test_df = get_training_dfs_from_parquet(
         parquet_files,
+        wide_parquet_output_path=wide_parquet_output_path,
         timestep_freq=timestep_freq,
+        max_timesteps_trim=max_timesteps_trim,
+        use_valid_time=use_valid_time,
         finetune_classes=finetune_classes,
         class_mappings=CLASS_MAPPINGS,
         val_samples_file=val_samples_file,
         debug=debug,
+        overwrite=False,
     )
 
     logger.warning("Still applying a patch here ...")
@@ -304,6 +313,17 @@ def parse_args(arg_list=None):
     parser.add_argument("--experiment_tag", type=str, default="")
     parser.add_argument(
         "--timestep_freq", type=str, choices=["month", "dekad"], default="month"
+    )
+    parser.add_argument(
+        "--max_timesteps_trim",
+        type=str,
+        default="auto",
+        help='Maximum number of timesteps to retain after trimming. Can be "auto", an integer, or a tuple of string dates.',
+    )
+    parser.add_argument(
+        "--use_valid_time",
+        action="store_true",
+        help="Whether to use the 'valid_time' column for processing timesteps.",
     )
 
     # Data paths
