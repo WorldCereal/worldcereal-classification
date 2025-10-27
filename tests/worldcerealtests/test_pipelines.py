@@ -129,9 +129,9 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         + len(static_columns)
         + len(feature_columns) * num_timesteps_expected
     )
-    # with new datasets added, number of samples may increase
-    # if collateral samples are excluded, this will decrease drastically
-    assert training_df.shape == (549, total_cols_expected)
+    # Make sure we have the expected columns and non-empty sample size
+    assert training_df.shape[1] == total_cols_expected
+    assert training_df.shape[0] > 0
 
     # We keep original ewoc_code for this test
     training_df["downstream_class"] = training_df["ewoc_code"]

@@ -419,6 +419,7 @@ def create_inputs_process_graph(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
 ) -> openeo.DataCube:
     """Wrapper function that creates the inputs openEO process graph.
 
@@ -440,6 +441,9 @@ def create_inputs_process_graph(
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
+    compositing_window: Literal["month", "dekad"]
+        Compositing window to use for the data loading in OpenEO, by default
+        "month".
 
     Returns
     -------
@@ -469,6 +473,7 @@ def create_inputs_process_graph(
         tile_size=tile_size,
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
+        compositing_window=compositing_window,
         # disable_meteo=True,
     )
 
@@ -484,6 +489,7 @@ def create_inputs_process_graph(
     )
 
     return inputs
+
 
 def create_inference_job(
     row: pd.Series,
@@ -962,9 +968,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert attr in production_gdf.columns, (
-                f"The production grid must contain a '{attr}' column."
-            )
+            assert (
+                attr in production_gdf.columns
+            ), f"The production grid must contain a '{attr}' column."
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 

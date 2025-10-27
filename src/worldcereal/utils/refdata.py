@@ -29,8 +29,8 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
+    resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
+    CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
 
     return CLASS_MAPPINGS
 
@@ -136,6 +136,7 @@ def query_public_extractions(
     buffer: int = 250000,
     filter_cropland: bool = True,
     crop_types: Optional[list[int]] = None,
+    query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
     """
     Query the WorldCereal global extractions database for reference data within a specified area.
@@ -159,6 +160,12 @@ def query_public_extractions(
     crop_types : Optional[List[int]], optional
         List of crop types to filter on, by default None
         If None, all crop types are included.
+    query_collateral_samples : bool, default=False
+        Whether to include collateral samples in the query.
+        Collateral samples are those samples that were not specifically marked for extraction,
+        but fell into the vicinity of such samples during the extraction process. While using
+        collateral samples will result in significant increase in amount of samples available for training,
+        it will also shift the distribution of the classes.
 
     Returns
     -------
@@ -241,6 +248,11 @@ AND ewoc_code > 1100000000
     else:
         cropland_filter_query_part = ""
 
+    if query_collateral_samples:
+        collateral_query_part = "AND extract >= 0"
+    else:
+        collateral_query_part = "AND extract >= 1"
+
     if crop_types is not None:
         ct_list_str = ",".join([str(x) for x in crop_types])
         cropland_filter_query_part += f"""
@@ -253,6 +265,7 @@ SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 {cropland_filter_query_part}
+{collateral_query_part}
 """
         if i == 0:
             main_query += query
@@ -674,7 +687,7 @@ def process_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
-        df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
+        df_raw = df_raw.loc[~df_raw["sample_id"].isin(invalid_samples)].copy()
 
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
@@ -691,7 +704,12 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
-    df_processed = process_parquet(df_raw, freq=freq, use_valid_time=True)
+    df_processed = process_parquet(
+        df_raw,
+        freq=freq,
+        use_valid_time=True,
+        max_timesteps_trim="auto",
+    )
 
     if processing_period is not None:
         # put back the true valid_time
