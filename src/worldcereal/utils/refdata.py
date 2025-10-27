@@ -2,7 +2,7 @@ import glob
 import importlib.resources
 import json
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import duckdb
 import geopandas as gpd
@@ -16,7 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
-from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+from worldcereal.train.datasets import MIN_EDGE_BUFFER
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -29,8 +29,8 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    with importlib.resources.open_text(croptype_mappings, "class_mappings.json") as f:  # type: ignore
-        CLASS_MAPPINGS = json.load(f)
+    resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
+    CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
 
     return CLASS_MAPPINGS
 
@@ -136,6 +136,7 @@ def query_public_extractions(
     buffer: int = 250000,
     filter_cropland: bool = True,
     crop_types: Optional[list[int]] = None,
+    query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
     """
     Query the WorldCereal global extractions database for reference data within a specified area.
@@ -159,6 +160,12 @@ def query_public_extractions(
     crop_types : Optional[List[int]], optional
         List of crop types to filter on, by default None
         If None, all crop types are included.
+    query_collateral_samples : bool, default=False
+        Whether to include collateral samples in the query.
+        Collateral samples are those samples that were not specifically marked for extraction,
+        but fell into the vicinity of such samples during the extraction process. While using
+        collateral samples will result in significant increase in amount of samples available for training,
+        it will also shift the distribution of the classes.
 
     Returns
     -------
@@ -241,6 +248,11 @@ AND ewoc_code > 1100000000
     else:
         cropland_filter_query_part = ""
 
+    if query_collateral_samples:
+        collateral_query_part = "AND extract >= 0"
+    else:
+        collateral_query_part = "AND extract >= 1"
+
     if crop_types is not None:
         ct_list_str = ",".join([str(x) for x in crop_types])
         cropland_filter_query_part += f"""
@@ -253,6 +265,7 @@ SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
 {cropland_filter_query_part}
+{collateral_query_part}
 """
         if i == 0:
             main_query += query
@@ -284,6 +297,7 @@ def query_private_extractions(
     filter_cropland: bool = True,
     buffer: int = 250000,
     crop_types: Optional[list[int]] = None,
+    ref_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Query and filter private extraction data stored in parquet files.
@@ -306,6 +320,9 @@ def query_private_extractions(
     crop_types : Optional[List[int]], optional
             List of crop types to filter on, by default None
             If None, all crop types are included.
+    ref_ids : Optional[List[str]], optional
+        List of reference IDs to filter on, by default None
+        If None, all reference IDs are included.
 
     Returns
     -------
@@ -323,6 +340,15 @@ def query_private_extractions(
         f"{merged_private_parquet_path}/**/*.parquet",
         recursive=True,
     )
+
+    if ref_ids is not None:
+        private_collection_paths = [
+            p for p in private_collection_paths if Path(p).stem in ref_ids
+        ]
+    if len(private_collection_paths) == 0:
+        logger.warning("No private collections found.")
+
+    logger.info(f"Checking {len(private_collection_paths)} datasets...")
 
     if bbox_poly is not None:
         bbox_poly = (
@@ -351,17 +377,22 @@ def query_private_extractions(
     # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
-        cropland_filter_query_part = """
-AND ewoc_code < 1115000000
+        prefix = "WHERE" if bbox_poly is None else "AND"
+        cropland_filter_query_part = f"""
+{prefix} ewoc_code < 1115000000
 AND ewoc_code > 1100000000
 """
     else:
         cropland_filter_query_part = ""
 
     if crop_types is not None:
+        if (bbox_poly is None) and (not filter_cropland):
+            prefix = "WHERE"
+        else:
+            prefix = "AND"
         ct_list_str = ",".join([str(x) for x in crop_types])
         cropland_filter_query_part += f"""
-AND ewoc_code IN ({ct_list_str})
+{prefix} ewoc_code IN ({ct_list_str})
 """
 
     main_query = "SET TimeZone = 'UTC';\n"
@@ -542,8 +573,8 @@ def process_extractions_df(
     Parameters
     ----------
     df_raw : Union[pd.DataFrame, gpd.GeoDataFrame]
-        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time',
-        'start_date', 'end_date', and 'timestamp' columns.
+        Raw dataframe or geodataframe containing extracted samples with at least 'valid_time'
+        and 'timestamp' columns.
     processing_period : TemporalContext, optional
         User-defined temporal context to align samples with. If provided, samples that do not fit
         within this temporal extent will be removed. Default is None (no temporal filtering).
@@ -569,15 +600,18 @@ def process_extractions_df(
     The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
 
-    from worldcereal.utils.timeseries import TimeSeriesProcessor, process_parquet
+    from worldcereal.utils.legend import ewoc_code_to_label
+    from worldcereal.utils.timeseries import (
+        DataFrameValidator,
+        TimeSeriesProcessor,
+        process_parquet,
+    )
 
     logger.info("Processing selected samples ...")
 
     # check for essential attributes
     required_columns = [
         "valid_time",
-        "start_date",
-        "end_date",
         "timestamp",
         "sample_id",
     ]
@@ -587,15 +621,9 @@ def process_extractions_df(
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-    # make sure the timestamp, valid_time, start and end dates are datetime objects
-    df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"])
-    for date_col in ["valid_time", "start_date", "end_date"]:
-        df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-        df_raw[date_col] = (
-            df_raw[date_col]
-            .dt.tz_localize(None)
-            .dt.tz_localize(df_raw["timestamp"].dt.tz)
-        )
+    # make sure the timestamp and valid_time are datetime objects with no timezone
+    df_raw = DataFrameValidator.validate_and_fix_dt_cols(df_raw)
+    df_raw = cast(Union[pd.DataFrame, gpd.GeoDataFrame], df_raw)
 
     if processing_period is not None:
         logger.info("Aligning the samples with the user-defined temporal extent ...")
@@ -618,6 +646,10 @@ def process_extractions_df(
         middle_index = len(date_range) // 2 - 1
         processing_period_middle_ts = date_range[middle_index]
         processing_period_middle_month = processing_period_middle_ts.month
+
+        # # calculate the start and end dates of available extractions per sample
+        df_raw["start_date"] = df_raw.groupby("sample_id")["timestamp"].transform("min")
+        df_raw["end_date"] = df_raw.groupby("sample_id")["timestamp"].transform("max")
 
         # get a lighter subset with only the necessary columns
         sample_dates = (
@@ -655,7 +687,7 @@ def process_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
-        df_raw = df_raw[~df_raw["sample_id"].isin(invalid_samples)]
+        df_raw = df_raw.loc[~df_raw["sample_id"].isin(invalid_samples)].copy()
 
         if df_raw.empty:
             error_msg = "None of the samples matched the proposed temporal extent. Please select a different temporal extent."
@@ -673,17 +705,24 @@ def process_extractions_df(
         )
 
     df_processed = process_parquet(
-        df_raw, freq=freq, use_valid_time=True, required_min_timesteps=None
+        df_raw,
+        freq=freq,
+        use_valid_time=True,
+        max_timesteps_trim="auto",
     )
 
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
-        # temporary fix to deal with tz-aware datetime objects
-        df_processed["valid_time"] = (
-            df_processed["valid_time"].dt.tz_localize(None).dt.strftime("%Y-%m-%d")
-        )
-        df_processed["valid_date"] = df_processed["valid_time"].copy()
+        df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
+
+    # Enrich resulting dataframe with full and sampling string labels
+    df_processed["label_full"] = ewoc_code_to_label(
+        df_processed["ewoc_code"], label_type="full"
+    )
+    df_processed["sampling_label"] = ewoc_code_to_label(
+        df_processed["ewoc_code"], label_type="sampling"
+    )
 
     logger.info(
         f"Extracted and processed {df_processed.shape[0]} samples from global database."
@@ -741,9 +780,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(country).any(), (
-                f"Tried removing {country} but it is not in the dataframe"
-            )
+            assert df.iso3.str.contains(
+                country
+            ).any(), f"Tried removing {country} but it is not in the dataframe"
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples

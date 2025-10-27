@@ -46,7 +46,7 @@ dependencies = [
     "netcdf4<=1.6.4",  
     "numpy<2.0.0",  
     "openeo==0.35.0",  
-    "prometheo==0.0.2",
+    "prometheo==0.0.3",
     "openeo-gfmap==0.4.7",  
     "pyarrow",  
     "pydantic==2.8.0",  
@@ -75,8 +75,11 @@ train = [
   "pystac-client==0.8.3"
 ]
 notebooks = [
-  "ipywidgets==8.1.3",
   "ipyleaflet==0.19.2",
+  "ipywidgets==8.1.3",
+  "leafmap==0.35.1",
+  "localtileserver==0.10.4",
+  "jupyter-server-proxy==4.4.0",
   "plotly==6.2.0"
 ]
 

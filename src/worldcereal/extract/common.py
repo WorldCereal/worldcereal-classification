@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from typing import Dict, Optional, Union
-from pathlib import Path
 from openeo_gfmap import Backend
 
 from openeo import Connection
@@ -76,11 +75,11 @@ def run_extractions(
     pipeline_log.info("Setting up extraction functions.")
     datacube_fn = setup_datacube_creation_fn(collection, job_options)
     path_fn = setup_output_path_fn(collection)
-    
+
     # Update post_job_fn if it also needs STAC configuration
     post_job_fn = setup_post_job_fn(
-        collection, 
-        extract_value, 
+        collection,
+        extract_value,
         write_stac_api,
     )
 
@@ -120,7 +119,7 @@ def run_extractions(
     pipeline_log.info("Running the extraction jobs.")
     job_manager.run_jobs(df=job_df, job_db=job_db, start_job=datacube_fn)
     pipeline_log.info("Extraction jobs completed.")
-    
+
     # --- Merge the extraction jobs (for point extractions) ---
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
         pipeline_log.info("Merging extraction jobs into final output.")
@@ -138,5 +137,3 @@ def run_extractions(
         pipeline_log.info("Uploading items to STAC API")
         upload_to_stac_api(job_items, collection_id=collection_id, stac_root_url=STAC_ROOT_URL)
         pipeline_log.info("Upload to STAC API completed successfully.")
-
-

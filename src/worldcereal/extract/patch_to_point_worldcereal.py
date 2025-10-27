@@ -93,7 +93,9 @@ def label_points_centroid(
 
 
 def get_label_points(
-    row: pd.Series, ground_truth_file: Optional[Union[Path, str]] = None
+    row: pd.Series,
+    ground_truth_file: Optional[Union[Path, str]] = None,
+    only_flagged_samples: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Retrieve label points for a given row from STAC collections and RDM API.
@@ -106,6 +108,9 @@ def get_label_points(
         The path to the ground truth file. If provided, this file will
         be queried for getting the ground truth. If not, the RDM will
         be used for the query.
+    only_flagged_samples : bool, optional
+        If True, only samples with extract flag >0 will be retrieved, no collateral samples.
+        (This is useful for very large and dense datasets like USDA).
 
     Returns
     -------
@@ -178,6 +183,7 @@ def get_label_points(
         temporal_extent=temporal_extent,
         include_private=True,
         ground_truth_file=ground_truth_file,
+        subset=only_flagged_samples,
     )
 
     sampled_gdf = gdf_to_points(gdf)
@@ -224,7 +230,9 @@ def generate_output_path_patch_to_point_worldcereal(
     return subfolder / output_file
 
 
-def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=None):
+def create_job_dataframe_patch_to_point_worldcereal(
+    ref_id, ground_truth_file=None, only_flagged_samples: bool = False
+):
     """
     Create a job dataframe for patch-to-point extractions.
 
@@ -238,6 +246,9 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         Reference ID for the extraction.
     ground_truth_file : str, optional
         Path to a ground truth file. If not provided, the function queries RDM for ground truth.
+    only_flagged_samples : bool, optional
+        If True, only samples with extract flag >0 will be retrieved, no collateral samples.
+        (This is useful for very large and dense datasets like USDA).
 
     Returns
     -------
@@ -289,12 +300,15 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         start_date = epsg_codes[epsg]["start_date"]
         end_date = epsg_codes[epsg]["end_date"]
 
+        # Clamp end_date to last day of the last complete month to avoid compositing an incomplete month
+        last_complete_month_end = pd.Timestamp.today().normalize().replace(
+            day=1
+        ) - pd.Timedelta(days=1)
+        end_date = min(pd.Timestamp(end_date), last_complete_month_end)
+
         # ensure start date is 1st day of month, end date is last day of month
-        # Start a month later and end a month earlier to ensure the extractions cover this.
-        start_date = (start_date + pd.Timedelta(days=31)).replace(day=1)
-        end_date = (
-            end_date.replace(day=1) - pd.Timedelta(days=31) + pd.offsets.MonthEnd(0)
-        )
+        start_date = start_date.replace(day=1)
+        end_date = end_date.replace(day=1) + pd.offsets.MonthEnd(0)
 
         # Convert dates to string format
         start_date, end_date = (
@@ -326,7 +340,9 @@ def create_job_dataframe_patch_to_point_worldcereal(ref_id, ground_truth_file=No
         # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
         gdf, disable_s1 = get_label_points(
-            row, ground_truth_file=row["ground_truth_file"]
+            row,
+            ground_truth_file=row["ground_truth_file"],
+            only_flagged_samples=only_flagged_samples,
         )
         gdf["ref_id"] = (
             row.ref_id
@@ -406,8 +422,7 @@ def create_job_patch_to_point_worldcereal(
     connection: openeo.Connection,
     provider,
     connection_provider,
-    executor_memory: str = "2G",
-    python_memory: str = "3G",
+    job_options: dict,
     period="month",
 ):
     """Creates an OpenEO BatchJob from the given row information."""
@@ -440,15 +455,6 @@ def create_job_patch_to_point_worldcereal(
         url=str(row["geometry_url"]), format="Parquet"
     )
     cube = cube.aggregate_spatial(geometries=point_geometries, reducer="mean")
-
-    job_options = {
-        "driver-memory": "12G",
-        "executor-cores": 2,
-        "executor-memory": "4G",
-        "executor-memoryOverhead": "2G",
-        "log_level": "info",
-        "max-executors": 300,
-    }
 
     return cube.create_job(
         title=f"WorldCereal patch-to-point extraction for: {row['ref_id']} and epsg: {row['epsg']} (period: {period})",

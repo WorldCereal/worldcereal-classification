@@ -1,4 +1,5 @@
 import logging
+import urllib.request
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -12,6 +13,7 @@ from shapely.geometry import Polygon
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
+from worldcereal.utils.legend import ewoc_code_to_label
 from worldcereal.utils.refdata import (
     gdf_to_points,
     query_private_extractions,
@@ -270,6 +272,7 @@ def visualize_timeseries(
     band: str = "NDVI",
     outfile: Optional[Path] = None,
     sample_ids: Optional[List] = None,
+    random_seed: Optional[int] = None,
 ) -> None:
     """Function to visaulize the timeseries for one band and random or specific samples
     from an extractions dataframe.
@@ -288,6 +291,9 @@ def visualize_timeseries(
     sample_ids : List, optional
         sample ids for which the time series needs to be visualized,
         by default None meaning a random subset will be visualized
+    random_seed : Optional[int], optional
+        Seed for reproducible random sampling of sample_ids when sample_ids is None.
+        If None, sampling will be non-deterministic.
 
     Returns
     -------
@@ -317,7 +323,8 @@ def visualize_timeseries(
     # Sample the data
     if sample_ids is None:
         sample_ids = extractions_gdf["sample_id"].unique()
-        selected_ids = np.random.choice(sample_ids, nsamples, replace=False)
+        rng = np.random.default_rng(random_seed)
+        selected_ids = rng.choice(sample_ids, nsamples, replace=False)
     else:
         selected_ids = sample_ids
 
@@ -326,6 +333,7 @@ def visualize_timeseries(
     for sample_id in selected_ids:
         sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
+        label_full = sample["label_full"].values[0]
 
         # Prepare the data to be shown
         if band == "NDVI":
@@ -342,7 +350,13 @@ def visualize_timeseries(
             values[values == NODATAVALUE] = np.nan
 
         # plot
-        ax.plot(sample["timestamp"], values, marker="o", linestyle="-", label=sample_id)
+        ax.plot(
+            sample["timestamp"],
+            values,
+            marker="o",
+            linestyle="-",
+            label=f"{label_full} ({sample_id})",
+        )
 
     plt.xlabel("Date")
     plt.ylabel(band)
@@ -367,6 +381,7 @@ def query_extractions(
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
     crop_types: Optional[List[int]] = None,
+    query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
     """Wrapper function to query both public and private extractions in a given area.
 
@@ -385,6 +400,12 @@ def query_extractions(
     crop_types : Optional[List[int]], optional
             List of crop types to filter on, by default None
             If None, all crop types are included.
+    query_collateral_samples : bool, default=False
+        Whether to include collateral samples in the query.
+        Collateral samples are those samples that were not specifically marked for extraction,
+        but fell into the vicinity of such samples during the extraction process. While using
+        collateral samples will result in significant increase in amount of samples available for training,
+        it will also shift the distribution of the classes.
 
     Returns
     -------
@@ -401,6 +422,7 @@ def query_extractions(
             buffer=buffer,
             filter_cropland=filter_cropland,
             crop_types=crop_types,
+            query_collateral_samples=query_collateral_samples,
         )
 
         if len(public_df) > 0:
@@ -411,7 +433,7 @@ def query_extractions(
             print("PUBLIC EXTRACTIONS")
             print("************")
             print(
-                f'Found {public_df["sample_id"].nunique()} unique samples in the public data, spread across {public_df["ref_id"].nunique()} unique reference datasets.'
+                f"Found {public_df['sample_id'].nunique()} unique samples in the public data, spread across {public_df['ref_id'].nunique()} unique reference datasets."
             )
             print("Public datasets:")
             for ds in sorted(list(public_df["ref_id"].unique())):
@@ -436,7 +458,7 @@ def query_extractions(
             print("PRIVATE EXTRACTIONS")
             print("************")
             print(
-                f'Found {private_df["sample_id"].nunique()} unique samples in the private data, spread across {private_df["ref_id"].nunique()} unique reference datasets.'
+                f"Found {private_df['sample_id'].nunique()} unique samples in the private data, spread across {private_df['ref_id'].nunique()} unique reference datasets."
             )
             print("Private datasets:")
             for ds in sorted(list(private_df["ref_id"].unique())):
@@ -451,7 +473,7 @@ def query_extractions(
     else:
         raise ValueError("No extractions found in the provided area.")
 
-    print(f'Total number of extracted samples: {merged_df["sample_id"].nunique()}')
+    print(f"Total number of extracted samples: {merged_df['sample_id'].nunique()}")
 
     # Quick check on how many different crop types are present in the data
     all_crops = list(merged_df["ewoc_code"].unique())
@@ -463,8 +485,48 @@ def query_extractions(
             "Expand your area of interest or add more reference data."
         )
 
+    # Translate ewoc codes to labels
+    merged_df["label_full"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="full"
+    )
+    merged_df["sampling_label"] = ewoc_code_to_label(
+        merged_df["ewoc_code"], label_type="sampling"
+    )
+    print(f"Represented crop groups: {merged_df['sampling_label'].unique()}")
+
     # Explictily drop column "feature_index" if it exists
     if "feature_index" in merged_df.columns:
         merged_df = merged_df.drop(columns=["feature_index"])
 
     return merged_df
+
+
+def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataFrame:
+    """Function to retrieve the extents of publicly available WorldCereal reference datasets
+    with satellite extractions.
+    Parameters
+    ----------
+    include_crop_types : bool, optional
+        Whether to only include datasets with crop type information, by default True
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the extents of publicly available WorldCereal reference datasets
+        with satellite extractions.
+    """
+    # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
+    local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
+    local_file.parent.mkdir(parents=True, exist_ok=True)
+    url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/worldcereal_public_extractions_extent.parquet"
+    urllib.request.urlretrieve(url, local_file)
+
+    # Read with geopandas
+    gdf = gpd.read_parquet(local_file)
+    # Ignore global extents
+    gdf = gdf[~gdf.ref_id.str.contains("GLO")]
+    # Optionally filter on crop types
+    if include_crop_types:
+        # Drop datasets with "_100" or "_101" in the ref_id
+        gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
+
+    return gdf

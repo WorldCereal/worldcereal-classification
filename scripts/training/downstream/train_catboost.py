@@ -56,6 +56,7 @@ class PrestoEmbeddingTrainer:
         num_workers: int = 8,
         modelversion: str = "001",
         detector: str = "cropland",
+        time_explicit: bool = False,
         downstream_classes: Optional[dict] = None,
     ):
         self.presto_model_path = Path(presto_model_path)
@@ -67,6 +68,7 @@ class PrestoEmbeddingTrainer:
         self.num_workers = num_workers
         self.modelversion = modelversion
         self.detector = detector
+        self.time_explicit = time_explicit
         self.downstream_classes = downstream_classes
 
         # Determine if binary classification based on downstream_classes
@@ -174,6 +176,7 @@ class PrestoEmbeddingTrainer:
             task_type="multiclass",
             num_outputs=len(orig_classes),
             classes_list=orig_classes,
+            time_explicit=self.time_explicit,
             augment=True,
             return_sample_id=True,
         )
@@ -184,6 +187,7 @@ class PrestoEmbeddingTrainer:
             task_type="multiclass",
             num_outputs=len(orig_classes),
             classes_list=orig_classes,
+            time_explicit=self.time_explicit,
             return_sample_id=True,
         )
         test_ds = WorldCerealLabelledDataset(
@@ -193,6 +197,7 @@ class PrestoEmbeddingTrainer:
             task_type="multiclass",
             num_outputs=len(orig_classes),
             classes_list=orig_classes,
+            time_explicit=self.time_explicit,
             return_sample_id=True,
         )
 
@@ -700,6 +705,12 @@ def parse_args() -> argparse.Namespace:
         help="Type of detector (cropland, croptype, etc.)",
     )
     parser.add_argument(
+        "--time-explicit",
+        type=bool,
+        default=False,
+        help="Whether to use time explicit features",
+    )
+    parser.add_argument(
         "--downstream_classes",
         type=str,
         default=None,
@@ -729,6 +740,7 @@ def main() -> None:
                 self.batch_size = 1024
                 self.num_workers = 8
                 self.modelversion = "001-debug"
+                self.time_explicit = False  # Don't forget this important setting!
                 self.detector = "temporary-crops"
                 self.downstream_classes = {
                     "temporary_crops": "cropland",
@@ -771,6 +783,7 @@ def main() -> None:
         num_workers=args.num_workers,
         modelversion=args.modelversion,
         detector=args.detector,
+        time_explicit=args.time_explicit,
         downstream_classes=args.downstream_classes,
     )
 

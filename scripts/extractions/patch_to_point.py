@@ -17,6 +17,7 @@ from worldcereal.extract.patch_to_point_worldcereal import (
     generate_output_path_patch_to_point_worldcereal,
     post_job_action_point_worldcereal,
 )
+from worldcereal.utils import parse_job_options_from_args
 
 
 class PatchToPointJobManager(MultiBackendJobManager):
@@ -39,7 +40,7 @@ class PatchToPointJobManager(MultiBackendJobManager):
 
 
 def merge_individual_parquet_files(
-    parquet_files: List[Union[Path, str]],
+    parquet_files: Union[List[Path], List[str]],
 ) -> gpd.GeoDataFrame:
     """
     Merge individual parquet files into a single GeoDataFrame.
@@ -101,12 +102,15 @@ def merge_individual_parquet_files(
 
 
 def main(
-    connection,
-    ref_id,
-    ground_truth_file,
-    root_folder,
-    period="month",
-    restart_failed=False,
+    connection: openeo.Connection,
+    ref_id: str,
+    ground_truth_file: str,
+    root_folder: Path,
+    job_options: dict[str, Union[str, int]],
+    period: str = "month",
+    restart_failed: bool = False,
+    only_flagged_samples: bool = False,
+    parallel_jobs: int = 1,
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -121,10 +125,17 @@ def main(
         Path to the ground truth file.
     root_folder : Path
         Root folder for storing extraction outputs.
+    job_options : dict
+        openEO job options. If no custom job options are provided, defaults are used (see DEFAULT_JOB_OPTIONS).
     period : str, optional
         Period for extractions, either 'month' or 'dekad'. Default is 'month'.
     restart_failed : bool, optional
         Whether to restart failed jobs. Default is False.
+    only_flagged_samples : bool, optional
+        If True, only samples with extract flag >0 will be retrieved, no collateral samples.
+        (This is useful for very large and dense datasets like USDA).
+    parallel_jobs : int, optional
+        Number of local parallel jobs to run concurrently. Default is 1.
 
     Returns
     -------
@@ -155,14 +166,20 @@ def main(
     if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
-            ref_id, ground_truth_file
+            ref_id, ground_truth_file, only_flagged_samples
         )
         job_db.initialize_from_df(job_df)
 
     manager = PatchToPointJobManager(root_dir=output_folder)
-    manager.add_backend("terrascope", connection=connection, parallel_jobs=1)
+    manager.add_backend(
+        "terrascope", connection=connection, parallel_jobs=parallel_jobs
+    )
     manager.run_jobs(
-        start_job=partial(create_job_patch_to_point_worldcereal, period=period),
+        start_job=partial(
+            create_job_patch_to_point_worldcereal,
+            period=period,
+            job_options=job_options,
+        ),
         job_db=job_db,
     )
 
@@ -219,6 +236,45 @@ if __name__ == "__main__":
         action="store_true",
         help="Restart failed jobs if the job tracking file exists.",
     )
+    parser.add_argument(
+        "--only-flagged-samples",
+        action="store_true",
+        help="If True, only samples with extract flag >0 will be retrieved, no collateral samples.",
+    )
+    parser.add_argument(
+        "--parallel_jobs",
+        type=int,
+        default=None,
+        help="Local parallel jobs.",
+    )
+    parser.add_argument("--driver_memory", type=str, default=None, help="Driver memory")
+    parser.add_argument(
+        "--driver_memoryOverhead",
+        type=str,
+        default=None,
+        help="Driver memory overhead.",
+    )
+    parser.add_argument(
+        "--executor_cores", type=int, default=None, help="Executor cores."
+    )
+    parser.add_argument(
+        "--executor_memory", type=str, default=None, help="Executor memory."
+    )
+    parser.add_argument(
+        "--executor_memoryOverhead",
+        type=str,
+        default=None,
+        help="Executor memory overhead.",
+    )
+    parser.add_argument(
+        "--max_executors", type=int, default=None, help="Max executors."
+    )
+    parser.add_argument(
+        "--image_name", type=str, default="python38", help="openEO image name."  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+    )
+    parser.add_argument(
+        "--organization_id", type=int, default=None, help="Organization id."
+    )
 
     args = parser.parse_args()
 
@@ -226,6 +282,9 @@ if __name__ == "__main__":
     period = args.period
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
+    only_flagged_samples = args.only_flagged_samples
+    parallel_jobs = args.parallel_jobs or 1
+    job_options = parse_job_options_from_args(args)
 
     logger.info("Starting patch to point extractions ...")
     logger.info(f"Root folder: {root_folder}")
@@ -239,6 +298,16 @@ if __name__ == "__main__":
             f"/vitodata/worldcereal/data/RDM/{ref_id}/harmonized/{ref_id}.geoparquet"
         )
 
-        main(connection, ref_id, ground_truth_file, root_folder, period, restart_failed)
+        main(
+            connection=connection,
+            ref_id=ref_id,
+            ground_truth_file=ground_truth_file,
+            root_folder=root_folder,
+            period=period,
+            restart_failed=restart_failed,
+            only_flagged_samples=only_flagged_samples,
+            parallel_jobs=parallel_jobs,
+            job_options=job_options,
+        )
 
     logger.success("All done!")

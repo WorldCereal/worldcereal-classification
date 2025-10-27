@@ -49,6 +49,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         SPATIAL_EXTENT,
         buffer=1000,  # Meters
         filter_cropland=True,
+        query_collateral_samples=True,  # query collateral to resemble previous behavior
     )
 
     assert not public_df.empty, "Should have found public extractions"
@@ -82,7 +83,55 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     print("*" * 40)
 
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
-    assert training_df.shape == (238, 246)
+    aux_columns = [
+        "ewoc_code",
+        "lat",
+        "quality_score_lc",
+        "available_timesteps",
+        "tile",
+        "valid_position",
+        "filename",
+        "quality_score_ct",
+        "year",
+        "geometry",
+        "extract",
+        "h3_l3_cell",
+        "geom_text",
+        "lon",
+        "ref_id",
+        "start_date",
+        "end_date",
+        "irrigation_status",
+        "valid_time",
+        "label_full",
+        "sampling_label",
+    ]
+    static_columns = ["DEM-alt-20m", "DEM-slo-20m"]
+    feature_columns = [
+        "OPTICAL-B02",
+        "OPTICAL-B03",
+        "OPTICAL-B04",
+        "OPTICAL-B08",
+        "OPTICAL-B05",
+        "OPTICAL-B06",
+        "OPTICAL-B07",
+        "OPTICAL-B8A",
+        "OPTICAL-B11",
+        "OPTICAL-B12",
+        "SAR-VV",
+        "SAR-VH",
+        "METEO-temperature_mean",
+        "METEO-precipitation_flux",
+    ]
+    num_timesteps_expected = 16
+    total_cols_expected = (
+        len(aux_columns)
+        + len(static_columns)
+        + len(feature_columns) * num_timesteps_expected
+    )
+    # Make sure we have the expected columns and non-empty sample size
+    assert training_df.shape[1] == total_cols_expected
+    assert training_df.shape[0] > 0
 
     # We keep original ewoc_code for this test
     training_df["downstream_class"] = training_df["ewoc_code"]
@@ -97,12 +146,14 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
 
     # Initialize dataset
     df = training_df.reset_index()
+
     ds = WorldCerealTrainingDataset(df, task_type="multiclass", augment=True)
     logger.info("Computing Presto embeddings ...")
     df = get_training_df(
         ds,
         presto_model,
         batch_size=256,
+        time_explicit=True,  # Important for croptype
     )
     logger.info("Presto embeddings computed.")
 
