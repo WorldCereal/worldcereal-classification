@@ -238,8 +238,8 @@ def get_training_dfs_from_parquet(
         parquet_files = [parquet_files]
 
     if debug:
-        # select 1st file in debug mode
-        parquet_files = parquet_files[:1]
+        # select first 3 files in debug mode
+        parquet_files = parquet_files[:3]
         logger.warning("Debug mode is enabled.")
 
     db = duckdb.connect()
