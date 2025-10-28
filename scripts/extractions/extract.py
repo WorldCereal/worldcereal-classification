@@ -7,7 +7,7 @@ from typing import Dict, Optional, Union
 
 from openeo_gfmap import Backend
 
-from worldcereal.extract.common import run_extractions
+from worldcereal.extract.common_hv import run_extractions
 from worldcereal.stac.constants import ExtractionCollection
 
 

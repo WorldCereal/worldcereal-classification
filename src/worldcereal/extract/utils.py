@@ -1,8 +1,6 @@
-"""Common utilities used by extraction scripts."""
-
 import logging
 import os
-from tempfile import NamedTemporaryFile
+from io import BytesIO
 
 import geojson
 import geopandas as gpd
@@ -10,6 +8,7 @@ import pandas as pd
 import requests
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
+from typing import Optional
 
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
@@ -74,36 +73,28 @@ def filter_extract_true(
     )
 
 
-def upload_geoparquet_s3(
-    backend: str, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
-) -> str:
-    """Upload the given GeoDataFrame to s3 and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
-    """
-    # Save the dataframe as geoparquet to upload it to artifactory
-    temporary_file = NamedTemporaryFile()
-    gdf.to_parquet(temporary_file.name)
+def upload_geoparquet_s3(backend, gdf: gpd.GeoDataFrame, name: str, collection: str = "") -> str:
+    """Upload the given GeoDataFrame to S3 and return a presigned URL."""
+    # Write GeoDataFrame to an in-memory buffer
+    buffer = BytesIO()
+    gdf.to_parquet(buffer)
+    buffer.seek(0)
 
     targetpath = f"openeogfmap_dataframe_{collection}_{name}.parquet"
 
     artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
-    normal_s3_uri = artifact_helper.upload_file(targetpath, temporary_file.name)
+    normal_s3_uri = artifact_helper.upload_file(targetpath, buffer)
     presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)
 
     return presigned_uri
 
 
-def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
-) -> str:
-    """Upload the given GeoDataFrame to artifactory and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
-    """
-    # Save the dataframe as geoparquet to upload it to artifactory
-    temporary_file = NamedTemporaryFile()
-    gdf.to_parquet(temporary_file.name)
+def upload_geoparquet_artifactory(gdf: gpd.GeoDataFrame, name: str, collection: str = "") -> str:
+    """Upload the given GeoDataFrame to Artifactory and return the URL."""
+    # Write GeoDataFrame to an in-memory buffer
+    buffer = BytesIO()
+    gdf.to_parquet(buffer)
+    buffer.seek(0)
 
     artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
     artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
@@ -114,19 +105,23 @@ def upload_geoparquet_artifactory(
         )
 
     headers = {"Content-Type": "application/octet-stream"}
+    upload_url = (
+        f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/"
+        f"gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
+    )
 
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
-
-    with open(temporary_file.name, "rb") as f:
-        response = requests.put(
-            upload_url,
-            headers=headers,
-            data=f,
-            auth=(artifactory_username, artifactory_password),
-            timeout=180,
-        )
-
+    response = requests.put(
+        upload_url,
+        headers=headers,
+        data=buffer,
+        auth=(artifactory_username, artifactory_password),
+        timeout=180,
+    )
     response.raise_for_status()
+
+    verify_response = requests.get(upload_url, auth=(artifactory_username, artifactory_password), timeout=60)
+    if verify_response.status_code != 200 or len(verify_response.content) == 0:
+        raise RuntimeError(f"Upload may have failed: file not found or empty at {upload_url}")
 
     return upload_url
 
@@ -141,3 +136,25 @@ def get_job_nb_polygons(row: pd.Series) -> int:
             )
         )
     )
+
+def extract_geometry_information(extracted_gpd: gpd.GeoDataFrame, item_id: str) -> Optional[pd.Series]:
+    """Extract geometry information for a given item ID."""
+    pipeline_log.info(f"Extracting geometry information for item_id: {item_id}")
+    sample_id_column_name = "sample_id" if "sample_id" in extracted_gpd.columns else "sampleID"
+    
+    geometry_information = extracted_gpd.loc[extracted_gpd[sample_id_column_name] == item_id]
+    
+    if len(geometry_information) == 0:
+        pipeline_log.warning("No geometry found for the sample_id %s in the input geometry.", item_id)
+        return None
+    
+    if len(geometry_information) > 1:
+        pipeline_log.warning(
+            "Duplicate geometries found for the sample_id %s in the input geometry, selecting the first one at index: %s.",
+            item_id,
+            geometry_information.index[0],
+        )
+    
+    return geometry_information.iloc[0]
+
+
