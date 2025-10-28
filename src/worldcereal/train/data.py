@@ -1,5 +1,4 @@
 import gc
-import glob
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
@@ -156,7 +155,6 @@ def remove_small_classes(df, min_samples):
 
 def get_training_dfs_from_parquet(
     parquet_files: Union[Union[Path, str], List[Union[Path, str]]],
-    wide_parquet_output_path: Union[Path, str],
     timestep_freq: Literal["month", "dekad"] = "month",
     max_timesteps_trim: Union[str, int, tuple] = "auto",
     use_valid_time: bool = True,
@@ -166,6 +164,7 @@ def get_training_dfs_from_parquet(
     test_samples_file: Optional[Union[Path, str]] = None,
     debug: bool = False,
     overwrite: bool = False,
+    wide_parquet_output_path: Optional[Union[Path, str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -178,12 +177,10 @@ def get_training_dfs_from_parquet(
     ----------
     parquet_files : List[Union[Path, str]]
         List of local paths to parquet files.
-    wide_parquet_output_path : Union[Path, str]
-        Path to save the processed wide-format parquet file.
     timestep_freq : str, default="month"
         Frequency of timesteps. Can be "month" or "dekad".
     max_timesteps_trim : Union[str, int, tuple], default="auto"
-        Maximum number of timesteps to retain after trimming. 
+        Maximum number of timesteps to retain after trimming.
         If "auto", it will be determined based on the timestep_freq and MIN_EDGE_BUFFER.
     use_valid_time : bool, default=True
         Whether to use the 'valid_time' column for processing timesteps.
@@ -203,6 +200,9 @@ def get_training_dfs_from_parquet(
         If True, a maximum of one file will be processed for quick testing.
     overwrite : bool, default=False
         If True, overwrite existing wide parquet file.
+    wide_parquet_output_path : Union[Path, str], optional
+        Path to save the processed wide-format parquet file.
+        If None, a temporary file is created, used internally, and deleted before return.
 
     Returns
     -------
@@ -213,6 +213,25 @@ def get_training_dfs_from_parquet(
         - test_df: DataFrame with test samples
     """
     logger.info("Reading dataset")
+
+    is_tempfile = False  # <-- track if we must clean up
+    if wide_parquet_output_path is None:
+        import tempfile
+
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".parquet", prefix="wide_", delete=False
+        )
+        wide_parquet_output_path = Path(tmp.name)
+        tmp.close()
+        is_tempfile = True
+        logger.warning(
+            f"No wide_parquet_output_path provided; using temporary file: {wide_parquet_output_path}"
+        )
+    else:
+        wide_parquet_output_path = Path(wide_parquet_output_path)
+        logger.info(
+            f"Using provided wide parquet output path: {wide_parquet_output_path}"
+        )
 
     if isinstance(parquet_files, (str, Path)):
         # If a single file is provided, convert it to a list
@@ -227,18 +246,43 @@ def get_training_dfs_from_parquet(
     db.sql("INSTALL spatial")
     db.load_extension("spatial")
 
-    STRING_COLS = ["sample_id", "timestamp",  "h3_l3_cell", "valid_time", "start_date", "end_date"]
+    STRING_COLS = [
+        "sample_id",
+        "timestamp",
+        "h3_l3_cell",
+        "valid_time",
+        "start_date",
+        "end_date",
+    ]
     INT_COLS = [
-        "extract", "quality_score_ct", "quality_score_lc", "ewoc_code", 
-        "S2-L2A-B02", "S2-L2A-B03", "S2-L2A-B04", "S2-L2A-B05", "S2-L2A-B06", 
-        "S2-L2A-B07", "S2-L2A-B08", "S2-L2A-B8A", "S2-L2A-B11", "S2-L2A-B12",
-        "S1-SIGMA0-VH", "S1-SIGMA0-VV", "slope", "elevation", 
-        "AGERA5-PRECIP", "AGERA5-TMEAN"
+        "extract",
+        "quality_score_ct",
+        "quality_score_lc",
+        "ewoc_code",
+        "S2-L2A-B02",
+        "S2-L2A-B03",
+        "S2-L2A-B04",
+        "S2-L2A-B05",
+        "S2-L2A-B06",
+        "S2-L2A-B07",
+        "S2-L2A-B08",
+        "S2-L2A-B8A",
+        "S2-L2A-B11",
+        "S2-L2A-B12",
+        "S1-SIGMA0-VH",
+        "S1-SIGMA0-VV",
+        "slope",
+        "elevation",
+        "AGERA5-PRECIP",
+        "AGERA5-TMEAN",
     ]
     FLOAT_COLS = ["lon", "lat"]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
-    if overwrite or not wide_parquet_output_path.exists():
+    if overwrite or is_tempfile or not wide_parquet_output_path.exists():
+        logger.info(
+            f"Creating wide parquet file at {wide_parquet_output_path} (overwrite={overwrite})"
+        )
         db_path = Path(f"{str(wide_parquet_output_path).split('.')[0]}.duckdb")
         table_name = "merged_parquets_wide"
         wide_parquet_output_path.unlink(missing_ok=True)
@@ -257,9 +301,9 @@ def get_training_dfs_from_parquet(
             _data_pivot = process_parquet(
                 _data,
                 freq=timestep_freq,
-                use_valid_time=use_valid_time, 
+                use_valid_time=use_valid_time,
                 max_timesteps_trim=max_timesteps_trim,
-                )
+            )
             _data_pivot = _data_pivot.reset_index()
             _data_pivot = _data_pivot.fillna(NODATAVALUE)
             con.register("pivot_batch", _data_pivot)
@@ -267,14 +311,18 @@ def get_training_dfs_from_parquet(
                 con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM pivot_batch")
                 initialized = True
             else:
-                con.execute(f"INSERT INTO {table_name} BY NAME SELECT * FROM pivot_batch")
+                con.execute(
+                    f"INSERT INTO {table_name} BY NAME SELECT * FROM pivot_batch"
+                )
             con.unregister("pivot_batch")
             # --- force flush to disk & keep WAL small ---
-            con.execute("CHECKPOINT")   # forces a checkpoint so data is on disk, WAL rotated
+            con.execute(
+                "CHECKPOINT"
+            )  # forces a checkpoint so data is on disk, WAL rotated
             # --- drop big Python objects ASAP ---
             del _data_pivot, _data
             gc.collect()
-        
+
         # write a single Parquet file
         con.execute(f"""
             COPY (SELECT * FROM {table_name})
@@ -340,6 +388,20 @@ def get_training_dfs_from_parquet(
             logger.warning(
                 "Removed classes from test set because they "
                 f"do not occur train/val: {nontrainval_classes}"
+            )
+
+    # Cleanup temporary files if created
+    if is_tempfile:
+        try:
+            wide_parquet_output_path.unlink(missing_ok=True)
+            db_path = Path(f"{str(wide_parquet_output_path).split('.')[0]}.duckdb")
+            db_path.unlink(missing_ok=True)
+            logger.info(
+                f"Deleted temporary wide parquet file: {wide_parquet_output_path}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to delete temporary file {wide_parquet_output_path}: {e}"
             )
 
     return train_df, val_df, test_df
