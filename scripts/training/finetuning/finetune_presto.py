@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 # from worldcereal_in_season.datasets import MaskingStrategy
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.finetuning_utils import (
+    FocalLoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
 )
@@ -190,7 +191,8 @@ def main(args):
     if task_type == "binary":
         loss_fn = nn.BCEWithLogitsLoss()
     elif task_type == "multiclass":
-        loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+        # loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+        loss_fn = FocalLoss(ignore_index=NODATAVALUE)
     else:
         raise ValueError(
             f"Task type {task_type} is not supported. "
