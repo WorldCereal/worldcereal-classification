@@ -1,5 +1,5 @@
 import xarray as xr
-import numpy
+import numpy as np
 from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 
@@ -130,63 +130,53 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
     assert croptype_classification.shape == (29, 100, 100)
 
 
-    def test_dual_workflow_preserves_individual_outputs(WorldCerealPreprocessedInputs, WorldCerealCroplandClassification, WorldCerealCroptypeClassification):
-        """Test that dual workflow outputs contain exact replicas of individual classifications with prefixes."""
-        
-        cropland_parameters = CropLandParameters()
-        croptype_parameters = CropTypeParameters()
+def test_dual_workflow_preserves_individual_outputs(WorldCerealPreprocessedInputs, WorldCerealCroplandClassification, WorldCerealCroptypeClassification):
+    """Test that dual workflow outputs contain exact replicas of individual classifications with prefixes."""
+    
+    cropland_parameters = CropLandParameters()
+    croptype_parameters = CropTypeParameters()
 
 
-        parameters = {
-            "cropland_params": {
-                "presto_model_url": cropland_parameters.feature_parameters.presto_model_url,
-                "classifier_url": cropland_parameters.classifier_parameters.classifier_url,
-                "rescale_s1": cropland_parameters.feature_parameters.rescale_s1,
-                "temporal_prediction": cropland_parameters.feature_parameters.temporal_prediction,
-                "target_date": cropland_parameters.feature_parameters.target_date,
-            },
-            "croptype_params": {
-                "presto_model_url": croptype_parameters.feature_parameters.presto_model_url, 
-                "classifier_url": croptype_parameters.classifier_parameters.classifier_url,
-                "rescale_s1": croptype_parameters.feature_parameters.rescale_s1,
-                "mask_cropland": croptype_parameters.mask_cropland,
-                "save_mask": croptype_parameters.save_mask
-            }
+    parameters = {
+        "cropland_params": {
+            "presto_model_url": cropland_parameters.feature_parameters.presto_model_url,
+            "classifier_url": cropland_parameters.classifier_parameters.classifier_url,
+            "rescale_s1": cropland_parameters.feature_parameters.rescale_s1,
+            "temporal_prediction": cropland_parameters.feature_parameters.temporal_prediction,
+            "target_date": cropland_parameters.feature_parameters.target_date,
+        },
+        "croptype_params": {
+            "presto_model_url": croptype_parameters.feature_parameters.presto_model_url, 
+            "classifier_url": croptype_parameters.classifier_parameters.classifier_url,
+            "rescale_s1": croptype_parameters.feature_parameters.rescale_s1,
+            "mask_cropland": croptype_parameters.mask_cropland,
+            "save_mask": croptype_parameters.save_mask
         }
+    }
 
+    udf_data = create_udf_data(WorldCerealPreprocessedInputs, parameters)
+    result = dual_udf(udf_data)
+    combined_output = result.datacube_list[0].get_array()
 
-        udf_data = create_udf_data(WorldCerealPreprocessedInputs, parameters)
-        result = dual_udf(udf_data)
-        combined_output = result.datacube_list[0].get_array()
+    cropland_output = combined_output.isel(bands=slice(0, 4))  # First 4 bands are cropland
+    croptype_output = combined_output.isel(bands=slice(4, None))  # Remaining bands are croptype
 
-        # Extract cropland and croptype components from combined output
-        cropland_bands = [band for band in combined_output.bands.values if band.startswith('cropland_')]
-        croptype_bands = [band for band in combined_output.bands.values if band.startswith('croptype_')]
-        
-        cropland_output = combined_output.sel(bands=cropland_bands)
-        croptype_output = combined_output.sel(bands=croptype_bands)
-        
-        # Remove prefixes for comparison with fixtures
-        cropland_output_no_prefix = cropland_output.rename({
-            band: band.replace('cropland_', '') for band in cropland_bands
-        })
-        
-        croptype_output_no_prefix = croptype_output.rename({
-            band: band.replace('croptype_', '') for band in croptype_bands
-        })
-        
-        # Verify cropland component matches fixture structure
-        assert cropland_output_no_prefix.dims == WorldCerealCroplandClassification.dims
-        assert cropland_output_no_prefix.shape == WorldCerealCroplandClassification.shape
-        assert list(cropland_output_no_prefix.bands.values) == list(WorldCerealCroplandClassification.bands.values)
-        
-        # Verify croptype component matches fixture structure  
-        assert croptype_output_no_prefix.dims == WorldCerealCroptypeClassification.dims
-        assert croptype_output_no_prefix.shape == WorldCerealCroptypeClassification.shape
-        assert list(croptype_output_no_prefix.bands.values) == list(WorldCerealCroptypeClassification.bands.values)
-        
-        # Verify spatial coordinates match
-        np.testing.assert_array_equal(cropland_output_no_prefix.x.values, WorldCerealCroplandClassification.x.values)
-        np.testing.assert_array_equal(cropland_output_no_prefix.y.values, WorldCerealCroplandClassification.y.values)
-        np.testing.assert_array_equal(croptype_output_no_prefix.x.values, WorldCerealCroptypeClassification.x.values)
-        np.testing.assert_array_equal(croptype_output_no_prefix.y.values, WorldCerealCroptypeClassification.y.values)
+    # Verify cropland component matches fixture structure
+    assert cropland_output.dims == WorldCerealCroplandClassification.dims
+    assert cropland_output.shape == WorldCerealCroplandClassification.shape
+    assert list(cropland_output.bands.values) == list(WorldCerealCroplandClassification.bands.values)
+    
+    # Verify croptype component matches fixture structure  
+    assert croptype_output.dims == WorldCerealCroptypeClassification.dims
+    assert croptype_output.shape == WorldCerealCroptypeClassification.shape
+    assert list(croptype_output.bands.values) == list(WorldCerealCroptypeClassification.bands.values)
+    
+    # Verify spatial coordinates match
+    np.testing.assert_array_equal(cropland_output.x.values, WorldCerealCroplandClassification.x.values)
+    np.testing.assert_array_equal(cropland_output.y.values, WorldCerealCroplandClassification.y.values)
+    np.testing.assert_array_equal(croptype_output.x.values, WorldCerealCroptypeClassification.x.values)
+    np.testing.assert_array_equal(croptype_output.y.values, WorldCerealCroptypeClassification.y.values)
+    
+    # Verify data types match
+    assert cropland_output.dtype == WorldCerealCroplandClassification.dtype
+    assert croptype_output.dtype == WorldCerealCroptypeClassification.dtype
