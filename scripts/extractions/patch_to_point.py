@@ -2,7 +2,7 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import List, Union
+from typing import List, Optional, Union
 
 import geopandas as gpd
 import openeo
@@ -110,6 +110,7 @@ def main(
     period: str = "month",
     restart_failed: bool = False,
     only_flagged_samples: bool = False,
+    max_samples_per_job: Optional[int] = None,
     parallel_jobs: int = 1,
 ):
     """
@@ -134,6 +135,9 @@ def main(
     only_flagged_samples : bool, optional
         If True, only samples with extract flag >0 will be retrieved, no collateral samples.
         (This is useful for very large and dense datasets like USDA).
+    max_samples_per_job : int, optional
+        Maximum number of samples allowed per job before splitting by H3 L3 cell identifiers.
+        If None, additional splitting is disabled.
     parallel_jobs : int, optional
         Number of local parallel jobs to run concurrently. Default is 1.
 
@@ -166,7 +170,10 @@ def main(
     if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
-            ref_id, ground_truth_file, only_flagged_samples
+            ref_id,
+            ground_truth_file,
+            only_flagged_samples,
+            max_samples_per_job,
         )
         job_db.initialize_from_df(job_df)
 
@@ -242,6 +249,12 @@ if __name__ == "__main__":
         help="If True, only samples with extract flag >0 will be retrieved, no collateral samples.",
     )
     parser.add_argument(
+        "--max_samples_per_job",
+        type=int,
+        default=None,
+        help="Maximum number of samples allowed per job before splitting by H3 L3 cells.",
+    )
+    parser.add_argument(
         "--parallel_jobs",
         type=int,
         default=None,
@@ -283,6 +296,7 @@ if __name__ == "__main__":
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
     only_flagged_samples = args.only_flagged_samples
+    max_samples_per_job = args.max_samples_per_job
     parallel_jobs = args.parallel_jobs or 1
     job_options = parse_job_options_from_args(args)
 
@@ -306,6 +320,7 @@ if __name__ == "__main__":
             period=period,
             restart_failed=restart_failed,
             only_flagged_samples=only_flagged_samples,
+            max_samples_per_job=max_samples_per_job,
             parallel_jobs=parallel_jobs,
             job_options=job_options,
         )
