@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 from loguru import logger
 from prometheo.finetune import Hyperparams, run_finetuning
@@ -19,6 +20,7 @@ from torch.utils.data import DataLoader
 # from worldcereal_in_season.datasets import MaskingStrategy
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.finetuning_utils import (
+    FocalLoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
 )
@@ -54,12 +56,14 @@ def main(args):
 
     experiment_tag = args.experiment_tag
     timestep_freq = args.timestep_freq  # "month" or "dekad"
+    max_timesteps_trim = args.max_timesteps_trim  # "auto", int or tuple of string dates
+    use_valid_time = args.use_valid_time
 
     # Path to the training data
     parquet_files = get_parquet_file_list(timestep_freq)
     val_samples_file = args.val_samples_file  # If None, random split is used
 
-    # Most popular maps: LANDCOVER14, CROPTYPE9, CROPTYPE0, CROPLAND2
+    # Most popular maps: LANDCOVER10, CROPTYPE9, CROPTYPE0, CROPLAND2
     finetune_classes = args.finetune_classes
     augment = args.augment
     time_explicit = args.time_explicit
@@ -91,6 +95,14 @@ def main(args):
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # setup path for processed wide parquet file so that it can be reused across experiments
+    if not debug:
+        wide_parquet_output_path = Path(
+            f"/projects/TAP/worldcereal/data/cached_wide_parquets/worldcereal_all_extractions_wide_{timestep_freq}.parquet"
+        )
+    else:
+        wide_parquet_output_path = None
+
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 100
@@ -107,25 +119,40 @@ def main(args):
         console_filter_keyword="PROGRESS",
     )
 
-    # Get the train/val/test dataframes
-    train_df, val_df, test_df = get_training_dfs_from_parquet(
-        parquet_files,
-        timestep_freq=timestep_freq,
-        finetune_classes=finetune_classes,
-        class_mappings=CLASS_MAPPINGS,
-        val_samples_file=val_samples_file,
-        debug=debug,
-    )
+    # Get the paths to train/val/test dataframe parquet files
+    train_df_path = Path(output_dir) / "train_df.parquet"
+    val_df_path = Path(output_dir) / "val_df.parquet"
+    test_df_path = Path(output_dir) / "test_df.parquet"
 
-    logger.warning("Still applying a patch here ...")
-    train_df = train_df[train_df["available_timesteps"] >= 12]
-    val_df = val_df[val_df["available_timesteps"] >= 12]
-    test_df = test_df[test_df["available_timesteps"] >= 12]
-
-    logger.info("Saving train, val, and test DataFrames to parquet files ...")
-    train_df.to_parquet(Path(output_dir) / "train_df.parquet")
-    val_df.to_parquet(Path(output_dir) / "val_df.parquet")
-    test_df.to_parquet(Path(output_dir) / "test_df.parquet")
+    # Get / load the train/val/test dataframes
+    if (
+        train_df_path.exists()
+        and val_df_path.exists()
+        and test_df_path.exists()
+        and not debug
+    ):
+        logger.info("Loading existing train/val/test DataFrames from parquet files.")
+        train_df = pd.read_parquet(train_df_path)
+        val_df = pd.read_parquet(val_df_path)
+        test_df = pd.read_parquet(test_df_path)
+    else:
+        logger.info("Generating train/val/test DataFrames from source parquet files.")
+        train_df, val_df, test_df = get_training_dfs_from_parquet(
+            parquet_files,
+            wide_parquet_output_path=wide_parquet_output_path,
+            timestep_freq=timestep_freq,
+            max_timesteps_trim=max_timesteps_trim,
+            use_valid_time=use_valid_time,
+            finetune_classes=finetune_classes,
+            class_mappings=CLASS_MAPPINGS,
+            val_samples_file=val_samples_file,
+            debug=debug,
+            overwrite=False,
+        )
+        logger.info("Saving train, val, and test DataFrames to parquet files ...")
+        train_df.to_parquet(train_df_path)
+        val_df.to_parquet(val_df_path)
+        test_df.to_parquet(test_df_path)
 
     classes_list = list(sorted(set(CLASS_MAPPINGS[finetune_classes].values())))
     classes_list = [
@@ -181,7 +208,8 @@ def main(args):
     if task_type == "binary":
         loss_fn = nn.BCEWithLogitsLoss()
     elif task_type == "multiclass":
-        loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+        # loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+        loss_fn = FocalLoss(ignore_index=NODATAVALUE)
     else:
         raise ValueError(
             f"Task type {task_type} is not supported. "
@@ -211,7 +239,7 @@ def main(args):
             generator=generator,
             sampling_class="finetune_class",
             method="log",
-            clip_range=(0.2, 10),
+            # clip_range=(0.2, 10),
         )
         if use_balancing
         else None,
@@ -305,6 +333,18 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--timestep_freq", type=str, choices=["month", "dekad"], default="month"
     )
+    parser.add_argument(
+        "--max_timesteps_trim",
+        type=str,
+        default="auto",
+        help='Maximum number of timesteps to retain after trimming. Can be "auto", an integer, or a tuple of string dates.',
+    )
+    parser.add_argument(
+        "--use_valid_time",
+        type=bool,
+        default=True,
+        help="Whether to use the 'valid_time' column for processing timesteps.",
+    )
 
     # Data paths
     parser.add_argument(
@@ -315,7 +355,7 @@ def parse_args(arg_list=None):
     )
 
     # Task setup
-    parser.add_argument("--finetune_classes", type=str, default="LANDCOVER14")
+    parser.add_argument("--finetune_classes", type=str, default="LANDCOVER10")
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--time_explicit", action="store_true")
     parser.add_argument("--debug", action="store_true")
@@ -361,12 +401,12 @@ if __name__ == "__main__":
     #     "debug-run",
     #     "--timestep_freq",
     #     "month",
-    #     "--time_explicit",
-    #     "--label_jitter",
-    #     "1",
+    #     # "--time_explicit",
+    #     # "--label_jitter",
+    #     # "1",
     #     "--augment",
     #     "--finetune_classes",
-    #     "CROPTYPE20",  # LANDCOVER14
+    #     "LANDCOVER10",  # CROPTYPE20
     #     "--use_balancing",
     #     "--debug",
     #     # "--masking_train_mode",
