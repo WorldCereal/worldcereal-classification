@@ -335,6 +335,7 @@ def get_training_dfs_from_parquet(
         "valid_time",
         "start_date",
         "end_date",
+        "ref_id"
     ]
     INT_COLS = [
         "extract",
