@@ -2,7 +2,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
