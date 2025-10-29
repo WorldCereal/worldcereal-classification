@@ -131,7 +131,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
 def test_dual_workflow(WorldCerealPreprocessedInputs):
     """Test that dual workflow outputs contain exact replicas of individual classifications with prefixes."""
-    
+
     cropland_parameters = CropLandParameters()
     croptype_parameters = CropTypeParameters()
 
@@ -144,12 +144,12 @@ def test_dual_workflow(WorldCerealPreprocessedInputs):
             "target_date": cropland_parameters.feature_parameters.target_date,
         },
         "croptype_params": {
-            "presto_model_url": croptype_parameters.feature_parameters.presto_model_url, 
+            "presto_model_url": croptype_parameters.feature_parameters.presto_model_url,
             "classifier_url": croptype_parameters.classifier_parameters.classifier_url,
             "rescale_s1": croptype_parameters.feature_parameters.rescale_s1,
             "mask_cropland": croptype_parameters.mask_cropland,
-            "save_mask": croptype_parameters.save_mask
-        }
+            "save_mask": croptype_parameters.save_mask,
+        },
     }
 
     # Create UDF data for the dual workflow
@@ -166,16 +166,16 @@ def test_dual_workflow(WorldCerealPreprocessedInputs):
     # Define expected PREFIXED band names (this is what we want in dual workflow)
     expected_cropland_bands = [
         "cropland_classification",
-        "cropland_probability", 
+        "cropland_probability",
         "cropland_probability_other",
         "cropland_probability_cropland",
     ]
-    
+
     expected_croptype_bands = [
         "croptype_classification",
         "croptype_probability",
         "croptype_probability_barley",
-        "croptype_probability_dry_pulses_legumes", 
+        "croptype_probability_dry_pulses_legumes",
         "croptype_probability_fibre_crops",
         "croptype_probability_flower_crops",
         "croptype_probability_grass_fodder_crops",
@@ -208,11 +208,13 @@ def test_dual_workflow(WorldCerealPreprocessedInputs):
     actual_croptype_bands = list(croptype_output.bands.values)
 
     # Assert that bands are exactly the prefixed versions
-    assert actual_cropland_bands == expected_cropland_bands, \
-        f"Cropland bands mismatch. Got {actual_cropland_bands}, expected {expected_cropland_bands}"
+    assert (
+        actual_cropland_bands == expected_cropland_bands
+    ), f"Cropland bands mismatch. Got {actual_cropland_bands}, expected {expected_cropland_bands}"
 
-    assert actual_croptype_bands == expected_croptype_bands, \
-        f"Croptype bands mismatch. Got {actual_croptype_bands}, expected {expected_croptype_bands}"
+    assert (
+        actual_croptype_bands == expected_croptype_bands
+    ), f"Croptype bands mismatch. Got {actual_croptype_bands}, expected {expected_croptype_bands}"
 
     # Verify shapes
     assert cropland_output.shape == (4, 100, 100)
