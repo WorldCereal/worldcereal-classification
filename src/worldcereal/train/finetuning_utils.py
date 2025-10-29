@@ -75,7 +75,7 @@ class MulticlassWithCroplandAuxBCELoss(nn.Module):
         pos_class_indices: List[int],
         ce_weight: float = 1.0,
         aux_weight: float = 0.3,
-        ignore_index: Optional[int] = None,
+        ignore_index: int = -100,
         pos_weight: Optional[float] = None,  # for BCE class imbalance
         label_smoothing: float = 0.0,
     ):

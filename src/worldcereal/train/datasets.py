@@ -27,7 +27,7 @@ MIN_EDGE_BUFFER = 2
 
 
 def get_class_weights(
-    labels: np.ndarray[Any],
+    labels: np.ndarray[Any, Any],
     method: str = "balanced",  # 'balanced', 'log', or 'none'
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
@@ -411,7 +411,10 @@ class WorldCerealDataset(Dataset):
         5. Per-timestep meteo dropout.
         6. DEM dropout.
         """
-        cfg = self.masking_config
+        # Guard: if masking_config is None (should not happen when enable checked)
+        if self.masking_config is None:
+            return s1, s2, meteo, dem
+        cfg: SensorMaskingConfig = self.masking_config  # type narrowing for mypy
         T = self.num_timesteps
         # 1. Full S1 dropout
         if np.random.rand() < cfg.s1_full_dropout_prob:
