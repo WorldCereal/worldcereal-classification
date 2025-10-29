@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (
-    FocalLoss,
+    FocalLoss,  # noqa: F401
     MulticlassWithCroplandAuxBCELoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
