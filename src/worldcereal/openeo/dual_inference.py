@@ -56,6 +56,11 @@ import onnxruntime as ort
 
 _PROMETHEO_INSTALLED = False
 
+# Global variables for Prometheo imports
+Presto = None
+load_presto_weights = None
+run_model_inference = None
+PoolingMethods = None
 
 # =============================================================================
 # STANDALONE FUNCTIONS (Work in both apply_udf_data and apply_metadata contexts)
@@ -66,19 +71,21 @@ def get_model_cache():
         setattr(sys, _MODULE_CACHE_KEY, {})
     return getattr(sys, _MODULE_CACHE_KEY)
 
-
 def _ensure_prometheo_dependencies():
     """Non-cached dependency check."""
-    global _PROMETHEO_INSTALLED
+    global _PROMETHEO_INSTALLED, Presto, load_presto_weights, run_model_inference, PoolingMethods
 
     if _PROMETHEO_INSTALLED:
         return
 
     try:
         # Try to import first
-        import prometheo
-
-        optimize_pytorch_cpu_performance(NUM_THREADS)
+        from prometheo.models import Presto
+        from prometheo.models.presto.wrapper import load_presto_weights
+        from prometheo.datasets.worldcereal import run_model_inference
+        from prometheo.models.pooling import PoolingMethods
+        
+        # They're now available in the global scope
         _PROMETHEO_INSTALLED = True
         return
     except ImportError:
@@ -87,16 +94,14 @@ def _ensure_prometheo_dependencies():
     # Installation required
     logger.info("Prometheo not available, installing...")
     _install_prometheo()
-    optimize_pytorch_cpu_performance(NUM_THREADS)
-
-    global prometheo, Presto, load_presto_weights, run_model_inference, PoolingMethods
-
-    import prometheo
+    
+    # Import immediately after installation - these will be available globally
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
     from prometheo.datasets.worldcereal import run_model_inference
     from prometheo.models.pooling import PoolingMethods
 
+    optimize_pytorch_cpu_performance(NUM_THREADS)
     _PROMETHEO_INSTALLED = True
 
 
