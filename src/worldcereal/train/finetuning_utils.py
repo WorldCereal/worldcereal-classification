@@ -613,10 +613,8 @@ def run_finetuning(
         train_loss.append(epoch_train_loss / len(train_dl))
 
         model.eval()
-        all_preds, all_y = [], []
-
-        model.eval()
-        all_preds, all_y = [], []
+        all_preds: List[torch.Tensor] = []
+        all_y: List[torch.Tensor] = []
 
         for batch in val_dl:
             with torch.no_grad():
