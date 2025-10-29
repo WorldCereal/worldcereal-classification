@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
+from tqdm import tqdm
+from tabulate import tabulate
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
@@ -252,16 +254,9 @@ def get_band_statistics(
 
     # Convert to DataFrame
     stats_df = pd.DataFrame(band_stats).T
-
-    print(
-        f"""
-        -------------------------------------
-        Band statistics:
-        -------------------------------------
-        {stats_df.to_string(index=True, header=True)}
-
-        """
-    )
+    print("-------------------------------------")
+    print("Band statistics:")
+    print(tabulate(stats_df, headers="keys", tablefmt="psql", showindex=True))
 
     return stats_df
 
@@ -273,6 +268,7 @@ def visualize_timeseries(
     outfile: Optional[Path] = None,
     sample_ids: Optional[List] = None,
     random_seed: Optional[int] = None,
+    crop_label_attr: Optional[str] = "label_full",
 ) -> None:
     """Function to visaulize the timeseries for one band and random or specific samples
     from an extractions dataframe.
@@ -294,6 +290,8 @@ def visualize_timeseries(
     random_seed : Optional[int], optional
         Seed for reproducible random sampling of sample_ids when sample_ids is None.
         If None, sampling will be non-deterministic.
+    crop_label_attr : Optional[str], optional
+        Attribute name of the data containing the crop type labels, by default 'label_full'.
 
     Returns
     -------
@@ -333,7 +331,10 @@ def visualize_timeseries(
     for sample_id in selected_ids:
         sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
         sample = sample.sort_values("timestamp")
-        label_full = sample["label_full"].values[0]
+        if crop_label_attr is not None:
+            crop_label = sample[crop_label_attr].values[0]
+        else:
+            crop_label = ""
 
         # Prepare the data to be shown
         if band == "NDVI":
@@ -355,7 +356,7 @@ def visualize_timeseries(
             values,
             marker="o",
             linestyle="-",
-            label=f"{label_full} ({sample_id})",
+            label=f"{crop_label} ({sample_id})",
         )
 
     plt.xlabel("Date")
@@ -530,3 +531,106 @@ def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataF
         gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
 
     return gdf
+
+
+def generate_extractions_extent(
+    parquet_folder: Path,
+) -> gpd.GeoDataFrame:
+    """Function to generate the extents of WorldCereal reference datasets
+    with satellite extractions.
+    Parameters
+    ----------
+    parquet_folder : Path
+        Path to the folder containing all parquet files with extractions.
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the extents of publicly available WorldCereal reference datasets
+        with satellite extractions.
+    """
+
+    # Look for all parquet files in the given folder
+    parquet_files = list(parquet_folder.glob("**/*.parquet"))
+    # Get rid of merged geoparquet
+    parquet_files = [f for f in parquet_files if not Path(f).is_dir()]
+
+    if len(parquet_files) == 0:
+        raise FileNotFoundError(f"No parquet files found in {parquet_folder}")
+    logger.info(f"Found {len(parquet_files)} parquet files in {parquet_folder}")
+
+    # Initialize empty geodataframe to hold the extents
+    ref_id_extent = gpd.GeoDataFrame(columns=["ref_id", "geometry"], crs="EPSG:4326")
+
+    for infile in tqdm(parquet_files):
+        gdf = gpd.read_parquet(infile)
+        ref_id = gdf.ref_id.iloc[0]
+        assert ref_id in str(infile)
+        bbox = box(*gdf.total_bounds)
+
+        ref_id_extent = pd.concat(
+            [
+                pd.DataFrame([[ref_id, bbox]], columns=ref_id_extent.columns),
+                ref_id_extent,
+            ],
+            ignore_index=True,
+        )
+
+    # Transform back to geodataframe
+    ref_id_extent = gpd.GeoDataFrame(ref_id_extent, crs="EPSG:4326")
+
+    return ref_id_extent
+
+
+def find_extractions_in_area(
+    extent_gdf: gpd.GeoDataFrame,
+    bbox_poly: Polygon,
+    include_crop_types: bool = True,
+) -> List[str]:
+    """Find extraction datasets that overlap with a given spatial extent.
+
+    Parameters
+    ----------
+    extent_gdf : gpd.GeoDataFrame
+        GeoDataFrame containing the extents of available extraction datasets.
+        Should have 'ref_id' and 'geometry' columns.
+    bbox_poly : Polygon
+        Polygon representing the area of interest to search for overlapping datasets.
+    include_crop_types : bool, optional
+        Whether to only include datasets with crop type information, by default True.
+        This filters out datasets with "_100" or "_101" in the ref_id.
+
+    Returns
+    -------
+    List[str]
+        List of ref_ids (dataset names) that spatially overlap with the given bbox_poly.
+    """
+
+    # Make a copy to avoid modifying the original
+    gdf = extent_gdf.copy()
+
+    # Optionally filter on crop types
+    if include_crop_types:
+        # Drop datasets with "_100" or "_101" in the ref_id
+        gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
+
+    # Ensure both geometries are in the same CRS
+    if gdf.crs != "EPSG:4326":
+        logger.info(f"Reprojecting extent_gdf from {gdf.crs} to EPSG:4326")
+        gdf = gdf.to_crs("EPSG:4326")
+
+    # Create a GeoDataFrame for the bbox_poly for spatial operations
+    bbox_gdf = gpd.GeoDataFrame([1], geometry=[bbox_poly], crs="EPSG:4326")
+
+    # Find intersecting datasets
+    intersecting = gpd.sjoin(
+        gdf[["ref_id", "geometry"]], bbox_gdf, predicate="intersects", how="inner"
+    )
+
+    # Get unique ref_ids
+    ref_ids_list = intersecting["ref_id"].unique().tolist()
+
+    logger.info(
+        f"Found {len(ref_ids_list)} datasets overlapping with the specified area:"
+    )
+
+    return ref_ids_list
