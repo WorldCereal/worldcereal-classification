@@ -1226,21 +1226,68 @@ def sample_extractions(
     # Combine all sampled data
     result = pd.concat(sampled_dfs, ignore_index=True)
 
-    # Print sampling summary
+    # Create and display beautified sampling summary
     summary_df = pd.DataFrame(sampling_summary)
     total_sampled = summary_df["sampled"].sum()
-    logger.info(f"Successfully sampled {total_sampled} samples in total:")
 
-    # Group summary by ref_id for cleaner output
-    all_processed_ref_ids = available_public_ref_ids + available_private_ref_ids
-    for ref_id in all_processed_ref_ids:
-        ref_summary = summary_df[summary_df["ref_id"] == ref_id]
-        if not ref_summary.empty:
-            total_for_ref = ref_summary["sampled"].sum()
-            combinations_with_data = (ref_summary["sampled"] > 0).sum()
-            logger.info(
-                f"  {ref_id}: {total_for_ref} samples across {combinations_with_data} crop types"
-            )
+    print("\n" + "=" * 80)
+    print("SAMPLE EXTRACTIONS SUMMARY")
+    print("=" * 80)
+
+    if not summary_df.empty:
+        # Prepare detailed sampling table
+        display_summary = []
+        all_processed_ref_ids = available_public_ref_ids + available_private_ref_ids
+
+        for ref_id in all_processed_ref_ids:
+            ref_summary = summary_df[summary_df["ref_id"] == ref_id]
+            if not ref_summary.empty:
+                # Determine source type
+                source = "Public" if ref_id in available_public_ref_ids else "Private"
+
+                # Calculate totals for this dataset
+                total_available = ref_summary["available"].sum()
+                total_sampled_ref = ref_summary["sampled"].sum()
+                crop_types_with_data = (ref_summary["sampled"] > 0).sum()
+                total_crop_types = len(ref_summary)
+
+                display_summary.append(
+                    {
+                        "Source": source,
+                        "Dataset": ref_id,
+                        "Available Samples": f"{total_available:,}",
+                        "Sampled": f"{total_sampled_ref:,}",
+                        "Crop Types": f"{crop_types_with_data}/{total_crop_types}",
+                    }
+                )
+
+        print("\nSampling Results by Dataset:")
+        print(
+            tabulate(display_summary, headers="keys", tablefmt="grid", showindex=False)
+        )
+
+        # Overall statistics
+        total_datasets = len(all_processed_ref_ids)
+        total_available = summary_df["available"].sum()
+        unique_crop_types = len(
+            summary_df[summary_df["sampled"] > 0]["crop_type"].unique()
+        )
+        sampling_efficiency = (
+            (total_sampled / total_available * 100) if total_available > 0 else 0
+        )
+
+        stats_table = [
+            ["Total Datasets Processed", f"{total_datasets}"],
+            ["Total Available Samples", f"{total_available:,}"],
+            ["Total Sampled", f"{total_sampled:,}"],
+            ["Unique Crop Types Sampled", f"{unique_crop_types}"],
+            ["Sampling Efficiency", f"{sampling_efficiency:.1f}%"],
+        ]
+
+        print("\nOverall Sampling Statistics:")
+        print(tabulate(stats_table, headers=["Metric", "Value"], tablefmt="grid"))
+
+    print("=" * 80 + "\n")
 
     return result
 
