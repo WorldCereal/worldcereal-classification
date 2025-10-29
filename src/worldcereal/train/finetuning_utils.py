@@ -1,6 +1,6 @@
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -459,12 +459,79 @@ def evaluate_finetuned_model(
     return results_df, cm, cm_norm
 
 
+def compute_validation_metrics(
+    val_preds: torch.Tensor, val_targets: torch.Tensor, task_type: Optional[str]
+) -> tuple[dict, str]:
+    """Compute standard classification metrics for validation set.
+
+    Parameters
+    ----------
+    val_preds : torch.Tensor
+        Concatenated model predictions (logits) for all validation samples with ignored labels removed.
+        Shape (N,) for binary or (N, C) for multiclass.
+    val_targets : torch.Tensor
+        Concatenated ground truth targets with ignored labels removed. Shape (N,).
+    task_type : Optional[str]
+        Either 'binary', 'multiclass' or None. If not recognized metrics are skipped.
+
+    Returns
+    -------
+    metrics_dict : dict
+        Dictionary containing accuracy, macro_f1, weighted_f1 (keys absent if computation failed).
+    metrics_str : str
+        Pre-formatted string for console logging.
+
+    Notes
+    -----
+    This helper is designed for easy future expansion (e.g., adding per-class F1, confusion matrix
+    serialization, binary-specific metrics like precision/recall for the positive class, or figure logging).
+    """
+    metrics: dict[str, float] = {}
+    metrics_str = ""
+    if task_type not in {"binary", "multiclass"}:
+        return metrics, metrics_str
+
+    from sklearn.metrics import accuracy_score, f1_score
+
+    if val_targets.numel() == 0:
+        logger.warning(
+            "Empty validation targets encountered; skipping metrics computation."
+        )
+        return metrics, metrics_str
+
+    if task_type == "binary":
+        probs = torch.sigmoid(val_preds).detach().cpu().numpy()
+        preds_np = (probs > 0.5).astype(int)
+        targets_np = val_targets.detach().cpu().numpy().astype(int)
+    else:  # multiclass
+        preds_np = torch.argmax(val_preds, dim=-1).detach().cpu().numpy().astype(int)
+        targets_np = val_targets.detach().cpu().numpy().astype(int)
+
+    try:
+        acc = accuracy_score(targets_np, preds_np)
+        f1_macro = f1_score(targets_np, preds_np, average="macro", zero_division=0)
+        f1_weighted = f1_score(
+            targets_np, preds_np, average="weighted", zero_division=0
+        )
+        metrics.update(
+            {
+                "accuracy": acc,
+                "f1_macro": f1_macro,
+                "f1_weighted": f1_weighted,
+            }
+        )
+        metrics_str = f" | Acc: {acc:.4f} | F1(macro): {f1_macro:.4f} | F1(weighted): {f1_weighted:.4f}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed computing validation metrics: {e}")
+    return metrics, metrics_str
+
+
 def run_finetuning(
     model: torch.nn.Module,
     train_dl: DataLoader,
     val_dl: DataLoader,
     experiment_name: str,
-    output_dir: str | Path,
+    output_dir: Union[Path, str],
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     hyperparams: Hyperparams,
@@ -574,6 +641,14 @@ def run_finetuning(
         current_val_loss = loss_fn(val_preds, val_targets).item()
         val_loss.append(current_val_loss)
 
+        # Additional classification metrics via helper
+        task_type = getattr(val_dl.dataset, "task_type", None)
+        _, metrics_str = compute_validation_metrics(val_preds, val_targets, task_type)
+        if metrics_str:
+            logger.info(
+                f"PROGRESS Epoch {epoch + 1}: validation metrics ->{metrics_str.replace(' | ', ' ', 1)}"
+            )
+
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
         else:
@@ -598,7 +673,7 @@ def run_finetuning(
             f"Train Loss: {train_loss[-1]:.4f} | "
             f"Val Loss: {current_val_loss:.4f} | "
             f"Best Loss: {best_loss:.4f}"
-        )
+        ) + metrics_str
 
         if epochs_since_improvement > 0:
             description += f" (no improvement for {epochs_since_improvement} epochs)"
