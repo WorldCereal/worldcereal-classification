@@ -642,10 +642,6 @@ def run_finetuning(
         # Additional classification metrics via helper
         task_type = getattr(val_dl.dataset, "task_type", None)
         _, metrics_str = compute_validation_metrics(val_preds, val_targets, task_type)
-        if metrics_str:
-            logger.info(
-                f"PROGRESS Epoch {epoch + 1}: validation metrics ->{metrics_str.replace(' | ', ' ', 1)}"
-            )
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
