@@ -1,14 +1,11 @@
 """openEO UDF to compute Presto/Prometheo features with clean code structure."""
 
-import functools
 import os
 import logging
 import random
 import sys
-import functools
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
-
 import numpy as np
 import xarray as xr
 import requests
@@ -23,7 +20,6 @@ from shapely.ops import transform
 logger = logging.getLogger(__name__)
 
 _MODULE_CACHE_KEY = f"__model_cache_{__name__}"
-
 
 # Constants
 PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.2-py3-none-any.whl"
@@ -50,7 +46,6 @@ sys.path.append("onnx_deps")
 import onnxruntime as ort
 
 _PROMETHEO_INSTALLED = False
-
 
 # =============================================================================
 # STANDALONE FUNCTIONS (Work in both apply_udf_data and apply_metadata contexts)
@@ -117,7 +112,6 @@ def _install_prometheo():
         logger.error(f"Failed to install prometheo: {e}")
         raise
 
-    
 def load_onnx_model_cached(model_url: str):
     """ONNX loading is fine since it's pure (no side effects)."""
 
@@ -167,7 +161,6 @@ def get_output_labels(lut_sorted: dict) -> list:
     return ["classification", "probability"] + [
         f"probability_{name}" for name in class_names
     ]
-
 
 def optimize_pytorch_cpu_performance(num_threads):
     """CPU-specific optimizations for Prometheo."""
@@ -399,31 +392,6 @@ class DataPreprocessor:
                 "S1 data should be uint16 format with values 1-65535. "
                 "Set 'rescale_s1' to False to disable scaling."
             )
-    
-    @staticmethod
-    def log_array_statistics(arr: xr.DataArray) -> None:
-        """Log comprehensive array statistics."""
-        total_pixels = arr.size
-        values = arr.values
-        
-        stats = {
-            "NaN": np.isnan(values).sum(),
-            "Zero": (values == 0).sum(),
-            "NODATA": (values == NODATA_VALUE).sum()
-        }
-        
-        logger.info(f"Bands: {', '.join(arr.bands.values)}")
-        logger.info(f"Shape: {arr.shape}, Dtype: {arr.dtype}")
-        
-        for name, count in stats.items():
-            percentage = (count / total_pixels) * 100
-            logger.info(f"{name} pixels: {count} ({percentage:.2f}%)")
-        
-        # Log band means
-        for band in arr.bands.values:
-            mean_val = np.nanmean(arr.sel(bands=band).values)
-            logger.info(f"Band '{band}' mean: {mean_val:.2f}")
-
 
 class PrestoFeatureExtractor:
     """Handles Presto feature extraction pipeline."""
@@ -451,15 +419,12 @@ class PrestoFeatureExtractor:
             # Return NaN array instead of crashing
             return create_nan_output_array(inarr, self.parameters['num_outputs'], error_msg)
         
-
         inarr = self._preprocess_input(inarr)
         
         if "slope" not in inarr.bands:
             inarr = self._add_slope_band(inarr, epsg)
         
         return self._run_presto_inference(inarr, epsg)
-    
-
     
     def _preprocess_input(self, inarr: xr.DataArray) -> xr.DataArray:
         """Preprocess input array for Presto."""
@@ -469,8 +434,6 @@ class PrestoFeatureExtractor:
         new_bands = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
         inarr = inarr.assign_coords(bands=new_bands)
         
-        #TODO commented out to minimize loggingfs
-        #DataPreprocessor.log_array_statistics(inarr)
         return inarr.fillna(NODATA_VALUE)
     
     def _add_slope_band(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
@@ -519,8 +482,6 @@ class PrestoFeatureExtractor:
         finally:
             gc.collect()
         
-        
-    
     def _select_temporal_features(self, features: xr.DataArray) -> xr.DataArray:
         """Select specific timestep from temporal features."""
         target_date = self.parameters.get("target_date")
@@ -538,7 +499,6 @@ class PrestoFeatureExtractor:
             )
         
         return features.sel(t=target_dt, method="nearest")
-
 
 class ONNXClassifier:
     """Handles ONNX model inference for classification."""
@@ -595,8 +555,6 @@ class ONNXClassifier:
             dims=["bands", "x", "y"],
             coords={"bands": output_labels, "x": x_coords, "y": y_coords}
         ).transpose("bands", "y", "x")
-
-
 
 # =============================================================================
 # MAIN UDF FUNCTIONS
@@ -657,7 +615,6 @@ def combine_results(croptype_result: xr.DataArray, cropland_result: xr.DataArray
     
     return result
 
-
 def apply_udf_data(udf_data: UdfData) -> UdfData:
     """Main UDF entry point - expects cropland_params and croptype_params in context."""
 
@@ -675,7 +632,6 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     # Check if we have both parameter sets for dual workflow
     if cropland_params and croptype_params:
         logger.info("Running dual workflow: cropland + croptype")
-        
         
         # Run cropland classification - pass the FLAT parameters
         logger.info("Running cropland classification")
@@ -701,7 +657,6 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     
     udf_data.datacube_list = [result_cube]
     return udf_data
-
 
 def apply_metadata(metadata, context: Dict) -> Any:
     """Update collection metadata for combined output with ALL bands."""
@@ -738,7 +693,6 @@ def apply_metadata(metadata, context: Dict) -> Any:
     except Exception as e:
         logger.warning(f"Could not load model in metadata context: {e}")
        
-    
     return metadata.rename_labels(dimension="bands", target=output_labels)
 
 
