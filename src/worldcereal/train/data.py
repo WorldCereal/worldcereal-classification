@@ -321,7 +321,7 @@ def get_training_dfs_from_parquet(
 
     if debug:
         # select first 3 files in debug mode
-        parquet_files = parquet_files[:3]
+        parquet_files = parquet_files[:10]
         logger.warning("Debug mode is enabled.")
 
     db = duckdb.connect()
@@ -335,7 +335,7 @@ def get_training_dfs_from_parquet(
         "valid_time",
         "start_date",
         "end_date",
-        "ref_id"
+        "ref_id",
     ]
     INT_COLS = [
         "extract",
