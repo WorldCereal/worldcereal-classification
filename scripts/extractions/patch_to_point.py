@@ -101,6 +101,80 @@ def merge_individual_parquet_files(
     return gdf
 
 
+def _normalize_h3_cell(value: Union[str, float, int, None]) -> Optional[str]:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _discover_completed_jobs(output_folder: Path) -> dict[int, set[Optional[str]]]:
+    """
+    Inspect existing parquet outputs to identify completed EPSG/H3 jobs.
+    """
+    completed: dict[int, set[Optional[str]]] = {}
+    if not output_folder.exists():
+        return completed
+
+    for parquet_file in output_folder.rglob("*.geoparquet"):
+        try:
+            epsg = int(parquet_file.parent.name)
+        except ValueError:
+            continue
+
+        target_set = completed.setdefault(epsg, set())
+
+        try:
+            df = pd.read_parquet(parquet_file, columns=["h3_l3_cell"])
+        except (FileNotFoundError, ValueError, KeyError, OSError):
+            target_set.add(None)
+            continue
+
+        column = df.get("h3_l3_cell")
+        if column is None:
+            target_set.add(None)
+            continue
+
+        unique_values = {_normalize_h3_cell(v) for v in column.unique()}
+        if not unique_values or unique_values == {None}:
+            target_set.add(None)
+        else:
+            target_set.update(unique_values)
+
+    return completed
+
+
+def _filter_completed_jobs(
+    job_df: pd.DataFrame, completed_jobs: dict[int, set[Optional[str]]]
+) -> tuple[pd.DataFrame, dict[tuple[int, Optional[str]], int]]:
+    """
+    Remove rows that are already covered by existing parquet outputs.
+    """
+    if job_df.empty or not completed_jobs:
+        return job_df, {}
+
+    keep_mask: list[bool] = []
+    skipped: dict[tuple[int, Optional[str]], int] = {}
+
+    for _, row in job_df.iterrows():
+        epsg = int(row["epsg"])
+        completed_for_epsg = completed_jobs.get(epsg, set())
+        h3_value = _normalize_h3_cell(row.get("h3l3_cell", None))
+
+        if h3_value in completed_for_epsg:
+            keep_mask.append(False)
+            key = (epsg, h3_value)
+            skipped[key] = skipped.get(key, 0) + 1
+        else:
+            keep_mask.append(True)
+
+    filtered_df = job_df.loc[keep_mask].reset_index(drop=True)
+    return filtered_df, skipped
+
+
 def main(
     connection: openeo.Connection,
     ref_id: str,
@@ -175,6 +249,24 @@ def main(
             only_flagged_samples,
             max_samples_per_job,
         )
+        completed_jobs = _discover_completed_jobs(output_folder)
+        job_df, skipped_jobs = _filter_completed_jobs(job_df, completed_jobs)
+        if skipped_jobs:
+            total_skipped = sum(skipped_jobs.values())
+            logger.info(
+                f"Detected {total_skipped} already processed job(s); skipping their rerun."
+            )
+            for (epsg_value, h3_value), count in sorted(skipped_jobs.items()):
+                if h3_value is None:
+                    logger.info(f"  - EPSG {epsg_value}: {count} job(s) already completed.")
+                else:
+                    logger.info(
+                        f"  - EPSG {epsg_value}, H3 {h3_value}: {count} job(s) already completed."
+                    )
+        if job_df.empty:
+            logger.info(
+                "All jobs appear to be completed already; creating empty tracking file."
+            )
         job_db.initialize_from_df(job_df)
 
     manager = PatchToPointJobManager(root_dir=output_folder)
