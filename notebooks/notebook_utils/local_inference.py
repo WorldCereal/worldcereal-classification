@@ -10,12 +10,90 @@ the UDF functions directly without running batch jobs on OpenEO.
 from typing import Optional
 from pathlib import Path
 
+from pyproj import CRS
 import xarray as xr
 from loguru import logger
 
 from worldcereal.openeo.feature_extractor import extract_presto_embeddings
 from worldcereal.openeo.inference import apply_inference
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
+
+
+def run_full_croptype_inference_workflow(
+    input_patches: dict[str, Path],
+    outdir: Path,
+    model_url: Optional[str] = None,
+    mask_croptype_with_cropland: bool = True,
+):
+    """Run full croptype mapping inference workflow on local files.
+    Parameters
+    ----------
+    input_patches : dict[str,Path]
+        Dictionary of input patch names and their corresponding file paths.
+    outdir : Path
+        Output directory to save results.
+    model_url : str, optional
+        URL to download the croptype classification model from. If None, uses
+        the default model provided by WorldCereal.
+    mask_croptype_with_cropland : bool, optional
+        Whether to mask croptype classification with cropland classification.
+        Defaults to True.
+    Returns
+    -------
+    dict[str, dict[str, Path]]
+        Dictionary with patch names as keys and another dictionary as values,
+        containing paths to cropland and croptype classification GeoTIFFs.
+    """
+
+    # Create dictionnary with final output paths
+    output_paths = {}
+
+    npatches = len(input_patches)
+    i = 0
+    for name, in_path in input_patches.items():
+        i += 1
+        logger.info(f"Processing patch {name} ({i}/{npatches})")
+        output_paths[name] = {}
+
+        # Open the file
+        ds = xr.open_dataset(in_path)
+        # Get the EPSG code and convert to xarray DataArray
+        epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
+        arr = ds.drop_vars("crs").fillna(65535).astype("uint16").to_array(dim="bands")
+
+        if mask_croptype_with_cropland:
+            logger.info("Generating cropland mask...")
+            # Run cropland mapping
+            landcover_embeddings, cropland_classification = run_cropland_mapping(
+                arr, epsg=epsg
+            )
+            # Save cropland classification to GeoTIFF
+            cropland_path = outdir / name / "cropland_classification.tif"
+            cropland_path.parent.mkdir(exist_ok=True)
+            classification_to_geotiff(cropland_classification, epsg, cropland_path)
+            output_paths[name]["cropland"] = cropland_path
+
+        # Run croptype mapping
+        logger.info("Generating crop type map...")
+        croptype_embeddings, croptype_classification = run_croptype_mapping(
+            arr, epsg=epsg, classifier_url=model_url
+        )
+
+        if mask_croptype_with_cropland:
+            logger.info("Masking crop type map with cropland mask...")
+            # Set all croptype_classification pixel values to 254 where cropland_classification 'classification' band == 0
+            mask = cropland_classification.sel(bands="classification") == 0
+            croptype_classification = croptype_classification.where(~mask, 254)
+
+        # save crop type map to GeoTIFF
+        croptype_path = outdir / name / "croptype_classification.tif"
+        croptype_path.parent.mkdir(exist_ok=True)
+        classification_to_geotiff(
+            classification=croptype_classification, epsg=epsg, out_path=croptype_path
+        )
+        output_paths[name]["croptype"] = croptype_path
+
+    return output_paths
 
 
 def run_cropland_mapping(

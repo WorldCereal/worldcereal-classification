@@ -17,7 +17,7 @@ class date_slider:
     def __init__(
         self,
         start_date=datetime(2017, 1, 1),
-        end_date=datetime(2025, 5, 1),
+        end_date=datetime(2025, 10, 1),
         show_year=True,
         display_interval=4,
         title="Select processing period:",
