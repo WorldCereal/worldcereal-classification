@@ -58,7 +58,6 @@ def run_full_croptype_inference_workflow(
         # Open the file
         ds = xr.open_dataset(in_path)
         # Get the EPSG code and convert to xarray DataArray
-        crs_attrs = ds["crs"].attrs
         epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
         arr = ds.drop_vars("crs").fillna(65535).astype("uint16").to_array(dim="bands")
 
