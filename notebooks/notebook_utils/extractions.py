@@ -13,6 +13,7 @@ from shapely.geometry import Polygon, box
 from tqdm import tqdm
 from tabulate import tabulate
 
+from prometheo.utils import DEFAULT_SEED
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.legend import ewoc_code_to_label
@@ -376,32 +377,45 @@ def visualize_timeseries(
 
 
 def query_extractions(
-    bbox_poly: Polygon,
+    bbox_poly: Optional[Polygon] = None,
     buffer: int = 250000,
     filter_cropland: bool = True,
     include_public: bool = True,
     private_parquet_path: Optional[Path] = None,
+    ref_ids: Optional[List[str]] = None,
     crop_types: Optional[List[int]] = None,
     query_collateral_samples: bool = True,
 ) -> pd.DataFrame:
-    """Wrapper function to query both public and private extractions in a given area.
+    """Wrapper function to query both public and private extractions.
+
+    This function queries extraction data (both public and private) using one of three modes:
+    1. Spatial discovery: Query by spatial intersection with a polygon (bbox_poly only)
+    2. Dataset-specific: Query specific datasets directly (ref_ids only)
+    3. Combined filtering: Query specific datasets within a spatial area (both bbox_poly and ref_ids)
+
+    IMPORTANT: You must specify at least one of 'ref_ids' or 'bbox_poly'.
 
     Parameters
     ----------
-    bbox_poly : Polygon
-        Polygon representing the area of interest
-    buffer : int, optional
-        Buffer to add to the bounding box, by default 250000 (250 km)
-    filter_cropland : bool, optional
+    bbox_poly : Optional[Polygon], default=None
+        Polygon representing the area of interest in EPSG:4326. Can be used alone for spatial
+        discovery or combined with ref_ids to spatially filter specific datasets.
+    buffer : int, default=250000
+        Buffer to add to the bounding box in meters, by default 250000 (250 km).
+        Only used when bbox_poly is provided.
+    filter_cropland : bool, default=True
         Whether to filter out non-cropland samples, by default True
-    include_public : bool, optional
+    include_public : bool, default=True
         Whether to include public extractions, by default True
-    private_parquet_path : Optional[Path], optional
+    private_parquet_path : Optional[Path], default=None
         Path to a parquet file containing private extractions, by default None
-    crop_types : Optional[List[int]], optional
-            List of crop types to filter on, by default None
-            If None, all crop types are included.
-    query_collateral_samples : bool, default=False
+    ref_ids : Optional[List[str]], default=None
+        List of specific reference dataset IDs to query. Can be used alone for
+        dataset-specific queries or combined with bbox_poly to spatially filter specific datasets.
+    crop_types : Optional[List[int]], default=None
+        List of crop types to filter on, by default None
+        If None, all crop types are included.
+    query_collateral_samples : bool, default=True
         Whether to include collateral samples in the query.
         Collateral samples are those samples that were not specifically marked for extraction,
         but fell into the vicinity of such samples during the extraction process. While using
@@ -412,59 +426,103 @@ def query_extractions(
     -------
     pd.DataFrame
         DataFrame containing the extracted samples.
+
+    Raises
+    ------
+    ValueError
+        If neither ref_ids nor bbox_poly is specified.
+
+    Examples
+    --------
+    # Mode 1: Query datasets in a spatial area (auto-discovery)
+    >>> from shapely.geometry import Polygon
+    >>> my_area = Polygon([...])  # your area of interest
+    >>> data = query_extractions(
+    ...     bbox_poly=my_area,
+    ...     buffer=50000,  # 50km buffer
+    ...     include_public=True,
+    ...     private_parquet_path="./extractions/"
+    ... )
+
+    # Mode 2: Query specific known datasets (no spatial filtering)
+    >>> data = query_extractions(
+    ...     ref_ids=["dataset1", "dataset2"],
+    ...     include_public=True,
+    ...     private_parquet_path="./extractions/"
+    ... )
+
+    # Mode 3: Query specific datasets within a spatial area (combined filtering)
+    >>> data = query_extractions(
+    ...     ref_ids=["dataset1", "dataset2", "dataset3"],
+    ...     bbox_poly=my_area,
+    ...     buffer=25000,  # 25km buffer
+    ...     include_public=True
+    ... )
     """
 
-    results = []
+    # Enforce that user must specify at least one of ref_ids or bbox_poly
+    if ref_ids is None and bbox_poly is None:
+        raise ValueError(
+            "You must specify at least one of 'ref_ids' (list of dataset names) OR 'bbox_poly' (spatial area of interest). "
+            "Cannot proceed without knowing which datasets to query or which area to query."
+        )
 
-    # First we query public extractions
+    results = []
+    extraction_summary = []
+
+    # Query public extractions
     if include_public:
+        logger.info("Querying public extractions...")
         public_df = query_public_extractions(
-            bbox_poly,
+            bbox_poly=bbox_poly,
             buffer=buffer,
             filter_cropland=filter_cropland,
             crop_types=crop_types,
             query_collateral_samples=query_collateral_samples,
+            ref_ids=ref_ids,
         )
 
         if len(public_df) > 0:
             results.append(public_df)
 
-            # Report on the contents of the data
-            print("********************************")
-            print("PUBLIC EXTRACTIONS")
-            print("************")
-            print(
-                f"Found {public_df['sample_id'].nunique()} unique samples in the public data, spread across {public_df['ref_id'].nunique()} unique reference datasets."
-            )
-            print("Public datasets:")
-            for ds in sorted(list(public_df["ref_id"].unique())):
-                print(ds)
-            print("********************************")
+            # Collect dataset information for summary table
+            for ref_id in sorted(public_df["ref_id"].unique()):
+                ref_data = public_df[public_df["ref_id"] == ref_id]
+                extraction_summary.append(
+                    {
+                        "Source": "Public",
+                        "Dataset": ref_id,
+                        "Samples": ref_data["sample_id"].nunique(),
+                        "Crop Types": ref_data["ewoc_code"].nunique(),
+                    }
+                )
 
-    # Then we query private extractions
+    # Query private extractions
     if private_parquet_path is not None:
+        logger.info("Querying private extractions...")
         private_df = query_private_extractions(
             str(private_parquet_path),
             bbox_poly=bbox_poly,
             filter_cropland=filter_cropland,
             buffer=buffer,
             crop_types=crop_types,
+            ref_ids=ref_ids,
         )
 
         if len(private_df) > 0:
             results.append(private_df)
 
-            # Report on the contents of the data
-            print("********************************")
-            print("PRIVATE EXTRACTIONS")
-            print("************")
-            print(
-                f"Found {private_df['sample_id'].nunique()} unique samples in the private data, spread across {private_df['ref_id'].nunique()} unique reference datasets."
-            )
-            print("Private datasets:")
-            for ds in sorted(list(private_df["ref_id"].unique())):
-                print(ds)
-            print("********************************")
+            # Collect dataset information for summary table
+            for ref_id in sorted(private_df["ref_id"].unique()):
+                ref_data = private_df[private_df["ref_id"] == ref_id]
+                extraction_summary.append(
+                    {
+                        "Source": "Private",
+                        "Dataset": ref_id,
+                        "Samples": ref_data["sample_id"].nunique(),
+                        "Crop Types": ref_data["ewoc_code"].nunique(),
+                    }
+                )
 
     # Now we merge the results together in one dataframe
     if len(results) > 1:
@@ -472,19 +530,7 @@ def query_extractions(
     elif len(results) == 1:
         merged_df = results[0]
     else:
-        raise ValueError("No extractions found in the provided area.")
-
-    print(f"Total number of extracted samples: {merged_df['sample_id'].nunique()}")
-
-    # Quick check on how many different crop types are present in the data
-    all_crops = list(merged_df["ewoc_code"].unique())
-    print(f"Found {len(all_crops)} unique crop types in the extracted data.")
-
-    if len(all_crops) <= 1:
-        logger.warning(
-            "Not enough crop types found in the extracted data to train a model. "
-            "Expand your area of interest or add more reference data."
-        )
+        raise ValueError("No extractions found for the specified criteria.")
 
     # Translate ewoc codes to labels
     merged_df["label_full"] = ewoc_code_to_label(
@@ -493,7 +539,40 @@ def query_extractions(
     merged_df["sampling_label"] = ewoc_code_to_label(
         merged_df["ewoc_code"], label_type="sampling"
     )
-    print(f"Represented crop groups: {merged_df['sampling_label'].unique()}")
+
+    # Create and display beautified summary
+    print("\n" + "=" * 80)
+    print("QUERY EXTRACTIONS SUMMARY")
+    print("=" * 80)
+
+    if extraction_summary:
+        summary_df = pd.DataFrame(extraction_summary)
+        print("\nDatasets Retrieved:")
+        print(tabulate(summary_df, headers="keys", tablefmt="grid", showindex=False))
+
+        # Overall statistics
+        total_samples = merged_df["sample_id"].nunique()
+        total_datasets = len(extraction_summary)
+        total_crop_types = merged_df["ewoc_code"].nunique()
+        unique_crop_groups = sorted(merged_df["sampling_label"].unique())
+
+        stats_table = [
+            ["Total Samples", f"{total_samples:,}"],
+            ["Total Datasets", f"{total_datasets}"],
+            ["Unique Crop Types", f"{total_crop_types}"],
+            ["Crop Groups", ", ".join(unique_crop_groups)],
+        ]
+
+        print("\nOverall Statistics:")
+        print(tabulate(stats_table, headers=["Metric", "Value"], tablefmt="grid"))
+
+    print("=" * 80 + "\n")
+
+    if total_crop_types <= 1:
+        logger.warning(
+            "Not enough crop types found in the extracted data to train a model. "
+            "Expand your area of interest or add more reference data."
+        )
 
     # Explictily drop column "feature_index" if it exists
     if "feature_index" in merged_df.columns:
@@ -630,7 +709,628 @@ def find_extractions_in_area(
     ref_ids_list = intersecting["ref_id"].unique().tolist()
 
     logger.info(
-        f"Found {len(ref_ids_list)} datasets overlapping with the specified area:"
+        f"Found {len(ref_ids_list)} datasets overlapping with the specified area."
     )
 
     return ref_ids_list
+
+
+def map_classes(
+    df: pd.DataFrame,
+    class_mappings_csv: Path,
+    target_col: str = "finetune_class",
+) -> pd.DataFrame:
+
+    # Get class mappings from csv
+    if class_mappings_csv.exists():
+        class_mappings = pd.read_csv(class_mappings_csv, sep=";", header=0)
+        # Remove rows with missing values in target_col
+        class_mappings = class_mappings.dropna(subset=[target_col])
+        # Convert ewoc_code to int64
+        class_mappings["ewoc_code"] = (
+            class_mappings["ewoc_code"].str.replace("-", "").astype(np.int64)
+        )
+
+        # Convert to dictionary
+        class_mappings = dict(
+            zip(class_mappings["ewoc_code"], class_mappings[target_col])
+        )
+    else:
+        raise FileNotFoundError(f"Class mappings file not found: {class_mappings_csv}")
+
+    # Map classes
+    df.loc[:, target_col] = df["ewoc_code"].map(
+        {int(k): v for k, v in class_mappings.items()}
+    )
+    # Remove rows with missing target_col values after mapping
+    df = df.dropna(subset=[target_col])
+
+    return df
+
+
+def _classify_ref_ids(
+    ref_ids: List[str], include_public: bool, private_parquet_path: Optional[Path]
+) -> tuple[List[str], List[str]]:
+    """
+    Helper function to classify provided ref_ids as public vs private.
+
+    Parameters
+    ----------
+    ref_ids : List[str]
+        List of ref_ids to classify
+    include_public : bool
+        Whether to check for public datasets
+    private_parquet_path : Optional[Path]
+        Path to private extractions
+
+    Returns
+    -------
+    tuple[List[str], List[str]]
+        Lists of (public_ref_ids, private_ref_ids) from the provided ref_ids
+    """
+    available_public_ref_ids = []
+    available_private_ref_ids = []
+
+    if include_public:
+        try:
+            logger.info(
+                "Checking which datasets are available in public extractions..."
+            )
+            public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+            all_public_ref_ids = set(public_extent_gdf["ref_id"].unique())
+            available_public_ref_ids = [
+                ref_id for ref_id in ref_ids if ref_id in all_public_ref_ids
+            ]
+            logger.info(
+                f"Found {len(available_public_ref_ids)} datasets available in public data: {sorted(available_public_ref_ids)}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not determine public datasets: {e}")
+
+    if private_parquet_path is not None:
+        try:
+            logger.info(
+                "Checking which datasets are available in private extractions..."
+            )
+            private_extent_gdf = generate_extractions_extent(
+                parquet_folder=private_parquet_path
+            )
+            all_private_ref_ids = set(private_extent_gdf["ref_id"].unique())
+            available_private_ref_ids = [
+                ref_id for ref_id in ref_ids if ref_id in all_private_ref_ids
+            ]
+            logger.info(
+                f"Found {len(available_private_ref_ids)} datasets available in private data: {sorted(available_private_ref_ids)}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not determine private datasets: {e}")
+
+    return available_public_ref_ids, available_private_ref_ids
+
+
+def _process_dataset_sampling(
+    dataset_data: pd.DataFrame,
+    ref_id: str,
+    crop_types: Optional[List[int]],
+    sample_size: int,
+    class_mappings_csv: Optional[Path],
+    random_state: int,
+    sampled_dfs: List[pd.DataFrame],
+    sampling_summary: List[dict],
+) -> None:
+    """
+    Helper function to process sampling for a single dataset.
+
+    Parameters
+    ----------
+    dataset_data : pd.DataFrame
+        The extraction data for a single dataset
+    ref_id : str
+        The reference dataset ID
+    crop_types : Optional[List[int]]
+        List of crop types to sample, or None to use all available
+    sample_size : int
+        Number of samples per crop type
+    class_mappings_csv : Optional[Path]
+        Path to class mappings file
+    random_state : int
+        Random state for sampling
+    sampled_dfs : List[pd.DataFrame]
+        List to append sampled data to (modified in place)
+    sampling_summary : List[dict]
+        List to append sampling summary to (modified in place)
+    """
+    if dataset_data.empty:
+        logger.warning(f"No data found for dataset: {ref_id}")
+        if crop_types is not None:
+            for crop_type in crop_types:
+                sampling_summary.append(
+                    {
+                        "ref_id": ref_id,
+                        "crop_type": crop_type,
+                        "available": 0,
+                        "sampled": 0,
+                    }
+                )
+        return
+
+    # Map classes if mapping is provided
+    if class_mappings_csv is not None:
+        target_col = "finetune_class"
+        dataset_data = map_classes(
+            dataset_data,
+            class_mappings_csv=class_mappings_csv,
+            target_col=target_col,
+        )
+    else:
+        target_col = "ewoc_code"
+
+    # If crop_types not specified, get them from this dataset
+    if crop_types is None:
+        dataset_crop_types = dataset_data[target_col].unique().tolist()
+        logger.info(
+            f"Using crop types from dataset {ref_id}: {len(dataset_crop_types)} types"
+        )
+    else:
+        dataset_crop_types = crop_types
+
+    # Get a list of unique sample id's with crop type information
+    available_data = dataset_data.drop_duplicates(subset=["sample_id"])
+
+    # Process each crop type for this dataset
+    for crop_type in dataset_crop_types:
+        # Filter data for this specific crop type
+        subset = available_data[available_data[target_col] == crop_type]
+
+        if subset.empty:
+            sampling_summary.append(
+                {
+                    "ref_id": ref_id,
+                    "crop_type": crop_type,
+                    "available": 0,
+                    "sampled": 0,
+                }
+            )
+            continue
+
+        # Sample the requested number (or all available if fewer)
+        n_available = len(subset)
+        n_to_sample = min(sample_size, n_available)
+
+        # Perform sampling
+        sampled_ids = subset.sample(
+            n=n_to_sample, random_state=random_state
+        ).sample_id.tolist()
+
+        # Get the full time series data for the sampled IDs
+        sampled_subset = dataset_data[dataset_data.sample_id.isin(sampled_ids)].copy()
+
+        sampled_dfs.append(sampled_subset)
+        sampling_summary.append(
+            {
+                "ref_id": ref_id,
+                "crop_type": crop_type,
+                "available": n_available,
+                "sampled": n_to_sample,
+            }
+        )
+
+
+def sample_extractions(
+    bbox_poly: Optional[Polygon] = None,
+    buffer: int = 250000,
+    filter_cropland: bool = True,
+    include_public: bool = True,
+    private_parquet_path: Optional[Path] = None,
+    ref_ids: Optional[List[str]] = None,
+    crop_types: Optional[List[int]] = None,
+    sample_size: int = 100,
+    class_mappings_csv: Optional[Path] = None,
+    query_collateral_samples: bool = True,
+    random_state: int = DEFAULT_SEED,
+) -> pd.DataFrame:
+    """
+    Sample a specified number of samples for each ref_id and crop_type combination from both public and private extractions.
+
+    This function queries extraction data (both public and private) dataset by dataset and samples a fixed number of samples
+    for each combination of reference dataset (ref_id) and crop type (ewoc_code).
+    This approach is more memory-efficient than loading all data at once and more efficient than querying entire regions
+    when specific datasets are targeted.
+
+    IMPORTANT: You must specify at least one of 'ref_ids' or 'bbox_poly'. Three modes are supported:
+    1. Dataset-specific: Use ref_ids only when you know specific dataset names to sample from
+    2. Spatial discovery: Use bbox_poly only to automatically discover and sample from all datasets
+       that spatially intersect with your area of interest (uses extent-based discovery for efficiency)
+    3. Combined filtering: Use both ref_ids and bbox_poly to sample from specific datasets within
+       a spatial area (most efficient when you want specific datasets in a region)
+
+    Parameters
+    ----------
+    bbox_poly : Optional[Polygon], default=None
+        Polygon representing the area of interest. Can be used alone for spatial discovery
+        or combined with ref_ids to filter specific datasets within the spatial area.
+    buffer : int, default=250000
+        Buffer to add to the bounding box in meters, by default 250000 (250 km).
+        Only used when bbox_poly is specified.
+    filter_cropland : bool, default=True
+        Whether to filter for temporary cropland samples only (WorldCereal codes 1100000000-1115000000,
+        excluding fallow classes). Should be True when using data for croptype classification.
+    include_public : bool, default=True
+        Whether to include public extractions.
+    private_parquet_path : Optional[Path], default=None
+        Path to a parquet file containing private extractions.
+    ref_ids : Optional[List[str]], default=None
+        List of specific reference dataset IDs to sample from. Can be used alone for
+        dataset-specific sampling or combined with bbox_poly to spatially filter specific datasets.
+    crop_types : Optional[List[int]], default=None
+        List of crop type codes (ewoc_codes) to sample. If None, all available crop types will be used.
+    sample_size : int, default=100
+        Number of samples to extract for each ref_id and crop_type combination.
+        If a combination has fewer samples than requested, all available samples will be returned.
+    class_mappings_csv : Optional[Path], default=None
+        Path to CSV file containing class mappings for remapping crop types.
+    query_collateral_samples : bool, default=True
+        Whether to include collateral samples in the query.
+    random_state : int, default=DEFAULT_SEED
+        Random state for reproducible sampling.
+
+    Returns
+    -------
+    pd.DataFrame
+        A GeoPandas DataFrame containing the sampled data with columns indicating
+        the ref_id, ewoc_code, and other extraction attributes.
+
+    Raises
+    ------
+    ValueError
+        If neither ref_ids nor bbox_poly is specified.
+
+    Examples
+    --------
+    # Mode 1: Sample from specific known datasets (no spatial filtering)
+    >>> sampled_data = sample_extractions(
+    ...     ref_ids=["dataset1", "dataset2"],
+    ...     include_public=True,
+    ...     private_parquet_path="./extractions/",
+    ...     crop_types=[1101000010, 1102000010],  # wheat, maize
+    ...     sample_size=100
+    ... )
+
+    # Mode 2: Sample from datasets in a spatial area (auto-discovery)
+    >>> from shapely.geometry import Polygon
+    >>> my_area = Polygon([...])  # your area of interest
+    >>> sampled_data = sample_extractions(
+    ...     bbox_poly=my_area,
+    ...     buffer=50000,  # 50km buffer
+    ...     include_public=True,
+    ...     private_parquet_path="./extractions/",
+    ...     sample_size=50
+    ... )
+
+    # Mode 3: Sample from specific datasets within a spatial area (combined filtering)
+    >>> sampled_data = sample_extractions(
+    ...     ref_ids=["dataset1", "dataset2", "dataset3"],
+    ...     bbox_poly=my_area,
+    ...     buffer=25000,  # 25km buffer
+    ...     include_public=True,
+    ...     sample_size=75
+    ... )
+    >>> print(sampled_data.groupby(['ref_id', 'ewoc_code']).size())
+    """
+
+    logger.info("######## Sampling extractions...")
+
+    # Enforce that user must specify at least one of ref_ids or bbox_poly
+    if ref_ids is None and bbox_poly is None:
+        raise ValueError(
+            "You must specify at least one of 'ref_ids' (list of dataset names) OR 'bbox_poly' (spatial area of interest). "
+            "Cannot proceed without knowing which datasets to sample from or which area to query."
+        )
+
+    # Determine which ref_ids are available in public vs private sources
+    available_public_ref_ids = []
+    available_private_ref_ids = []
+
+    if ref_ids is None:
+        # Mode 1: Spatial discovery - find all datasets that intersect with the provided area
+        logger.info(
+            "No ref_ids specified. Discovering datasets that intersect with the provided area..."
+        )
+
+        # Find public datasets that intersect with the area
+        if include_public:
+            try:
+                logger.info("Retrieving public extractions extent...")
+                public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+                available_public_ref_ids = find_extractions_in_area(
+                    extent_gdf=public_extent_gdf,
+                    bbox_poly=bbox_poly,
+                    include_crop_types=True,
+                )
+            except Exception as e:
+                logger.warning(f"Could not retrieve public extractions extent: {e}")
+
+        # Find private datasets that intersect with the area
+        if private_parquet_path is not None:
+            try:
+                logger.info("Generating private extractions extent...")
+                private_extent_gdf = generate_extractions_extent(
+                    parquet_folder=private_parquet_path
+                )
+                available_private_ref_ids = find_extractions_in_area(
+                    extent_gdf=private_extent_gdf,
+                    bbox_poly=bbox_poly,
+                    include_crop_types=True,
+                )
+            except Exception as e:
+                logger.warning(f"Could not generate private extractions extent: {e}")
+
+        if not available_public_ref_ids and not available_private_ref_ids:
+            logger.warning("No datasets found that intersect with the specified area.")
+            return pd.DataFrame()
+
+        logger.info(
+            f"Total datasets found in area: {len(available_public_ref_ids) + len(available_private_ref_ids)}"
+        )
+
+    elif ref_ids is not None and bbox_poly is not None:
+        # Mode 2: Combined filtering - filter provided ref_ids by spatial intersection
+        logger.info(
+            f"Filtering {len(ref_ids)} provided datasets by spatial intersection..."
+        )
+
+        # Get extent data and filter by provided ref_ids, then find spatial intersections
+        public_ref_ids = []
+        private_ref_ids = []
+
+        if include_public:
+            try:
+                logger.info("Checking spatial intersection for public datasets...")
+                public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+                public_extent_gdf = public_extent_gdf[
+                    public_extent_gdf["ref_id"].isin(ref_ids)
+                ]
+                public_ref_ids = find_extractions_in_area(
+                    extent_gdf=public_extent_gdf,
+                    bbox_poly=bbox_poly,
+                    include_crop_types=True,
+                )
+                logger.info(
+                    f"Found {len(public_ref_ids)} public datasets from the provided list that intersect with the area"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not check public datasets spatial intersection: {e}"
+                )
+
+        if private_parquet_path is not None:
+            try:
+                logger.info("Checking spatial intersection for private datasets...")
+                private_extent_gdf = generate_extractions_extent(
+                    parquet_folder=private_parquet_path
+                )
+                private_extent_gdf = private_extent_gdf[
+                    private_extent_gdf["ref_id"].isin(ref_ids)
+                ]
+                private_ref_ids = find_extractions_in_area(
+                    extent_gdf=private_extent_gdf,
+                    bbox_poly=bbox_poly,
+                    include_crop_types=True,
+                )
+                logger.info(
+                    f"Found {len(private_ref_ids)} private datasets from the provided list that intersect with the area"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not check private datasets spatial intersection: {e}"
+                )
+
+        available_public_ref_ids = public_ref_ids
+        available_private_ref_ids = private_ref_ids
+
+        if not available_public_ref_ids and not available_private_ref_ids:
+            logger.warning(
+                f"None of the provided datasets ({ref_ids}) intersect with the specified area."
+            )
+            return pd.DataFrame()
+
+    else:
+        # Mode 3: Dataset-specific - user provided ref_ids without spatial filtering
+        logger.info(
+            f"Determining which of the {len(ref_ids)} provided datasets are public vs private..."
+        )
+        available_public_ref_ids, available_private_ref_ids = _classify_ref_ids(
+            ref_ids, include_public, private_parquet_path
+        )
+
+        if not available_public_ref_ids and not available_private_ref_ids:
+            logger.warning(
+                f"None of the provided datasets ({ref_ids}) were found in the available data sources."
+            )
+            return pd.DataFrame()
+
+    # If crop_types not specified, we'll determine them from each dataset individually
+    if crop_types is None:
+        logger.info(
+            "No crop_types specified. Will determine available crop types from each dataset individually"
+        )
+
+    # Prepare outputs
+    sampled_dfs = []
+    sampling_summary = []
+
+    # Apply spatial filtering when bbox_poly is provided
+    spatial_filter = bbox_poly
+    spatial_buffer = buffer if spatial_filter is not None else 0
+
+    # Prepare list of crop types for the query
+    if class_mappings_csv is not None:
+        crop_types_for_query = None  # Query all, will map later
+    else:
+        crop_types_for_query = crop_types
+
+    # Process public datasets
+    for ref_id in available_public_ref_ids:
+        logger.info(f"Processing public dataset: {ref_id}")
+
+        public_df = query_public_extractions(
+            bbox_poly=spatial_filter,
+            buffer=spatial_buffer,
+            filter_cropland=filter_cropland,
+            crop_types=crop_types_for_query,
+            query_collateral_samples=query_collateral_samples,
+            ref_ids=[ref_id],  # Filter for this specific ref_id at query level
+        )
+
+        _process_dataset_sampling(
+            dataset_data=public_df,
+            ref_id=ref_id,
+            crop_types=crop_types,
+            sample_size=sample_size,
+            class_mappings_csv=class_mappings_csv,
+            random_state=random_state,
+            sampled_dfs=sampled_dfs,
+            sampling_summary=sampling_summary,
+        )
+
+    # Process private datasets
+    for ref_id in available_private_ref_ids:
+        logger.info(f"Processing private dataset: {ref_id}")
+
+        private_df = query_private_extractions(
+            str(private_parquet_path),
+            bbox_poly=spatial_filter,
+            filter_cropland=filter_cropland,
+            buffer=spatial_buffer,
+            crop_types=crop_types_for_query,
+            ref_ids=[ref_id],  # Filter for this specific ref_id
+        )
+
+        _process_dataset_sampling(
+            dataset_data=private_df,
+            ref_id=ref_id,
+            crop_types=crop_types,
+            sample_size=sample_size,
+            class_mappings_csv=class_mappings_csv,
+            random_state=random_state,
+            sampled_dfs=sampled_dfs,
+            sampling_summary=sampling_summary,
+        )
+
+    if not sampled_dfs:
+        logger.warning(
+            "No samples could be extracted for any of the requested combinations."
+        )
+        return pd.DataFrame()
+
+    # Combine all sampled data
+    result = pd.concat(sampled_dfs, ignore_index=True)
+
+    # Create and display beautified sampling summary
+    summary_df = pd.DataFrame(sampling_summary)
+    total_sampled = summary_df["sampled"].sum()
+
+    print("\n" + "=" * 80)
+    print("SAMPLE EXTRACTIONS SUMMARY")
+    print("=" * 80)
+
+    if not summary_df.empty:
+        # Prepare detailed sampling table
+        display_summary = []
+        all_processed_ref_ids = available_public_ref_ids + available_private_ref_ids
+
+        for ref_id in all_processed_ref_ids:
+            ref_summary = summary_df[summary_df["ref_id"] == ref_id]
+            if not ref_summary.empty:
+                # Determine source type
+                source = "Public" if ref_id in available_public_ref_ids else "Private"
+
+                # Calculate totals for this dataset
+                total_available = ref_summary["available"].sum()
+                total_sampled_ref = ref_summary["sampled"].sum()
+                crop_types_with_data = (ref_summary["sampled"] > 0).sum()
+                total_crop_types = len(ref_summary)
+
+                display_summary.append(
+                    {
+                        "Source": source,
+                        "Dataset": ref_id,
+                        "Available Samples": f"{total_available:,}",
+                        "Sampled": f"{total_sampled_ref:,}",
+                        "Crop Types": f"{crop_types_with_data}/{total_crop_types}",
+                    }
+                )
+
+        print("\nSampling Results by Dataset:")
+        print(
+            tabulate(display_summary, headers="keys", tablefmt="grid", showindex=False)
+        )
+
+        # Overall statistics
+        total_datasets = len(all_processed_ref_ids)
+        total_available = summary_df["available"].sum()
+        unique_crop_types = len(
+            summary_df[summary_df["sampled"] > 0]["crop_type"].unique()
+        )
+        sampling_efficiency = (
+            (total_sampled / total_available * 100) if total_available > 0 else 0
+        )
+
+        stats_table = [
+            ["Total Datasets Processed", f"{total_datasets}"],
+            ["Total Available Samples", f"{total_available:,}"],
+            ["Total Sampled", f"{total_sampled:,}"],
+            ["Unique Crop Types Sampled", f"{unique_crop_types}"],
+            ["Sampling Efficiency", f"{sampling_efficiency:.1f}%"],
+        ]
+
+        print("\nOverall Sampling Statistics:")
+        print(tabulate(stats_table, headers=["Metric", "Value"], tablefmt="grid"))
+
+    print("=" * 80 + "\n")
+
+    return result
+
+
+def report_extractions_content(df: pd.DataFrame, crop_attribute: str) -> None:
+    """
+    Report the content of a dataframe containing private extractions.
+
+    This function prints a summary of the number of unique samples, reference datasets,
+    and crop types present in the provided dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        A GeoPandas DataFrame containing private extraction data with columns
+        'sample_id', 'ref_id', and 'ewoc_code'.
+
+    Returns
+    -------
+    None
+        This function prints the summary to the console.
+
+    Examples
+    --------
+    >>> report_extractions_content(sampled_data)
+    Total unique samples: 1500
+    Unique reference datasets: 3
+    Unique crop types: 5
+    """
+
+    if df.empty:
+        logger.warning("The provided dataframe is empty.")
+        return
+
+    # Report total unique samples
+    df = df[["sample_id", "valid_time", "ref_id", crop_attribute]]
+    df = df.drop_duplicates(subset=["sample_id"])
+    logger.info(f"Total unique samples: {len(df)}")
+
+    # Report ref_id composition
+    unique_ref_ids = df["ref_id"].nunique()
+    logger.info(f"Unique reference datasets: {unique_ref_ids}")
+    logger.info(df["ref_id"].value_counts())
+
+    # check crop types available
+    logger.info(df[crop_attribute].value_counts())
