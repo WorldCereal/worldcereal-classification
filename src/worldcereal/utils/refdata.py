@@ -357,16 +357,7 @@ FROM read_parquet('{url}')
     public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
 
     if public_df_raw.empty:
-        if bbox_poly is not None and ref_ids is None:
-            logger.warning(
-                f"No samples from the WorldCereal public extractions database fall into the selected area with buffer {int(buffer / 1000)} km²."
-            )
-        elif bbox_poly is None and ref_ids is not None:
-            logger.warning(f"No samples found in the specified datasets: {ref_ids_lst}")
-        else:
-            logger.warning(
-                f"No samples found in the specified datasets ({list(ref_ids_lst)}) within the selected area with buffer {int(buffer / 1000)} km²."
-            )
+        logger.warning("No samples found matching your search criteria.")
         return pd.DataFrame()
 
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
