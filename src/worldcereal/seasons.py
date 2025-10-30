@@ -11,7 +11,7 @@ from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
 
 # from worldcereal.utils import aez as aezloader
-from worldcereal.utils.geoloader import load_reproject
+from worldcereal.utils.geoloader import load_reproject_int
 
 
 class NoSeasonError(Exception):
@@ -31,61 +31,149 @@ def angle_to_doy(angle, total_days=365):
 
 
 def max_doy_difference(doy_array):
-    """Method to check the max difference in days between all DOY values
-    in an array taking into account wrap-around effects due to the circular nature
     """
+    Method to check the max difference in days between all DOY values
+    in an array taking into account wrap-around effects due to the circular nature.
+    Optimized for integer DOY arrays.
+    """
+    # Ensure we're working with integers for efficiency
+    doy_array = np.asarray(doy_array, dtype=np.int32)
 
-    doy_array = np.expand_dims(doy_array, axis=1)
-    x, y = np.meshgrid(doy_array, doy_array.T)
+    # For small arrays, use the full pairwise approach
+    if len(doy_array) <= 1000:
+        doy_array = np.expand_dims(doy_array, axis=1)
+        x, y = np.meshgrid(doy_array, doy_array.T)
 
-    days_in_year = 365  # True for crop calendars
+        days_in_year = 365  # True for crop calendars
 
-    # Step 2: Calculate the direct difference
-    direct_difference = np.abs(x - y)
+        # Calculate the direct difference
+        direct_difference = np.abs(x - y)
 
-    # Step 3: Calculate the wrap-around difference
-    wrap_around_difference = days_in_year - direct_difference
+        # Calculate the wrap-around difference
+        wrap_around_difference = days_in_year - direct_difference
 
-    # Step 4: Determine the minimum difference
-    effective_difference = np.min(
-        np.stack([direct_difference, wrap_around_difference]), axis=0
-    )
+        # Determine the minimum difference
+        effective_difference = np.minimum(direct_difference, wrap_around_difference)
 
-    # Step 5: Determine the maximum difference for all combinations
+        return int(effective_difference.max())
 
-    return effective_difference.max()
+    else:
+        # For large arrays, use a more efficient approach
+        # Find min and max, then check if the gap is larger going the other way
+        min_doy = int(np.min(doy_array))
+        max_doy = int(np.max(doy_array))
+
+        # Direct span
+        direct_span = max_doy - min_doy
+
+        # Wrap-around span (going the other direction around the circle)
+        wrap_span = (365 - max_doy) + min_doy
+
+        # The maximum difference is the smaller of the two spans
+        return int(min(direct_span, wrap_span))
 
 
 def circular_median_day_of_year(doy_array, total_days=365):
-    """This function computes the median doy from a given array
-    taking into account its circular nature. Still has to be used with caution!
     """
-    angles = np.array([doy_to_angle(day, total_days) for day in doy_array])
+    Efficiently compute the median DOY from an array taking into account
+    its circular nature. Optimized for integer DOY values (1-365).
 
-    def circular_distance(a, b):
-        return np.angle(np.exp(1j * (a - b)))
+    """
+    # Convert to numpy array and ensure we have integers
+    doy_array = np.asarray(doy_array, dtype=np.int32)
 
-    median_angle = None
-    min_distance = float("inf")
+    # Remove any invalid values (0, negative, or > total_days)
+    valid_doys = doy_array[(doy_array > 0) & (doy_array <= total_days)]
 
-    for angle in angles:
-        total_distance = np.sum(
-            [abs(circular_distance(angle, other)) for other in angles]
-        )
-        if total_distance < min_distance:
-            min_distance = total_distance
-            median_angle = angle
+    if len(valid_doys) == 0:
+        return np.nan
 
-    median_day = round(angle_to_doy(median_angle, total_days))
-    median_day = median_day % total_days
-    if median_day < 0:
-        median_day += total_days
+    if len(valid_doys) == 1:
+        return int(valid_doys[0])
 
-    return median_day
+    # For small arrays, use the original method but optimized
+    if len(valid_doys) <= 50:
+        return _circular_median_small_array(valid_doys, total_days)
+
+    # For large arrays, use a much more efficient histogram-based approach
+    return _circular_median_large_array(valid_doys, total_days)
+
+
+def _circular_median_small_array(doy_array, total_days=365):
+    """Optimized circular median for small arrays using vectorized operations."""
+    n = len(doy_array)
+
+    # Create pairwise distance matrix efficiently
+    doy_matrix = np.broadcast_to(doy_array.reshape(-1, 1), (n, n))
+    doy_matrix_t = doy_matrix.T
+
+    # Calculate circular distances efficiently
+    direct_diff = np.abs(doy_matrix - doy_matrix_t)
+    wrap_diff = total_days - direct_diff
+    circular_distances = np.minimum(direct_diff, wrap_diff)
+
+    # Sum distances for each candidate median
+    total_distances = np.sum(circular_distances, axis=1)
+
+    # Find the DOY with minimum total distance
+    median_idx = np.argmin(total_distances)
+    return int(doy_array[median_idx])
+
+
+def _circular_median_large_array(doy_array, total_days=365):
+    """
+    Highly efficient circular median for large arrays using histogram approach.
+    This avoids O(n²) complexity by working with DOY histogram.
+    """
+    # Create histogram of DOY values
+    hist, bin_edges = np.histogram(
+        doy_array, bins=total_days, range=(1, total_days + 1)
+    )
+
+    # Find non-empty bins
+    non_zero_bins = np.where(hist > 0)[0]
+    if len(non_zero_bins) == 0:
+        return np.nan
+
+    # If we have very few unique values, use the small array method
+    if len(non_zero_bins) <= 20:
+        unique_doys = non_zero_bins + 1  # Convert bin indices to DOY values
+        return _circular_median_small_array(unique_doys, total_days)
+
+    # For truly large datasets with many unique values, use approximation
+    # Find the DOY that minimizes circular distance to all other DOYs
+    min_total_distance = float("inf")
+    best_doy = 1
+
+    # Test candidate medians (sample approach for efficiency)
+    # Test the actual unique DOY values present in the data
+    for candidate_doy in non_zero_bins + 1:  # Convert to actual DOY values
+        total_distance = 0
+
+        # Calculate total weighted distance to all other DOYs
+        for other_bin_idx in non_zero_bins:
+            other_doy = other_bin_idx + 1
+            weight = hist[other_bin_idx]
+
+            # Circular distance
+            direct_dist = abs(candidate_doy - other_doy)
+            wrap_dist = total_days - direct_dist
+            min_dist = min(direct_dist, wrap_dist)
+
+            total_distance += weight * min_dist
+
+        if total_distance < min_total_distance:
+            min_total_distance = total_distance
+            best_doy = candidate_doy
+
+    return int(best_doy)
 
 
 def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: int):
     """Function to read SOS/EOS DOY from TIFF
+
+    Optimized to return integer arrays for maximum efficiency. Missing/nodata
+    values are represented as 0 - filter these out with array[array > 0].
 
     Args:
         season (str): crop season to process
@@ -100,7 +188,7 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
         ValueError: when `kind` value is not supported
 
     Returns:
-        np.ndarray: resulting DOY array
+        np.ndarray: resulting DOY array as uint16 integers (1-365), with 0 for nodata
     """
 
     if epsg == 4326:
@@ -126,8 +214,16 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
         )
 
     with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:  # type: ignore
-        doy_data = load_reproject(
-            doy_file, bounds, epsg, resolution, nodata_value=0, fill_value=np.nan
+        # Use integer-optimized loading for DOY data (1-365 values)
+        # Keep as integers throughout - much more memory efficient
+        doy_data = load_reproject_int(
+            doy_file,
+            bounds,
+            epsg,
+            resolution,
+            nodata_value=0,
+            fill_value=0,
+            dtype=np.uint16,
         )
 
     return doy_data
@@ -312,19 +408,20 @@ def get_season_dates_for_extent(
     bounds = (extent.west, extent.south, extent.east, extent.north)
     epsg = extent.epsg
 
-    # Get DOY of SOS and EOS for the target season
+    # Get DOY of SOS and EOS for the target season (now returns integers directly)
     sos_doy = doy_from_tiff(season, "SOS", bounds, epsg, 10000).flatten()
     eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000).flatten()
 
-    # Check if we have seasonality
-    if not np.isfinite(sos_doy).any():
+    # Check if we have seasonality - filter out nodata values (0)
+    if not (sos_doy > 0).any():
         raise NoSeasonError(f"No valid SOS DOY found for season `{season}`")
-    if not np.isfinite(eos_doy).any():
+    if not (eos_doy > 0).any():
         raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
 
-    # Only consider valid seasonality pixels
-    sos_doy = sos_doy[np.isfinite(sos_doy)]
-    eos_doy = eos_doy[np.isfinite(eos_doy)]
+    # Only consider valid seasonality pixels (DOY > 0)
+    # Already integers, much more efficient!
+    sos_doy = sos_doy[sos_doy > 0].astype(np.int32)
+    eos_doy = eos_doy[eos_doy > 0].astype(np.int32)
 
     # Check max seasonality difference
     seasonality_difference_sos = max_doy_difference(sos_doy)
@@ -391,15 +488,16 @@ def get_processing_dates_for_extent(
     bounds = (extent.west, extent.south, extent.east, extent.north)
     epsg = extent.epsg
 
-    # Get DOY of EOS for the target season
+    # Get DOY of EOS for the target season (now returns integers directly)
     eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000).flatten()
 
-    # Check if we have seasonality
-    if not np.isfinite(eos_doy).any():
+    # Check if we have seasonality - filter out nodata values (0)
+    if not (eos_doy > 0).any():
         raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
 
-    # Only consider valid seasonality pixels
-    eos_doy = eos_doy[np.isfinite(eos_doy)]
+    # Only consider valid seasonality pixels (DOY > 0)
+    # Already integers, much more efficient!
+    eos_doy = eos_doy[eos_doy > 0].astype(np.int32)
 
     # Check max seasonality difference
     seasonality_difference = max_doy_difference(eos_doy)

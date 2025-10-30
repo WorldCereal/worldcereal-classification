@@ -63,6 +63,70 @@ def _load_array_bounds_latlon(
     return arr
 
 
+def load_reproject_int(
+    filename,
+    bounds,
+    epsg,
+    resolution=10,
+    border_buff=0,
+    fill_value=0,
+    nodata_value=None,
+    rio_gdal_options=None,
+    resampling=Resampling.nearest,
+    dtype=np.uint16,
+):
+    """
+    Read from latlon layer and reproject to UTM, optimized for integer data.
+    This version avoids unnecessary float32 conversion for integer data like DOY values.
+    """
+    bbox = gpd.GeoSeries(Polygon.from_bounds(*bounds), crs=CRS.from_epsg(epsg))
+
+    bounds = bbox.buffer(border_buff * resolution).to_crs(epsg=4326).bounds.values[0]
+    utm_bounds = bbox.buffer(border_buff * resolution).bounds.values[0].tolist()
+
+    width = max(1, int((utm_bounds[2] - utm_bounds[0]) / resolution))
+    height = max(1, int((utm_bounds[3] - utm_bounds[1]) / resolution))
+
+    gim = _load_array_bounds_latlon(
+        filename,
+        bounds,
+        rio_gdal_options=rio_gdal_options,
+        fill_value=fill_value,
+        nodata_value=nodata_value,
+    )
+
+    src_crs = CRS.from_epsg(4326)
+    dst_crs = CRS.from_epsg(bbox.crs.to_epsg())
+
+    src_transform = rasterio.transform.from_bounds(*bounds, gim.shape[1], gim.shape[0])
+    dst_transform = rasterio.transform.from_bounds(*utm_bounds, width, height)
+
+    # Use specified dtype instead of forcing float32
+    dst = np.zeros((height, width), dtype=dtype)
+
+    # Convert source to appropriate type for reprojection
+    gim_for_reproject = (
+        gim.astype(np.float32)
+        if resampling != Resampling.nearest
+        else gim.astype(dtype)
+    )
+
+    reproject(
+        gim_for_reproject,
+        dst,
+        src_transform=src_transform,
+        dst_transform=dst_transform,
+        src_crs=src_crs,
+        dst_crs=dst_crs,
+        resampling=resampling,
+    )
+
+    if border_buff > 0:
+        dst = dst[border_buff:-border_buff, border_buff:-border_buff]
+
+    return dst
+
+
 def load_reproject(
     filename,
     bounds,
