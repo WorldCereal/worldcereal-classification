@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -26,7 +27,7 @@ MIN_EDGE_BUFFER = 2
 
 
 def get_class_weights(
-    labels: np.ndarray[Any],
+    labels: np.ndarray[Any, Any],
     method: str = "balanced",  # 'balanced', 'log', or 'none'
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
@@ -70,6 +71,68 @@ def get_class_weights(
     return dict(zip(classes, weights))
 
 
+@dataclass
+class SensorMaskingConfig:
+    """Configuration for simulating real-world missing data scenarios.
+
+    Probabilities are applied independently per sample. Values are in [0,1].
+    Set config to None or enabled=False to disable masking.
+
+    Attributes
+    ----------
+    enable: bool
+        Master switch.
+    s1_full_dropout_prob: float
+        Probability that all S1 timesteps (VV & VH) are missing (e.g. prolonged platform outage).
+    s1_timestep_dropout_prob: float
+        Probability applied per timestep to drop S1 values (sporadic acquisition gaps).
+    s2_cloud_timestep_prob: float
+        Probability applied per timestep to cloud-mask S2 (all optical bands) individually.
+    s2_cloud_block_prob: float
+        Probability to create a contiguous cloud block of S2 masked timesteps.
+    s2_cloud_block_min: int
+        Minimum length of the contiguous S2 cloud block.
+    s2_cloud_block_max: int
+        Maximum length of the contiguous S2 cloud block.
+    meteo_timestep_dropout_prob: float
+        Probability applied per timestep to mask meteorological data.
+    dem_dropout_prob: float
+        Probability to mask DEM (rare but possible missing elevation ancillary data).
+    seed: Optional[int]
+        Optional random seed for reproducibility at dataset construction time.
+    """
+
+    enable: bool = False
+    s1_full_dropout_prob: float = 0.0
+    s1_timestep_dropout_prob: float = 0.0
+    s2_cloud_timestep_prob: float = 0.0
+    s2_cloud_block_prob: float = 0.0
+    s2_cloud_block_min: int = 2
+    s2_cloud_block_max: int = 5
+    meteo_timestep_dropout_prob: float = 0.0
+    dem_dropout_prob: float = 0.0
+    seed: Optional[int] = None
+
+    def validate(self, num_timesteps: int):
+        if self.s2_cloud_block_min > self.s2_cloud_block_max:
+            raise ValueError(
+                "s2_cloud_block_min cannot be greater than s2_cloud_block_max"
+            )
+        if self.s2_cloud_block_max > num_timesteps:
+            raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
+        for name in [
+            "s1_full_dropout_prob",
+            "s1_timestep_dropout_prob",
+            "s2_cloud_timestep_prob",
+            "s2_cloud_block_prob",
+            "meteo_timestep_dropout_prob",
+            "dem_dropout_prob",
+        ]:
+            v = getattr(self, name)
+            if not (0.0 <= v <= 1.0):
+                raise ValueError(f"{name} must be in [0,1], got {v}")
+
+
 class WorldCerealDataset(Dataset):
     BAND_MAPPING = {
         "OPTICAL-B02-ts{}-10m": "B2",
@@ -98,6 +161,7 @@ class WorldCerealDataset(Dataset):
         task_type: Literal["ssl", "binary", "multiclass"] = "ssl",
         num_outputs: Optional[int] = None,
         augment: bool = False,
+        masking_config: Optional[SensorMaskingConfig] = None,
     ):
         """WorldCereal base dataset. This dataset is typically used for
         self-supervised learning.
@@ -117,6 +181,8 @@ class WorldCerealDataset(Dataset):
             the value of this parameter is ignored.
         augment : bool, optional
             whether to augment the data, by default False
+        masking_config : Optional[SensorMaskingConfig], optional
+            configuration for sensor masking during training, by default None.
         """
         self.dataframe = dataframe.replace({np.nan: NODATAVALUE})
         self.num_timesteps = num_timesteps
@@ -130,6 +196,22 @@ class WorldCerealDataset(Dataset):
         self.num_outputs = num_outputs
         self.is_ssl = task_type == "ssl"
         self.augment = augment
+        self.masking_config = masking_config
+        if self.masking_config:
+            if self.masking_config.seed is not None:
+                # set a per-dataset RNG seed (numpy global for simplicity)
+                np.random.seed(self.masking_config.seed)
+            self.masking_config.validate(self.num_timesteps)
+            if self.masking_config.enable:
+                logger.info(
+                    "Sensor masking enabled for this dataset with config: {}".format(
+                        self.masking_config
+                    )
+                )
+            else:
+                logger.info(
+                    "Sensor masking config provided but enable=False; masking disabled."
+                )
 
     def __len__(self):
         return self.dataframe.shape[0]
@@ -167,9 +249,9 @@ class WorldCerealDataset(Dataset):
             )
 
         # Sanity check to make sure valid_position is still within the extracted timesteps
-        assert (
-            valid_position in timestep_positions
-        ), f"Valid position {valid_position} not in timestep positions {timestep_positions}"
+        assert valid_position in timestep_positions, (
+            f"Valid position {valid_position} not in timestep positions {timestep_positions}"
+        )
 
         return timestep_positions, valid_position
 
@@ -282,6 +364,10 @@ class WorldCerealDataset(Dataset):
                 dem[..., DEM_BANDS.index(dst_atr)] = values
             else:
                 raise ValueError(f"Unknown band {dst_atr}")
+
+        # Apply masking if configured
+        if self.masking_config and self.masking_config.enable:
+            s1, s2, meteo, dem = self._apply_masking(s1, s2, meteo, dem)
         return dict(
             s1=s1, s2=s2, meteo=meteo, dem=dem, latlon=latlon, timestamps=timestamps
         )
@@ -305,6 +391,85 @@ class WorldCerealDataset(Dataset):
         dem = np.full(
             (1, 1, len(DEM_BANDS)), fill_value=NODATAVALUE, dtype=np.float32
         )  # [H, W, len(DEM_BANDS)]
+
+        return s1, s2, meteo, dem
+
+    def _apply_masking(
+        self,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        meteo: np.ndarray,
+        dem: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Apply sensor/timestep masking according to the masking_config.
+
+        Rules applied in order:
+        1. Full S1 dropout (overrides timestep dropout).
+        2. Per-timestep S1 dropout.
+        3. S2 contiguous cloud block.
+        4. Per-timestep S2 cloud dropout.
+        5. Per-timestep meteo dropout.
+        6. DEM dropout.
+        """
+        # Guard: if masking_config is None (should not happen when enable checked)
+        if self.masking_config is None:
+            return s1, s2, meteo, dem
+        cfg: SensorMaskingConfig = self.masking_config  # type narrowing for mypy
+        T = self.num_timesteps
+        # 1. Full S1 dropout
+        if np.random.rand() < cfg.s1_full_dropout_prob:
+            s1[:] = NODATAVALUE
+            # logger.debug("Applied full S1 dropout")
+        else:
+            # 2. Per-timestep S1 dropout
+            if cfg.s1_timestep_dropout_prob > 0:
+                s1_mask = np.random.rand(T) < cfg.s1_timestep_dropout_prob
+                if s1_mask.any():
+                    s1[..., s1_mask, :] = NODATAVALUE
+                    # logger.debug(
+                    #     f"Applied S1 timestep dropout on {s1_mask.sum()} of {T} timesteps"
+                    # )
+
+        # 3. S2 contiguous cloud block
+        if cfg.s2_cloud_block_prob > 0 and np.random.rand() < cfg.s2_cloud_block_prob:
+            block_len = np.random.randint(
+                cfg.s2_cloud_block_min, cfg.s2_cloud_block_max + 1
+            )
+            if block_len >= T:
+                start = 0
+                end = T
+            else:
+                start = np.random.randint(0, T - block_len + 1)
+                end = start + block_len
+            s2[..., start:end, :] = NODATAVALUE
+            # logger.debug(
+            #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
+            # )
+
+        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps)
+        if cfg.s2_cloud_timestep_prob > 0:
+            s2_mask = np.random.rand(T) < cfg.s2_cloud_timestep_prob
+            # Avoid double logging of block; still mask independent timesteps not in block
+            newly_masked = s2_mask & (s2[0, 0, :, 0] != NODATAVALUE)
+            if newly_masked.any():
+                s2[..., newly_masked, :] = NODATAVALUE
+                # logger.debug(
+                #     f"Applied S2 per-timestep cloud masking on {newly_masked.sum()} timesteps"
+                # )
+
+        # 5. Meteo per-timestep dropout
+        if cfg.meteo_timestep_dropout_prob > 0:
+            meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
+            if meteo_mask.any():
+                meteo[..., meteo_mask, :] = NODATAVALUE
+                # logger.debug(
+                #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
+                # )
+
+        # 6. DEM dropout
+        if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
+            dem[:] = NODATAVALUE
+            # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
 
@@ -472,9 +637,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             else:
                 # apply jitter
                 # scalar valid_position must be an int here
-                assert isinstance(
-                    valid_position, int
-                ), f"Expected single int valid_position, got {type(valid_position)}"
+                assert isinstance(valid_position, int), (
+                    f"Expected single int valid_position, got {type(valid_position)}"
+                )
                 p = valid_position
                 if self.label_jitter > 0:
                     shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
@@ -541,6 +706,79 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             generator=generator,
         )
         return sampler
+
+
+class WorldCerealTrainingDataset(WorldCerealDataset):
+
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        num_timesteps: int = 12,
+        timestep_freq: Literal["month", "dekad"] = "month",
+        task_type: Literal["ssl", "binary", "multiclass"] = "ssl",
+        num_outputs: Optional[int] = None,
+        augment: bool = False,
+        masking_config: Optional[SensorMaskingConfig] = None,
+        repeats: int = 1,
+    ):
+        super().__init__(
+            dataframe=dataframe,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type=task_type,
+            num_outputs=num_outputs,
+            augment=augment,
+            masking_config=masking_config,
+        )
+
+        some_augmentation = (augment or (masking_config and masking_config.enable))
+        if repeats == 1 and some_augmentation:
+            logger.warning(
+                "Dataset augmentation or masking is enabled but repeats=1. "
+                "Consider setting repeats > 1 to increase training variability."
+            )
+        elif repeats > 1 and not some_augmentation:
+            logger.warning(
+                "Dataset is repeated but not augmented which is useless; "
+                "consider setting `augment=True` or `masking_config` for training."
+            )
+        elif repeats > 1:
+            logger.info(f"Dataset repeated {repeats} times for training with augmentation/masking.")
+
+        base_indices = list(range(len(self.dataframe)))
+        self.indices = base_indices * repeats
+        self._repeats = repeats
+
+    def __len__(self):
+        # Return total repeated length, not the base dataframe length
+        return len(self.indices)
+
+    def __iter__(self):
+        for idx in self.indices:
+            yield self.__getitem__(idx)
+
+    def __getitem__(self, idx):
+        # Map incoming idx to the original dataframe index
+        real_idx = self.indices[idx]
+
+        # Get the sample
+        sample = super().__getitem__(real_idx)
+        row = self.dataframe.iloc[real_idx, :]
+        timestep_positions, valid_position = self.get_timestep_positions(row)
+        valid_position = valid_position - timestep_positions[0]
+        attrs = [
+            "lat",
+            "lon",
+            "ref_id",
+            "sample_id",
+            "downstream_class",
+            "valid_time",
+        ]
+        attrs = [attr for attr in attrs if attr in row.index]
+        attrs = row[attrs].to_dict()
+        attrs["valid_position"] = valid_position
+
+        return sample, attrs
 
 
 def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:

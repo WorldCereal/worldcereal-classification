@@ -6,11 +6,11 @@ from torch.utils.data import DataLoader
 
 from worldcereal.parameters import CropLandParameters
 from worldcereal.train.data import (
-    WorldCerealTrainingDataset,
     collate_fn,
     get_training_df,
     get_training_dfs_from_parquet,
 )
+from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.utils.refdata import get_class_mappings
 
 LANDCOVER_KEY = "LANDCOVER10"
