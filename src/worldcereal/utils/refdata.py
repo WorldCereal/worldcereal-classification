@@ -251,6 +251,8 @@ def query_public_extractions(
         )
     else:
         # Case 3: Both ref_ids and bbox_poly provided - filter ref_ids by spatial intersection
+        # At this point we know ref_ids is not None due to the conditional logic above
+        assert ref_ids is not None
         logger.info(
             f"Filtering {len(ref_ids)} specific datasets by spatial intersection..."
         )
@@ -363,7 +365,7 @@ FROM read_parquet('{url}')
             logger.warning(f"No samples found in the specified datasets: {ref_ids_lst}")
         else:
             logger.warning(
-                f"No samples found in the specified datasets ({ref_ids_lst.tolist()}) within the selected area with buffer {int(buffer / 1000)} km²."
+                f"No samples found in the specified datasets ({list(ref_ids_lst)}) within the selected area with buffer {int(buffer / 1000)} km²."
             )
         return pd.DataFrame()
 
