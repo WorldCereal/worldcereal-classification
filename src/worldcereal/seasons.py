@@ -11,7 +11,7 @@ from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
 
 # from worldcereal.utils import aez as aezloader
-from worldcereal.utils.geoloader import load_reproject_int
+from worldcereal.utils.geoloader import load_reproject
 
 
 class NoSeasonError(Exception):
@@ -216,7 +216,7 @@ def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: 
     with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:  # type: ignore
         # Use integer-optimized loading for DOY data (1-365 values)
         # Keep as integers throughout - much more memory efficient
-        doy_data = load_reproject_int(
+        doy_data = load_reproject(
             doy_file,
             bounds,
             epsg,
