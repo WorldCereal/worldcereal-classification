@@ -565,6 +565,36 @@ def run_finetuning(
     # Track layers that were originally frozen
     originally_frozen_layers = set()
 
+    # Define checkpoint paths
+    best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
+    best_encoder_ckpt_path = Path(output_dir) / f"{experiment_name}_encoder.pt"
+
+    def _save_best(epoch_idx: int, model: torch.nn.Module, best_val: float):
+        """Persist best full-model checkpoint and encoder-only variant (head=None)."""
+        # Save full model
+        try:
+            torch.save(model.state_dict(), best_ckpt_path)
+            logger.debug(
+                f"Saved best checkpoint (val_loss={best_val:.4f}) to {best_ckpt_path}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed saving best full-model checkpoint: {e}")
+
+        # Save encoder-only by deepcopy + removing head
+        if hasattr(model, "head"):
+            try:
+                model.head = None
+                torch.save(model.state_dict(), best_encoder_ckpt_path)
+                logger.debug(
+                    f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed saving encoder-only checkpoint: {e}")
+        else:
+            logger.debug(
+                "Model has no 'head' attribute; skipping encoder-only checkpoint."
+            )
+
     # Freeze specified layers initially
     if freeze_layers:
         for name, param in model.named_parameters():
@@ -648,31 +678,30 @@ def run_finetuning(
         else:
             scheduler.step()
 
-        if best_loss is None:
-            best_loss = val_loss[-1]
-            best_model_dict = deepcopy(model.state_dict())
+        improved = best_loss is None or current_val_loss < best_loss
+        if improved:
+            best_loss = current_val_loss
+            best_model = deepcopy(model)
+            epochs_since_improvement = 0
+            _save_best(epoch + 1, best_model, best_loss)
         else:
-            if val_loss[-1] < best_loss:
-                best_loss = val_loss[-1]
-                best_model_dict = deepcopy(model.state_dict())
-                epochs_since_improvement = 0
-            else:
-                epochs_since_improvement += 1
-                if epochs_since_improvement >= hyperparams.patience:
-                    logger.info("Early stopping!")
-                    break
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= hyperparams.patience:
+                logger.info("Early stopping!")
+                break
 
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
             f"Val Loss: {current_val_loss:.4f} | "
             f"Best Loss: {best_loss:.4f}"
-        ) + metrics_str
+        ) + (metrics_str if "metrics_str" in locals() else "")
 
-        if epochs_since_improvement > 0:
-            description += f" (no improvement for {epochs_since_improvement} epochs)"
-        else:
-            description += " (improved)"
+        description += (
+            " (improved)"
+            if epochs_since_improvement == 0
+            else f" (no improvement for {epochs_since_improvement} epochs)"
+        )
 
         pbar.set_description(description)
         pbar.set_postfix(lr=scheduler.get_last_lr()[0])
