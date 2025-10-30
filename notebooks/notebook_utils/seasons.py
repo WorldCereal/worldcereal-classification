@@ -190,12 +190,31 @@ def retrieve_worldcereal_seasons(
 
 
 def valid_time_distribution(df):
+    """Plot the distribution of valid_time in a dataframe as a histogram.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing a 'valid_time' column.
+    """
+    # Work on a defensive copy to avoid chained assignment / SettingWithCopyWarning
+    # and ensure we never mutate a caller's view.
+    df = df.copy(deep=True)
 
-    # Make sure the column is of datetime type
-    df["date"] = pd.to_datetime(df["valid_time"])
+    # Remove duplicate sample_ids if present using loc assignment pattern
+    if "sample_id" in df.columns:
+        df = df.loc[~df["sample_id"].duplicated()].reset_index(drop=True)
 
-    # Extract month names (e.g., 'January', 'February', etc.)
-    df["month"] = df["date"].dt.month_name()
+    # Validate presence of required column
+    if "valid_time" not in df.columns:
+        raise KeyError("Input dataframe must contain a 'valid_time' column.")
+
+    # Coerce to datetime; errors='coerce' will set invalid parses to NaT which we then drop
+    df["date"] = pd.to_datetime(df["valid_time"], errors="coerce")
+    # Drop rows where conversion failed
+    df = df.loc[df["date"].notna()]
+
+    # Extract month names (e.g., 'January', 'February', etc.) using assign for clarity
+    df = df.assign(month=df["date"].dt.month_name())
 
     # To preserve calendar order
     month_order = [
@@ -214,7 +233,9 @@ def valid_time_distribution(df):
     ]
 
     # Plotting the histogram
-    df["month"].value_counts().reindex(month_order).plot(kind="bar")
+    # Safely align month counts with calendar order, filling missing months with 0
+    month_counts = df["month"].value_counts().reindex(month_order).fillna(0)
+    month_counts.plot(kind="bar")
     plt.title("Distribution of training data by month")
     plt.xlabel("Month")
     plt.ylabel("Count")
