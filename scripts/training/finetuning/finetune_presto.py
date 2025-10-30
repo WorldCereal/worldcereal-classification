@@ -120,7 +120,7 @@ def main(args):
     # setup path for processed wide parquet file so that it can be reused across experiments
     if not debug:
         wide_parquet_output_path = Path(
-            f"/projects/TAP/worldcereal/data/cached_wide_parquets/worldcereal_all_extractions_wide_{timestep_freq}.parquet"
+            f"/projects/TAP/worldcereal/data/cached_wide_parquets/worldcereal_all_extractions_wide_{timestep_freq}_{finetune_classes}.parquet"
         )
     else:
         wide_parquet_output_path = None
@@ -236,12 +236,16 @@ def main(args):
                 label_smoothing=0.05,
                 pos_class_indices=[classes_list.index("temporary_crops")],
             )
-        elif finetune_classes == "CROPTYPE20":
+        elif finetune_classes == "CROPTYPE27":
             # Normal CE with label smoothing, maybe we can try focal loss as well
-            loss_fn = nn.CrossEntropyLoss(
-                ignore_index=NODATAVALUE, label_smoothing=0.05
+            # loss_fn = nn.CrossEntropyLoss(
+            #     ignore_index=NODATAVALUE, label_smoothing=0.05
+            # )
+            loss_fn = FocalLoss(ignore_index=NODATAVALUE, label_smoothing=0.05)
+        else:
+            raise NotImplementedError(
+                f"Multiclass loss function for finetune_classes {finetune_classes} is not implemented."
             )
-            # loss_fn = FocalLoss(ignore_index=NODATAVALUE, label_smoothing=0.05)
     else:
         raise ValueError(
             f"Task type {task_type} is not supported. "
@@ -424,24 +428,24 @@ def parse_args(arg_list=None):
 
 
 if __name__ == "__main__":
-    manual_args = [
-        "--experiment_tag",
-        "debug-run",
-        "--timestep_freq",
-        "month",
-        "--enable_masking",
-        # "--time_explicit",
-        # "--label_jitter",
-        # "1",
-        "--augment",
-        "--finetune_classes",
-        "LANDCOVER10",  # CROPTYPE20
-        "--use_balancing",
-        "--debug",
-        # "--use_balancing",
-        # "--debug",
-    ]
-    # manual_args = None
+    # manual_args = [
+    #     "--experiment_tag",
+    #     "debug-run",
+    #     "--timestep_freq",
+    #     "month",
+    #     "--enable_masking",
+    #     # "--time_explicit",
+    #     # "--label_jitter",
+    #     # "1",
+    #     "--augment",
+    #     "--finetune_classes",
+    #     "CROPTYPE27",  # CROPTYPE27
+    #     "--use_balancing",
+    #     "--debug",
+    #     # "--use_balancing",
+    #     # "--debug",
+    # ]
+    manual_args = None
 
     args = parse_args(manual_args)
     main(args)
