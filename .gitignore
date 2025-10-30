@@ -51,6 +51,9 @@ experimental/**
 notebooks/*.ipynb
 notebooks/trainings/*.ipynb
 
+# Don't track dependencies
+dependencies/
+
 # Misc
 scripts/docker
 scripts/other/**
