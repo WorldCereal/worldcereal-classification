@@ -419,16 +419,16 @@ class WorldCerealDataset(Dataset):
         # 1. Full S1 dropout
         if np.random.rand() < cfg.s1_full_dropout_prob:
             s1[:] = NODATAVALUE
-            logger.debug("Applied full S1 dropout")
+            # logger.debug("Applied full S1 dropout")
         else:
             # 2. Per-timestep S1 dropout
             if cfg.s1_timestep_dropout_prob > 0:
                 s1_mask = np.random.rand(T) < cfg.s1_timestep_dropout_prob
                 if s1_mask.any():
                     s1[..., s1_mask, :] = NODATAVALUE
-                    logger.debug(
-                        f"Applied S1 timestep dropout on {s1_mask.sum()} of {T} timesteps"
-                    )
+                    # logger.debug(
+                    #     f"Applied S1 timestep dropout on {s1_mask.sum()} of {T} timesteps"
+                    # )
 
         # 3. S2 contiguous cloud block
         if cfg.s2_cloud_block_prob > 0 and np.random.rand() < cfg.s2_cloud_block_prob:
@@ -442,9 +442,9 @@ class WorldCerealDataset(Dataset):
                 start = np.random.randint(0, T - block_len + 1)
                 end = start + block_len
             s2[..., start:end, :] = NODATAVALUE
-            logger.debug(
-                f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
-            )
+            # logger.debug(
+            #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
+            # )
 
         # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps)
         if cfg.s2_cloud_timestep_prob > 0:
@@ -453,23 +453,23 @@ class WorldCerealDataset(Dataset):
             newly_masked = s2_mask & (s2[0, 0, :, 0] != NODATAVALUE)
             if newly_masked.any():
                 s2[..., newly_masked, :] = NODATAVALUE
-                logger.debug(
-                    f"Applied S2 per-timestep cloud masking on {newly_masked.sum()} timesteps"
-                )
+                # logger.debug(
+                #     f"Applied S2 per-timestep cloud masking on {newly_masked.sum()} timesteps"
+                # )
 
         # 5. Meteo per-timestep dropout
         if cfg.meteo_timestep_dropout_prob > 0:
             meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
             if meteo_mask.any():
                 meteo[..., meteo_mask, :] = NODATAVALUE
-                logger.debug(
-                    f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
-                )
+                # logger.debug(
+                #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
+                # )
 
         # 6. DEM dropout
         if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
             dem[:] = NODATAVALUE
-            logger.debug("Applied DEM dropout")
+            # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
 
