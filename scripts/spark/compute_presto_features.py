@@ -7,7 +7,8 @@ from loguru import logger
 from presto.presto import Presto
 from presto.utils import process_parquet
 
-from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
+from worldcereal.train.data import get_training_df
+from worldcereal.train.datasets import WorldCerealTrainingDataset
 
 
 def embeddings_from_parquet_file(

@@ -708,6 +708,79 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return sampler
 
 
+class WorldCerealTrainingDataset(WorldCerealDataset):
+
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        num_timesteps: int = 12,
+        timestep_freq: Literal["month", "dekad"] = "month",
+        task_type: Literal["ssl", "binary", "multiclass"] = "ssl",
+        num_outputs: Optional[int] = None,
+        augment: bool = False,
+        masking_config: Optional[SensorMaskingConfig] = None,
+        repeats: int = 1,
+    ):
+        super().__init__(
+            dataframe=dataframe,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type=task_type,
+            num_outputs=num_outputs,
+            augment=augment,
+            masking_config=masking_config,
+        )
+
+        some_augmentation = (augment or (masking_config and masking_config.enable))
+        if repeats == 1 and some_augmentation:
+            logger.warning(
+                "Dataset augmentation or masking is enabled but repeats=1. "
+                "Consider setting repeats > 1 to increase training variability."
+            )
+        elif repeats > 1 and not some_augmentation:
+            logger.warning(
+                "Dataset is repeated but not augmented which is useless; "
+                "consider setting `augment=True` or `masking_config` for training."
+            )
+        elif repeats > 1:
+            logger.info(f"Dataset repeated {repeats} times for training with augmentation/masking.")
+
+        base_indices = list(range(len(self.dataframe)))
+        self.indices = base_indices * repeats
+        self._repeats = repeats
+
+    def __len__(self):
+        # Return total repeated length, not the base dataframe length
+        return len(self.indices)
+
+    def __iter__(self):
+        for idx in self.indices:
+            yield self.__getitem__(idx)
+
+    def __getitem__(self, idx):
+        # Map incoming idx to the original dataframe index
+        real_idx = self.indices[idx]
+
+        # Get the sample
+        sample = super().__getitem__(real_idx)
+        row = self.dataframe.iloc[real_idx, :]
+        timestep_positions, valid_position = self.get_timestep_positions(row)
+        valid_position = valid_position - timestep_positions[0]
+        attrs = [
+            "lat",
+            "lon",
+            "ref_id",
+            "sample_id",
+            "downstream_class",
+            "valid_time",
+        ]
+        attrs = [attr for attr in attrs if attr in row.index]
+        attrs = row[attrs].to_dict()
+        attrs["valid_position"] = valid_position
+
+        return sample, attrs
+
+
 def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     def _get_timestamps() -> np.ndarray:
         timestamps = arr.t.values

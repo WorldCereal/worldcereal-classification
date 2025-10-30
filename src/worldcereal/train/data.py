@@ -15,32 +15,9 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
-from worldcereal.train.datasets import WorldCerealDataset
+from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
-
-
-class WorldCerealTrainingDataset(WorldCerealDataset):
-    def __getitem__(self, idx):
-        # Get the sample
-        sample = super().__getitem__(idx)
-        row = self.dataframe.iloc[idx, :]
-        timestep_positions, valid_position = self.get_timestep_positions(row)
-        valid_position = valid_position - timestep_positions[0]
-        attrs = [
-            "lat",
-            "lon",
-            "ref_id",
-            "sample_id",
-            "downstream_class",
-            "valid_time",
-        ]
-
-        attrs = [attr for attr in attrs if attr in row.index]
-        attrs = row[attrs].to_dict()
-        attrs["valid_position"] = valid_position
-
-        return sample, attrs
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):

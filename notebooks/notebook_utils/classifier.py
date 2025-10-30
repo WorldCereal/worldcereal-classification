@@ -1,18 +1,11 @@
 """Utility functions to generate Presto embeddings and train CatBoost classifiers.
 
-This module provides a light-weight, notebook friendly pipeline to:
+This module provides a light-weight pipeline to:
 
 1. Align raw reference data extractions to a user defined season (``TemporalContext``).
 2. Generate 128‑D Presto embeddings (either globally pooled or time‑explicit at the valid
      timestep) ready for downstream ML.
 3. Train and evaluate a CatBoost classifier (multiclass crop type or binary cropland).
-
-Design principles
------------------
-* Keep dependencies minimal inside the notebook environment.
-* Preserve original metadata columns in the returned DataFrames whenever possible.
-* Make temporal behaviour (augmentation vs time explicit embedding) explicit in the
-    docstrings so that downstream interpretation of model features is unambiguous.
 
 Notes
 -----
@@ -40,10 +33,22 @@ from sklearn.utils.class_weight import compute_class_weight
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 from worldcereal.train.datasets import MIN_EDGE_BUFFER
 from worldcereal.utils.refdata import process_extractions_df
+from worldcereal.train.datasets import SensorMaskingConfig
 
 
 def get_input(label):
-    """Get user input as short string without spaces."""
+    """Prompt user for a short identifier without spaces.
+
+    Parameters
+    ----------
+    label : str
+        Human readable description of what is being named (e.g. 'model').
+
+    Returns
+    -------
+    str
+        User provided identifier guaranteed not to contain whitespace.
+    """
     while True:
         modelname = input(f"Enter a short name for your {label} (don't use spaces): ")
         if " " not in modelname:
@@ -51,106 +56,53 @@ def get_input(label):
         print("Invalid input. Please enter a name without spaces.")
 
 
-def compute_training_features(
+def align_extractions_to_season(
     df: pd.DataFrame,
     season: TemporalContext,
     freq: Literal["month", "dekad"] = "month",
     valid_time_buffer: int = MIN_EDGE_BUFFER,
-    batch_size: int = 256,
-    task_type: str = "croptype",
-    augment: bool = True,
-    time_explicit: bool = True,
-    custom_presto_url: Optional[str] = None,
+
 ) -> pd.DataFrame:
-    """Generate a training dataframe with Presto embeddings and labels.
+    """Align raw extraction rows to a target season and enrich with labels.
 
-    The pipeline performs three steps: (1) temporal alignment of extraction rows to the
-    user provided ``season`` (with a safety buffer), (2) embedding inference with a
-    pretrained *Presto* model (optionally using temporal augmentation), and (3) light
-    harmonisation / renaming of the target column.
+    This function performs the temporal / metadata alignment step. After alignment
+    it reports basic dataset diagnostics and adds helper label columns.
 
-    Temporal representation modes
-    -----------------------------
-    ``time_explicit=False``
-        One 128‑D embedding is produced per sample via internal global pooling over the
-        (possibly jittered) temporal slice. Augmentation changes which timesteps
-        contribute to the pooled summary.
+    Output additions
+    ----------------
+    The returned DataFrame preserves original attributes and adds:
 
-    ``time_explicit=True`` (default)
-        No global pooling: the embedding at the *valid* timestep (``valid_position``)
-        is selected after alignment / augmentation. There is still one 128‑D vector per
-        sample but it represents the state at the valid time instead of an aggregate.
-
-    Augmentation interaction
-    ------------------------
-    ``augment=True`` introduces horizontal (temporal) jitter. For pooled embeddings this
-    changes the window being summarised. For time explicit mode the absolute real-world
-    valid timestep stays the same; only its relative index inside the extracted window may shift.
-
-    Output schema
-    -------------
-    The returned dataframe preserves original metadata and adds the following columns:
-
-    * ``presto_ft_0`` .. ``presto_ft_127`` : float32 embedding features.
-    * ``ewoc_code`` : final class label (copied / renamed from temporary ``downstream_class``).
-    * ``year`` : year parsed from ``ref_id`` (added for simple diagnostics).
+    * ``year``: integer year parsed from ``ref_id`` (first token before underscore).
+    * ``label_full``: human readable crop / land cover label.
+    * ``sampling_label``: label variant used for stratified splitting.
 
     Parameters
     ----------
     df : pandas.DataFrame
-        Raw extraction rows containing at minimum ``ewoc_code`` and ``ref_id``.
+        Raw extraction rows containing at minimum ``ref_id`` and ``ewoc_code``.
     season : TemporalContext
         Target temporal context defining the modelling season.
     freq : {'month', 'dekad'}, default='month'
-        Resampling / alignment frequency.
+        Resampling / alignment frequency controlling internal temporal aggregation.
     valid_time_buffer : int, default=MIN_EDGE_BUFFER
-        Minimum distance (in time units compatible with ``freq``) required between the
-        sample's original valid time and the edges of ``season``.
-    batch_size : int, default=256
-        Batch size used during embedding inference.
-    task_type : {'croptype', 'cropland'}, default='croptype'
-        Determines which pretrained Presto weights to load and multiclass vs binary mode.
-    augment : bool, default=True
-        Enable temporal jitter data augmentation.
-    time_explicit : bool, default=True
-        Switch from globally pooled sequence embeddings to valid timestep embeddings.
-    custom_presto_url : str, optional
-        If provided, this URL overrides the default Presto model used to compute embeddings.
+        Safety buffer in frequency units between original valid time and season edges.
 
     Returns
     -------
     pandas.DataFrame
-        Aligned samples with embedding columns and ``ewoc_code`` label. A warning is
-        logged if fewer than 2 unique classes remain.
-
-    Raises
-    ------
-    ValueError
-        If ``task_type`` is invalid (propagated from downstream functions).
+        Aligned samples with additional ``year``, ``label_full`` and ``sampling_label``
+        columns. A warning is logged if fewer than two unique ``ewoc_code`` values
+        remain (training feasibility issue).
 
     Notes
     -----
-    This function does not perform train/test splitting; it only produces features.
-    Use :func:`train_classifier` for modelling.
+    Call :func:`compute_presto_embeddings` next to generate embedding features, then
+    :func:`train_classifier` to train a model on them.
     """
     from worldcereal.utils.legend import ewoc_code_to_label
 
     # Align the samples with the season of interest
     df = process_extractions_df(df, season, freq, valid_time_buffer)
-
-    # Create an attribute "downstream_class" that is a copy of "ewoc_code"
-    # for compatibility with presto computation
-    df["downstream_class"] = df["ewoc_code"].copy()
-
-    # Now compute the Presto embeddings
-    df = compute_presto_embeddings(
-        df,
-        batch_size=batch_size,
-        task_type=task_type,
-        augment=augment,
-        time_explicit=time_explicit,
-        custom_presto_url=custom_presto_url,
-    )
 
     # Report on contents of the resulting dataframe here
     logger.info(
@@ -160,10 +112,9 @@ def compute_training_features(
     logger.info("Distribution of samples across years:")
     # extract year from ref_id
     df["year"] = df["ref_id"].str.split("_").str[0].astype(int)
-    logger.info(df.year.value_counts())
+    logger.info(f"\n{df.year.value_counts()}")
 
-    # Rename downstream_class to ewoc_code
-    df.rename(columns={"downstream_class": "ewoc_code"}, inplace=True)
+    # Get crop statistics
     ncroptypes = df["ewoc_code"].nunique()
     logger.info(f"Number of crop types remaining: {ncroptypes}")
     if ncroptypes <= 1:
@@ -175,7 +126,7 @@ def compute_training_features(
     df["label_full"] = ewoc_code_to_label(df["ewoc_code"], label_type="full")
     df["sampling_label"] = ewoc_code_to_label(df["ewoc_code"], label_type="sampling")
 
-    return df
+    return df.reset_index()
 
 
 def compute_presto_embeddings(
@@ -183,10 +134,12 @@ def compute_presto_embeddings(
     batch_size: int = 256,
     task_type: str = "croptype",
     augment: bool = True,
-    time_explicit: bool = True,
+    mask_on_training: bool = True,
+    repeats: int = 3,
+    time_explicit: bool = False,
     custom_presto_url: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Run pretrained *Presto* model to attach 128‑D embeddings to each sample.
+    """Run pretrained *Presto* model to compute 128‑D embeddings for each sample.
 
     Parameters
     ----------
@@ -198,7 +151,12 @@ def compute_presto_embeddings(
         Selects pretrained weights and multiclass vs binary configuration.
     augment : bool, default=True
         Whether the underlying dataset applies temporal jitter.
-    time_explicit : bool, default=True
+    mask_on_training : bool, default=True
+        Whether to apply sensor masking augmentations on the training set.
+    repeats : int, default=3
+        Number of times to repeat each sample in the training set (temporal / masking
+        augmentation leverage). Should be >=1; values >1 increase effective dataset size.
+    time_explicit : bool, default=False
         When ``True`` selects the embedding at ``valid_position`` instead of a pooled
         sequence representation.
     custom_presto_url : str, optional
@@ -217,13 +175,14 @@ def compute_presto_embeddings(
     Notes
     -----
     This function *does not* modify the target column: it only adds features. A temporary
-    column named ``downstream_class`` is expected by the dataset wrapper prior to renaming
-    in :func:`compute_training_features`.
+    column named ``downstream_class`` must be present in ``df``. This function does not
+    rename it; later training uses that column directly.
     """
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
 
-    from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
+    from worldcereal.train.data import get_training_df
+    from worldcereal.train.datasets import WorldCerealTrainingDataset
 
     # Determine Presto model URL
     if custom_presto_url is not None:
@@ -241,20 +200,79 @@ def compute_presto_embeddings(
     presto_model = Presto()
     presto_model = load_presto_weights(presto_model, presto_model_url)
 
-    # Initialize dataset
-    df = df.reset_index()
-    ds = WorldCerealTrainingDataset(
-        df,
+    # Split dataframe in cal/val
+    try:
+        samples_train, samples_test = train_test_split(
+            df,
+            test_size=0.2,
+            random_state=DEFAULT_SEED,
+            stratify=df["sampling_label"],
+        )
+    except ValueError:
+        logger.warning(
+            "Stratified train/test split failed (not enough samples per class),"
+            " proceeding with random split."
+        )
+        samples_train, samples_test = train_test_split(
+            df,
+            test_size=0.2,
+            random_state=DEFAULT_SEED,
+        )
+
+    # Initialize datasets
+    samples_train, samples_test = samples_train.reset_index(), samples_test.reset_index()
+    if mask_on_training:
+        masking_config = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=0.05,
+            s1_timestep_dropout_prob=0.1,
+            s2_cloud_timestep_prob=0.1,
+            s2_cloud_block_prob=0.05,
+            s2_cloud_block_min=2,
+            s2_cloud_block_max=3,
+            meteo_timestep_dropout_prob=0.03,
+            dem_dropout_prob=0.01
+        )
+    else:
+        masking_config = SensorMaskingConfig(enable=False)
+
+    # Augmentations and repeats only on training set
+    ds_train = WorldCerealTrainingDataset(
+        samples_train,
         task_type="multiclass" if task_type == "croptype" else "binary",
         augment=augment,
+        masking_config=masking_config,
+        repeats=repeats
     )
-    logger.info("Computing Presto embeddings ...")
-    df = get_training_df(
-        ds,
+
+    # No augmentations on test set
+    ds_test = WorldCerealTrainingDataset(
+        samples_test,
+        task_type="multiclass" if task_type == "croptype" else "binary",
+        augment=False,
+        masking_config=SensorMaskingConfig(enable=False)
+    )
+
+    # Compute embeddings
+    logger.info("Computing Presto embeddings on train set ...")
+    df_train = get_training_df(
+        ds_train,
         presto_model,
         batch_size=batch_size,
         time_explicit=time_explicit,
     )
+    logger.info("Computing Presto embeddings on test set ...")
+    df_test = get_training_df(
+        ds_test,
+        presto_model,
+        batch_size=batch_size,
+        time_explicit=time_explicit,
+    )
+
+    # Merging train and test embeddings
+    df_train["split"] = "train"
+    df_test["split"] = "test"
+    df = pd.concat([df_train, df_test]).reset_index(drop=True)
 
     logger.info("Done.")
 
@@ -272,8 +290,9 @@ def train_classifier(
     Parameters
     ----------
     training_dataframe : pandas.DataFrame
-        DataFrame containing feature columns ``presto_ft_0``..``presto_ft_127`` and
-        a target column named ``downstream_class``.
+        DataFrame containing feature columns ``presto_ft_0``..``presto_ft_127``,
+        a target column named ``downstream_class`` and a ``split`` column with values
+        ``'train'`` and ``'test'``.
     class_names : list of str, optional
         Explicit class ordering passed to CatBoost. If ``None`` the unique labels in
         the training split are used.
@@ -285,12 +304,13 @@ def train_classifier(
 
     Returns
     -------
-    tuple
+    (CatBoostClassifier, dict | str, numpy.ndarray)
         ``(model, report, cm)`` where:
 
-        * ``model`` is the trained ``CatBoostClassifier``.
-        * ``report`` is the string output of :func:`sklearn.metrics.classification_report`.
-        * ``cm`` is the raw (non-normalized) confusion matrix ``numpy.ndarray``.
+        * ``model``: trained ``CatBoostClassifier`` instance.
+        * ``report``: string classification report (also logged) OR dict depending on
+          internal downstream consumption (maintained for backwards compatibility).
+        * ``cm``: raw (absolute counts) confusion matrix ``shape=(n_classes, n_classes)``.
 
     Raises
     ------
@@ -305,13 +325,8 @@ def train_classifier(
     """
 
     # Split into train and test set
-    logger.info("Split train/test ...")
-    samples_train, samples_test = train_test_split(
-        training_dataframe,
-        test_size=0.2,
-        random_state=DEFAULT_SEED,
-        stratify=training_dataframe["downstream_class"],
-    )
+    samples_train = training_dataframe[training_dataframe["split"] == "train"].reset_index()
+    samples_test = training_dataframe[training_dataframe["split"] == "test"].reset_index()
 
     # Define loss function and eval metric
     if np.unique(samples_train["downstream_class"]).shape[0] < 2:
@@ -403,31 +418,37 @@ def apply_classifier(
     show_confusion_matrix: Optional[Literal["absolute", "relative"]] = None,
     print_report: bool = True,
     target_attribute: str = "downstream_class",
-) -> pd.DataFrame:
-    """Method to apply a trained CatBoostClassifier to a dataframe.
+) -> Tuple[dict, np.ndarray, np.ndarray]:
+    """Apply a trained CatBoost classifier and optionally visualize performance.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        input dataframe containing the features to apply the model on
+    df : pandas.DataFrame
+        DataFrame containing a target column (``target_attribute``) and feature columns
+        ``presto_ft_0`` .. ``presto_ft_127``.
     model : CatBoostClassifier
-        trained CatBoost model
-    show_confusion_matrix : Optional[Literal["absolute", "relative"]], optional
-        if 'absolute', the confusion matrix is shown as absolute values,
-        if 'relative', the confusion matrix is shown as relative values,
-        if None, no confusion matrix is shown,
-        by default None
-    print_report : bool, optional
-        if True, the classification report is printed to the console,
-        by default True
-    target_attribute : str, optional
-        name of the attribute in the dataframe containing the true class labels,
-        by default "downstream_class"
+        Fitted model returned by :func:`train_classifier`.
+    show_confusion_matrix : {'absolute', 'relative', None}, default=None
+        If ``'absolute'`` displays raw counts; if ``'relative'`` normalizes each row
+        (true class) to sum to 1. ``None`` disables the plot.
+    print_report : bool, default=True
+        Whether to log & print the human readable classification report.
+    target_attribute : str, default='downstream_class'
+        Column name holding ground truth labels in ``df``.
 
     Returns
     -------
-    pd.DataFrame
-        dataframe with additional columns "predicted_class" and "predicted_proba"
+    tuple
+        ``(report_dict, cm, pred)`` where:
+
+        * ``report_dict``: dict form of :func:`sklearn.metrics.classification_report`.
+        * ``cm``: raw confusion matrix (absolute counts) as ``numpy.ndarray``.
+        * ``pred``: 1‑D numpy array of predicted class labels.
+
+    Notes
+    -----
+    Probabilities are not currently returned; they can be obtained via
+    ``model.predict_proba(df[bands])`` if needed.
     """
 
     # Make predictions
