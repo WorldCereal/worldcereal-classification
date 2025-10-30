@@ -419,7 +419,7 @@ def apply_classifier(
     print_report: bool = True,
     target_attribute: str = "downstream_class",
 ) -> Tuple[dict, np.ndarray, np.ndarray]:
-    """Apply a trained CatBoost classifier and optionally visualize performance.
+    """Apply a trained CatBoost classifier and optionally visualize its performance.
 
     Parameters
     ----------
