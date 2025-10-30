@@ -74,99 +74,67 @@ def max_doy_difference(doy_array):
 
 
 def circular_median_day_of_year(doy_array, total_days=365):
+    """Compute the circular median DOY (exact) using a weighted histogram approach.
+
+    The circular median is the day-of-year (DOY) that minimizes the sum of
+    circular distances to all observations, where circular distance between two
+    DOYs d1 and d2 is ``min(|d1-d2|, total_days - |d1-d2|)``.
+
+    Implementation details:
+    * Filters invalid entries (<=0 or > ``total_days``).
+    * Collapses duplicates via a histogram (frequency weighting) so runtime depends
+      on the number of distinct DOYs (k ≤ 365) instead of raw sample size (n).
+    * Uses a fully vectorized k×k distance matrix over unique DOYs to obtain the
+      exact weighted 1-median solution on the circle.
+
+    Contract:
+    * Returns an ``int`` DOY in [1, total_days] when at least one valid value is present.
+    * Raises ``ValueError`` if, after filtering, there are no valid DOY values.
+
+    Parameters
+    ----------
+    doy_array : array-like
+        Input day-of-year values (integers expected). May include zeros or other invalid
+        values that will be filtered out.
+    total_days : int, default 365
+        Length of the circular period (e.g. 365 for non-leap-year crop calendars).
+
+    Returns
+    -------
+    int
+        Circular median DOY.
+
+    Raises
+    ------
+    ValueError
+        If no valid DOY values remain after filtering.
     """
-    Efficiently compute the median DOY from an array taking into account
-    its circular nature. Optimized for integer DOY values (1-365).
+    vals = np.asarray(doy_array, dtype=np.int32)
+    vals = vals[(vals > 0) & (vals <= total_days)]
+    if vals.size == 0:
+        raise ValueError(
+            "circular_median_day_of_year: no valid DOY values (after filtering) to compute median."
+        )
+    if vals.size == 1:
+        return int(vals[0])
 
-    """
-    # Convert to numpy array and ensure we have integers
-    doy_array = np.asarray(doy_array, dtype=np.int32)
+    # Histogram counts for each DOY (1..total_days). Index 0 unused.
+    counts = np.bincount(vals, minlength=total_days + 1)[1:]
+    nonzero = np.nonzero(counts)[0] + 1  # actual DOYs present
+    weights = counts[nonzero - 1].astype(np.int64)
 
-    # Remove any invalid values (0, negative, or > total_days)
-    valid_doys = doy_array[(doy_array > 0) & (doy_array <= total_days)]
+    if nonzero.size == 1:
+        return int(nonzero[0])
 
-    if len(valid_doys) == 0:
-        return np.nan
-
-    if len(valid_doys) == 1:
-        return int(valid_doys[0])
-
-    # For small arrays, use the original method but optimized
-    if len(valid_doys) <= 50:
-        return _circular_median_small_array(valid_doys, total_days)
-
-    # For large arrays, use a much more efficient histogram-based approach
-    return _circular_median_large_array(valid_doys, total_days)
-
-
-def _circular_median_small_array(doy_array, total_days=365):
-    """Optimized circular median for small arrays using vectorized operations."""
-    n = len(doy_array)
-
-    # Create pairwise distance matrix efficiently
-    doy_matrix = np.broadcast_to(doy_array.reshape(-1, 1), (n, n))
-    doy_matrix_t = doy_matrix.T
-
-    # Calculate circular distances efficiently
-    direct_diff = np.abs(doy_matrix - doy_matrix_t)
-    wrap_diff = total_days - direct_diff
-    circular_distances = np.minimum(direct_diff, wrap_diff)
-
-    # Sum distances for each candidate median
-    total_distances = np.sum(circular_distances, axis=1)
-
-    # Find the DOY with minimum total distance
-    median_idx = np.argmin(total_distances)
-    return int(doy_array[median_idx])
-
-
-def _circular_median_large_array(doy_array, total_days=365):
-    """
-    Highly efficient circular median for large arrays using histogram approach.
-    This avoids O(n²) complexity by working with DOY histogram.
-    """
-    # Create histogram of DOY values
-    hist, bin_edges = np.histogram(
-        doy_array, bins=total_days, range=(1, total_days + 1)
-    )
-
-    # Find non-empty bins
-    non_zero_bins = np.where(hist > 0)[0]
-    if len(non_zero_bins) == 0:
-        return np.nan
-
-    # If we have very few unique values, use the small array method
-    if len(non_zero_bins) <= 20:
-        unique_doys = non_zero_bins + 1  # Convert bin indices to DOY values
-        return _circular_median_small_array(unique_doys, total_days)
-
-    # For truly large datasets with many unique values, use approximation
-    # Find the DOY that minimizes circular distance to all other DOYs
-    min_total_distance = float("inf")
-    best_doy = 1
-
-    # Test candidate medians (sample approach for efficiency)
-    # Test the actual unique DOY values present in the data
-    for candidate_doy in non_zero_bins + 1:  # Convert to actual DOY values
-        total_distance = 0
-
-        # Calculate total weighted distance to all other DOYs
-        for other_bin_idx in non_zero_bins:
-            other_doy = other_bin_idx + 1
-            weight = hist[other_bin_idx]
-
-            # Circular distance
-            direct_dist = abs(candidate_doy - other_doy)
-            wrap_dist = total_days - direct_dist
-            min_dist = min(direct_dist, wrap_dist)
-
-            total_distance += weight * min_dist
-
-        if total_distance < min_total_distance:
-            min_total_distance = total_distance
-            best_doy = candidate_doy
-
-    return int(best_doy)
+    # Vectorized pairwise circular distances between candidate DOYs and observed DOYs.
+    cand = nonzero.reshape(-1, 1)
+    other = nonzero.reshape(1, -1)
+    direct = np.abs(cand - other)
+    circ = np.minimum(direct, total_days - direct)
+    # Weighted sum of distances for each candidate median.
+    total_dist = (circ * weights).sum(axis=1)
+    median_idx = int(np.argmin(total_dist))
+    return int(nonzero[median_idx])
 
 
 def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: int):
@@ -414,8 +382,10 @@ def get_season_dates_for_extent(
 
     # Check if we have seasonality - filter out nodata values (0)
     if not (sos_doy > 0).any():
+        logger.error("No start of season information available for this location!")
         raise NoSeasonError(f"No valid SOS DOY found for season `{season}`")
     if not (eos_doy > 0).any():
+        logger.error("No end of season information available for this location!")
         raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
 
     # Only consider valid seasonality pixels (DOY > 0)
