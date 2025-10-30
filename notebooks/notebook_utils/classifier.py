@@ -60,6 +60,7 @@ def compute_training_features(
     task_type: str = "croptype",
     augment: bool = True,
     time_explicit: bool = True,
+    custom_presto_url: Optional[str] = None,
 ) -> pd.DataFrame:
     """Generate a training dataframe with Presto embeddings and labels.
 
@@ -113,6 +114,8 @@ def compute_training_features(
         Enable temporal jitter data augmentation.
     time_explicit : bool, default=True
         Switch from globally pooled sequence embeddings to valid timestep embeddings.
+    custom_presto_url : str, optional
+        If provided, this URL overrides the default Presto model used to compute embeddings.
 
     Returns
     -------
@@ -146,6 +149,7 @@ def compute_training_features(
         task_type=task_type,
         augment=augment,
         time_explicit=time_explicit,
+        custom_presto_url=custom_presto_url,
     )
 
     # Report on contents of the resulting dataframe here
@@ -180,6 +184,7 @@ def compute_presto_embeddings(
     task_type: str = "croptype",
     augment: bool = True,
     time_explicit: bool = True,
+    custom_presto_url: Optional[str] = None,
 ) -> pd.DataFrame:
     """Run pretrained *Presto* model to attach 128‑D embeddings to each sample.
 
@@ -196,6 +201,8 @@ def compute_presto_embeddings(
     time_explicit : bool, default=True
         When ``True`` selects the embedding at ``valid_position`` instead of a pooled
         sequence representation.
+    custom_presto_url : str, optional
+        If provided, this URL overrides the default Presto model used to compute embeddings.
 
     Returns
     -------
@@ -218,7 +225,10 @@ def compute_presto_embeddings(
 
     from worldcereal.train.data import WorldCerealTrainingDataset, get_training_df
 
-    if task_type == "croptype":
+    # Determine Presto model URL
+    if custom_presto_url is not None:
+        presto_model_url = custom_presto_url
+    elif task_type == "croptype":
         presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
     elif task_type == "cropland":
         presto_model_url = CropLandParameters().feature_parameters.presto_model_url
