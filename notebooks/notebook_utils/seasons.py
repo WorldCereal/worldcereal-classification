@@ -1,6 +1,7 @@
 import logging
 from calendar import monthrange
 from typing import List
+from loguru import logger
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -175,6 +176,7 @@ def retrieve_worldcereal_seasons(
 
     # Get the start and end date for each season
     for idx, season in enumerate(seasons):
+        logger.info(f"Retrieving WorldCereal season '{season}' for the given extent")
         seasonal_extent = get_season_dates_for_extent(extent, 2021, f"tc-{season}")
         sos = pd.to_datetime(seasonal_extent.start_date)
         eos = pd.to_datetime(seasonal_extent.end_date)
