@@ -233,7 +233,8 @@ def compute_presto_embeddings(
     elif task_type == "cropland":
         presto_model_url = CropLandParameters().feature_parameters.presto_model_url
     else:
-        raise ValueError(f"Unknown task type: {task_type}")
+        raise ValueError((f"Unknown task type: `{task_type}` and no `custom_presto_url`"
+                          " given -> cannot infer Presto model"))
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
