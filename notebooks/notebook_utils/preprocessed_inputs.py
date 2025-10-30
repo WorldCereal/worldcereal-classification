@@ -6,6 +6,10 @@ import sys
 from functools import partial
 from pathlib import Path
 from typing import Literal, Optional
+from tabulate import tabulate
+import numpy as np
+import matplotlib.pyplot as plt
+import xarray as xr
 
 import geopandas as gpd
 import openeo
@@ -18,6 +22,11 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from worldcereal.job import create_inputs_process_graph
+from .extractions import (
+    _apply_band_scaling,
+    WORLDCEREAL_BANDS,
+    NODATAVALUE,
+)
 
 MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds
@@ -433,17 +442,6 @@ def collect_worldcereal_inputs_patches(
 # ---------------------------------------------------------------------------
 # Utility functions to inspect locally downloaded preprocessed input NetCDFs
 # ---------------------------------------------------------------------------
-
-from tabulate import tabulate  # noqa: E402
-import numpy as np  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-import xarray as xr  # noqa: E402
-
-from .extractions import (
-    _apply_band_scaling,
-    WORLDCEREAL_BANDS,
-    NODATAVALUE,
-)  # noqa: E402
 
 
 def get_band_statistics_netcdf(ds: xr.Dataset) -> pd.DataFrame:
