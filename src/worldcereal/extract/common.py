@@ -14,6 +14,7 @@ import geopandas as gpd
 import pandas as pd
 import pystac
 import pystac_client
+from tabulate import tabulate
 import xarray as xr
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
@@ -495,15 +496,9 @@ def check_job_status(output_folder: Path) -> dict:
     status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"])
     status_count = status_count.sort_values(by="count", ascending=False)
 
-    print(
-        f"""
-    -------------------------------------
-    Overall jobs status:
-    -------------------------------------
-    {status_count.to_string(index=False, header=True)}
-    -------------------------------------
-    """
-    )
+    print("-------------------------------------")
+    print("Overall jobs status:")
+    print(tabulate(status_count, headers="keys", tablefmt="psql", showindex=True))
 
     return status_histogram
 

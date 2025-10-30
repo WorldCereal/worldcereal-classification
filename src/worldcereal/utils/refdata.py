@@ -132,27 +132,36 @@ def map_classes(
 
 
 def query_public_extractions(
-    bbox_poly: Polygon,
+    bbox_poly: Optional[Polygon] = None,
     buffer: int = 250000,
     filter_cropland: bool = True,
     crop_types: Optional[list[int]] = None,
     query_collateral_samples: bool = True,
+    ref_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
-    Query the WorldCereal global extractions database for reference data within a specified area.
+    Query the WorldCereal public extractions database for reference data within a specified area and/or for specific datasets.
 
     This function retrieves training samples from the WorldCereal public extractions database
-    that intersect with the provided polygon (with optional buffer). The function connects to
-    an S3 bucket containing WorldCereal reference data and performs spatial queries to find
-    relevant samples.
+    using one of three modes:
+    1. Spatial discovery: Query by spatial intersection with a polygon (bbox_poly only)
+    2. Dataset-specific: Query specific datasets directly (ref_ids only)
+    3. Combined filtering: Query specific datasets within a spatial area (both bbox_poly and ref_ids)
+
+    The function connects to an S3 bucket containing WorldCereal reference data and performs efficient queries.
+
+    Note: You must specify at least one of 'bbox_poly' or 'ref_ids'.
 
     Parameters
     ----------
-    bbox_poly : Polygon
-        A shapely Polygon object defining the area of interest in EPSG:4326 (WGS84)
+    bbox_poly : Optional[Polygon], default=None
+        A shapely Polygon object defining the area of interest in EPSG:4326 (WGS84).
+        Can be used alone for spatial discovery, or combined with ref_ids for spatial filtering
+        of specific datasets. If None, no spatial filtering is applied.
     buffer : int, default=250000
         Buffer distance in meters to expand the search area around the input polygon.
         The buffer is applied in EPSG:3785 (Web Mercator) projection.
+        Only used when bbox_poly is provided.
     filter_cropland : bool, default=True
         If True, filter results to include only temporary cropland samples (WorldCereal
         classes with codes 11-... except fallow classes 11-15-...). This step is needed
@@ -166,28 +175,47 @@ def query_public_extractions(
         but fell into the vicinity of such samples during the extraction process. While using
         collateral samples will result in significant increase in amount of samples available for training,
         it will also shift the distribution of the classes.
+    ref_ids : Optional[List[str]], default=None
+        List of specific reference dataset IDs to filter on. Can be used alone for dataset-specific
+        queries, or combined with bbox_poly to spatially filter specific datasets. If provided,
+        only data from these datasets will be queried.
 
     Returns
     -------
     pd.DataFrame
-        A GeoDataFrame containing reference data points that intersect with the area of interest.
-        Each row represents a single sample with its geometry and associated attributes.
+        A GeoDataFrame containing reference data points that intersect with the area of interest
+        or from the specified datasets. Each row represents a single sample with its geometry
+        and associated attributes.
+
+    Raises
+    ------
+    ValueError
+        If neither bbox_poly nor ref_ids is specified.
 
     """
 
-    logger.info(
-        f"Applying a buffer of {int(buffer / 1000)} km to the selected area ..."
-    )
+    # Validate that at least one of bbox_poly or ref_ids is provided
+    if bbox_poly is None and ref_ids is None:
+        raise ValueError(
+            "You must specify either 'bbox_poly' (spatial area of interest) OR 'ref_ids' (specific datasets) OR both. "
+            "Cannot proceed without knowing what data to query."
+        )
 
-    bbox_poly = (
-        gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
-        .to_crs(epsg=3785)
-        .buffer(buffer, cap_style="square", join_style="mitre")
-        .to_crs(epsg=4326)[0]
-    )
+    # Apply buffering when spatial filtering is requested (bbox_poly provided)
+    if bbox_poly is not None:
+        logger.info(
+            f"Applying a buffer of {int(buffer / 1000)} km to the selected area ..."
+        )
 
-    xmin, ymin, xmax, ymax = bbox_poly.bounds
-    bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
+        bbox_poly = (
+            gpd.GeoSeries(bbox_poly, crs="EPSG:4326")
+            .to_crs(epsg=3785)
+            .buffer(buffer, cap_style="square", join_style="mitre")
+            .to_crs(epsg=4326)[0]
+        )
+
+        xmin, ymin, xmax, ymax = bbox_poly.bounds
+        bbox_poly = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
 
     db = duckdb.connect()
     db.sql("INSTALL spatial")
@@ -195,29 +223,60 @@ def query_public_extractions(
 
     metadata_s3_path = "s3://geoparquet/worldcereal_public_extractions_extent.parquet"
 
-    query_metadata = f"""
-    SET s3_endpoint='s3.waw3-1.cloudferro.com';
-    SET enable_progress_bar=false;
-    SET TimeZone = 'UTC';
-    SELECT distinct ref_id
-    FROM read_parquet('{metadata_s3_path}') metadata
-    WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))
-    """
-    ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
+    # Determine which ref_ids to query
+    if ref_ids is not None and bbox_poly is None:
+        # Case 1: Only ref_ids provided - use them directly
+        ref_ids_lst = ref_ids
+        logger.info(f"Querying {len(ref_ids_lst)} specific datasets: {ref_ids_lst}")
+    elif ref_ids is None and bbox_poly is not None:
+        # Case 2: Only spatial area provided - discover intersecting datasets
+        query_metadata = f"""
+        SET s3_endpoint='s3.waw3-1.cloudferro.com';
+        SET enable_progress_bar=false;
+        SET TimeZone = 'UTC';
+        SELECT distinct ref_id
+        FROM read_parquet('{metadata_s3_path}') metadata
+        WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))
+        """
+        ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
-    if len(ref_ids_lst) == 0:
-        logger.warning(
-            "No datasets found in the WorldCereal global extractions database that intersect with the selected area."
+        if len(ref_ids_lst) == 0:
+            logger.warning(
+                "No datasets found in the WorldCereal public extractions database that intersect with the selected area."
+            )
+            return pd.DataFrame()
+
+        logger.info(
+            f"Found {len(ref_ids_lst)} datasets in WorldCereal public extractions database that intersect with the selected area."
         )
-        return pd.DataFrame()
+    else:
+        # Case 3: Both ref_ids and bbox_poly provided - filter ref_ids by spatial intersection
+        # At this point we know ref_ids is not None due to the conditional logic above
+        assert ref_ids is not None
+        logger.info(
+            f"Filtering {len(ref_ids)} specific datasets by spatial intersection..."
+        )
 
-    logger.info(
-        f"Found {len(ref_ids_lst)} datasets in WorldCereal global extractions database that intersect with the selected area."
-    )
+        # Create a filter for the specific ref_ids
+        ref_ids_filter = "', '".join(ref_ids)
+        query_metadata = f"""
+        SET s3_endpoint='s3.waw3-1.cloudferro.com';
+        SET enable_progress_bar=false;
+        SET TimeZone = 'UTC';
+        SELECT distinct ref_id
+        FROM read_parquet('{metadata_s3_path}') metadata
+        WHERE ST_Intersects(geometry, ST_GeomFromText('{str(bbox_poly)}'))
+        AND ref_id IN ('{ref_ids_filter}')
+        """
+        ref_ids_lst = db.sql(query_metadata).df()["ref_id"].values
 
-    logger.info(
-        "Querying WorldCereal global extractions database (this can take a while) ..."
-    )
+        if len(ref_ids_lst) == 0:
+            logger.warning(
+                f"None of the specified datasets ({ref_ids}) intersect with the selected area."
+            )
+            return pd.DataFrame()
+
+    logger.info("Querying extractions...")
 
     all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
     f = requests.get(all_extractions_url)
@@ -260,12 +319,30 @@ AND ewoc_code IN ({ct_list_str})
 """
 
     for i, url in enumerate(s3_urls_lst):
+        # Apply spatial filtering when bbox_poly is provided
+        if bbox_poly is not None:
+            spatial_condition = f"WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))"
+            # Use AND for subsequent conditions
+            cropland_condition = cropland_filter_query_part
+            collateral_condition = collateral_query_part
+        else:
+            spatial_condition = ""
+            # Convert first AND to WHERE if no spatial condition
+            cropland_condition = (
+                cropland_filter_query_part.replace("AND ", "WHERE ", 1)
+                if cropland_filter_query_part
+                else ""
+            )
+            collateral_condition = collateral_query_part.replace(
+                "AND ", "WHERE " if not cropland_condition else "AND ", 1
+            )
+
         query = f"""
 SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
-WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
-{cropland_filter_query_part}
-{collateral_query_part}
+{spatial_condition}
+{cropland_condition}
+{collateral_condition}
 """
         if i == 0:
             main_query += query
@@ -280,9 +357,7 @@ WHERE ST_Intersects(ST_MakeValid(geometry), ST_GeomFromText('{str(bbox_poly)}'))
     public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
 
     if public_df_raw.empty:
-        logger.warning(
-            f"No samples from the WorldCereal global extractions database fall into the selected area with buffer {int(buffer / 1000)} km²."
-        )
+        logger.warning("No samples found matching your search criteria.")
         return pd.DataFrame()
 
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
@@ -347,6 +422,7 @@ def query_private_extractions(
         ]
     if len(private_collection_paths) == 0:
         logger.warning("No private collections found.")
+        return pd.DataFrame()
 
     logger.info(f"Checking {len(private_collection_paths)} datasets...")
 
