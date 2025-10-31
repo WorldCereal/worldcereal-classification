@@ -519,7 +519,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             dataframe,
             task_type=task_type,
             num_outputs=num_outputs,
-            label_jitter=label_jitter,
             **kwargs,
         )
         self.classes_list = classes_list
