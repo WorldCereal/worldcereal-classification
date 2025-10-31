@@ -482,7 +482,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         num_outputs: int = 1,
         classes_list: Union[np.ndarray, List[str]] = [],
         time_explicit: bool = False,
-        augment: bool = False,
         label_jitter: int = 0,  # ± timesteps to jitter true label pos, for time_explicit only
         label_window: int = 0,  # ± timesteps to expand around label pos (true or moved), for time_explicit only
         return_sample_id: bool = False,
@@ -520,7 +519,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             dataframe,
             task_type=task_type,
             num_outputs=num_outputs,
-            augment=augment,
+            label_jitter=label_jitter,
             **kwargs,
         )
         self.classes_list = classes_list
@@ -709,7 +708,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
 
 class WorldCerealTrainingDataset(WorldCerealDataset):
-
     def __init__(
         self,
         dataframe: pd.DataFrame,
@@ -731,19 +729,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             masking_config=masking_config,
         )
 
-        some_augmentation = (augment or (masking_config and masking_config.enable))
-        if repeats == 1 and some_augmentation:
-            logger.warning(
-                "Dataset augmentation or masking is enabled but repeats=1. "
-                "Consider setting repeats > 1 to increase training variability."
-            )
-        elif repeats > 1 and not some_augmentation:
-            logger.warning(
-                "Dataset is repeated but not augmented which is useless; "
-                "consider setting `augment=True` or `masking_config` for training."
-            )
-        elif repeats > 1:
-            logger.info(f"Dataset repeated {repeats} times for training with augmentation/masking.")
+        repeats = _check_augmentation_settings(augment, masking_config, repeats)
 
         base_indices = list(range(len(self.dataframe)))
         self.indices = base_indices * repeats
@@ -779,6 +765,36 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         attrs["valid_position"] = valid_position
 
         return sample, attrs
+
+
+def _check_augmentation_settings(
+    augment: bool, masking_config: Optional[SensorMaskingConfig], repeats: int
+) -> int:
+    """
+    Check augmentation/masking settings. If no augmentation or masking is
+    enabled but repeats > 1, set repeats to 1 and log a warning.
+    If augmentation or masking is enabled but repeats = 1, log a warning
+    suggesting to increase repeats for more variability.
+    """
+    some_augmentation = augment or (masking_config and masking_config.enable)
+    if repeats == 1 and some_augmentation:
+        logger.warning(
+            "Dataset augmentation or masking is enabled but repeats=1. "
+            "Consider setting repeats > 1 to increase training variability."
+        )
+    elif repeats > 1 and not some_augmentation:
+        logger.warning(
+            "Dataset is repeated but not augmented which is useless; "
+            "consider setting `augment=True` or `masking_config` for training. "
+            "Setting repeats=1 instead."
+        )
+        repeats = 1
+    elif repeats > 1:
+        logger.info(
+            f"Dataset will be repeated {repeats} times for training with augmentation/masking."
+        )
+
+    return repeats
 
 
 def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
