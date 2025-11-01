@@ -249,9 +249,9 @@ class WorldCerealDataset(Dataset):
             )
 
         # Sanity check to make sure valid_position is still within the extracted timesteps
-        assert valid_position in timestep_positions, (
-            f"Valid position {valid_position} not in timestep positions {timestep_positions}"
-        )
+        assert (
+            valid_position in timestep_positions
+        ), f"Valid position {valid_position} not in timestep positions {timestep_positions}"
 
         return timestep_positions, valid_position
 
@@ -637,9 +637,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             else:
                 # apply jitter
                 # scalar valid_position must be an int here
-                assert isinstance(valid_position, int), (
-                    f"Expected single int valid_position, got {type(valid_position)}"
-                )
+                assert isinstance(
+                    valid_position, int
+                ), f"Expected single int valid_position, got {type(valid_position)}"
                 p = valid_position
                 if self.label_jitter > 0:
                     shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
@@ -731,7 +731,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             masking_config=masking_config,
         )
 
-        some_augmentation = (augment or (masking_config and masking_config.enable))
+        some_augmentation = augment or (masking_config and masking_config.enable)
         if repeats == 1 and some_augmentation:
             logger.warning(
                 "Dataset augmentation or masking is enabled but repeats=1. "
@@ -740,10 +740,14 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         elif repeats > 1 and not some_augmentation:
             logger.warning(
                 "Dataset is repeated but not augmented which is useless; "
-                "consider setting `augment=True` or `masking_config` for training."
+                "consider setting `augment=True` or `masking_config` for training. "
+                " Reverting to no repeats for this run..."
             )
+            repeats = 1
         elif repeats > 1:
-            logger.info(f"Dataset repeated {repeats} times for training with augmentation/masking.")
+            logger.info(
+                f"Dataset repeated {repeats} times for training with augmentation/masking."
+            )
 
         base_indices = list(range(len(self.dataframe)))
         self.indices = base_indices * repeats
