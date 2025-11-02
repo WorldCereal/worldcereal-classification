@@ -24,6 +24,8 @@ def run_full_croptype_inference_workflow(
     outdir: Path,
     model_url: Optional[str] = None,
     mask_croptype_with_cropland: bool = True,
+    custom_landcover_presto_url: Optional[str] = None,
+    custom_landcover_classifier_url: Optional[str] = None,
 ):
     """Run full croptype mapping inference workflow on local files.
     Parameters
@@ -38,6 +40,12 @@ def run_full_croptype_inference_workflow(
     mask_croptype_with_cropland : bool, optional
         Whether to mask croptype classification with cropland classification.
         Defaults to True.
+    custom_landcover_presto_url : str, optional
+        URL to download the cropland feature extraction model from. If None, uses
+        the default model provided by WorldCereal.
+    custom_landcover_classifier_url : str, optional
+        URL to download the cropland classification model from. If None, uses
+        the default model provided by WorldCereal.
     Returns
     -------
     dict[str, dict[str, Path]]
@@ -65,7 +73,10 @@ def run_full_croptype_inference_workflow(
             logger.info("Generating cropland mask...")
             # Run cropland mapping
             landcover_embeddings, cropland_classification = run_cropland_mapping(
-                arr, epsg=epsg
+                arr,
+                epsg=epsg,
+                custom_presto_url=custom_landcover_presto_url,
+                classifier_url=custom_landcover_classifier_url,
             )
             # Save cropland classification to GeoTIFF
             cropland_path = outdir / name / "cropland_classification.tif"
@@ -97,9 +108,29 @@ def run_full_croptype_inference_workflow(
 
 
 def run_cropland_mapping(
-    arr: xr.DataArray, epsg: int = 32631
+    arr: xr.DataArray,
+    epsg: int = 32631,
+    custom_presto_url: Optional[str] = None,
+    classifier_url: Optional[str] = None,
 ) -> tuple[xr.DataArray, xr.DataArray]:
-    """Run cropland mapping pipeline: embedding extraction + classification."""
+    """Run cropland mapping pipeline: embedding extraction + classification.
+    parameters
+    ----------
+    arr : xr.DataArray
+        Input satellite data array
+    epsg : int, optional
+        EPSG code for the input data. Default is 32631.
+    custom_presto_url : str, optional
+        URL to download the cropland feature extraction model from. If None, uses
+        the default model provided by WorldCereal.
+    classifier_url : str, optional
+        URL to download the cropland classification model from. If None, uses
+        the default model provided by WorldCereal.
+    Returns
+    -------
+    tuple[xr.DataArray, xr.DataArray]
+        Tuple of (embeddings, classification) arrays
+    """
     logger.info("Running cropland embedding extraction UDF...")
 
     # Initialize CropLandParameters - simple and clean
@@ -108,6 +139,10 @@ def run_cropland_mapping(
     # Get feature parameters and add any testing overrides
     feature_params = cropland_params.feature_parameters.model_dump()
     feature_params.update({"ignore_dependencies": True})
+    # add custom presto URL
+    if custom_presto_url is not None:
+        feature_params.update({"presto_model_url": custom_presto_url})
+        logger.info(f"Custom Presto URL set to: {feature_params['presto_model_url']}")
 
     # Run feature extraction UDF
     embeddings = extract_presto_embeddings(
@@ -125,6 +160,12 @@ def run_cropland_mapping(
             "ignore_dependencies": True,
         }
     )
+    # Add custom classifier URL if provided
+    if classifier_url is not None:
+        classifier_params.update({"classifier_url": classifier_url})
+        logger.info(
+            f"Custom classifier URL set to: {classifier_params['classifier_url']}"
+        )
 
     # Run classification UDF
     classification = apply_inference(inarr=embeddings, parameters=classifier_params)
