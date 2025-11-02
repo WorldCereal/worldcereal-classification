@@ -562,8 +562,8 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
             total_credits = int(succeeded_jobs["costs"].sum())
             avg_cost = int(succeeded_jobs["costs"].mean())
         else:
-            total_credits = "N/A"
-            avg_cost = "N/A"
+            total_credits = 0
+            avg_cost = 0
 
         summary_table = [
             ["Succeeded jobs", n_jobs],
