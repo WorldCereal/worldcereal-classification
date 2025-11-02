@@ -498,7 +498,7 @@ def check_job_status(output_folder: Path) -> dict:
 
     print("-------------------------------------")
     print("Overall jobs status:")
-    print(tabulate(status_count, headers="keys", tablefmt="psql", showindex=True))
+    print(tabulate(status_count, headers="keys", tablefmt="psql", showindex=False))
 
     return status_histogram
 
