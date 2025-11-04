@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import geopandas as gpd
+import textwrap
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -546,9 +547,32 @@ def query_extractions(
     print("=" * 80)
 
     if extraction_summary:
+        DEFAULT_COL_WIDTH = 40
         summary_df = pd.DataFrame(extraction_summary)
+        # Truncate textual columns to a fixed width to avoid overly wide tables
+        for col in summary_df.columns:
+            if summary_df[col].dtype == object:
+                summary_df[col] = (
+                    summary_df[col]
+                    .astype(str)
+                    .apply(
+                        lambda s: (
+                            (s[: DEFAULT_COL_WIDTH - 1] + "…")
+                            if len(s) > DEFAULT_COL_WIDTH
+                            else s
+                        )
+                    )
+                )
         print("\nDatasets Retrieved:")
-        print(tabulate(summary_df, headers="keys", tablefmt="grid", showindex=False))
+        print(
+            tabulate(
+                summary_df,
+                headers="keys",
+                tablefmt="grid",
+                showindex=False,
+                maxcolwidths=[DEFAULT_COL_WIDTH] * summary_df.shape[1],
+            )
+        )
 
         # Overall statistics
         total_samples = merged_df["sample_id"].nunique()
@@ -556,15 +580,26 @@ def query_extractions(
         total_crop_types = merged_df["ewoc_code"].nunique()
         unique_crop_groups = sorted(merged_df["sampling_label"].unique())
 
+        # Build full (untruncated) crop groups list and wrap over multiple lines for readability
+        crop_groups_full = ", ".join(unique_crop_groups)
+        # Wrap at 40 characters per line (matches default column width) but do NOT truncate
+        wrapped_crop_groups = "\n".join(textwrap.wrap(crop_groups_full, width=40))
         stats_table = [
             ["Total Samples", f"{total_samples:,}"],
             ["Total Datasets", f"{total_datasets}"],
             ["Unique Crop Types", f"{total_crop_types}"],
-            ["Crop Groups", ", ".join(unique_crop_groups)],
+            ["Crop Groups", wrapped_crop_groups],
         ]
 
         print("\nOverall Statistics:")
-        print(tabulate(stats_table, headers=["Metric", "Value"], tablefmt="grid"))
+        print(
+            tabulate(
+                stats_table,
+                headers=["Metric", "Value"],
+                tablefmt="grid",
+                maxcolwidths=[None, 40],
+            )
+        )
 
     print("=" * 80 + "\n")
 
