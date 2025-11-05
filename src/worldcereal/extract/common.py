@@ -367,7 +367,7 @@ def load_dataframe(
                 collection,
             )
             client = pystac_client.Client.open(STAC_ROOT_URL)
-            samples_list: list[str] = []
+            samples_orbits: dict[Union[str, int], set[str]] = {}
 
             if collection == ExtractionCollection.PATCH_SENTINEL1:
                 STAC_COLLECTION = "worldcereal_sentinel_1_patch_extractions"
@@ -386,22 +386,83 @@ def load_dataframe(
             )
             for item in stac_search.items():
                 sample_id = item.properties.get("sample_id")
-                if sample_id:
-                    samples_list.append(sample_id)
-            df = df[~df["sample_id"].isin(samples_list)]
-            if len(df) > 0:
+                if not sample_id:
+                    continue
+                orbit_state = item.properties.get("sat:orbit_state")
+                orbits = samples_orbits.setdefault(sample_id, set())
+                if orbit_state:
+                    orbits.add(str(orbit_state).upper())
+
+            if collection == ExtractionCollection.PATCH_SENTINEL1:
+                if len(df) > 0:
+                    df["needs_ascending"] = True
+                    df["needs_descending"] = True
+                    sample_ids_str = df["sample_id"].astype(str)
+                else:
+                    sample_ids_str = pd.Series(dtype=str)
+
+                for sample_id, orbits in samples_orbits.items():
+                    mask = sample_ids_str == str(sample_id)
+                    if not mask.any():
+                        continue
+                    if "ASCENDING" in orbits:
+                        df.loc[mask, "needs_ascending"] = False
+                    if "DESCENDING" in orbits:
+                        df.loc[mask, "needs_descending"] = False
+
+                if {"needs_ascending", "needs_descending"}.issubset(df.columns):
+                    fully_covered_mask = (~df["needs_ascending"]) & (
+                        ~df["needs_descending"]
+                    )
+                else:
+                    fully_covered_mask = pd.Series(
+                        data=False, index=df.index, dtype=bool
+                    )
+
+                covered_samples = int(fully_covered_mask.sum())
+                if covered_samples > 0:
+                    pipeline_log.info(
+                        "Filtered out %s samples that already have both Sentinel-1 orbits in the STAC API.",
+                        covered_samples,
+                    )
+                df = df[~fully_covered_mask]
+
+                if len(df) == 0:
+                    pipeline_log.info(
+                        "All samples already have both Sentinel-1 orbits in the STAC API for ref_id %s. No samples to extract.",
+                        ref_id,
+                    )
+                    return gpd.GeoDataFrame()
+
+                missing_ascending = (
+                    int(df["needs_ascending"].sum()) if "needs_ascending" in df else 0
+                )
+                missing_descending = (
+                    int(df["needs_descending"].sum())
+                    if "needs_descending" in df
+                    else 0
+                )
                 pipeline_log.info(
-                    "Filtered out %s samples that already exist in STAC API for collection %s.",
-                    len(samples_list),
-                    collection,
+                    "Sentinel-1 STAC check summary - samples still requiring extraction: ASCENDING=%s, DESCENDING=%s.",
+                    missing_ascending,
+                    missing_descending,
                 )
             else:
-                pipeline_log.info(
-                    "All samples already exist in STAC API for ref_id %s, collection %s. No samples to extract.",
-                    ref_id,
-                    collection,
-                )
-                return gpd.GeoDataFrame()
+                samples_list = [sample for sample in samples_orbits.keys()]
+                df = df[~df["sample_id"].isin(samples_list)]
+                if len(df) > 0:
+                    pipeline_log.info(
+                        "Filtered out %s samples that already exist in STAC API for collection %s.",
+                        len(samples_list),
+                        collection,
+                    )
+                else:
+                    pipeline_log.info(
+                        "All samples already exist in STAC API for ref_id %s, collection %s. No samples to extract.",
+                        ref_id,
+                        collection,
+                    )
+                    return gpd.GeoDataFrame()
         else:
             pipeline_log.warning(
                 "STAC check is only performed for PATCH_SENTINEL1 or PATCH_SENTINEL2 collections. ",
