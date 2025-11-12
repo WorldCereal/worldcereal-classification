@@ -138,14 +138,19 @@ class CropTypeParameters(BaseParameters):
         Whether or not to save the cropland mask as an intermediate result.
     """
 
-    feature_parameters: FeaturesParameters = Field(
-        default_factory=lambda: BaseParameters.create_feature_parameters(
+    @staticmethod
+    def _default_feature_parameters() -> FeaturesParameters:
+        """Single source of truth for default croptype feature parameters."""
+        return BaseParameters.create_feature_parameters(
             rescale_s1=False,
-            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DTrue-run%3D202507181013_encoder.pt",  # NOQA
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",  # NOQA
             compile_presto=False,
-            temporal_prediction=True,
+            temporal_prediction=False,
             target_date=None,  # By default take the middle date
         )
+
+    feature_parameters: FeaturesParameters = Field(
+        default_factory=lambda: CropTypeParameters._default_feature_parameters()
     )
     classifier_parameters: ClassifierParameters = Field(
         default_factory=lambda: BaseParameters.create_classifier_parameters(
@@ -156,17 +161,10 @@ class CropTypeParameters(BaseParameters):
     save_mask: bool = Field(default=False)
 
     def __init__(self, target_date: Optional[str] = None, **kwargs):
-        feature_params = self.create_feature_parameters(
-            rescale_s1=False,
-            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DTrue-run%3D202507181013_encoder.pt",  # NOQA
-            compile_presto=False,
-            temporal_prediction=True,
-            target_date=target_date,
-        )
-
         if "feature_parameters" not in kwargs:
-            kwargs["feature_parameters"] = feature_params
-
+            fp = self._default_feature_parameters().model_copy()
+            fp.target_date = target_date  # type: ignore[attr-defined]
+            kwargs["feature_parameters"] = fp
         super().__init__(**kwargs)
 
     @model_validator(mode="after")

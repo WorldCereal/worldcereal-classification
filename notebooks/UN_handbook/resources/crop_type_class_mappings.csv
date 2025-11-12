@@ -1,0 +1,868 @@
+﻿ewoc_code;level_1;level_2;level_3;level_4;level_5;definition;label_full;LC_code;LC_label;sampling_label;sampling_label_v0;finetune_class
+00-00-00-000-0;unknown;;;;;;unknown;0;unknown;unknown;;
+10-00-00-000-0;cropland_unspecified;;;;;Unknown cropped land, either annual or perennial;cropland_unspecified;10;cropland_unspecified;cropland_unspecified;cropland_unspecified;
+11-00-00-000-0;temporary_crops;;;;;Unspecified arable crops (harvested once every year);temporary_crops;11;temporary_crops;temporary_crops;temporary_crops;
+11-01-00-000-0;temporary_crops;cereals;unspecified_cereal;unspecified_cereal;;;unspecified_cereal;11;temporary_crops;cereals;cereals;
+11-01-00-000-1;temporary_crops;cereals;unspecified_cereal;unspecified_cereal;unspecified_winter_cereal;;unspecified_winter_cereal;11;temporary_crops;cereals;cereals;
+11-01-00-000-2;temporary_crops;cereals;unspecified_cereal;unspecified_cereal;unspecified_spring_cereal;;unspecified_spring_cereal;11;temporary_crops;spring_cereals;cereals;
+11-01-01-000-0;temporary_crops;cereals;wheat;unspecified_wheat;;Triticum genus;unspecified_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-000-1;temporary_crops;cereals;wheat;unspecified_wheat;unspecified_winter_wheat;;unspecified_winter_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-000-2;temporary_crops;cereals;wheat;unspecified_wheat;unspecified_spring_wheat;;unspecified_spring_wheat;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-000-3;temporary_crops;cereals;wheat;unspecified_wheat;fodder_wheat;wheat cut early for fodder;fodder_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-000-4;temporary_crops;cereals;wheat;unspecified_wheat;fodder_winter_wheat;wheat cut early for fodder;fodder_winter_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-000-5;temporary_crops;cereals;wheat;unspecified_wheat;fodder_spring_wheat;wheat cut early for fodder;fodder_spring_wheat;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-001-0;temporary_crops;cereals;wheat;common_soft_wheat;;Triticum aestivum;common_soft_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-001-1;temporary_crops;cereals;wheat;common_soft_wheat;winter_common_soft_wheat;;winter_common_soft_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-001-2;temporary_crops;cereals;wheat;common_soft_wheat;spring_common_soft_wheat;;spring_common_soft_wheat;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-002-0;temporary_crops;cereals;wheat;durum_hard_wheat;;Triticum durum;durum_hard_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-002-1;temporary_crops;cereals;wheat;durum_hard_wheat;winter_durum_hard_wheat;;winter_durum_hard_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-002-2;temporary_crops;cereals;wheat;durum_hard_wheat;spring_durum_hard_wheat;;spring_durum_hard_wheat;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-003-0;temporary_crops;cereals;wheat;khorasan_wheat;;Triticum turanicum;khorasan_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-003-1;temporary_crops;cereals;wheat;khorasan_wheat;winter_khorasan_wheat;;winter_khorasan_wheat;11;temporary_crops;wheat;wheat;wheat
+11-01-01-003-2;temporary_crops;cereals;wheat;khorasan_wheat;spring_khorasan_wheat;;spring_khorasan_wheat;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-004-0;temporary_crops;cereals;wheat;spelt;;Triticum spelta;spelt;11;temporary_crops;wheat;wheat;wheat
+11-01-01-004-1;temporary_crops;cereals;wheat;spelt;winter_spelt;;winter_spelt;11;temporary_crops;wheat;wheat;wheat
+11-01-01-004-2;temporary_crops;cereals;wheat;spelt;spring_spelt;;spring_spelt;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-005-0;temporary_crops;cereals;wheat;emmer;;Triticum dicoccum;emmer;11;temporary_crops;wheat;wheat;wheat
+11-01-01-005-1;temporary_crops;cereals;wheat;emmer;winter_emmer;;winter_emmer;11;temporary_crops;wheat;wheat;wheat
+11-01-01-005-2;temporary_crops;cereals;wheat;emmer;spring_emmer;;spring_emmer;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-006-0;temporary_crops;cereals;wheat;einkorn;;Triticum monococcum;einkorn;11;temporary_crops;wheat;wheat;wheat
+11-01-01-006-1;temporary_crops;cereals;wheat;einkorn;winter_einkorn;;winter_einkorn;11;temporary_crops;wheat;wheat;wheat
+11-01-01-006-2;temporary_crops;cereals;wheat;einkorn;spring_einkorn;;spring_einkorn;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-01-007-0;temporary_crops;cereals;wheat;einkorn_emmer;;Triticum monococcum OR Triticum dicoccum;einkorn_emmer;11;temporary_crops;wheat;wheat;wheat
+11-01-01-007-1;temporary_crops;cereals;wheat;einkorn_emmer;winter_einkorn_emmer;;winter_einkorn_emmer;11;temporary_crops;wheat;wheat;wheat
+11-01-01-007-2;temporary_crops;cereals;wheat;einkorn_emmer;spring_einkorn_emmer;;spring_einkorn_emmer;11;temporary_crops;spring_wheat;wheat;spring_wheat
+11-01-02-000-0;temporary_crops;cereals;barley;unspecified_barley;;Hordeum genus;unspecified_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-1;temporary_crops;cereals;barley;unspecified_barley;winter_barley;;winter_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-2;temporary_crops;cereals;barley;unspecified_barley;spring_barley;;spring_barley;11;temporary_crops;spring_barley;barley;spring_barley
+11-01-02-000-3;temporary_crops;cereals;barley;unspecified_barley;fodder_barley;;fodder_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-4;temporary_crops;cereals;barley;unspecified_barley;six-row_barley;;six-row_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-5;temporary_crops;cereals;barley;unspecified_barley;two-row_barley;;two-row_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-6;temporary_crops;cereals;barley;unspecified_barley;fodder_winter_barley;;fodder_winter_barley;11;temporary_crops;barley;barley;barley
+11-01-02-000-7;temporary_crops;cereals;barley;unspecified_barley;fodder_spring_barley;;fodder_spring_barley;11;temporary_crops;spring_barley;barley;spring_barley
+11-01-02-001-0;temporary_crops;cereals;barley;common_barley;;Hordeum vulgare;common_barley;11;temporary_crops;barley;barley;barley
+11-01-02-001-1;temporary_crops;cereals;barley;common_barley;winter_common_barley;;winter_common_barley;11;temporary_crops;barley;barley;barley
+11-01-02-001-2;temporary_crops;cereals;barley;common_barley;spring_common_barley;;spring_common_barley;11;temporary_crops;spring_barley;barley;spring_barley
+11-01-02-002-0;temporary_crops;cereals;barley;other_barley;;other Hordeum species than H. vulgare;other_barley;11;temporary_crops;barley;barley;barley
+11-01-02-002-1;temporary_crops;cereals;barley;other_barley;winter_other_barley;;winter_other_barley;11;temporary_crops;barley;barley;barley
+11-01-02-002-2;temporary_crops;cereals;barley;other_barley;spring_other_barley;;spring_other_barley;11;temporary_crops;spring_barley;barley;spring_barley
+11-01-03-000-0;temporary_crops;cereals;rye;unspecified_rye;;Secale genus;unspecified_rye;11;temporary_crops;rye;rye;rye
+11-01-03-000-1;temporary_crops;cereals;rye;unspecified_rye;winter_rye;;winter_rye;11;temporary_crops;rye;rye;rye
+11-01-03-000-2;temporary_crops;cereals;rye;unspecified_rye;spring_rye;;spring_rye;11;temporary_crops;spring_rye;rye;spring_rye
+11-01-03-000-3;temporary_crops;cereals;rye;unspecified_rye;fodder_rye;rye cut early for fodder;fodder_rye;11;temporary_crops;rye;rye;rye
+11-01-03-000-4;temporary_crops;cereals;rye;unspecified_rye;non_fodder_rye;unspecified rye, but non-fodder;non_fodder_rye;11;temporary_crops;rye;rye;rye
+11-01-03-000-5;temporary_crops;cereals;rye;unspecified_rye;fodder_winter_rye;;fodder_winter_rye;11;temporary_crops;rye;rye;rye
+11-01-03-000-6;temporary_crops;cereals;rye;unspecified_rye;fodder_spring_rye;;fodder_spring_rye;11;temporary_crops;spring_rye;rye;spring_rye
+11-01-03-001-0;temporary_crops;cereals;rye;common_rye;;Secale cereale;common_rye;11;temporary_crops;rye;rye;rye
+11-01-03-001-1;temporary_crops;cereals;rye;common_rye;winter_common_rye;;winter_common_rye;11;temporary_crops;rye;rye;rye
+11-01-03-001-2;temporary_crops;cereals;rye;common_rye;spring_common_rye;;spring_common_rye;11;temporary_crops;spring_rye;rye;spring_rye
+11-01-03-002-0;temporary_crops;cereals;rye;other_rye;;other Secale species than S. cereale;other_rye;11;temporary_crops;rye;rye;rye
+11-01-03-002-1;temporary_crops;cereals;rye;other_rye;winter_other_rye;;winter_other_rye;11;temporary_crops;rye;rye;rye
+11-01-03-002-2;temporary_crops;cereals;rye;other_rye;spring_other_rye;;spring_other_rye;11;temporary_crops;spring_rye;rye;spring_rye
+11-01-04-000-0;temporary_crops;cereals;oats;unspecified_oats;;Avena genus;unspecified_oats;11;temporary_crops;oats;oats;oats
+11-01-04-000-1;temporary_crops;cereals;oats;unspecified_oats;winter_oats;;winter_oats;11;temporary_crops;oats;oats;oats
+11-01-04-000-2;temporary_crops;cereals;oats;unspecified_oats;spring_oats;;spring_oats;11;temporary_crops;spring_oats;oats;spring_oats
+11-01-04-000-3;temporary_crops;cereals;oats;unspecified_oats;fodder_oats;;fodder_oats;11;temporary_crops;oats;oats;oats
+11-01-04-000-4;temporary_crops;cereals;oats;unspecified_oats;fodder_winter_oats;;fodder_winter_oats;11;temporary_crops;oats;oats;oats
+11-01-04-000-5;temporary_crops;cereals;oats;unspecified_oats;fodder_spring_oats;;fodder_spring_oats;11;temporary_crops;spring_oats;oats;spring_oats
+11-01-04-001-0;temporary_crops;cereals;oats;common_oats;;Avena sativa;common_oats;11;temporary_crops;oats;oats;oats
+11-01-04-001-1;temporary_crops;cereals;oats;common_oats;winter_common_oats;;winter_common_oats;11;temporary_crops;oats;oats;oats
+11-01-04-001-2;temporary_crops;cereals;oats;common_oats;spring_common_oats;;spring_common_oats;11;temporary_crops;spring_oats;oats;spring_oats
+11-01-04-002-0;temporary_crops;cereals;oats;other_oats;;other Avena species than A. sativa;other_oats;11;temporary_crops;oats;oats;oats
+11-01-04-002-1;temporary_crops;cereals;oats;other_oats;winter_other_oats;;winter_other_oats;11;temporary_crops;oats;oats;oats
+11-01-04-002-2;temporary_crops;cereals;oats;other_oats;spring_other_oats;;spring_other_oats;11;temporary_crops;spring_oats;oats;spring_oats
+11-01-04-003-0;temporary_crops;cereals;oats;bristle_oats;;Avena strigosa;bristle_oats;11;temporary_crops;oats;oats;oats
+11-01-05-000-0;temporary_crops;cereals;triticale;triticale;;Hybrid between wheat and rye;triticale;11;temporary_crops;cereals;other_cereals;cereals
+11-01-05-000-1;temporary_crops;cereals;triticale;triticale;winter_triticale;;winter_triticale;11;temporary_crops;cereals;other_cereals;cereals
+11-01-05-000-2;temporary_crops;cereals;triticale;triticale;spring_triticale;;spring_triticale;11;temporary_crops;spring_cereals;other_cereals;spring_cereals
+11-01-05-000-3;temporary_crops;cereals;triticale;triticale;fodder_triticale;;fodder_triticale;11;temporary_crops;cereals;other_cereals;cereals
+11-01-05-000-4;temporary_crops;cereals;triticale;triticale;fodder_winter_triticale;;fodder_winter_triticale;11;temporary_crops;cereals;other_cereals;cereals
+11-01-05-000-5;temporary_crops;cereals;triticale;triticale;fodder_spring_triticale;;fodder_spring_triticale;11;temporary_crops;spring_cereals;other_cereals;spring_cereals
+11-01-06-000-0;temporary_crops;cereals;maize;maize;;Zea mays;maize;11;temporary_crops;maize;maize;maize
+11-01-06-000-1;temporary_crops;cereals;maize;maize;grain_maize_corn_popcorn;maize for human consumption;grain_maize_corn_popcorn;11;temporary_crops;maize;maize;maize
+11-01-06-000-2;temporary_crops;cereals;maize;maize;green_silo_maize;harvested green;green_silo_maize;11;temporary_crops;maize;maize;maize
+11-01-06-000-3;temporary_crops;cereals;maize;maize;other_maize;other Zea species than Z. mays;other_maize;11;temporary_crops;maize;maize;maize
+11-01-06-000-4;temporary_crops;cereals;maize;maize;energy_maize;maize for energy production;energy_maize;11;temporary_crops;maize;maize;maize
+11-01-06-000-5;temporary_crops;cereals;maize;maize;teosinte;;teosinte;11;temporary_crops;maize;maize;maize
+11-01-07-000-0;temporary_crops;cereals;sorghum;unspecified_sorghum;;;unspecified_sorghum;11;temporary_crops;sorghum;sorghum;sorghum
+11-01-07-001-0;temporary_crops;cereals;sorghum;sweet_sorghum;;;sweet_sorghum;11;temporary_crops;sorghum;sorghum;sorghum
+11-01-07-002-0;temporary_crops;cereals;sorghum;forage_sorghum;;;forage_sorghum;11;temporary_crops;sorghum;sorghum;sorghum
+11-01-08-000-0;temporary_crops;cereals;rice;rice;;;rice;11;temporary_crops;rice;rice;rice
+11-01-09-000-0;temporary_crops;cereals;teff;teff;;;teff;11;temporary_crops;cereals;other_cereals;cereals
+11-01-10-000-0;temporary_crops;cereals;canary_seed_canaryseed;canary_seed_canaryseed;;;canary_seed_canaryseed;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-000-0;temporary_crops;cereals;cereal_mixtures;unspecified_cereal_mixture;;;unspecified_cereal_mixture;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-000-1;temporary_crops;cereals;cereal_mixtures;unspecified_cereal_mixture;cereals_mixture_fodder;;cereals_mixture_fodder;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-000-2;temporary_crops;cereals;cereal_mixtures;unspecified_cereal_mixture;winter_cereals_mixture;;winter_cereals_mixture;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-000-3;temporary_crops;cereals;cereal_mixtures;unspecified_cereal_mixture;spring_cereals_mixture;;spring_cereals_mixture;11;temporary_crops;spring_cereals;other_cereals;cereals
+11-01-11-001-0;temporary_crops;cereals;cereal_mixtures;meslin;;A mixture of wheat and rye that is sown and harvested together;meslin;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-001-1;temporary_crops;cereals;cereal_mixtures;meslin;winter_meslin;;winter_meslin;11;temporary_crops;cereals;other_cereals;cereals
+11-01-11-001-2;temporary_crops;cereals;cereal_mixtures;meslin;spring_meslin;;spring_meslin;11;temporary_crops;spring_cereals;other_cereals;cereals
+11-01-11-002-0;temporary_crops;cereals;cereal_mixtures;wheat_like_mixtures;;mixture of wheat-like cereals such as wheat, barley, rye, oats, triticale;wheat_like_mixtures;11;temporary_crops;cereals;other_cereals;
+11-01-11-003-0;temporary_crops;cereals;cereal_mixtures;wheat_maize_mixture;;mixture of wheat-like cereal with maize;wheat_maize_mixtures;11;temporary_crops;cereals;other_cereals;
+11-01-11-004-0;temporary_crops;cereals;cereal_mixtures;maize_millet_sorghum;;mixture of maize, millet, sorghum;maize_millet_sorghum;11;temporary_crops;cereals;other_cereals;
+11-01-11-005-0;temporary_crops;cereals;cereal_mixtures;maize_rice;;;maize_rice;11;temporary_crops;cereals;other_cereals;
+11-01-12-000-0;temporary_crops;cereals;millet;unspecified_millet;;;unspecified_millet;11;temporary_crops;millet;millet;millet
+11-01-12-001-0;temporary_crops;cereals;millet;foxtail_millet_moha;;;foxtail_millet_moha;11;temporary_crops;millet;millet;millet
+11-01-12-002-0;temporary_crops;cereals;millet;burgu_millet;;Bourgou, hippo grass, Echinochloa stagnina;burgu_millet;11;temporary_crops;millet;millet;millet
+11-01-12-003-0;temporary_crops;cereals;millet;finger_millet;;"ragi; Eleusine coracana";finger_millet;11;temporary_crops;millet;millet;millet
+11-01-12-004-0;temporary_crops;cereals;millet;pearl_millet;;Cenchrus americanus, commonly known as the synonym Pennisetum glaucum;pearl_millet;11;temporary_crops;millet;millet;millet
+11-01-12-005-0;temporary_crops;cereals;millet;hungarian_millet;;Panicum miliaceum;hungarian_millet;11;temporary_crops;millet;millet;millet
+11-02-00-000-0;temporary_crops;pseudocereal;;;;;pseudocereal;11;temporary_crops;pseudocereal;pseudocereal;pseudocereal
+11-02-00-001-0;temporary_crops;pseudocereal;;amaranth;;;amaranth;11;temporary_crops;pseudocereal;pseudocereal;pseudocereal
+11-02-00-002-0;temporary_crops;pseudocereal;;buckwheat;;;buckwheat;11;temporary_crops;pseudocereal;pseudocereal;pseudocereal
+11-02-00-002-1;temporary_crops;pseudocereal;;buckwheat;tartary_buckwheat;Fagopyrum tataricum;tartary_buckwheat;11;temporary_crops;pseudocereal;pseudocereal;pseudocereal
+11-02-00-003-0;temporary_crops;pseudocereal;;quinoa;;;quinoa;11;temporary_crops;pseudocereal;pseudocereal;pseudocereal
+11-03-00-000-0;temporary_crops;vegetables_fruits;;;;;vegetables_fruits;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-01-000-0;temporary_crops;vegetables_fruits;fruit_bearing_vegetables;;;;fruit_bearing_vegetables;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-01-001-0;temporary_crops;vegetables_fruits;fruit_bearing_vegetables;tomato;;;tomato;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-01-002-0;temporary_crops;vegetables_fruits;fruit_bearing_vegetables;aubergine_eggplant;;;aubergine_eggplant;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-01-003-0;temporary_crops;vegetables_fruits;fruit_bearing_vegetables;okra_ladys_finger;;Abelmoschus esculentus;okra_ladys_finger;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-000-0;temporary_crops;vegetables_fruits;cucurbits;;;;cucurbits;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-001-0;temporary_crops;vegetables_fruits;cucurbits;cucumber_pickle;;;cucumber_pickle;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-002-0;temporary_crops;vegetables_fruits;cucurbits;honeydew;;;honeydew;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-003-0;temporary_crops;vegetables_fruits;cucurbits;melon;;;melon;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-004-0;temporary_crops;vegetables_fruits;cucurbits;pumpkin_squash_gourd;;;pumpkin_squash_gourd;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-005-0;temporary_crops;vegetables_fruits;cucurbits;watermelon;;;watermelon;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-02-006-0;temporary_crops;vegetables_fruits;cucurbits;zucchini_courgette;;;zucchini_courgette;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-03-000-0;temporary_crops;vegetables_fruits;capsicum;;;;capsicum;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-03-007-0;temporary_crops;vegetables_fruits;capsicum;bell_pepper_paprika;;;bell_pepper_paprika;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-03-008-0;temporary_crops;vegetables_fruits;capsicum;chili_pepper;;;chili_pepper;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-04-000-0;temporary_crops;vegetables_fruits;leafy_stem_vegetables;;;;leafy_stem_vegetables;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-04-001-0;temporary_crops;vegetables_fruits;leafy_stem_vegetables;rhubarb;;;rhubarb;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-04-002-0;temporary_crops;vegetables_fruits;leafy_stem_vegetables;artichoke;;;artichoke;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-04-003-0;temporary_crops;vegetables_fruits;leafy_stem_vegetables;asparagus;;;asparagus;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-05-000-0;temporary_crops;vegetables_fruits;brassicaceae_cruciferae;;;;brassicaceae_cruciferae;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-000-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cabbage;;;cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-000-1;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cabbage;winter_cabbage;;winter_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-000-2;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cabbage;spring_cabbage;;spring_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-001-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;bok_choy_pak_choi;;;bok_choy_pak_choi;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-002-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;broccoli;;;broccoli;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-002-1;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;broccoli;winter_broccoli;;winter_broccoli;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-002-2;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;broccoli;spring_broccoli;;spring_broccoli;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-003-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;brussels_sprouts;;;brussels_sprouts;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-004-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cauliflower;;;cauliflower;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-004-1;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cauliflower;winter_cauliflower;;winter_cauliflower;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-004-2;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cauliflower;spring_cauliflower;;spring_cauliflower;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-005-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;chinese_cabbage;;;chinese_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-006-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;collard_greens;;;collard_greens;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-007-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;gai_lan;;;gai_lan;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-008-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;kale;;;kale;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-009-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;kohlrabi;;;kohlrabi;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-010-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;red_cabbage;;;red_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-011-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;savoy_cabbage;;;savoy_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-012-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;white_cabbage;;;white_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-013-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;cauliflower_broccoli;;;cauliflower_broccoli;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-014-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;fodder_cabbage;;;fodder_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-015-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;pointed_white_cabbage;;spitskool;pointed_white_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-06-016-0;temporary_crops;vegetables_fruits;brassica_oleracea_cabbage;abyssinian_cabbage;;Abyssinian cabbage (Crambe abyssinica);abyssinian_cabbage;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-07-000-0;temporary_crops;vegetables_fruits;celery;;;;celery;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-07-001-0;temporary_crops;vegetables_fruits;celery;celeriac;;;celeriac;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-07-002-0;temporary_crops;vegetables_fruits;celery;leaf_celery;;;leaf_celery;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-07-002-1;temporary_crops;vegetables_fruits;celery;leaf_celery;winter_leaf_celery;;winter_leaf_celery;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-07-002-2;temporary_crops;vegetables_fruits;celery;leaf_celery;spring_leaf_celery;;spring_leaf_celery;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-000-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;;;;salads_lettuce_leaf_vegetables;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-001-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;chard;;;chard;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-002-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;chicory_chicories;;;chicory_chicories;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-002-1;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;chicory_chicories;brussels_chicory;witloof;brussels_chicory;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-003-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;endive;;;endive;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-004-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;iceberg;;;iceberg;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-005-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;lambs_lettuce_rapunzel_mache;;;lambs_lettuce_rapunzel_mache;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-006-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;rocket_arugula;;;rocket_arugula;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-007-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;sorrel;;;sorrel;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-008-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;spinach;;;spinach;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-008-1;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;spinach;spinach_winter;;spinach_winter;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-008-2;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;spinach;spinach_spring;;spinach_spring;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-009-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;purslane;;;purslane;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-010-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;cress;;;cress;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-011-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;lettuce;;;lettuce;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-012-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;radicchio;;;radicchio;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-013-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;mustard_greens;;sarepta mustard, brown mustard, Brassica juncea;mustard_greens;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-08-014-0;temporary_crops;vegetables_fruits;salads_lettuce_leaf_vegetables;rapini;;"turnip tops; broccoli rabe";rapini;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-000-0;temporary_crops;vegetables_fruits;root_vegetables;;;;root_vegetables;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-001-0;temporary_crops;vegetables_fruits;root_vegetables;arctium_burdock;;;arctium_burdock;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-003-0;temporary_crops;vegetables_fruits;root_vegetables;horseradish;;;horseradish;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-004-0;temporary_crops;vegetables_fruits;root_vegetables;carrots_daucus;;;carrots_daucus;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-004-1;temporary_crops;vegetables_fruits;root_vegetables;carrots_daucus;fodder_carrot;;fodder_carrot;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-005-0;temporary_crops;vegetables_fruits;root_vegetables;parsnips;;;parsnips;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-006-0;temporary_crops;vegetables_fruits;root_vegetables;radish;;;radish;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-006-1;temporary_crops;vegetables_fruits;root_vegetables;radish;fodder_radish;"oilseed radish (cover crop); Raphanus sativus subsp. Oleiferus";fodder_radish;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-007-0;temporary_crops;vegetables_fruits;root_vegetables;turnips;;;turnips;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-007-1;temporary_crops;vegetables_fruits;root_vegetables;turnips;fodder_turnip;;fodder_turnip;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-007-2;temporary_crops;vegetables_fruits;root_vegetables;turnips;summer_turnip;;summer_turnip;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-007-3;temporary_crops;vegetables_fruits;root_vegetables;turnips;winter_turnip;;winter_turnip;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-008-0;temporary_crops;vegetables_fruits;root_vegetables;swede_rutabaga;;;swede_rutabaga;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-009-0;temporary_crops;vegetables_fruits;root_vegetables;fennel;;;fennel;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-010-0;temporary_crops;vegetables_fruits;root_vegetables;topinambur_jerusalem_artichoke;;aardpeer;topinambur_jerusalem_artichoke;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-011-0;temporary_crops;vegetables_fruits;root_vegetables;black_radish;;rammenas;black_radish;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-012-0;temporary_crops;vegetables_fruits;root_vegetables;fodder_roots;;;fodder_roots;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-09-013-0;temporary_crops;vegetables_fruits;root_vegetables;black_salsify;;schorseneer;black_salsify;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-000-0;temporary_crops;vegetables_fruits;alliums;;;;alliums;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-001-0;temporary_crops;vegetables_fruits;alliums;chives;;;chives;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-002-0;temporary_crops;vegetables_fruits;alliums;garlic;;;garlic;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-002-1;temporary_crops;vegetables_fruits;alliums;garlic;winter_garlic;;winter_garlic;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-002-2;temporary_crops;vegetables_fruits;alliums;garlic;spring_garlic;;spring_garlic;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-003-0;temporary_crops;vegetables_fruits;alliums;leek;;;leek;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-003-1;temporary_crops;vegetables_fruits;alliums;leek;winter_leek;;winter_leek;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-003-2;temporary_crops;vegetables_fruits;alliums;leek;spring_leek;;spring_leek;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-004-0;temporary_crops;vegetables_fruits;alliums;onions;;;onions;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-004-1;temporary_crops;vegetables_fruits;alliums;onions;onions_early;from LPIS flanders;onions_early;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-004-2;temporary_crops;vegetables_fruits;alliums;onions;onions_late;from LPIS flanders;onions_late;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-004-3;temporary_crops;vegetables_fruits;alliums;onions;silver_onion;small onions (conserved in vinegar);silver_onion;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-005-0;temporary_crops;vegetables_fruits;alliums;scallion;;;scallion;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-006-0;temporary_crops;vegetables_fruits;alliums;shallot;;;shallot;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-11-007-0;temporary_crops;vegetables_fruits;alliums;onion_shallot;;;onion_shallot;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-12-000-0;temporary_crops;vegetables_fruits;annual_fruits;;;;annual_fruits;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-12-001-0;temporary_crops;vegetables_fruits;annual_fruits;strawberries;;;strawberries;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-03-13-000-0;temporary_crops;vegetables_fruits;vegetable_fruit_mixtures;;;;vegetable_fruit_mixtures;11;temporary_crops;vegetables_fruits;vegetables_fruits;vegetables_fruits
+11-04-00-000-0;temporary_crops;mushrooms_truffles;;;;;mushrooms_truffles;11;temporary_crops;mushrooms_truffles;mushrooms_truffles;
+11-04-00-001-0;temporary_crops;mushrooms_truffles;;truffle;;;truffle;11;temporary_crops;mushrooms_truffles;mushrooms_truffles;
+11-04-00-002-0;temporary_crops;mushrooms_truffles;;champignons;;;champignons;11;temporary_crops;mushrooms_truffles;mushrooms_truffles;
+11-05-00-000-0;temporary_crops;dry_pulses_legumes;;;;;dry_pulses_legumes;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-001-0;temporary_crops;dry_pulses_legumes;;esparsette_onobrychis;;;esparsette_onobrychis;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-002-0;temporary_crops;dry_pulses_legumes;;fenugreek;;;fenugreek;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-003-0;temporary_crops;dry_pulses_legumes;;lentils;;;lentils;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-003-1;temporary_crops;dry_pulses_legumes;;lentils;fodder_lentils;;fodder_lentils;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-003-2;temporary_crops;dry_pulses_legumes;;lentils;winter_lentils;;winter_lentils;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-003-3;temporary_crops;dry_pulses_legumes;;lentils;spring_lentils;;spring_lentils;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-004-0;temporary_crops;dry_pulses_legumes;;sweet_lupins;;;sweet_lupins;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-004-1;temporary_crops;dry_pulses_legumes;;sweet_lupins;winter_lupine;;winter_lupine;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-004-2;temporary_crops;dry_pulses_legumes;;sweet_lupins;spring_lupine;;spring_lupine;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-004-3;temporary_crops;dry_pulses_legumes;;sweet_lupins;winter_fodder_lupine;;winter_fodder_lupine;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-004-4;temporary_crops;dry_pulses_legumes;;sweet_lupins;spring_fodder_lupine;;spring_fodder_lupine;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-005-0;temporary_crops;dry_pulses_legumes;;crotalaria;;brown hemp, indian hemp, madras hemp, sun hemp;crotalaria;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-00-006-0;temporary_crops;dry_pulses_legumes;;coronilla;;;coronilla;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-000-0;temporary_crops;dry_pulses_legumes;beans_peas;;;;beans_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-0;temporary_crops;dry_pulses_legumes;beans_peas;beans;;;beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-1;temporary_crops;dry_pulses_legumes;beans_peas;beans;forage_beans;;forage_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-2;temporary_crops;dry_pulses_legumes;beans_peas;beans;kidney_beans;;kidney_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-3;temporary_crops;dry_pulses_legumes;beans_peas;beans;lima_beans;;lima_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-4;temporary_crops;dry_pulses_legumes;beans_peas;beans;pinto_beans;;pinto_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-5;temporary_crops;dry_pulses_legumes;beans_peas;beans;red_beans;;red_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-6;temporary_crops;dry_pulses_legumes;beans_peas;beans;white_beans;;white_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-7;temporary_crops;dry_pulses_legumes;beans_peas;beans;brown_beans;;brown_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-8;temporary_crops;dry_pulses_legumes;beans_peas;beans;common_beans;phaseolus vulgaris;common_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-001-9;temporary_crops;dry_pulses_legumes;beans_peas;beans;runner_beans;Phaseolus coccineus;runner_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-0;temporary_crops;dry_pulses_legumes;beans_peas;peas;;;peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-1;temporary_crops;dry_pulses_legumes;beans_peas;peas;winter_peas;;winter_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-2;temporary_crops;dry_pulses_legumes;beans_peas;peas;spring_peas;;spring_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-3;temporary_crops;dry_pulses_legumes;beans_peas;peas;forage_peas;;forage_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-4;temporary_crops;dry_pulses_legumes;beans_peas;peas;winter_forage_peas;;winter_forage_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-5;temporary_crops;dry_pulses_legumes;beans_peas;peas;spring_forage_peas;;spring_forage_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-002-6;temporary_crops;dry_pulses_legumes;beans_peas;peas;field_peas;Pisum sativum var. arvense;field_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-003-0;temporary_crops;dry_pulses_legumes;beans_peas;broad_fava_beans;;;broad_fava_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-003-1;temporary_crops;dry_pulses_legumes;beans_peas;broad_fava_beans;fodder_fava_beans;;fodder_fava_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-003-2;temporary_crops;dry_pulses_legumes;beans_peas;broad_fava_beans;early_fava_beans;;early_fava_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-003-3;temporary_crops;dry_pulses_legumes;beans_peas;broad_fava_beans;late_fava_beans;;late_fava_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-004-0;temporary_crops;dry_pulses_legumes;beans_peas;chick_peas;;;chick_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-005-0;temporary_crops;dry_pulses_legumes;beans_peas;cow_peas;;Vigna unguiculata;cow_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-006-0;temporary_crops;dry_pulses_legumes;beans_peas;pigeon_peas;;;pigeon_peas;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-007-0;temporary_crops;dry_pulses_legumes;beans_peas;indian_pea;;Lathyrus sativus;indian_pea;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-008-0;temporary_crops;dry_pulses_legumes;beans_peas;mexican_turnip_jicama;;Pachyrhizus erosus;mexican_turnip_jicama;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-009-0;temporary_crops;dry_pulses_legumes;beans_peas;jack_beans_canavalia;;Canavalia sp.;jack_beans_canavalia;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-010-0;temporary_crops;dry_pulses_legumes;beans_peas;velvet_beans_mucuna;;Mucuna pruriens;velvet_beans_mucuna;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-011-0;temporary_crops;dry_pulses_legumes;beans_peas;lablab_beans_dolichos;;Lablab purpureus (or Dolichos lablab);lablab_beans_dolichos;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-012-0;temporary_crops;dry_pulses_legumes;beans_peas;mung_beans;;Vigna radiata;mung_beans;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-013-0;temporary_crops;dry_pulses_legumes;beans_peas;bean_pea_mixture;;;bean_pea_mixture;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-01-014-0;temporary_crops;dry_pulses_legumes;beans_peas;bambara_nut;;vigna subterranea;bambara_nut;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-05-02-000-0;temporary_crops;dry_pulses_legumes;legume_mix;;;;legume_mix;11;temporary_crops;dry_pulses_legumes;dry_pulses_legumes;dry_pulses_legumes
+11-06-00-000-0;temporary_crops;oilseed_crops;;;;;oilseed_crops;11;temporary_crops;temporary_crops;oilseed_crops;
+11-06-00-001-0;temporary_crops;oilseed_crops;;sunflower;;;sunflower;11;temporary_crops;sunflower;sunflower;sunflower
+11-06-00-002-0;temporary_crops;oilseed_crops;;soy_soybeans;;;soy_soybeans;11;temporary_crops;soy_soybeans;soy_soybeans;soy_soybeans
+11-06-00-003-0;temporary_crops;oilseed_crops;;rapeseed_rape;;;rapeseed_rape;11;temporary_crops;rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-003-1;temporary_crops;oilseed_crops;;rapeseed_rape;winter_rapeseed_rape;;winter_rapeseed_rape;11;temporary_crops;rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-003-2;temporary_crops;oilseed_crops;;rapeseed_rape;spring_rapeseed_rape;;spring_rapeseed_rape;11;temporary_crops;spring_rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-003-3;temporary_crops;oilseed_crops;;rapeseed_rape;forage_rape;;forage_rape;11;temporary_crops;rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-003-4;temporary_crops;oilseed_crops;;rapeseed_rape;forage_winter_rape;;forage_winter_rape;11;temporary_crops;rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-003-5;temporary_crops;oilseed_crops;;rapeseed_rape;forage_spring_rape;;forage_spring_rape;11;temporary_crops;spring_rapeseed_rape;rapeseed_rape;rapeseed_rape
+11-06-00-004-0;temporary_crops;oilseed_crops;;guizotia_abyssinica_nyger;;;guizotia_abyssinica_nyger;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-005-0;temporary_crops;oilseed_crops;;groundnuts;;peanut;groundnuts;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-006-0;temporary_crops;oilseed_crops;;castor_bean;;;castor_bean;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-007-0;temporary_crops;oilseed_crops;;linseed;;;linseed;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-007-1;temporary_crops;oilseed_crops;;linseed;winter_linseed_oil;;winter_linseed_oil;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-007-2;temporary_crops;oilseed_crops;;linseed;spring_linseed_oil;;spring_linseed_oil;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-007-3;temporary_crops;oilseed_crops;;linseed;linseed_fibre;;linseed_fibre;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-008-0;temporary_crops;oilseed_crops;;mustard;;;mustard;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-008-1;temporary_crops;oilseed_crops;;mustard;yellow_mustard;"white mustard; Brassica hirita L.; Sinapis alba";yellow_mustard;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-008-2;temporary_crops;oilseed_crops;;mustard;ethiopian_mustard;Brassica carinata;ethiopian_mustard;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-008-3;temporary_crops;oilseed_crops;;mustard;black_mustard;brassica nigra;black_mustard;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-009-0;temporary_crops;oilseed_crops;;safflower;;;safflower;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-010-0;temporary_crops;oilseed_crops;;sesame;;;sesame;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-011-0;temporary_crops;oilseed_crops;;camelina;;;camelina;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-011-1;temporary_crops;oilseed_crops;;camelina;camelina_winter;;camelina_winter;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-011-2;temporary_crops;oilseed_crops;;camelina;camelina_spring;;camelina_spring;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-00-012-0;temporary_crops;oilseed_crops;;oil_radish;;;oil_radish;11;temporary_crops;other_oilseeds;other_oilseeds;other_oilseeds
+11-06-01-000-0;temporary_crops;oilseed_crops;oilseeds_mixture;;;;oilseeds_mixture;11;temporary_crops;other_oilseeds;oilseeds_mixture;other_oilseeds
+11-06-01-001-0;temporary_crops;oilseed_crops;oilseeds_mixture;soybean_groundnut;;;soybean_groundnut;11;temporary_crops;other_oilseeds;oilseeds_mixture;other_oilseeds
+11-06-01-002-0;temporary_crops;oilseed_crops;oilseeds_mixture;soybean_sesame;;;soybean_sesame;11;temporary_crops;other_oilseeds;oilseeds_mixture;other_oilseeds
+11-06-01-003-0;temporary_crops;oilseed_crops;oilseeds_mixture;soybean_sunflower;;;soybean_sunflower;11;temporary_crops;other_oilseeds;oilseeds_mixture;other_oilseeds
+11-06-01-004-0;temporary_crops;oilseed_crops;oilseeds_mixture;sunflower_groundnut;;;sunflower_groundnut;11;temporary_crops;other_oilseeds;oilseeds_mixture;other_oilseeds
+11-07-00-000-0;temporary_crops;root_tuber_crops;;;;;root_tuber_crops;11;temporary_crops;root_tuber_crops;root_tuber_crops;
+11-07-00-001-0;temporary_crops;root_tuber_crops;;potatoes;;;potatoes;11;temporary_crops;potatoes;root_tuber_crops;potatoes
+11-07-00-001-1;temporary_crops;root_tuber_crops;;potatoes;fodder_potatoes;;fodder_potatoes;11;temporary_crops;potatoes;root_tuber_crops;potatoes
+11-07-00-001-2;temporary_crops;root_tuber_crops;;potatoes;early_potatoes;;early_potatoes;11;temporary_crops;potatoes;root_tuber_crops;potatoes
+11-07-00-001-3;temporary_crops;root_tuber_crops;;potatoes;late_potatoes;;late_potatoes;11;temporary_crops;potatoes;root_tuber_crops;potatoes
+11-07-00-002-0;temporary_crops;root_tuber_crops;;sweet_potatoes;;;sweet_potatoes;11;temporary_crops;potatoes;root_tuber_crops;potatoes
+11-07-00-003-0;temporary_crops;root_tuber_crops;;beet;;;beet;11;temporary_crops;beet;root_tuber_crops;beet
+11-07-00-003-1;temporary_crops;root_tuber_crops;;beet;sugar_beet;;sugar_beet;11;temporary_crops;beet;root_tuber_crops;beet
+11-07-00-003-2;temporary_crops;root_tuber_crops;;beet;fodder_beet;;fodder_beet;11;temporary_crops;beet;root_tuber_crops;beet
+11-07-00-003-3;temporary_crops;root_tuber_crops;;beet;beetroot_beets;;beetroot_beets;11;temporary_crops;root_tuber_crops;root_tuber_crops;root_tuber_crops
+11-07-00-004-0;temporary_crops;root_tuber_crops;;cassava;;;cassava;11;temporary_crops;root_tuber_crops;root_tuber_crops;root_tuber_crops
+11-07-00-005-0;temporary_crops;root_tuber_crops;;yams;;;yams;11;temporary_crops;root_tuber_crops;root_tuber_crops;root_tuber_crops
+11-07-01-000-0;temporary_crops;root_tuber_crops;root_tuber_mixture;;;;root_tuber_mixture;11;temporary_crops;root_tuber_crops;root_tuber_crops;root_tuber_crops
+11-07-01-001-0;temporary_crops;root_tuber_crops;root_tuber_mixture;cassava_potatoes;;;cassava_potatoes;11;temporary_crops;root_tuber_crops;root_tuber_crops;root_tuber_crops
+11-08-00-000-0;temporary_crops;fibre_crops;;;;;fibre_crops;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-00-001-0;temporary_crops;fibre_crops;;cotton;;;cotton;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-00-002-0;temporary_crops;fibre_crops;;jute_kenaf;;;jute_kenaf;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-01-000-0;temporary_crops;fibre_crops;fibre_oleaginous_crops;;;;fibre_oleaginous_crops;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-02-000-0;temporary_crops;fibre_crops;flax_hemp;;;;flax_hemp;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-02-001-0;temporary_crops;fibre_crops;flax_hemp;flax;;;flax;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-02-001-1;temporary_crops;fibre_crops;flax_hemp;flax;winter_flax;;winter_flax;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-02-002-0;temporary_crops;fibre_crops;flax_hemp;hemp;;;hemp;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-08-02-002-1;temporary_crops;fibre_crops;flax_hemp;hemp;finola;;finola;11;temporary_crops;fibre_crops;fibre_crops;fibre_crops
+11-09-00-000-0;temporary_crops;herb_spice_medicinal_crops;;;;;herb_spice_medicinal_crops;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-001-0;temporary_crops;herb_spice_medicinal_crops;;sage_chia;;;sage_chia;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-002-0;temporary_crops;herb_spice_medicinal_crops;;actaea_baneberry_christopher_herbs;;;actaea_baneberry_christopher_herbs;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-003-0;temporary_crops;herb_spice_medicinal_crops;;alchemilla_ladys_mantle;;;alchemilla_ladys_mantle;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-004-0;temporary_crops;herb_spice_medicinal_crops;;anethum_dill;;;anethum_dill;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-005-0;temporary_crops;herb_spice_medicinal_crops;;angelica;;;angelica;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-006-0;temporary_crops;herb_spice_medicinal_crops;;anise_aniseed;;;anise_aniseed;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-007-0;temporary_crops;herb_spice_medicinal_crops;;artemisia;;;artemisia;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-008-0;temporary_crops;herb_spice_medicinal_crops;;basil;;;basil;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-009-0;temporary_crops;herb_spice_medicinal_crops;;black_cumin;;;black_cumin;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-010-0;temporary_crops;herb_spice_medicinal_crops;;borage;;;borage;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-011-0;temporary_crops;herb_spice_medicinal_crops;;calendula_marigold;;;calendula_marigold;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-012-0;temporary_crops;herb_spice_medicinal_crops;;caraway;;;caraway;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-012-1;temporary_crops;herb_spice_medicinal_crops;;caraway;caraway_winter;;caraway_winter;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-012-2;temporary_crops;herb_spice_medicinal_crops;;caraway;caraway_spring;;caraway_spring;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-013-0;temporary_crops;herb_spice_medicinal_crops;;catnip;;;catnip;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-014-0;temporary_crops;herb_spice_medicinal_crops;;chamomile;;;chamomile;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-015-0;temporary_crops;herb_spice_medicinal_crops;;chervil;;;chervil;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-016-0;temporary_crops;herb_spice_medicinal_crops;;coriander;;;coriander;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-017-0;temporary_crops;herb_spice_medicinal_crops;;ericaceae_heather;;;ericaceae_heather;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-018-0;temporary_crops;herb_spice_medicinal_crops;;galium_bedstraw;;;galium_bedstraw;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-019-0;temporary_crops;herb_spice_medicinal_crops;;hibiscus;;;hibiscus;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-019-1;temporary_crops;herb_spice_medicinal_crops;;bissap;;Hibiscus sabdariffa;bissap;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-020-0;temporary_crops;herb_spice_medicinal_crops;;lavender_lavandula;;;lavender_lavandula;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-021-0;temporary_crops;herb_spice_medicinal_crops;;lemon_balm_melissa;;;lemon_balm_melissa;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-022-0;temporary_crops;herb_spice_medicinal_crops;;lovage_maggiplant;;;lovage_maggiplant;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-023-0;temporary_crops;herb_spice_medicinal_crops;;mints_peppermint;;;mints_peppermint;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-024-0;temporary_crops;herb_spice_medicinal_crops;;moldavian_dragonhead;;;moldavian_dragonhead;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-025-0;temporary_crops;herb_spice_medicinal_crops;;nasturtiums;;;nasturtiums;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-026-0;temporary_crops;herb_spice_medicinal_crops;;nettles;;;nettles;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-027-0;temporary_crops;herb_spice_medicinal_crops;;oregano;;;oregano;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-028-0;temporary_crops;herb_spice_medicinal_crops;;parsley;;;parsley;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-028-1;temporary_crops;herb_spice_medicinal_crops;;parsley;parsley_root;Petroselinum crispum var. tuberosum;parsley_root;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-029-0;temporary_crops;herb_spice_medicinal_crops;;piper_pepper;;;piper_pepper;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-030-0;temporary_crops;herb_spice_medicinal_crops;;polygonum;;;polygonum;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-031-0;temporary_crops;herb_spice_medicinal_crops;;rosemary;;;rosemary;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-032-0;temporary_crops;herb_spice_medicinal_crops;;rubia_tinctorum_common_madder;;;rubia_tinctorum_common_madder;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-033-0;temporary_crops;herb_spice_medicinal_crops;;saffron_crocus_sativus;;;saffron_crocus_sativus;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-034-0;temporary_crops;herb_spice_medicinal_crops;;silver_comb;;;silver_comb;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-035-0;temporary_crops;herb_spice_medicinal_crops;;st_johns_wort;;;st_johns_wort;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-036-0;temporary_crops;herb_spice_medicinal_crops;;stachys_hedgenettle_chinese_artichoke;;;stachys_hedgenettle_chinese_artichoke;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-037-0;temporary_crops;herb_spice_medicinal_crops;;tarragon;;;tarragon;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-038-0;temporary_crops;herb_spice_medicinal_crops;;thyme;;;thyme;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-039-0;temporary_crops;herb_spice_medicinal_crops;;valerian;;;valerian;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-040-0;temporary_crops;herb_spice_medicinal_crops;;yarrow;;;yarrow;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-041-0;temporary_crops;herb_spice_medicinal_crops;;marian_thistles;;;marian_thistles;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-048-0;temporary_crops;herb_spice_medicinal_crops;;ginger;;;ginger;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-049-0;temporary_crops;herb_spice_medicinal_crops;;vanilla;;;vanilla;10;cropland_unspecified;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-049-1;temporary_crops;herb_spice_medicinal_crops;;vanilla;vanilla_forest;;vanilla_forest;10;cropland_unspecified;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-049-2;temporary_crops;herb_spice_medicinal_crops;;vanilla;green_vanilla;;green_vanilla;10;cropland_unspecified;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-050-0;temporary_crops;herb_spice_medicinal_crops;;tobacco;;;tobacco;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-051-0;temporary_crops;herb_spice_medicinal_crops;;hops;;;hops;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-052-0;temporary_crops;herb_spice_medicinal_crops;;poppy;;;poppy;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-052-1;temporary_crops;herb_spice_medicinal_crops;;poppy;winter_poppy;;winter_poppy;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-052-2;temporary_crops;herb_spice_medicinal_crops;;poppy;spring_poppy;;spring_poppy;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-054-0;temporary_crops;herb_spice_medicinal_crops;;savory;;;savory;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-055-0;temporary_crops;herb_spice_medicinal_crops;;psyllium;;;psyllium;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-055-1;temporary_crops;herb_spice_medicinal_crops;;psyllium_black;;;psyllium_black;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-055-2;temporary_crops;herb_spice_medicinal_crops;;psyllium_plantain;;;psyllium_plantain;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-056-0;temporary_crops;herb_spice_medicinal_crops;;bugleweed;;;bugleweed;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-057-0;temporary_crops;herb_spice_medicinal_crops;;curcuma_turmeric;;;curcuma_turmeric;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-058-0;temporary_crops;herb_spice_medicinal_crops;;speedwell_veronica;;;speedwell_veronica;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-059-0;temporary_crops;herb_spice_medicinal_crops;;hyssop;;;hyssop;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-060-0;temporary_crops;herb_spice_medicinal_crops;;woad;;dyer's woad, glastum, Isatis tinctoria;woad;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-061-0;temporary_crops;herb_spice_medicinal_crops;;marjoram;;;marjoram;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-062-0;temporary_crops;herb_spice_medicinal_crops;;horehound;;Marrubium vulgare;horehound;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-063-0;temporary_crops;herb_spice_medicinal_crops;;agrimony;;agrimonia;agrimony;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-064-0;temporary_crops;herb_spice_medicinal_crops;;mallow;;Malva genus;mallow;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-064-1;temporary_crops;herb_spice_medicinal_crops;;mallow;whorled_mallow;Malva verticillata, chinese marlow, cluster mallow;whorled_mallow;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-064-2;temporary_crops;herb_spice_medicinal_crops;;mallow;fodder_mallow;;fodder_mallow;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-065-0;temporary_crops;herb_spice_medicinal_crops;;marshmallow;;Althaea officinalis;marshmallow;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-066-0;temporary_crops;herb_spice_medicinal_crops;;mullein;;Verbascum;mullein;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-067-0;temporary_crops;herb_spice_medicinal_crops;;comfrey;;Symphytum;comfrey;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-09-00-068-0;temporary_crops;herb_spice_medicinal_crops;;roman_wormwood;;Artemisia pontica;roman_wormwood;11;temporary_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops;herb_spice_medicinal_crops
+11-10-00-000-0;temporary_crops;flower_crops;;;;;flower_crops;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-001-0;temporary_crops;flower_crops;;adonis;;;adonis;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-002-0;temporary_crops;flower_crops;;anemones_windflowers;;;anemones_windflowers;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-003-0;temporary_crops;flower_crops;;asters;;;asters;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-004-0;temporary_crops;flower_crops;;begonias;;;begonias;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-005-0;temporary_crops;flower_crops;;bluebells;;;bluebells;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-006-0;temporary_crops;flower_crops;;bulrush;;;bulrush;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-007-0;temporary_crops;flower_crops;;burnet;;;burnet;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-008-0;temporary_crops;flower_crops;;carnation;;;carnation;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-009-0;temporary_crops;flower_crops;;chrysanthemum;;;chrysanthemum;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-010-0;temporary_crops;flower_crops;;cornflowers;;;cornflowers;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-011-0;temporary_crops;flower_crops;;corsican_hellebore;;;corsican_hellebore;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-012-0;temporary_crops;flower_crops;;dahlia;;;dahlia;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-013-0;temporary_crops;flower_crops;;daisy_daisies;;;daisy_daisies;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-014-0;temporary_crops;flower_crops;;dandelions;;;dandelions;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-015-0;temporary_crops;flower_crops;;echinacea_sun_hat;;;echinacea_sun_hat;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-016-0;temporary_crops;flower_crops;;edelweiss;;;edelweiss;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-017-0;temporary_crops;flower_crops;;fiddleneck_amsinckia;;;fiddleneck_amsinckia;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-018-0;temporary_crops;flower_crops;;fuchsias;;;fuchsias;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-019-0;temporary_crops;flower_crops;;galega;;goat's rue, Galega officinalis;galega;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-020-0;temporary_crops;flower_crops;;gentians;;;gentians;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-021-0;temporary_crops;flower_crops;;gladiolus_gladioli;;;gladiolus_gladioli;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-022-0;temporary_crops;flower_crops;;goldenrod;;;goldenrod;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-023-0;temporary_crops;flower_crops;;iris;;;iris;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-024-0;temporary_crops;flower_crops;;isatis_tinctoria_woad;;;isatis_tinctoria_woad;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-025-0;temporary_crops;flower_crops;;lilies;;;lilies;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-026-0;temporary_crops;flower_crops;;lotus;;;lotus;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-027-0;temporary_crops;flower_crops;;lunaria_honesty_silver;;;lunaria_honesty_silver;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-028-0;temporary_crops;flower_crops;;malva;;;malva;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-029-0;temporary_crops;flower_crops;;milk_star;;;milk_star;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-030-0;temporary_crops;flower_crops;;miscanthus_silvergrass;;;miscanthus_silvergrass;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-031-0;temporary_crops;flower_crops;;monstera_adansonii_eyelet;;;monstera_adansonii_eyelet;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-032-0;temporary_crops;flower_crops;;moonseed;;;moonseed;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-033-0;temporary_crops;flower_crops;;narcissus_daffodil;;;narcissus_daffodil;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-034-0;temporary_crops;flower_crops;;peony_peonies;;;peony_peonies;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-035-0;temporary_crops;flower_crops;;primrose;;;primrose;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-037-0;temporary_crops;flower_crops;;roses;;;roses;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-038-0;temporary_crops;flower_crops;;rudbeckia_coneflowers;;;rudbeckia_coneflowers;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-040-0;temporary_crops;flower_crops;;salsify;;;salsify;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-041-0;temporary_crops;flower_crops;;sanvitalia_procumbens;;;sanvitalia_procumbens;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-042-0;temporary_crops;flower_crops;;serradella;;;serradella;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-043-0;temporary_crops;flower_crops;;silene_catchfly;;;silene_catchfly;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-044-0;temporary_crops;flower_crops;;silphium_rosinweeds;;;silphium_rosinweeds;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-045-0;temporary_crops;flower_crops;;snapdragons;;;snapdragons;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-046-0;temporary_crops;flower_crops;;stonecrop;;;stonecrop;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-047-0;temporary_crops;flower_crops;;tagetes;;;tagetes;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-048-0;temporary_crops;flower_crops;;thimbles;;;thimbles;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-049-0;temporary_crops;flower_crops;;tulips;;;tulips;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-050-0;temporary_crops;flower_crops;;viola;;;viola;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-051-0;temporary_crops;flower_crops;;violets_pansies;;;violets_pansies;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-052-0;temporary_crops;flower_crops;;zinnias;;;zinnias;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-053-0;temporary_crops;flower_crops;;geranium;;;geranium;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-054-0;temporary_crops;flower_crops;;knapweed;;;knapweed;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-055-0;temporary_crops;flower_crops;;crocus;;;crocus;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-056-0;temporary_crops;flower_crops;;calla;;Zantedeschia (aronskelk);calla;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-057-0;temporary_crops;flower_crops;;belladona_lilly;;amaryllis;belladona_lilly;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-058-0;temporary_crops;flower_crops;;allium_flower;;;allium_flower;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-059-0;temporary_crops;flower_crops;;common_grape_hyacinth;;(blauw druifje);common_grape_hyacinth;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-060-0;temporary_crops;flower_crops;;myosotis;;myosotis;myosotis;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-061-0;temporary_crops;flower_crops;;hyacinth;;;hyacinth;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-062-0;temporary_crops;flower_crops;;hawkweed;;Hieracium;hawkweed;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-063-0;temporary_crops;flower_crops;;hollyhock;;Alcea rosea;hollyhock;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-10-00-064-0;temporary_crops;flower_crops;;cow_wheat;;Melampyrum;cow_wheat;11;temporary_crops;flower_crops;flower_crops;flower_crops
+11-11-00-000-0;temporary_crops;grass_fodder_crops;;;;;grass_fodder_crops;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-00-001-0;temporary_crops;grass_fodder_crops;;temporary_grass;;1 year grassland;temporary_grass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-00-002-0;temporary_crops;grass_fodder_crops;;sudan_grass;;;sudan_grass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-000-0;temporary_crops;grass_fodder_crops;poaceae_grasses;;;;poaceae_grasses;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-001-0;temporary_crops;grass_fodder_crops;poaceae_grasses;elymus;;;elymus;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-002-0;temporary_crops;grass_fodder_crops;poaceae_grasses;festuca_fescue;;;festuca_fescue;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-002-1;temporary_crops;grass_fodder_crops;poaceae_grasses;festuca_fescue;tall_fescue;Lolium arundinaceum;tall_fescue;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-002-2;temporary_crops;grass_fodder_crops;poaceae_grasses;festuca_fescue;red_fescue;Festuca rubra;red_fescue;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-003-0;temporary_crops;grass_fodder_crops;poaceae_grasses;cocksfoot_catgrass_dactyl;;;cocksfoot_catgrass_dactyl;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-004-0;temporary_crops;grass_fodder_crops;poaceae_grasses;festulolium;;;festulolium;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-005-0;temporary_crops;grass_fodder_crops;poaceae_grasses;lolium_ryegrass;;;lolium_ryegrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-005-1;temporary_crops;grass_fodder_crops;poaceae_grasses;lolium_ryegrass;italian_ryegrass;Lolium multiflorum;italian_ryegrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-005-2;temporary_crops;grass_fodder_crops;poaceae_grasses;lolium_ryegrass;english_ryegrass;Lolium perenne;english_ryegrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-006-0;temporary_crops;grass_fodder_crops;poaceae_grasses;setaria;;;setaria;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-007-0;temporary_crops;grass_fodder_crops;poaceae_grasses;sod_turf;;;sod_turf;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-008-0;temporary_crops;grass_fodder_crops;poaceae_grasses;switchgrass;;;switchgrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-009-0;temporary_crops;grass_fodder_crops;poaceae_grasses;timothy;;;timothy;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-010-0;temporary_crops;grass_fodder_crops;poaceae_grasses;sugar_cane;;;sugar_cane;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-011-0;temporary_crops;grass_fodder_crops;poaceae_grasses;brome_grasses;;;brome_grasses;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-012-0;temporary_crops;grass_fodder_crops;poaceae_grasses;vetiver_khus;;Chrysopogon zizanioides;vetiver_khus;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-013-0;temporary_crops;grass_fodder_crops;poaceae_grasses;agrostis;;bentgrass;agrostis;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-014-0;temporary_crops;grass_fodder_crops;poaceae_grasses;oatgrass;;Arrhenatherum;oatgrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-015-0;temporary_crops;grass_fodder_crops;poaceae_grasses;kentucky_bluegrass;;Poa pratensis;kentucky_bluegrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-016-0;temporary_crops;grass_fodder_crops;poaceae_grasses;wild_oat_jai_ghas;;Avena fatua;wild_oat_jai_ghas;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-017-0;temporary_crops;grass_fodder_crops;poaceae_grasses;reed_canary_grass;;Phalaris arundinacea;reed_canary_grass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-018-0;temporary_crops;grass_fodder_crops;poaceae_grasses;lemongrass;;Cymbopogon, barbed wire grass, silky heads, oily heads, Cochin grass, Malabar grass, citronella grass or fever grass;lemongrass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-01-019-0;temporary_crops;grass_fodder_crops;poaceae_grasses;sweet_grass;;Hierochloe odorata or Anthoxanthum nitens, manna grass;sweet_grass;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-000-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;;;;legumes_harvested_green;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-001-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;alfalfa_lucerne;;;alfalfa_lucerne;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-001-1;temporary_crops;grass_fodder_crops;legumes_harvested_green;alfalfa_lucerne;annual_alfalfa;;annual_alfalfa;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-001-2;temporary_crops;grass_fodder_crops;legumes_harvested_green;alfalfa_lucerne;perennial_alfalfa;;perennial_alfalfa;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-002-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;arachis;;;arachis;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;;;clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-1;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;annual_clover;;annual_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-2;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;perennial_clover;;perennial_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-3;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;persian_clover;Trifolium resupinatum;persian_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-4;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;egyptian_clover;Trifolium alexandrium;egyptian_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-5;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;crimson_clover;Trifolium incarnatum;crimson_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-6;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;red_clover;;red_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-003-7;temporary_crops;grass_fodder_crops;legumes_harvested_green;clover;white_clover;;white_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-004-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;melilot_sweet_clover;;;melilot_sweet_clover;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-005-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;vetches;;;vetches;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-005-1;temporary_crops;grass_fodder_crops;legumes_harvested_green;vetches;winter_vetches;;winter_vetches;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-005-2;temporary_crops;grass_fodder_crops;legumes_harvested_green;vetches;summer_vetches;;summer_vetches;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-006-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;phacelia;;;phacelia;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-007-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;onobrychis_sainfoins;;;onobrychis_sainfoins;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-008-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;mix_forage_legumes;;;mix_forage_legumes;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-009-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;birdsfoot_trefoil;;;birdsfoot_trefoil;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-010-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;sulla;;Hedysarium coronarium;sulla;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-02-011-0;temporary_crops;grass_fodder_crops;legumes_harvested_green;black_medick;;Medicago lupulina L.;black_medick;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-04-000-0;temporary_crops;grass_fodder_crops;fodder_mixtures;;;;fodder_mixtures;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-05-000-0;temporary_crops;grass_fodder_crops;sedges;;;;sedges;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-11-05-001-0;temporary_crops;grass_fodder_crops;sedges;chufa;;;chufa;11;temporary_crops;grass_fodder_crops;grass_fodder_crops;grass_fodder_crops
+11-12-00-000-0;temporary_crops;industrial_crops;;;;;industrial_crops;11;temporary_crops;temporary_crops;other_crop;
+11-13-00-000-0;temporary_crops;seed_seedlings;;;;;seed_seedlings;11;temporary_crops;temporary_crops;other_crop;
+11-14-00-000-0;temporary_crops;mixed_arable_crops;;;;;mixed_arable_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-000-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;;;;cereal_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-001-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_beans/peas;;;cereal_mixed_with_beans/peas;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-001-1;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_beans/peas;millet_mixed_with_beans/peas;;millet_mixed_with_beans/peas;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-001-2;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_beans/peas;sorghum_mixed_with_beans/peas;;sorghum_mixed_with_beans/peas;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-002-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_vegetables;;;cereal_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-002-1;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_vegetables;sorghum_mixed_with_vegetables;;sorghum_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-002-2;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_vegetables;millet_mixed_with_vegetables;;millet_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-003-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_root_crops;;;cereal_mixed_with_root_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-003-1;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_root_crops;sorghum_mixed_with_potato;;sorghum_mixed_with_potato;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-003-2;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_root_crops;millet_mixed_with_potato;;millet_mixed_with_potato;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-004-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_oilseeds;;;cereal_mixed_with_oilseeds;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-004-1;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_oilseeds;cereal_mixed_with_groundnut;;cereal_mixed_with_groundnut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-004-2;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_oilseeds;cereal_mixed_with_soybean;;cereal_mixed_with_soybean;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-004-3;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_oilseeds;cereal_mixed_with_sunflower;;cereal_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-004-4;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_oilseeds;cereal_mixed_with_sesame;;cereal_mixed_with_sesame;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-005-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_grass;;;cereal_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-006-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_protein_crops;;;cereal_mixed_with_protein_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-007-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_fibre_crops;;;cereal_mixed_with_fibre_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-007-1;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_fibre_crops;cereal_mixed_with_cotton;;cereal_mixed_with_cotton;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-01-008-0;temporary_crops;mixed_arable_crops;cereal_mixed_with;cereal_mixed_with_legumes;;;cereal_mixed_with_legumes;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-000-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;;;;beans_peas_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-001-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_vegetables;;;beans_peas_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-002-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_oilseed;;;beans_peas_mixed_with_oilseed;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-002-1;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_oilseed;beans_peas_mixed_with_groundnut;;beans_peas_mixed_with_groundnut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-002-2;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_oilseed;beans_peas_mixed_with_soybean;;beans_peas_mixed_with_soybean;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-002-3;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_oilseed;beans_peas_mixed_with_sunflower;;beans_peas_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-002-4;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_oilseed;beans_peas_mixed_with_sesame;;beans_peas_mixed_with_sesame;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-003-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_root_crops;;;beans_peas_mixed_with_root_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-003-1;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_root_crops;beans_peas_mixed_with_cassava;;beans_peas_mixed_with_cassava;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-003-2;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_root_crops;beans_peas_mixed_with_potatoes;;beans_peas_mixed_with_potatoes;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-004-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_grass;;;beans_peas_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-005-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_herbs;;;beans_peas_mixed_with_herbs;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-006-0;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_fibre;;;beans_peas_mixed_with_fibre;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-02-006-1;temporary_crops;mixed_arable_crops;beans_peas_mixed_with;beans_peas_mixed_with_fibre;beans_peas_mixed_with_cotton;;beans_peas_mixed_with_cotton;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-000-0;temporary_crops;mixed_arable_crops;vegetables_mixed_with;;;;vegetables_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-001-0;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_oilseeds;;;vegetables_mixed_with_oilseeds;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-001-1;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_oilseeds;vegetables_mixed_with_groundnut;;vegetables_mixed_with_groundnut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-001-2;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_oilseeds;vegetables_mixed_with_soybeans;;vegetables_mixed_with_soybeans;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-001-3;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_oilseeds;vegetables_mixed_with_rapeseed;;vegetables_mixed_with_rapeseed;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-001-4;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_oilseeds;vegetables_mixed_with_sunflower;;vegetables_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-002-0;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_potatoes;;;vegetables_mixed_with_potatoes;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-003-0;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_grass;;;vegetables_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-03-004-0;temporary_crops;mixed_arable_crops;vegetables_mixed_with;vegetables_mixed_with_root_tuber;;;vegetables_mixed_with_root_tuber;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-000-0;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;;;;oilseeds_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-000-1;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;groundnut_mixed_with;;;groundnut_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-000-2;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;soybean_mixed_with;;;soybean_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-000-3;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;sunflower_mixed_with;;;sunflower_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-001-0;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_grass;;;oilseeds_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-001-1;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_grass;soybean_mixed_with_sugarcane;;soybean_mixed_with_sugarcane;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-002-0;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_protein_crops;;;oilseeds_mixed_with_protein_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-002-1;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_protein_crops;groundnut_mixed_with_bambaranut;;groundnut_mixed_with_bambaranut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-003-0;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_fibre;;;oilseeds_mixed_with_fibre;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-04-003-1;temporary_crops;mixed_arable_crops;oilseeds_mixed_with;oilseeds_mixed_with_fibre;soybean_mixed_with_cotton;;soybean_mixed_with_cotton;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-05-000-0;temporary_crops;mixed_arable_crops;Mixture three or more;mixture_three_or_more;;;mixture_three_or_more;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-000-0;temporary_crops;mixed_arable_crops;maize_mixed_with;;;;maize_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-001-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_beans/peas;;;maize_mixed_with_beans/peas;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-001-1;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_beans/peas;maize_mixed_with_pigeon_peas;;maize_mixed_with_pigeon_peas;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-001-2;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_beans/peas;maize_mixed_with_pigeon_peas_cassava;;maize_mixed_with_pigeon_peas_cassava;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-001-3;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_beans/peas;maize_mixed_with_cowpea;;maize_mixed_with_cowpea;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-001-4;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_beans/peas;maize_mixed_with_beans;;maize_mixed_with_beans;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-002-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_vegetables;;;maize_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-003-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_root_crops;;;maize_mixed_with_root_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-003-1;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_root_crops;maize_mixed_with_cassava;;maize_mixed_with_cassava;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-003-2;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_root_crops;maize_mixed_with_sweetpotato;;maize_mixed_with_sweetpotato;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-004-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_oilseeds;;;maize_mixed_with_oilseeds;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-004-1;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_oilseeds;maize_mixed_with_groundnut;;maize_mixed_with_groundnut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-004-2;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_oilseeds;maize_mixed_with_soybean;;maize_mixed_with_soybean;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-004-3;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_oilseeds;maize_mixed_with_sunflower;;maize_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-005-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_grass;;;maize_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-006-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_protein_crops;;;maize_mixed_with_protein_crops;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-007-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_other_cereals;;;maize_mixed_with_other_cereals;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-007-1;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_other_cereals;maize_mixed_with_sorghum;;maize_mixed_with_sorghum;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-008-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_herbs;;;maize_mixed_with_herbs;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-009-0;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_fibre;;;maize_mixed_with_fibre;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-06-009-1;temporary_crops;mixed_arable_crops;maize_mixed_with;maize_mixed_with_fibre;maize_mixed_with_cotton;;maize_mixed_with_cotton;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-000-0;temporary_crops;mixed_arable_crops;root_crops_mixed_with;;;;root_crops_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-000-1;temporary_crops;mixed_arable_crops;root_crops_mixed_with;;potatoes_mixed_with;;potatoes_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-000-2;temporary_crops;mixed_arable_crops;root_crops_mixed_with;;cassava_mixed_with;;cassava_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-001-0;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_grass;;;root_crops_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-002-0;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_oilseeds;;;root_crops_mixed_with_oilseeds;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-002-1;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_oilseeds;cassava_mixed_with_sunflower;;cassava_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-002-2;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_oilseeds;potatoes_mixed_with_sunflower;;potatoes_mixed_with_sunflower;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-002-3;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_oilseeds;potatoes_mixed_with_soybean;;potatoes_mixed_with_soybean;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-002-4;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_oilseeds;potatoes_mixed_with_groundnut;;potatoes_mixed_with_groundnut;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-003-0;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_vegetables;;;root_crops_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-003-1;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_vegetables;cassava_mixed_with_vegetables;;cassava_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-07-003-2;temporary_crops;mixed_arable_crops;root_crops_mixed_with;root_crops_mixed_with_vegetables;potatoes_mixed_with_vegetables;;potatoes_mixed_with_vegetables;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-08-000-0;temporary_crops;mixed_arable_crops;fibre_crops_mixed_with;;;;fibre_crops_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-08-000-1;temporary_crops;mixed_arable_crops;fibre_crops_mixed_with;cotton_mixed_with;;;cotton_mixed_with;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-14-08-001-0;temporary_crops;mixed_arable_crops;fibre_crops_mixed_with;fibre_crops_mixed_with_grass;;;fibre_crops_mixed_with_grass;11;temporary_crops;mixed_arable_crops;mixed_arable_crops;
+11-15-00-000-0;temporary_crops;not_cultivated_fallow;;;;Fallow, unknown whether long or short-term -> further specified in next level…;not_cultivated_fallow;0;unkown;not_cultivated_fallow;not_cultivated_fallow;
+11-15-00-000-1;temporary_crops;not_cultivated_fallow;;;fallow_short_term;fallow, 5 years or less;fallow_short_term;0;unkown;not_cultivated_fallow;not_cultivated_fallow;
+11-15-00-000-2;temporary_crops;not_cultivated_fallow;;;fallow_long_term;fallow, 6 years or more;fallow_long_term;0;unkown;not_cultivated_fallow;not_cultivated_fallow;
+12-00-00-000-0;permanent_crops;;;;;;permanent_crops;12;permanent_crops;permanent_crops;permanent_crops;
+12-01-00-000-0;permanent_crops;fruit_nuts;;;;;fruit_nuts;12;permanent_crops;permanent_crops;fruit_nuts;
+12-01-00-001-0;permanent_crops;fruit_nuts;;vineyards_wine_vine_rebland_grapes;;;vineyards_wine_vine_rebland_grapes;12;permanent_crops;grapes;fruit_nuts;
+12-01-00-001-1;permanent_crops;fruit_nuts;;vineyards_wine_vine_rebland_grapes;red_grape_with_seed;;red_grape_with_seed;12;permanent_crops;grapes;fruit_nuts;
+12-01-00-001-2;permanent_crops;fruit_nuts;;vineyards_wine_vine_rebland_grapes;red_grape_without_seed;;red_grape_without_seed;12;permanent_crops;grapes;fruit_nuts;
+12-01-00-001-3;permanent_crops;fruit_nuts;;vineyards_wine_vine_rebland_grapes;white_grape_with_seed;;white_grape_with_seed;12;permanent_crops;grapes;fruit_nuts;
+12-01-00-001-4;permanent_crops;fruit_nuts;;vineyards_wine_vine_rebland_grapes;white_grape_without_seed;;white_grape_without_seed;12;permanent_crops;grapes;fruit_nuts;
+12-01-01-000-0;permanent_crops;fruit_nuts;pome_stone_fruit;;;;pome_stone_fruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-001-0;permanent_crops;fruit_nuts;pome_stone_fruit;amelanchier_serviceberry;;;amelanchier_serviceberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-002-0;permanent_crops;fruit_nuts;pome_stone_fruit;apples;;;apples;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-002-1;permanent_crops;fruit_nuts;pome_stone_fruit;apples;apples_young;apples planted in current season;apples_young;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-002-2;permanent_crops;fruit_nuts;pome_stone_fruit;apples;apples_old;apples planted earlier than current season;apples_old;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-003-0;permanent_crops;fruit_nuts;pome_stone_fruit;apricots;;;apricots;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-004-0;permanent_crops;fruit_nuts;pome_stone_fruit;cherry_cherries;;;cherry_cherries;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-004-1;permanent_crops;fruit_nuts;pome_stone_fruit;cherry_cherries;sweet_cherry;;sweet_cherry;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-004-2;permanent_crops;fruit_nuts;pome_stone_fruit;cherry_cherries;sour_cherry;;sour_cherry;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-005-0;permanent_crops;fruit_nuts;pome_stone_fruit;feijoa;;;feijoa;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-006-0;permanent_crops;fruit_nuts;pome_stone_fruit;fig;;;fig;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-007-0;permanent_crops;fruit_nuts;pome_stone_fruit;medlar_loquat;;;medlar_loquat;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-008-0;permanent_crops;fruit_nuts;pome_stone_fruit;nectarine;;;nectarine;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-009-0;permanent_crops;fruit_nuts;pome_stone_fruit;pawpaw;;;pawpaw;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-010-0;permanent_crops;fruit_nuts;pome_stone_fruit;peach;;;peach;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-011-0;permanent_crops;fruit_nuts;pome_stone_fruit;pears;;;pears;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-011-1;permanent_crops;fruit_nuts;pome_stone_fruit;pears;nashi_pears;;nashi_pears;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-011-2;permanent_crops;fruit_nuts;pome_stone_fruit;pears;pears_young;pears planted in current season;pears_young;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-011-3;permanent_crops;fruit_nuts;pome_stone_fruit;pears;pears_old;pears planted earlier than current season;pears_old;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-012-0;permanent_crops;fruit_nuts;pome_stone_fruit;plums;;;plums;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-013-0;permanent_crops;fruit_nuts;pome_stone_fruit;pomegranate;;;pomegranate;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-014-0;permanent_crops;fruit_nuts;pome_stone_fruit;quinces;;;quinces;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-015-0;permanent_crops;fruit_nuts;pome_stone_fruit;cherimoya;;;cherimoya;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-016-0;permanent_crops;fruit_nuts;pome_stone_fruit;persimmon_khaki;;;persimmon_khaki;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-017-0;permanent_crops;fruit_nuts;pome_stone_fruit;peach_nectarines;;;peach_nectarines;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-018-0;permanent_crops;fruit_nuts;pome_stone_fruit;prickly_pear;;;prickly_pear;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-019-0;permanent_crops;fruit_nuts;pome_stone_fruit;pears_quinces;;;pears_quinces;12;permanent_crops;fruits;fruit_nuts;
+12-01-01-020-0;permanent_crops;fruit_nuts;pome_stone_fruit;sorb_tree;;Cormus domestica;sorb_tree;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-000-0;permanent_crops;fruit_nuts;tropical_fruits;;;;tropical_fruits;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-001-0;permanent_crops;fruit_nuts;tropical_fruits;avocado;;;avocado;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-002-0;permanent_crops;fruit_nuts;tropical_fruits;bananas_plantains;;;bananas_plantains;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-003-0;permanent_crops;fruit_nuts;tropical_fruits;dates;;;dates;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-004-0;permanent_crops;fruit_nuts;tropical_fruits;mangoes;;;mangoes;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-005-0;permanent_crops;fruit_nuts;tropical_fruits;papayas;;;papayas;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-006-0;permanent_crops;fruit_nuts;tropical_fruits;pineapples;;;pineapples;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-007-0;permanent_crops;fruit_nuts;tropical_fruits;snake_skin_fruit;;;snake_skin_fruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-008-0;permanent_crops;fruit_nuts;tropical_fruits;rambutan;;;rambutan;12;permanent_crops;fruits;fruit_nuts;
+12-01-02-009-0;permanent_crops;fruit_nuts;tropical_fruits;dragon_fruit;;;dragon_fruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-000-0;permanent_crops;fruit_nuts;citrus_fruit;;;;citrus_fruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-001-0;permanent_crops;fruit_nuts;citrus_fruit;grapefruit;;;grapefruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-002-0;permanent_crops;fruit_nuts;citrus_fruit;pomelo;;;pomelo;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-003-0;permanent_crops;fruit_nuts;citrus_fruit;lemons_limes;;;lemons_limes;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-004-0;permanent_crops;fruit_nuts;citrus_fruit;oranges;;;oranges;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-005-0;permanent_crops;fruit_nuts;citrus_fruit;tangerines_mandarins_clementines;;;tangerines_mandarins_clementines;12;permanent_crops;fruits;fruit_nuts;
+12-01-03-006-0;permanent_crops;fruit_nuts;citrus_fruit;citrus_mixtures;;;citrus_mixtures;12;permanent_crops;fruits;fruit_nuts;
+12-01-04-000-0;permanent_crops;fruit_nuts;nuts;;;;nuts;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-001-0;permanent_crops;fruit_nuts;nuts;almond;;;almond;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-002-0;permanent_crops;fruit_nuts;nuts;hazelnuts_hazel;;;hazelnuts_hazel;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-003-0;permanent_crops;fruit_nuts;nuts;pecan;;;pecan;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-004-0;permanent_crops;fruit_nuts;nuts;pistachio;;;pistachio;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-005-0;permanent_crops;fruit_nuts;nuts;sweet_chestnuts;;;sweet_chestnuts;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-006-0;permanent_crops;fruit_nuts;nuts;walnuts;;;walnuts;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-007-0;permanent_crops;fruit_nuts;nuts;cashew;;;cashew;12;permanent_crops;nuts;fruit_nuts;
+12-01-04-008-0;permanent_crops;fruit_nuts;nuts;macadamia;;;macadamia;12;permanent_crops;nuts;fruit_nuts;
+12-01-05-000-0;permanent_crops;fruit_nuts;berries;;;;berries;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-001-0;permanent_crops;fruit_nuts;berries;aronia_chokeberries;;;aronia_chokeberries;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-002-0;permanent_crops;fruit_nuts;berries;blackberry;;;blackberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-003-0;permanent_crops;fruit_nuts;berries;blackcurrant_cassis;;;blackcurrant_cassis;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-004-0;permanent_crops;fruit_nuts;berries;blueberry;;;blueberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-005-0;permanent_crops;fruit_nuts;berries;cranberry;;;cranberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-006-0;permanent_crops;fruit_nuts;berries;currants;;;currants;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-007-0;permanent_crops;fruit_nuts;berries;gooseberry_gooseberries_cranberries;;;gooseberry_gooseberries_cranberries;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-008-0;permanent_crops;fruit_nuts;berries;hippophae_sea_buckthorns_seaberry;;;hippophae_sea_buckthorns_seaberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-009-0;permanent_crops;fruit_nuts;berries;jostaberry;;;jostaberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-010-0;permanent_crops;fruit_nuts;berries;raspberry_raspberries;;;raspberry_raspberries;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-010-1;permanent_crops;fruit_nuts;berries;raspberry_raspberries;arctic_raspberry;;arctic_raspberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-011-0;permanent_crops;fruit_nuts;berries;redcurrant;;;redcurrant;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-012-0;permanent_crops;fruit_nuts;berries;rose_hip_rosehip;;;rose_hip_rosehip;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-013-0;permanent_crops;fruit_nuts;berries;rowan_rowanberries;;;rowan_rowanberries;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-014-0;permanent_crops;fruit_nuts;berries;tayberry;;;tayberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-015-0;permanent_crops;fruit_nuts;berries;kiwi_fruit;;;kiwi_fruit;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-016-0;permanent_crops;fruit_nuts;berries;huckleberry;;;huckleberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-017-0;permanent_crops;fruit_nuts;berries;saskatoon_berry;;Amelanchier alnifolia;saskatoon_berry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-018-0;permanent_crops;fruit_nuts;berries;jujube_buckthorn;;;jujube_buckthorn;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-019-0;permanent_crops;fruit_nuts;berries;mulberry;;;mulberry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-020-0;permanent_crops;fruit_nuts;berries;goji_berry;;;goji_berry;12;permanent_crops;fruits;fruit_nuts;
+12-01-05-021-0;permanent_crops;fruit_nuts;berries;caneberries;;This class applies to any Rubus species or hybrid which is commonly grown with supports such as wires or canes, including raspberries, blackberries, and hybrids such as loganberry, boysenberry, marionberry and tayberry.;caneberries;12;permanent_crops;fruits;fruit_nuts;
+12-01-06-000-0;permanent_crops;fruit_nuts;fruit_berries;;;other fruit and berries, no nuts;fruit_berries;12;permanent_crops;fruits;fruit_nuts;
+12-01-07-000-0;permanent_crops;fruit_nuts;fruit_nut_mixtures;;;different species of fruit/nut mixed;fruit_nut_mixtures;12;permanent_crops;fruits;fruit_nuts;
+12-02-00-000-0;permanent_crops;permanent_beverage_spice_medicinal;;;;;permanent_beverage_spice_medicinal;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-001-0;permanent_crops;permanent_beverage_spice_medicinal;;coffee;;;coffee;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-002-0;permanent_crops;permanent_beverage_spice_medicinal;;tea;;;tea;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-003-0;permanent_crops;permanent_beverage_spice_medicinal;;maté;;;maté;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-004-0;permanent_crops;permanent_beverage_spice_medicinal;;cocoa;;;cocoa;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-005-0;permanent_crops;permanent_beverage_spice_medicinal;;coffee_cocoa;;;coffee_cocoa;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-006-0;permanent_crops;permanent_beverage_spice_medicinal;;chameleon;;Houttuynia cordata;chameleon;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-007-0;permanent_crops;permanent_beverage_spice_medicinal;;nutmeg_mace_cardamoms;;;nutmeg_mace_cardamoms;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-008-0;permanent_crops;permanent_beverage_spice_medicinal;;cinnamon;;;cinnamon;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-009-0;permanent_crops;permanent_beverage_spice_medicinal;;cloves;;;cloves;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-010-0;permanent_crops;permanent_beverage_spice_medicinal;;ginseng;;;ginseng;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-011-0;permanent_crops;permanent_beverage_spice_medicinal;;agave;;;agave;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-012-0;permanent_crops;permanent_beverage_spice_medicinal;;aloe_vera;;;aloe_vera;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-02-00-013-0;permanent_crops;permanent_beverage_spice_medicinal;;cactus;;;cactus;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-03-00-000-0;permanent_crops;permanent_oilseed_crops;;;;;permanent_oilseed_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-03-00-001-0;permanent_crops;permanent_oilseed_crops;;olive;;;olive;12;permanent_crops;olive;other_permanent_crops;
+12-03-00-001-1;permanent_crops;permanent_oilseed_crops;;olive;olives_for_oil_production;;olives_for_oil_production;12;permanent_crops;olive;other_permanent_crops;
+12-03-00-001-2;permanent_crops;permanent_oilseed_crops;;olive;table_olives;;table_olives;12;permanent_crops;olive;other_permanent_crops;
+12-03-00-002-0;permanent_crops;permanent_oilseed_crops;;coconuts;;;coconuts;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-03-00-003-0;permanent_crops;permanent_oilseed_crops;;oil_palms;;;oil_palms;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-03-00-004-0;permanent_crops;permanent_oilseed_crops;;ylang-ylang;;;ylang-ylang;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-03-00-005-0;permanent_crops;permanent_oilseed_crops;;argan;;;argan;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-000-0;permanent_crops;permanent_leguminous_crops;;;;;permanent_leguminous_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-001-0;permanent_crops;permanent_leguminous_crops;;carob;;;carob;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-002-0;permanent_crops;permanent_leguminous_crops;;mesquite;;;mesquite;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-003-0;permanent_crops;permanent_leguminous_crops;;tamarind;;;tamarind;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-004-0;permanent_crops;permanent_leguminous_crops;;liquorice;;;liquorice;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-04-00-005-0;permanent_crops;permanent_leguminous_crops;;restharrow;;;restharrow;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-05-00-000-0;permanent_crops;permanent_fibre_crops;;;;;permanent_fibre_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-05-00-001-0;permanent_crops;permanent_fibre_crops;;golden_grass;;Syngonanthus nitens - Capim Dourado;permanent_fibre_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-000-0;permanent_crops;permanent_tree_shrub_flowers;;;;;permanent_tree_shrub_flowers;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-001-0;permanent_crops;permanent_tree_shrub_flowers;;azaleas;;;azaleas;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-002-0;permanent_crops;permanent_tree_shrub_flowers;;chaenomeles_cathayensis;;;chaenomeles_cathayensis;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-003-0;permanent_crops;permanent_tree_shrub_flowers;;crataegus_hawthorn;;;crataegus_hawthorn;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-004-0;permanent_crops;permanent_tree_shrub_flowers;;elder_elderberry;;;elder_elderberry;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-005-0;permanent_crops;permanent_tree_shrub_flowers;;honeysuckle;;;honeysuckle;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-006-0;permanent_crops;permanent_tree_shrub_flowers;;ricinus_castor;;;ricinus_castor;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-007-0;permanent_crops;permanent_tree_shrub_flowers;;wire_bush;;;wire_bush;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-008-0;permanent_crops;permanent_tree_shrub_flowers;;rubber;;;rubber;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-009-0;permanent_crops;permanent_tree_shrub_flowers;;ginkgo;;;ginkgo;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-010-0;permanent_crops;permanent_tree_shrub_flowers;;robinia;;;robinia;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-011-0;permanent_crops;permanent_tree_shrub_flowers;;christmas_trees;;;christmas_trees;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-012-0;permanent_crops;permanent_tree_shrub_flowers;;rhododendron;;;rhododendron;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-013-0;permanent_crops;permanent_tree_shrub_flowers;;boxwood;;;boxwood;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-014-0;permanent_crops;permanent_tree_shrub_flowers;;ornamental_conifers;;;ornamental_conifers;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-015-0;permanent_crops;permanent_tree_shrub_flowers;;rose_bush;;;rose_bush;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-016-0;permanent_crops;permanent_tree_shrub_flowers;;short_term_willow;;Willow regularly harvested for wood;short_term_willow;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-017-0;permanent_crops;permanent_tree_shrub_flowers;;blackthorn_sloes;;prunus spinosa;blackthorn_sloes;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-06-00-018-0;permanent_crops;permanent_tree_shrub_flowers;;unspecified_palm;;;unspecified_palm;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-00-000-0;permanent_crops;nurseries;;;;;nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-01-000-0;permanent_crops;nurseries;horticultural_nurseries;;;;horticultural_nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-02-000-0;permanent_crops;nurseries;vine_nurseries;;;;vine_nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-03-000-0;permanent_crops;nurseries;tree_bush_nurseries;;;;tree_bush_nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-03-001-0;permanent_crops;nurseries;;fruit_tree_nurseries;;;fruit_tree_nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-07-03-002-0;permanent_crops;nurseries;;forest_tree_nurseries;;;forest_tree_nurseries;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-08-00-000-0;permanent_crops;mixed_permanent_crops;;;;;mixed_permanent_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-09-00-000-0;permanent_crops;permanent_industrial_crops;;;;;permanent_industrial_crops;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-10-00-000-0;permanent_crops;permanent_forbs;;;;Permanent non-shrub and non-tree crops;permanent_forbs;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-10-00-001-0;permanent_crops;permanent_forbs;;sida_virginia_mallow;;"Sida hermaphrodita; used as bioenergy crop";sida_virginia_mallow;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-10-00-002-0;permanent_crops;permanent_forbs;;igniscum_candy;;"Giant Knotweed (Fallopia sachalinensis var. Igniscum); used as bioenergy crop";igniscum_candy;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-10-00-003-0;permanent_crops;permanent_forbs;;Silphium perfoliatum;;cup plant;Silphium perfoliatum;12;permanent_crops;other_permanent_crops;other_permanent_crops;
+12-11-00-000-0;permanent_crops;permanent_herbs;;;;Specific class from LPIS Latvia dataset, definition unclear;permanent_herbs;10;cropland_unspecified;other_permanent_crops;other_permanent_crops;
+14-00-00-000-0;mixed_cropland;;;;;;mixed_cropland;10;cropland_unspecified;mixed_cropland;mixed_cropland;
+14-01-00-000-0;mixed_cropland;kitchen_allotment_gardens;;;;;kitchen_allotment_gardens;10;cropland_unspecified;mixed_cropland;kitchen_allotment_gardens;
+14-02-00-000-0;mixed_cropland;agroforestry;;;;;agroforestry;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-01-000-0;mixed_cropland;agroforestry;wheat_like_with_trees;;;;wheat_like_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-01-001-0;mixed_cropland;agroforestry;wheat_like_with_trees;sorghum_with_trees;;;sorghum_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-02-000-0;mixed_cropland;agroforestry;vegetables_with_trees;;;;vegetables_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-02-001-0;mixed_cropland;agroforestry;vegetables_with_trees;vegetables_with_banana;;;vegetables_with_banana;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-03-000-0;mixed_cropland;agroforestry;legumes_with_trees;;;;legumes_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-04-000-0;mixed_cropland;agroforestry;grass_with_trees;;;;grass_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-05-000-0;mixed_cropland;agroforestry;perennial_crop_with_trees;;;;perennial_crop_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-06-000-0;mixed_cropland;agroforestry;dry_pulses_with_trees;;;;dry_pulses_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-07-000-0;mixed_cropland;agroforestry;corn_with_trees;;;;corn_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-07-001-0;mixed_cropland;agroforestry;corn_with_trees;corn_with_banana;;;corn_with_banana;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-08-000-0;mixed_cropland;agroforestry;oilseeds_with_trees;;;;oilseeds_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-08-001-0;mixed_cropland;agroforestry;oilseeds_with_trees;groundnut_with_trees;;;groundnut_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-09-000-0;mixed_cropland;agroforestry;root_crops_with_trees;;;;root_crops_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-02-09-001-0;mixed_cropland;agroforestry;root_crops_with_trees;cassava_with_trees;;;cassava_with_trees;10;cropland_unspecified;mixed_cropland;agroforestry;
+14-03-00-000-0;mixed_cropland;annual_perennial_mixtures;;;;;annual_perennial_mixtures;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-01-000-0;mixed cropland;annual_perennial_mixtures;wheat_like_with_perennial;;;;wheat_like_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-02-000-0;mixed cropland;annual_perennial_mixtures;vegetables_with_perennial;;;;vegetables_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-03-000-0;mixed cropland;annual_perennial_mixtures;legumes_with_perennial;;;;legumes_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-04-000-0;mixed cropland;annual_perennial_mixtures;grass_with_perennial;;;;grass_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-05-000-0;mixed cropland;annual_perennial_mixtures;root_crops_with_perennial;;;;root_crops_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+14-03-06-000-0;mixed cropland;annual_perennial_mixtures;dry_pulses_with_perennial;;;;dry_pulses_with_perennial;10;cropland_unspecified;mixed_cropland;annual_perennial_mixtures;
+15-00-00-000-0;greenhouse_foil_film_indoor;;;;;;greenhouse_foil_film_indoor;60;built_up;greenhouse_foil_film_indoor;greenhouse_foil_film_indoor;
+15-01-00-000-0;greenhouse_foil_film_indoor;greenhouse_glass;;;;;greenhouse_glass;60;built_up;greenhouse_foil_film_indoor;greenhouse_foil_film_indoor;
+15-02-00-000-0;greenhouse_foil_film_indoor;greenhouse_plastic;;;;;greenhouse_plastic;60;built_up;greenhouse_foil_film_indoor;greenhouse_foil_film_indoor;
+15-03-00-000-0;greenhouse_foil_film_indoor;foil;;;;;foil;60;built_up;greenhouse_foil_film_indoor;greenhouse_foil_film_indoor;
+15-04-00-000-0;greenhouse_foil_film_indoor;container;;;;;container;60;built_up;greenhouse_foil_film_indoor;greenhouse_foil_film_indoor;
+16-00-00-000-0;non_cropland_incl_perennial;;;;;Not annual cropland and not perennial cropland (Worldcereal class 99);non_cropland_incl_perennial;16;No cropland, not further specified;non_cropland_incl_perennial;non_cropland_incl_perennial;
+17-00-00-000-0;non_cropland_excl_perennial;;;;;Not annual cropland, but may be perennial cropland (Worldcereal class 98);non_cropland_excl_perennial;17;No temporary crops, not further specified;non_cropland_excl_perennial;non_cropland_excl_perennial;
+20-00-00-000-0;non_cropland_herbaceous;;;;;herbaceous vegetation, clearly non-cropland;non_cropland_herbaceous;20;non_cropland_herbaceous;herbaceous_vegetation;herbaceous_vegetation;
+20-01-00-000-0;non_cropland_herbaceous;grasslands;;;;grass-dominated, herbaceous vegetation;grasslands;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-01-000-0;non_cropland_herbaceous;grasslands;natural_grasslands;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-321.html;natural_grasslands;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-000-0;non_cropland_herbaceous;grasslands;managed_grasslands;;;Managed grassland, purpose not specified;managed_grasslands;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-001-0;non_cropland_herbaceous;grasslands;managed_grasslands;pastures;;Managed grasslands for grazing by cattle;pastures;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-002-0;non_cropland_herbaceous;grasslands;managed_grasslands;meadows;;Managed grasslands, mown for hay/biomass;meadows;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-002-1;non_cropland_herbaceous;grasslands;managed_grasslands;meadows;temporary_meadows;temporary meadow 5 years or less;temporary_meadows;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-002-2;non_cropland_herbaceous;grasslands;managed_grasslands;meadows;longterm_meadows;long term meadow 6 years or more;longterm_meadows;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-01-02-002-3;non_cropland_herbaceous;grasslands;managed_grasslands;meadows;foxtail_meadow;meadow dominated by foxtail;foxtail_meadow;20;non_cropland_herbaceous;grasslands;grasslands;grass_fodder_crops
+20-02-00-000-0;non_cropland_herbaceous;wetlands;;;;grass and/or herbaceous dominated vegetation, highly affected by water;wetlands;20;non_cropland_herbaceous;wetlands;wetlands;
+20-02-01-000-0;non_cropland_herbaceous;wetlands;inland_marshes_wetlands;;;"unspecified, inland wetland; https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-411.html";inland_marshes_wetlands;20;non_cropland_herbaceous;wetlands;wetlands;
+20-02-02-000-0;non_cropland_herbaceous;wetlands;salt_marshes;;;"unspecified, coastal wetland; https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-421.html";salt_marshes;20;non_cropland_herbaceous;wetlands;wetlands;
+20-02-03-000-0;non_cropland_herbaceous;wetlands;reed;;;tall-grass dominated wetland;reed;20;non_cropland_herbaceous;wetlands;wetlands;
+20-02-03-001-0;non_cropland_herbaceous;wetlands;reed;cattail;;Typhaceae;cattail;20;non_cropland_herbaceous;wetlands;wetlands;
+25-00-00-000-0;non_cropland_mixed;;;;;mixed vegetation composed of herbaceous, shrub and/or trees, clearly non-cropland;non_cropland_mixed;25;non_cropland_mixed;non_cropland_mixed;non_cropland_mixed;
+25-01-00-000-0;non_cropland_mixed;grassland_with_tree_shrub;;;;grassland with significant tree and/or shrub cover;grassland_with_tree_shrub;25;non_cropland_mixed;non_cropland_mixed;non_cropland_mixed;
+25-02-00-000-0;non_cropland_mixed;shrubland_with_tree_cover;;;;shrubland with significant tree cover;shrubland_with_tree_cover;25;non_cropland_mixed;non_cropland_mixed;non_cropland_mixed;
+25-03-00-000-0;non_cropland_mixed;peatbogs;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-412.html;peatbogs;25;non_cropland_mixed;non_cropland_mixed;non_cropland_mixed;
+30-00-00-000-0;shrubland;;;;;;shrubland;30;shrubland;shrubland;shrubland;
+30-03-00-000-0;shrubland;moors_heathland;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-322.html;moors_heathland;30;shrubland;shrubland;shrubland;
+30-04-00-000-0;shrubland;sclerophyllous_vegetation;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-323.html;sclerophyllous_vegetation;30;shrubland;shrubland;shrubland;
+30-05-00-000-0;shrubland;transitional_woodland_shrub;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-324.html;transitional_woodland_shrub;30;shrubland;shrubland;shrubland;
+30-06-00-000-0;shrubland;hedges;;;;;hedges;30;shrubland;shrubland;shrubland;
+40-00-00-000-0;trees_unspecified;;;;;;trees_unspecified;40;trees;trees_unspecified;trees_unspecified;
+40-01-00-000-0;trees_unspecified;mangroves;;;;;mangroves;40;trees;trees_unspecified;trees_unspecified;
+40-02-00-000-0;trees_unspecified;woody_wetlands;;;;;woody_wetlands;40;trees;trees_unspecified;trees_unspecified;
+40-03-00-000-0;trees_unspecified;trees_unspecified_evergreen;;;;;trees_unspecified_evergreen;40;trees;trees_unspecified;trees_unspecified;
+40-04-00-000-0;trees_unspecified;trees_unspecified_deciduous;;;;;trees_unspecified_deciduous;40;trees;trees_unspecified;trees_unspecified;
+41-00-00-000-0;trees_broadleaved;;;;;;trees_broadleaved;40;trees;trees_broadleaved;trees_broadleaved;
+41-01-00-000-0;trees_broadleaved;trees_broadleaved_evergreen;;;;;trees_broadleaved_evergreen;40;trees;trees_broadleaved;trees_broadleaved;
+41-01-00-001-0;trees_broadleaved;trees_broadleaved_evergreen;;eucalyptus;;;eucalyptus;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-000-0;trees_broadleaved;trees_broadleaved_deciduous;;;;;trees_broadleaved_deciduous;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-001-0;trees_broadleaved;trees_broadleaved_deciduous;;aspen;;;aspen;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-002-0;trees_broadleaved;trees_broadleaved_deciduous;;birch;;;birch;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-003-0;trees_broadleaved;trees_broadleaved_deciduous;;dogwood_cornus;;;dogwood_cornus;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-004-0;trees_broadleaved;trees_broadleaved_deciduous;;oak;;;oak;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-005-0;trees_broadleaved;trees_broadleaved_deciduous;;populus;;;populus;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-006-0;trees_broadleaved;trees_broadleaved_deciduous;;willows_osiers;;;willows_osiers;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-007-0;trees_broadleaved;trees_broadleaved_deciduous;;alder;;;alder;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-008-0;trees_broadleaved;trees_broadleaved_deciduous;;maple;;;maple;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-009-0;trees_broadleaved;trees_broadleaved_deciduous;;poplar;;;poplar;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-010-0;trees_broadleaved;trees_broadleaved_deciduous;;teak;;;teak;40;trees;trees_broadleaved;trees_broadleaved;
+41-02-00-011-0;trees_broadleaved;trees_broadleaved_deciduous;;ash;;;ash;40;trees;trees_broadleaved;trees_broadleaved;
+42-00-00-000-0;trees_coniferous;;;;;;trees_coniferous;40;trees;trees_coniferous;trees_coniferous;
+42-01-00-000-0;trees_coniferous;trees_coniferous_evergreen;;;;;trees_coniferous_evergreen;40;trees;trees_coniferous;trees_coniferous;
+42-01-00-001-0;trees_coniferous;trees_coniferous_evergreen;;spruce_dominated_coniferous_woodland;;;spruce_dominated_coniferous_woodland;40;trees;trees_coniferous;trees_coniferous;
+42-01-00-002-0;trees_coniferous;trees_coniferous_evergreen;;pine_dominated_coniferous_woodland;;;pine_dominated_coniferous_woodland;40;trees;trees_coniferous;trees_coniferous;
+42-01-00-003-0;trees_coniferous;trees_coniferous_evergreen;;cedar;;;cedar;40;trees;trees_coniferous;trees_coniferous;
+42-02-00-000-0;trees_coniferous;trees_coniferous_deciduous;;;;;trees_coniferous_deciduous;40;trees;trees_coniferous;trees_coniferous;
+43-00-00-000-0;trees_mixed;;;;;unspecified mixed woodland. Can be a combination of any of the broadleaved/coniferous/evergreen/deciduous trees;trees_mixed;40;trees;trees_mixed;trees_mixed;
+43-00-00-001-0;trees_mixed;;;spruce_dominated_mixed_woodland;;;spruce_dominated_mixed_woodland;40;trees;trees_mixed;trees_mixed;
+43-00-00-002-0;trees_mixed;;;pine_dominated_mixed_woodland;;;pine_dominated_mixed_woodland;40;trees;trees_mixed;trees_mixed;
+43-01-00-000-0;trees_mixed;trees_mixed_evergreen;;;;;trees_mixed_evergreen;40;trees;trees_mixed;trees_mixed;
+43-02-00-000-0;trees_mixed;trees_mixed_deciduous;;;;;trees_mixed_deciduous;40;trees;trees_mixed;trees_mixed;
+50-00-00-000-0;bare_sparsely_vegetated;;;;;;bare_sparsely_vegetated;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-01-00-000-0;bare_sparsely_vegetated;beach_sand_dunes;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-331.html;beach_sand_dunes;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-02-00-000-0;bare_sparsely_vegetated;bare_rock;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-332.html;bare_rock;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-03-00-000-0;bare_sparsely_vegetated;sparsely_vegetated;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-333.html;sparsely_vegetated;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-04-00-000-0;bare_sparsely_vegetated;burnt areas;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-334.html;burnt areas;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-05-00-000-0;bare_sparsely_vegetated;snow_ice;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-335.html;snow_ice;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-06-00-000-0;bare_sparsely_vegetated;lichens_mosses;;;;;lichens_mosses;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-07-00-000-0;bare_sparsely_vegetated;salines;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-422.html;salines;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-08-00-000-0;bare_sparsely_vegetated;intertidal_flats;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-423.html;intertidal_flats;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-09-00-000-0;bare_sparsely_vegetated;mining_sites;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-131.html;mining_sites;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-10-00-000-0;bare_sparsely_vegetated;dump_sites;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-132.html;dump_sites;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+50-11-00-000-0;bare_sparsely_vegetated;bare_soil;;;;;bare_soil;50;bare_sparsely_vegetated;bare_sparsely_vegetated;bare_sparsely_vegetated;
+60-00-00-000-0;built_up;;;;;;built_up;60;built_up;built_up;built_up;
+60-01-00-000-0;built_up;roads_sealed_surface;;;;;roads_sealed_surface;60;built_up;built_up;built_up;
+60-02-00-000-0;built_up;buildings_unspecified;;;;;buildings_unspecified;60;built_up;built_up;built_up;
+60-03-00-000-0;built_up;buildings_1_3_floors;;;;Low buildings with maximum 3 floors;buildings_1_3_floors;60;built_up;built_up;built_up;
+60-04-00-000-0;built_up;buildings_more_than_3_floors;;;;Buildings with more than 3 floors;buildings_more_than_3_floors;60;built_up;built_up;built_up;
+60-05-00-000-0;built_up;low_intensity_builtup;;;;from USDA CDL;low_intensity_builtup;60;built_up;built_up;built_up;
+60-06-00-000-0;built_up;medium_intensity_builtup;;;;from USDA CDL;medium_intensity_builtup;60;built_up;built_up;built_up;
+60-07-00-000-0;built_up;high_intensity_builtup;;;;from USDA CDL;high_intensity_builtup;60;built_up;built_up;built_up;
+70-00-00-000-0;open_water;;;;;;open_water;70;water;open_water;open_water;
+70-01-00-000-0;open_water;sea_ocean;;;;;sea_ocean;70;water;open_water;open_water;
+70-02-00-000-0;open_water;permanent_inland_water_bodies;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-512.html;permanent_inland_water_bodies;70;water;open_water;open_water;
+70-03-00-000-0;open_water;temporary_inland_water_bodies;;;;Temporal lakes or land temporarily flooded;temporary_inland_water_bodies;70;water;open_water;open_water;
+70-04-00-000-0;open_water;water_courses;;;;https://land.copernicus.eu/user-corner/technical-library/corine-land-cover-nomenclature-guidelines/html/index-clc-511.html;water_courses;70;water;open_water;open_water;
+70-05-00-000-0;open_water;aquaculture;;;;;aquaculture;70;water;open_water;open_water;
+70-05-01-000-0;open_water;aquaculture;water_plants;;;;water_plants;70;water;open_water;open_water;
+70-05-01-001-0;open_water;aquaculture;water_plants;water_chestnut;;;water_chestnut;70;water;open_water;open_water;

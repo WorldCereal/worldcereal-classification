@@ -1,44 +1,23 @@
+import gc
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+import duckdb
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
 from prometheo.models import Presto
 from prometheo.models.pooling import PoolingMethods
-from prometheo.predictors import Predictors
+from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
-from worldcereal.train.datasets import WorldCerealDataset
+from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
-
-
-class WorldCerealTrainingDataset(WorldCerealDataset):
-    def __getitem__(self, idx):
-        # Get the sample
-        sample = super().__getitem__(idx)
-        row = self.dataframe.iloc[idx, :]
-        timestep_positions, valid_position = self.get_timestep_positions(row)
-        valid_position = valid_position - timestep_positions[0]
-        attrs = [
-            "lat",
-            "lon",
-            "ref_id",
-            "sample_id",
-            "downstream_class",
-            "valid_time",
-        ]
-
-        attrs = [attr for attr in attrs if attr in row.index]
-        attrs = row[attrs].to_dict()
-        attrs["valid_position"] = valid_position
-
-        return sample, attrs
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
@@ -151,14 +130,100 @@ def remove_small_classes(df, min_samples):
     return df
 
 
+def duckdb_type_from_series(s: pd.Series) -> str:
+    """
+    Infer a DuckDB column type from a pandas Series.
+    We'll be conservative:
+    - ints -> BIGINT
+    - floats -> DOUBLE
+    - bool -> BOOLEAN
+    - everything else -> TEXT
+    """
+    if pd.api.types.is_integer_dtype(s):
+        return "BIGINT"
+    if pd.api.types.is_float_dtype(s):
+        return "DOUBLE"
+    if pd.api.types.is_bool_dtype(s):
+        return "BOOLEAN"
+    # timestamps: let DuckDB infer TIMESTAMP if we detect datetime64
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return "TIMESTAMP"
+    return "TEXT"
+
+
+def get_table_columns(con, table_name):
+    """Return current column names (ordered) from the DuckDB table."""
+    info_df = con.execute(f"PRAGMA table_info('{table_name}')").df()
+    return list(info_df["name"])
+
+
+def add_missing_columns_to_table(con, table_name, batch_df, current_cols, nodata_value):
+    """
+    For each column in batch_df that is NOT yet in table_name:
+    ALTER TABLE ... ADD COLUMN that_col <type> DEFAULT NODATAVALUE (or NULL).
+    If the column looks numeric/bool/datetime, we add that sql type.
+    If we add a numeric column with DEFAULT NODATAVALUE, older rows get the fill.
+    """
+
+    new_cols = [c for c in batch_df.columns if c not in current_cols]
+
+    for col in new_cols:
+        col_type = duckdb_type_from_series(batch_df[col])
+
+        # Decide default value depending on type.
+        # For numeric types we can use NODATAVALUE.
+        # For non-numeric types, use NULL default so we don't shove NODATAVALUE into text/timestamps.
+        if col_type in ("BIGINT", "DOUBLE"):
+            default_expr = str(nodata_value)
+        elif col_type == "BOOLEAN":
+            default_expr = "FALSE"
+        elif col_type == "TIMESTAMP":
+            default_expr = "NULL"
+        else:
+            default_expr = "NULL"
+
+        # Quote column name if it has weird chars like '-' :
+        quoted_col = f'"{col}"'
+
+        alter_sql = (
+            f"ALTER TABLE {table_name} "
+            f"ADD COLUMN {quoted_col} {col_type} DEFAULT {default_expr};"
+        )
+        con.execute(alter_sql)
+
+    # Return updated list of columns from the table after ALTERs
+    return get_table_columns(con, table_name)
+
+
+def align_batch_to_table_columns(batch_df, table_cols, nodata_value):
+    """
+    Ensure batch_df has exactly all columns in table_cols.
+    - Add missing cols with nodata_value (or NaN for non-numeric).
+    - Reorder to table_cols.
+    """
+
+    # Add any columns that exist in table_cols but not in batch_df
+    missing_for_batch = [c for c in table_cols if c not in batch_df.columns]
+    for col in missing_for_batch:
+        batch_df[col] = nodata_value
+
+    # Reorder columns to match table
+    batch_df = batch_df[table_cols]
+    return batch_df
+
+
 def get_training_dfs_from_parquet(
     parquet_files: Union[Union[Path, str], List[Union[Path, str]]],
     timestep_freq: Literal["month", "dekad"] = "month",
+    max_timesteps_trim: Union[str, int, tuple] = "auto",
+    use_valid_time: bool = True,
     finetune_classes: str = "CROPLAND2",
     class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
     val_samples_file: Optional[Union[Path, str]] = None,
     test_samples_file: Optional[Union[Path, str]] = None,
     debug: bool = False,
+    overwrite: bool = False,
+    wide_parquet_output_path: Optional[Union[Path, str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -173,6 +238,12 @@ def get_training_dfs_from_parquet(
         List of local paths to parquet files.
     timestep_freq : str, default="month"
         Frequency of timesteps. Can be "month" or "dekad".
+    max_timesteps_trim : Union[str, int, tuple], default="auto"
+        Maximum number of timesteps to retain after trimming.
+        If "auto", it will be determined based on the timestep_freq and MIN_EDGE_BUFFER.
+    use_valid_time : bool, default=True
+        Whether to use the 'valid_time' column for processing timesteps.
+        If True, centering and filtering of samples will be based on 'valid_time'.
     finetune_classes (str):
         The set of fine-tuning classes to use from CLASS_MAPPINGS.
         This should be one of the keys in CLASS_MAPPINGS.
@@ -186,6 +257,11 @@ def get_training_dfs_from_parquet(
         If None, a random train/test split will be performed.
     debug : bool, default=False
         If True, a maximum of one file will be processed for quick testing.
+    overwrite : bool, default=False
+        If True, overwrite existing wide parquet file.
+    wide_parquet_output_path : Union[Path, str], optional
+        Path to save the processed wide-format parquet file.
+        If None, a temporary file is created, used internally, and deleted before return.
 
     Returns
     -------
@@ -197,30 +273,147 @@ def get_training_dfs_from_parquet(
     """
     logger.info("Reading dataset")
 
+    is_tempfile = False  # <-- track if we must clean up
+    if wide_parquet_output_path is None:
+        import tempfile
+
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".parquet", prefix="wide_", delete=False
+        )
+        wide_parquet_output_path = Path(tmp.name)
+        tmp.close()
+        is_tempfile = True
+        logger.warning(
+            f"No wide_parquet_output_path provided; using temporary file: {wide_parquet_output_path}"
+        )
+    else:
+        wide_parquet_output_path = Path(wide_parquet_output_path)
+        logger.info(
+            f"Using provided wide parquet output path: {wide_parquet_output_path}"
+        )
+
     if isinstance(parquet_files, (str, Path)):
         # If a single file is provided, convert it to a list
         parquet_files = [parquet_files]
 
     if debug:
-        # select 1st file in debug mode
-        parquet_files = parquet_files[:1]
+        # select first 3 files in debug mode
+        parquet_files = parquet_files[:10]
         logger.warning("Debug mode is enabled.")
 
-    df = None
-    for f in parquet_files:
-        logger.info(f"Processing {f}")
-        _data = pd.read_parquet(f, engine="fastparquet")
-        _data = _data[_data["sample_id"].notnull()]
-        _data["ewoc_code"] = _data["ewoc_code"].astype(int)
+    db = duckdb.connect()
+    db.sql("INSTALL spatial")
+    db.load_extension("spatial")
 
-        for tcol in ["valid_time", "start_time", "end_time", "timestamp"]:
-            if tcol in _data.columns:
-                _data[tcol] = pd.to_datetime(_data[tcol], utc=True)
-                _data[tcol] = _data[tcol].dt.tz_localize(None)
+    STRING_COLS = [
+        "sample_id",
+        "timestamp",
+        "h3_l3_cell",
+        "valid_time",
+        "start_date",
+        "end_date",
+        "ref_id",
+    ]
+    INT_COLS = [
+        "extract",
+        "quality_score_ct",
+        "quality_score_lc",
+        "ewoc_code",
+        "S2-L2A-B02",
+        "S2-L2A-B03",
+        "S2-L2A-B04",
+        "S2-L2A-B05",
+        "S2-L2A-B06",
+        "S2-L2A-B07",
+        "S2-L2A-B08",
+        "S2-L2A-B8A",
+        "S2-L2A-B11",
+        "S2-L2A-B12",
+        "S1-SIGMA0-VH",
+        "S1-SIGMA0-VV",
+        "slope",
+        "elevation",
+        "AGERA5-PRECIP",
+        "AGERA5-TMEAN",
+    ]
+    FLOAT_COLS = ["lon", "lat"]
+    REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
-        _data_pivot = process_parquet(_data, freq=timestep_freq)
-        _data_pivot.reset_index(inplace=True)
-        df = _data_pivot if df is None else pd.concat([df, _data_pivot])
+    if overwrite or is_tempfile or not wide_parquet_output_path.exists():
+        logger.info(
+            f"Creating wide parquet file at {wide_parquet_output_path} (overwrite={overwrite})"
+        )
+        db_path = Path(f"{str(wide_parquet_output_path).split('.')[0]}.duckdb")
+        table_name = "merged_parquets_wide"
+        wide_parquet_output_path.unlink(missing_ok=True)
+        db_path.unlink(missing_ok=True)
+
+        con = duckdb.connect(db_path)
+        con.execute("PRAGMA memory_limit='4GB'")
+        # If the DB existed and table might be present, ensure a clean start:
+        con.execute(f"DROP TABLE IF EXISTS {table_name}")
+        initialized = False
+        for f in tqdm(parquet_files, desc="Processing long parquet files"):
+            _data = pd.read_parquet(f, engine="fastparquet")
+            _ref_id = Path(f).stem
+            _data["ref_id"] = _ref_id
+            _data = _data[REQUIRED_COLS]
+            _data_pivot = process_parquet(
+                _data,
+                freq=timestep_freq,
+                use_valid_time=use_valid_time,
+                max_timesteps_trim=max_timesteps_trim,
+            )
+            _data_pivot = _data_pivot.reset_index()
+            _data_pivot = _data_pivot.fillna(NODATAVALUE)
+            con.register("pivot_batch", _data_pivot)
+            if not initialized:
+                con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM pivot_batch")
+                initialized = True
+            else:
+                # Make sure next batch aligns with table schema:
+                # 1. Get current columns from table
+                table_cols = get_table_columns(con, table_name)
+                # 2. If batch has NEW columns, ALTER TABLE to add them w/ defaults
+                table_cols = add_missing_columns_to_table(
+                    con,
+                    table_name,
+                    _data_pivot,
+                    table_cols,
+                    NODATAVALUE,
+                )
+                # 3. Align batch df to table columns (add any columns the table has that batch doesn't)
+                _data_pivot = align_batch_to_table_columns(
+                    _data_pivot,
+                    table_cols,
+                    NODATAVALUE,
+                )
+                # 4. Register and insert
+                con.register("pivot_batch", _data_pivot)
+                con.execute(
+                    f"INSERT INTO {table_name} BY NAME SELECT * FROM pivot_batch"
+                )
+                con.unregister("pivot_batch")
+
+            # --- force flush to disk & keep WAL small ---
+            con.execute(
+                "CHECKPOINT"
+            )  # forces a checkpoint so data is on disk, WAL rotated
+            # --- drop big Python objects ASAP ---
+            del _data_pivot, _data
+            gc.collect()
+
+        # write a single Parquet file
+        con.execute(
+            f"""
+            COPY (SELECT * FROM {table_name})
+            TO '{wide_parquet_output_path}'
+            (FORMAT PARQUET, COMPRESSION SNAPPY)
+        """
+        )
+
+    # Load the merged Parquet
+    df = pd.read_parquet(wide_parquet_output_path)
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
@@ -277,6 +470,20 @@ def get_training_dfs_from_parquet(
             logger.warning(
                 "Removed classes from test set because they "
                 f"do not occur train/val: {nontrainval_classes}"
+            )
+
+    # Cleanup temporary files if created
+    if is_tempfile:
+        try:
+            wide_parquet_output_path.unlink(missing_ok=True)
+            db_path = Path(f"{str(wide_parquet_output_path).split('.')[0]}.duckdb")
+            db_path.unlink(missing_ok=True)
+            logger.info(
+                f"Deleted temporary wide parquet file: {wide_parquet_output_path}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to delete temporary file {wide_parquet_output_path}: {e}"
             )
 
     return train_df, val_df, test_df

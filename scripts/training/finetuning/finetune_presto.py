@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Literal
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 from loguru import logger
-from prometheo.finetune import Hyperparams, run_finetuning
+from prometheo.finetune import Hyperparams
 from prometheo.models import Presto
 from prometheo.models.presto import param_groups_lrd
 from prometheo.predictors import NODATAVALUE
@@ -18,9 +19,13 @@ from torch.utils.data import DataLoader
 
 # from worldcereal_in_season.datasets import MaskingStrategy
 from worldcereal.train.data import get_training_dfs_from_parquet
+from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (
+    FocalLoss,  # noqa: F401
+    MulticlassWithCroplandAuxBCELoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
+    run_finetuning,
 )
 from worldcereal.utils.refdata import get_class_mappings
 
@@ -54,15 +59,18 @@ def main(args):
 
     experiment_tag = args.experiment_tag
     timestep_freq = args.timestep_freq  # "month" or "dekad"
+    max_timesteps_trim = args.max_timesteps_trim  # "auto", int or tuple of string dates
+    use_valid_time = args.use_valid_time
 
     # Path to the training data
     parquet_files = get_parquet_file_list(timestep_freq)
     val_samples_file = args.val_samples_file  # If None, random split is used
 
-    # Most popular maps: LANDCOVER14, CROPTYPE9, CROPTYPE0, CROPLAND2
+    # Most popular maps: LANDCOVER10, CROPTYPE9, CROPTYPE0, CROPLAND2
     finetune_classes = args.finetune_classes
     augment = args.augment
     time_explicit = args.time_explicit
+    enable_masking = args.enable_masking
     debug = args.debug
     use_balancing = args.use_balancing  # If True, use class balancing for training
 
@@ -72,24 +80,50 @@ def main(args):
     # ± timesteps to expand around label pos (true or moved), for time_explicit only; will only be set for training
     label_window = args.label_window
 
-    # # In-season masking parameters
-    # masking_strategy_train = args.masking_strategy_train
-    # masking_strategy_val = args.masking_strategy_val
+    # Presto freezing settings
+    freeze_layers = None
+    unfreeze_epoch = None
+    if args.freeze_encoder_epochs > 0:
+        freeze_layers = ["encoder"]
+        unfreeze_epoch = args.freeze_encoder_epochs
+        logger.info(
+            f"Freezing encoder for the first {args.freeze_encoder_epochs} epoch(s)"
+        )
+
+    # Masking parameters
+    masking_config = SensorMaskingConfig(
+        enable=enable_masking,
+        s1_full_dropout_prob=0.05,
+        s1_timestep_dropout_prob=0.05,
+        s2_cloud_timestep_prob=0.1,
+        s2_cloud_block_prob=0.05,
+        s2_cloud_block_min=2,
+        s2_cloud_block_max=3 if timestep_freq == "month" else 9,
+        meteo_timestep_dropout_prob=0.05,
+        dem_dropout_prob=0.01,
+        seed=DEFAULT_SEED,
+    )
 
     # Experiment signature
     timestamp_ind = datetime.now().strftime("%Y%m%d%H%M")
 
-    # # Update experiment name to include masking info
-    # if masking_strategy_train.mode == "random":
-    #     masking_info = f"random-masked-from-{masking_strategy_train.from_position}"
-    # elif masking_strategy_train.mode == "fixed":
-    #     masking_info = f"masked-from-{masking_strategy_train.from_position}"
-    # else:
-    #     masking_info = "no-masking"
+    # Update experiment name to include masking info
+    if masking_config.enable:
+        masking_info = "enabled"
+    else:
+        masking_info = "disabled"
 
-    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-{finetune_classes}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-run={timestamp_ind}"
+    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-{finetune_classes}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # setup path for processed wide parquet file so that it can be reused across experiments
+    if not debug:
+        wide_parquet_output_path = Path(
+            f"/projects/TAP/worldcereal/data/cached_wide_parquets/worldcereal_all_extractions_wide_{timestep_freq}_{finetune_classes}.parquet"
+        )
+    else:
+        wide_parquet_output_path = None
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
@@ -107,25 +141,40 @@ def main(args):
         console_filter_keyword="PROGRESS",
     )
 
-    # Get the train/val/test dataframes
-    train_df, val_df, test_df = get_training_dfs_from_parquet(
-        parquet_files,
-        timestep_freq=timestep_freq,
-        finetune_classes=finetune_classes,
-        class_mappings=CLASS_MAPPINGS,
-        val_samples_file=val_samples_file,
-        debug=debug,
-    )
+    # Get the paths to train/val/test dataframe parquet files
+    train_df_path = Path(output_dir) / "train_df.parquet"
+    val_df_path = Path(output_dir) / "val_df.parquet"
+    test_df_path = Path(output_dir) / "test_df.parquet"
 
-    logger.warning("Still applying a patch here ...")
-    train_df = train_df[train_df["available_timesteps"] >= 12]
-    val_df = val_df[val_df["available_timesteps"] >= 12]
-    test_df = test_df[test_df["available_timesteps"] >= 12]
-
-    logger.info("Saving train, val, and test DataFrames to parquet files ...")
-    train_df.to_parquet(Path(output_dir) / "train_df.parquet")
-    val_df.to_parquet(Path(output_dir) / "val_df.parquet")
-    test_df.to_parquet(Path(output_dir) / "test_df.parquet")
+    # Get / load the train/val/test dataframes
+    if (
+        train_df_path.exists()
+        and val_df_path.exists()
+        and test_df_path.exists()
+        and not debug
+    ):
+        logger.info("Loading existing train/val/test DataFrames from parquet files.")
+        train_df = pd.read_parquet(train_df_path)
+        val_df = pd.read_parquet(val_df_path)
+        test_df = pd.read_parquet(test_df_path)
+    else:
+        logger.info("Generating train/val/test DataFrames from source parquet files.")
+        train_df, val_df, test_df = get_training_dfs_from_parquet(
+            parquet_files,
+            wide_parquet_output_path=wide_parquet_output_path,
+            timestep_freq=timestep_freq,
+            max_timesteps_trim=max_timesteps_trim,
+            use_valid_time=use_valid_time,
+            finetune_classes=finetune_classes,
+            class_mappings=CLASS_MAPPINGS,
+            val_samples_file=val_samples_file,
+            debug=debug,
+            overwrite=False,
+        )
+        logger.info("Saving train, val, and test DataFrames to parquet files ...")
+        train_df.to_parquet(train_df_path)
+        val_df.to_parquet(val_df_path)
+        test_df.to_parquet(test_df_path)
 
     classes_list = list(sorted(set(CLASS_MAPPINGS[finetune_classes].values())))
     classes_list = [
@@ -164,8 +213,7 @@ def main(args):
         task_type=task_type_literal,
         num_outputs=num_outputs,
         classes_list=classes_list,
-        # masking_strategy_train=masking_strategy_train,
-        # masking_strategy_val=masking_strategy_val,
+        masking_config=masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
     )
@@ -181,12 +229,29 @@ def main(args):
     if task_type == "binary":
         loss_fn = nn.BCEWithLogitsLoss()
     elif task_type == "multiclass":
-        loss_fn = nn.CrossEntropyLoss(ignore_index=NODATAVALUE)
+        if finetune_classes == "LANDCOVER10":
+            # Custom loss function combining CE on landcover and BCE on crop-nocrop
+            loss_fn = MulticlassWithCroplandAuxBCELoss(
+                ignore_index=NODATAVALUE,
+                label_smoothing=0.05,
+                pos_class_indices=[classes_list.index("temporary_crops")],
+            )
+        elif finetune_classes == "CROPTYPE27":
+            # Normal CE with label smoothing, maybe we can try focal loss as well
+            # loss_fn = nn.CrossEntropyLoss(
+            #     ignore_index=NODATAVALUE, label_smoothing=0.05
+            # )
+            loss_fn = FocalLoss(ignore_index=NODATAVALUE, label_smoothing=0.05)
+        else:
+            raise NotImplementedError(
+                f"Multiclass loss function for finetune_classes {finetune_classes} is not implemented."
+            )
     else:
         raise ValueError(
             f"Task type {task_type} is not supported. "
             f"Supported task types are 'binary' and 'multiclass'."
         )
+    logger.info(f"Using loss function: {loss_fn}")
 
     # Set the parameters
     hyperparams = Hyperparams(
@@ -211,7 +276,7 @@ def main(args):
             generator=generator,
             sampling_class="finetune_class",
             method="log",
-            clip_range=(0.2, 10),
+            clip_range=(0.3, 5),
         )
         if use_balancing
         else None,
@@ -239,6 +304,8 @@ def main(args):
         scheduler=scheduler,
         hyperparams=hyperparams,
         setup_logging=False,  # Already setup logging
+        freeze_layers=freeze_layers,
+        unfreeze_epoch=unfreeze_epoch,
     )
 
     # Evaluate the finetuned model
@@ -300,10 +367,32 @@ def main(args):
 def parse_args(arg_list=None):
     parser = argparse.ArgumentParser(description="Train in-season crop type model")
 
+    def auto_or_int(value):
+        if value == "auto":
+            return value
+        try:
+            return int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                "max_timesteps_trim must be 'auto' or an integer."
+            )
+
     # General setup
     parser.add_argument("--experiment_tag", type=str, default="")
     parser.add_argument(
         "--timestep_freq", type=str, choices=["month", "dekad"], default="month"
+    )
+    parser.add_argument(
+        "--max_timesteps_trim",
+        type=auto_or_int,
+        default="auto",
+        help='Maximum number of timesteps to retain after trimming. Can be "auto" or an integer.',
+    )
+    parser.add_argument(
+        "--use_valid_time",
+        type=bool,
+        default=True,
+        help="Whether to use the 'valid_time' column for processing timesteps.",
     )
 
     # Data paths
@@ -315,42 +404,25 @@ def parse_args(arg_list=None):
     )
 
     # Task setup
-    parser.add_argument("--finetune_classes", type=str, default="LANDCOVER14")
+    parser.add_argument("--finetune_classes", type=str, default="LANDCOVER10")
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--time_explicit", action="store_true")
+    parser.add_argument("--enable_masking", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--use_balancing", action="store_true")
+    parser.add_argument(
+        "--freeze_encoder_epochs",
+        type=int,
+        default=0,
+        help="Freeze encoder weights for this many initial epochs (0 disables freezing)",
+    )
 
     # Label timing (for time_explicit only)
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
 
-    # # Masking strategy
-    # parser.add_argument(
-    #     "--masking_train_mode",
-    #     type=str,
-    #     choices=["none", "fixed", "random"],
-    #     default="random",
-    # )
-    # parser.add_argument("--masking_train_from", type=int, default=5)
-
-    # parser.add_argument(
-    #     "--masking_val_mode",
-    #     type=str,
-    #     choices=["none", "fixed", "random"],
-    #     default="fixed",
-    # )
-    # parser.add_argument("--masking_val_from", type=int, default=6)
-
+    # Parse the arguments
     args = parser.parse_args(arg_list)
-
-    # # Compose masking strategy objects
-    # args.masking_strategy_train = MaskingStrategy(
-    #     mode=args.masking_train_mode, from_position=args.masking_train_from
-    # )
-    # args.masking_strategy_val = MaskingStrategy(
-    #     mode=args.masking_val_mode, from_position=args.masking_val_from
-    # )
 
     return args
 
@@ -361,22 +433,17 @@ if __name__ == "__main__":
     #     "debug-run",
     #     "--timestep_freq",
     #     "month",
-    #     "--time_explicit",
-    #     "--label_jitter",
-    #     "1",
+    #     "--enable_masking",
+    #     # "--time_explicit",
+    #     # "--label_jitter",
+    #     # "1",
     #     "--augment",
     #     "--finetune_classes",
-    #     "CROPTYPE20",  # LANDCOVER14
+    #     "CROPTYPE27",  # CROPTYPE27
     #     "--use_balancing",
     #     "--debug",
-    #     # "--masking_train_mode",
-    #     # "random",
-    #     # "--masking_train_from",
-    #     # "15",
-    #     # "--masking_val_mode",
-    #     # "fixed",
-    #     # "--masking_val_from",
-    #     # "18",
+    #     # "--use_balancing",
+    #     # "--debug",
     # ]
     manual_args = None
 

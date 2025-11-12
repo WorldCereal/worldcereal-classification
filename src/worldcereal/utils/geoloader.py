@@ -73,9 +73,39 @@ def load_reproject(
     nodata_value=None,
     rio_gdal_options=None,
     resampling=Resampling.nearest,
+    dtype=None,
 ):
-    """
-    Read from latlon layer and reproject to UTM
+    """Read from lat/lon layer and reproject to target CRS.
+    Supports float and integer loading.
+
+    Parameters
+    ----------
+    filename : str or file-like
+        Source raster filename or file object.
+    bounds : tuple
+        (minx, miny, maxx, maxy) in target EPSG coordinates.
+    epsg : int
+        EPSG code of target CRS.
+    resolution : int, default 10
+        Output resolution in target CRS units.
+    border_buff : int, default 0
+        Buffer (in pixels) to trim around the output after reprojection.
+    fill_value : numeric, default 0
+        Value to assign where nodata occurs after reading source window.
+    nodata_value : numeric, optional
+        Explicit nodata value for source raster; if None uses src.nodata.
+    rio_gdal_options : dict, optional
+        Extra environment options for rasterio / GDAL.
+    resampling : rasterio.enums.Resampling, default nearest
+        Resampling method used during reprojection.
+    dtype : numpy dtype, optional
+        Desired dtype of output. If None, defaults to float32.
+        If provided and resampling is nearest, integer data is preserved.
+
+    Returns
+    -------
+    np.ndarray
+        Reprojected array.
     """
     bbox = gpd.GeoSeries(Polygon.from_bounds(*bounds), crs=CRS.from_epsg(epsg))
 
@@ -99,10 +129,18 @@ def load_reproject(
     src_transform = rasterio.transform.from_bounds(*bounds, gim.shape[1], gim.shape[0])
     dst_transform = rasterio.transform.from_bounds(*utm_bounds, width, height)
 
-    dst = np.zeros((height, width), dtype=np.float32)
+    # Determine output dtype
+    out_dtype = dtype if dtype is not None else np.float32
+    dst = np.zeros((height, width), dtype=out_dtype)
+
+    # Prepare source array for reprojection: force float32 for non-nearest resampling
+    if resampling == Resampling.nearest and dtype is not None:
+        gim_for_reproject = gim.astype(out_dtype)
+    else:
+        gim_for_reproject = gim.astype(np.float32)
 
     reproject(
-        gim.astype(np.float32),
+        gim_for_reproject,
         dst,
         src_transform=src_transform,
         dst_transform=dst_transform,
