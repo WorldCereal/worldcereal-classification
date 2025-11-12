@@ -52,7 +52,7 @@ NUM_THREADS = 2
 
 sys.path.append("feature_deps")
 sys.path.append("onnx_deps")
-import onnxruntime as ort
+import onnxruntime as ort  # noqa: E402
 
 _PROMETHEO_INSTALLED = False
 
@@ -84,7 +84,7 @@ def _ensure_prometheo_dependencies():
         from prometheo.models.presto.wrapper import load_presto_weights
         from prometheo.datasets.worldcereal import run_model_inference
         from prometheo.models.pooling import PoolingMethods
-        
+
         # They're now available in the global scope
         _PROMETHEO_INSTALLED = True
         return
@@ -94,7 +94,7 @@ def _ensure_prometheo_dependencies():
     # Installation required
     logger.info("Prometheo not available, installing...")
     _install_prometheo()
-    
+
     # Import immediately after installation - these will be available globally
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
@@ -170,8 +170,8 @@ def load_presto_weights_cached(presto_model_url: str):
 
     logger.info(f"Loading Presto weights from: {presto_model_url}")
 
-    model = Presto()
-    result = load_presto_weights(model, presto_model_url)
+    model = Presto()  # type: ignore
+    result = load_presto_weights(model, presto_model_url)  # type: ignore
 
     cache[presto_model_url] = result
     return result
@@ -289,7 +289,7 @@ class SlopeCalculator:
     """Handles slope computation from elevation data."""
 
     @staticmethod
-    def compute(resolution: int, elevation_data: np.ndarray) -> np.ndarray:
+    def compute(resolution: float, elevation_data: np.ndarray) -> np.ndarray:
         """Compute slope from elevation data."""
         dem_arr = SlopeCalculator._prepare_dem_array(elevation_data)
         dem_downsampled = SlopeCalculator._downsample_to_20m(dem_arr, resolution)
@@ -321,7 +321,7 @@ class SlopeCalculator:
         return SlopeCalculator._fill_nans(dem_arr, max_iter - 1)
 
     @staticmethod
-    def _downsample_to_20m(dem_arr: np.ndarray, resolution: int) -> np.ndarray:
+    def _downsample_to_20m(dem_arr: np.ndarray, resolution: float) -> np.ndarray:
         """Downsample DEM to 20m resolution for slope computation."""
         factor = int(20 / resolution)
         if factor < 1 or factor % 2 != 0:
@@ -352,7 +352,7 @@ class SlopeCalculator:
 
     @staticmethod
     def _upsample_to_original(
-        slope: np.ndarray, original_shape: Tuple[int, int], resolution: int
+        slope: np.ndarray, original_shape: Tuple[int, ...], resolution: float
     ) -> np.ndarray:
         """Upsample slope back to original resolution."""
         factor = int(20 / resolution)
@@ -521,9 +521,9 @@ class PrestoFeatureExtractor:
 
         # Import here to ensure dependencies are available
         pooling_method = (
-            PoolingMethods.TIME
+            PoolingMethods.TIME  # type: ignore
             if self.parameters.get("temporal_prediction")
-            else PoolingMethods.GLOBAL
+            else PoolingMethods.GLOBAL  # type: ignore
         )
 
         logger.info("Running presto inference")
@@ -535,7 +535,7 @@ class PrestoFeatureExtractor:
                     epsg=epsg,
                     batch_size=self.parameters.get("batch_size", 256),  # TODO optimize?
                     pooling_method=pooling_method,
-                )
+                )  # type: ignore
             logger.info("Inference completed")
 
             if self.parameters.get("temporal_prediction"):
@@ -711,7 +711,10 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
     input_cube = udf_data.datacube_list[0]
     parameters = udf_data.user_context.copy()
+
     epsg = udf_data.proj["EPSG"] if udf_data.proj else None
+    if epsg is None:
+        raise ValueError("EPSG code not found in projection information")
 
     # Prepare input array
     input_array = input_cube.get_array().transpose("bands", "t", "y", "x")
