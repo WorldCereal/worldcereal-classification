@@ -106,6 +106,7 @@ def test_create_inference_job_logic():
             cropland_parameters=CropLandParameters(),
             s1_orbit_state=None,
             target_epsg=4326,
+            connection=mock_connection,
         )
 
         # first positional arg is the inference result, options via 'additional'
