@@ -937,7 +937,7 @@ class Postprocessor:
 def run_single_workflow(
     input_array: xr.DataArray,
     epsg: int,
-    parameters: Dict,
+    parameters: Dict[str, Any],
     mask: Optional[xr.DataArray] = None,
 ) -> xr.DataArray:
     """Run a single classification workflow with optional masking."""
@@ -960,19 +960,25 @@ def run_single_workflow(
     classes = classifier.predict(features)
 
     # Postprocess
-    postprocess_parameters = parameters.get("postprocess_parameters")
-    if postprocess_parameters["enable"]:
+    postprocess_parameters: Dict[str, Any] = parameters.get(
+        "postprocess_parameters", {}
+    )
+
+    if postprocess_parameters.get("enable"):
         logger.info("Postprocessing classification results ...")
-        if postprocess_parameters["save_intermediate"]:
+        if postprocess_parameters.get("save_intermediate"):
             classes_raw = classes.assign_coords(
                 bands=[f"raw_{b}" for b in list(classes.bands.values)]
             )
         postprocessor = Postprocessor(
             postprocess_parameters,
-            classifier_url=parameters["classifier_parameters"]["classifier_url"],
+            classifier_url=parameters.get("classifier_parameters", {}).get(
+                "classifier_url"
+            ),
         )
+
         classes = postprocessor.apply(classes)
-        if postprocess_parameters["save_intermediate"]:
+        if postprocess_parameters.get("save_intermediate"):
             classes = xr.concat([classes, classes_raw], dim="bands")
         logger.info("Postprocessing done.")
 
@@ -1038,7 +1044,9 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
     # Check if we have both parameter sets for dual workflow
     if cropland_params and croptype_params:
-        logger.info("Running combined workflow: cropland masking + croptype mapping ...")
+        logger.info(
+            "Running combined workflow: cropland masking + croptype mapping ..."
+        )
 
         # Run cropland classification - pass the FLAT parameters
         logger.info("Running cropland classification ...")
