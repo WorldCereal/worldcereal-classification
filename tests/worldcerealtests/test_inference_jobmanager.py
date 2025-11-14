@@ -77,10 +77,12 @@ def test_create_inference_job_logic():
     # Mock the OpenEO connection
     mock_connection = MagicMock(spec=Connection)
 
+    # Dummy inference result returned by process graph creation
+    mock_inference_result = MagicMock(name="inference_result")
+
     # Mock the process graph creation
     with patch("worldcereal.job.create_inference_process_graph") as mock_create_graph:
-        mock_data_cube = MagicMock()
-        mock_create_graph.return_value = mock_data_cube
+        mock_create_graph.return_value = mock_inference_result
 
         # Call the function
         create_inference_job(
@@ -91,7 +93,6 @@ def test_create_inference_job_logic():
             product_type=WorldCerealProductType.CROPTYPE,
             cropland_parameters=CropLandParameters(),
             croptype_parameters=CropTypeParameters(),
-            postprocess_parameters=None,
             s1_orbit_state=None,
             target_epsg=None,
             job_options=None,
@@ -103,12 +104,18 @@ def test_create_inference_job_logic():
             product_type=WorldCerealProductType.CROPTYPE,
             croptype_parameters=CropTypeParameters(),
             cropland_parameters=CropLandParameters(),
-            postprocess_parameters=None,
             s1_orbit_state=None,
             target_epsg=4326,
         )
-        mock_data_cube.create_job.assert_called_once_with(
-            title="WorldCereal [croptype] job_tile_1",
-            description="Job that performs end-to-end WorldCereal inference",
-            job_options=INFERENCE_JOB_OPTIONS,
+
+        # first positional arg is the inference result, options via 'additional'
+        assert mock_connection.create_job.call_count == 1
+        args, kwargs = mock_connection.create_job.call_args
+        assert args[0] is mock_inference_result
+        assert kwargs["title"] == "WorldCereal [croptype] job_tile_1"
+        assert (
+            kwargs["description"]
+            == "Job that performs end-to-end WorldCereal inference"
         )
+        assert "additional" in kwargs
+        assert kwargs["additional"] == INFERENCE_JOB_OPTIONS

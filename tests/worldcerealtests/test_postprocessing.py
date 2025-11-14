@@ -1,21 +1,7 @@
 import pytest
-import xarray as xr
 
-
-from openeo.udf import XarrayDataCube
-from openeo.udf.udf_data import UdfData
-
-from worldcereal.openeo.postprocess import apply_udf_data as postprocess_udf
-from worldcereal.parameters import CropLandParameters, PostprocessParameters
-
-
-def create_udf_data(arr: xr.DataArray, parameters: dict, epsg: int = 32631) -> UdfData:
-    """Create UdfData object from xarray DataArray and parameters."""
-    cube = XarrayDataCube(arr)
-    udf_data = UdfData(
-        datacube_list=[cube], user_context=parameters, proj={"EPSG": epsg}
-    )
-    return udf_data
+from worldcereal.openeo.inference import Postprocessor
+from worldcereal.parameters import CropLandParameters, CropTypeParameters, PostprocessParameters
 
 
 def test_cropland_postprocessing(WorldCerealCroplandClassification):
@@ -24,17 +10,11 @@ def test_cropland_postprocessing(WorldCerealCroplandClassification):
     print("Postprocessing cropland product ...")
 
     parameters={
-            "ignore_dependencies": True,
-            "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "smooth_probabilities",
         }
 
-    postprocess_udf_data = create_udf_data(
-        arr=WorldCerealCroplandClassification,
-        parameters=parameters)
-
-    postprocess_result = postprocess_udf(postprocess_udf_data)
-    _ = postprocess_result.datacube_list[0].get_array()
+    postprocessor = Postprocessor(parameters, classifier_url=CropLandParameters().classifier_parameters.classifier_url)
+    _ = postprocessor.apply(WorldCerealCroplandClassification)
 
 
 
@@ -44,18 +24,12 @@ def test_cropland_postprocessing_majority_vote(WorldCerealCroplandClassification
     print("Postprocessing cropland product ...")
 
     parameters={
-            "ignore_dependencies": True,
-            "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "majority_vote",
             "kernel_size": 7,
         }
 
-    postprocess_udf_data = create_udf_data(
-        arr=WorldCerealCroplandClassification,
-        parameters=parameters)
-
-    postprocess_result = postprocess_udf(postprocess_udf_data)
-    _ = postprocess_result.datacube_list[0].get_array()
+    postprocessor = Postprocessor(parameters, classifier_url=CropLandParameters().classifier_parameters.classifier_url)
+    _ = postprocessor.apply(WorldCerealCroplandClassification)
 
 
 def test_croptype_postprocessing(WorldCerealCroptypeClassification):
@@ -64,19 +38,11 @@ def test_croptype_postprocessing(WorldCerealCroptypeClassification):
     print("Postprocessing croptype product ...")
 
     parameters={
-            "ignore_dependencies": True,
-            "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "smooth_probabilities",
         }
 
-    postprocess_udf_data = create_udf_data(
-        arr=WorldCerealCroptypeClassification,
-        parameters=parameters)
-
-    postprocess_result = postprocess_udf(postprocess_udf_data)
-    _ = postprocess_result.datacube_list[0].get_array()
-
-
+    postprocessor = Postprocessor(parameters, classifier_url=CropTypeParameters().classifier_parameters.classifier_url)
+    _ = postprocessor.apply(WorldCerealCroptypeClassification)
 
 
 def test_croptype_postprocessing_majority_vote(WorldCerealCroptypeClassification):
@@ -85,18 +51,12 @@ def test_croptype_postprocessing_majority_vote(WorldCerealCroptypeClassification
     print("Postprocessing croptype product ...")
 
     parameters={
-            "ignore_dependencies": True,
-            "classifier_url": CropLandParameters().classifier_parameters.classifier_url,
             "method": "majority_vote",
             "kernel_size": 7,
         }
 
-    postprocess_udf_data = create_udf_data(
-        arr=WorldCerealCroptypeClassification,
-        parameters=parameters)
-
-    postprocess_result = postprocess_udf(postprocess_udf_data)
-    _ = postprocess_result.datacube_list[0].get_array()
+    postprocessor = Postprocessor(parameters, classifier_url=CropTypeParameters().classifier_parameters.classifier_url)
+    _ = postprocessor.apply(WorldCerealCroptypeClassification)
 
 
 def test_postprocessing_parameters():
