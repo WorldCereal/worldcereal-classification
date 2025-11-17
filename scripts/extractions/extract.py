@@ -251,7 +251,7 @@ if __name__ == "__main__":
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
         extract_value=args.extract_value,
-        backend=Backend.VLCC,
+        backend=Backend.CDSE,
         write_stac_api=args.write_stac_api,
         check_existing_extractions=args.check_existing_extractions,
         image_name=args.image_name,

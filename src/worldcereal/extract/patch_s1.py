@@ -95,15 +95,6 @@ def create_job_dataframe_patch_s1(
         descending_area = area_per_orbit["DESCENDING"]["area"]
         ascending_area = area_per_orbit["ASCENDING"]["area"]
 
-        needs_descending = True
-        needs_ascending = True
-        if "needs_descending" in job.columns:
-            needs_descending = (
-                job["needs_descending"].fillna(False).astype(bool).any()
-            )
-        if "needs_ascending" in job.columns:
-            needs_ascending = job["needs_ascending"].fillna(False).astype(bool).any()
-
         # Set back the valid_time in the geometry as string
         job["valid_time"] = job.valid_time.dt.strftime("%Y-%m-%d")
 
@@ -121,11 +112,13 @@ def create_job_dataframe_patch_s1(
             "geometry": job.to_json(),
         }
 
-        if descending_area > 0 and needs_descending:
-            rows.append(pd.Series({**variables, "orbit_state": "DESCENDING"}))
+        if descending_area > 0:
+            variables.update({"orbit_state": "DESCENDING"})
+            rows.append(pd.Series(variables))
 
-        if ascending_area > 0 and needs_ascending:
-            rows.append(pd.Series({**variables, "orbit_state": "ASCENDING"}))
+        if ascending_area > 0:
+            variables.update({"orbit_state": "ASCENDING"})
+            rows.append(pd.Series(variables))
 
         if descending_area + ascending_area == 0:
             pipeline_log.warning(
