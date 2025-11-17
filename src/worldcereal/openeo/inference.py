@@ -17,8 +17,24 @@ from scipy.ndimage import convolve, zoom
 from shapely.geometry import Point
 from shapely.ops import transform
 
-# Configure logging
-logger = logging.getLogger(__name__)
+try:
+    from loguru import logger
+
+    class InterceptHandler(logging.Handler):
+        def emit(self, record):
+            level = record.levelname
+            logger.opt(depth=6).log(level, record.getMessage())
+
+    # Replace existing handlers
+    for h in logging.root.handlers[:]:
+        logging.root.removeHandler(h)
+
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(InterceptHandler())
+
+except ImportError:
+    # loguru not available, use standard logging
+    logger = logging.getLogger(__name__)
 
 _MODULE_CACHE_KEY = f"__model_cache_{__name__}"
 
@@ -148,7 +164,7 @@ def load_onnx_model_cached(model_url: str):
 
     cache = get_model_cache()
     if model_url in cache:
-        logger.info(f"ONNX model cache hit for {model_url}.")
+        logger.debug(f"ONNX model cache hit for {model_url}.")
         return cache[model_url]
 
     logger.info(f"Loading ONNX model from {model_url}")
@@ -173,7 +189,7 @@ def load_presto_weights_cached(presto_model_url: str):
     """Manual caching for Presto weights with dependency check."""
     cache = get_model_cache()
     if presto_model_url in cache:
-        logger.info(f"Presto model cache hit for {presto_model_url}")
+        logger.debug(f"Presto model cache hit for {presto_model_url}")
         return cache[presto_model_url]
 
     # Ensure dependencies are available (not cached)
@@ -744,7 +760,7 @@ class PrestoFeatureExtractor:
             else PoolingMethods.GLOBAL  # type: ignore
         )
 
-        logger.info("Running presto inference")
+        logger.info("Running presto inference ...")
         try:
             with torch.inference_mode():
                 features = run_model_inference(
@@ -754,7 +770,7 @@ class PrestoFeatureExtractor:
                     batch_size=self.parameters.get("batch_size", 256),  # TODO optimize?
                     pooling_method=pooling_method,
                 )  # type: ignore
-            logger.info("Inference completed")
+            logger.info("Inference completed.")
 
             if self.parameters.get("temporal_prediction"):
                 features = self._select_temporal_features(features)
@@ -800,9 +816,9 @@ class ONNXClassifier:
         session, lut = load_onnx_model_cached(classifier_url)
         features_flat = self._prepare_features(features)
 
-        logger.info("Running onnx model ...")
+        logger.info("Running ONNX model inference ...")
         predictions = self._run_inference(session, lut, features_flat)
-        logger.info("Running onnx model done.")
+        logger.info("ONNX inference completed.")
 
         return self._reshape_predictions(predictions, features, lut)
 
@@ -957,8 +973,8 @@ def run_single_workflow(
     # Classify
     logger.info("Onnx classification ...")
     classifier = ONNXClassifier(parameters["classifier_parameters"])
-    logger.info("Onnx classification done.")
     classes = classifier.predict(features)
+    logger.info("Onnx classification done.")
 
     # Postprocess
     postprocess_parameters: Dict[str, Any] = parameters.get(
@@ -985,6 +1001,7 @@ def run_single_workflow(
 
     # Set masked areas to specific value
     if mask is not None:
+        logger.info("`mask` provided, applying to classification results ...")
         classes = classes.where(mask, 254)  # 254 = non-cropland
 
     return classes
