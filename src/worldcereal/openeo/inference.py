@@ -887,8 +887,9 @@ class Postprocessor:
 
             # Re-apply labels
             class_labels = list(lookup_table.values())
-            # create a final labels array with same dimensions as new_labels
-            final_labels = xr.full_like(new_labels, fill_value=float("nan"))
+
+            # Create a final labels array with same dimensions as new_labels
+            final_labels = xr.full_like(new_labels, fill_value=65535)
             for idx, label in enumerate(class_labels):
                 final_labels.loc[{"bands": "classification"}] = xr.where(
                     new_labels.sel(bands="classification") == idx,
