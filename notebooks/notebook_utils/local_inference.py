@@ -19,7 +19,6 @@ from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
 # from worldcereal.openeo.classifier import apply_inference
-from worldcereal.openeo.feature_extractor import extract_presto_embeddings
 from worldcereal.openeo.inference import run_single_workflow
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 
