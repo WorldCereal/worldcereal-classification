@@ -106,7 +106,7 @@ def main(
     ref_id: str,
     ground_truth_file: str,
     root_folder: Path,
-    job_options: dict[str, Union[str, int]],
+    job_options: dict[str, Union[str, int, None]],
     period: str = "month",
     restart_failed: bool = False,
     only_flagged_samples: bool = False,
@@ -126,7 +126,7 @@ def main(
     root_folder : Path
         Root folder for storing extraction outputs.
     job_options : dict
-        openEO job options. If no custom job options are provided, defaults are used (see DEFAULT_JOB_OPTIONS).
+        openEO job options. May contain None values (they will fall back to defaults).
     period : str, optional
         Period for extractions, either 'month' or 'dekad'. Default is 'month'.
     restart_failed : bool, optional

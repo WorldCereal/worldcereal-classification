@@ -11,6 +11,7 @@ from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, 
 from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
+    WorldCerealTrainingDataset,
     align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
@@ -734,6 +735,93 @@ class TestInference(unittest.TestCase):
         )
 
         assert presto_features.dims == ref_presto_features.dims
+
+
+class TestRepeatHandling(unittest.TestCase):
+    """Tests for repeat logic in WorldCerealLabelledDataset and WorldCerealTrainingDataset.
+
+    These were previously in a standalone file but are integrated here for cohesion.
+    """
+
+    def setUp(self):
+        # Minimal dataframes (no band columns needed because we don't call __getitem__ which populates predictors)
+        self.df_labelled = pd.DataFrame(
+            [
+                {
+                    "lat": 45.0,
+                    "lon": 5.0,
+                    "start_date": "2021-01-01",
+                    "end_date": "2021-12-31",
+                    "available_timesteps": 12,
+                    "valid_position": 6,
+                    "finetune_class": "cropland",
+                },
+                {
+                    "lat": 45.1,
+                    "lon": 5.1,
+                    "start_date": "2021-01-01",
+                    "end_date": "2021-12-31",
+                    "available_timesteps": 12,
+                    "valid_position": 6,
+                    "finetune_class": "not_cropland",
+                },
+                {
+                    "lat": 45.2,
+                    "lon": 5.2,
+                    "start_date": "2021-01-01",
+                    "end_date": "2021-12-31",
+                    "available_timesteps": 12,
+                    "valid_position": 6,
+                    "finetune_class": "cropland",
+                },
+            ]
+        )
+
+        self.df_training = pd.DataFrame(
+            [
+                {
+                    "lat": 46.0,
+                    "lon": 6.0,
+                    "start_date": "2021-01-01",
+                    "end_date": "2021-12-31",
+                    "available_timesteps": 12,
+                    "valid_position": 6,
+                },
+                {
+                    "lat": 46.1,
+                    "lon": 6.1,
+                    "start_date": "2021-01-01",
+                    "end_date": "2021-12-31",
+                    "available_timesteps": 12,
+                    "valid_position": 6,
+                },
+            ]
+        )
+
+    def test_training_repeats_without_augmentation(self):
+        ds = WorldCerealTrainingDataset(
+            self.df_training,
+            num_timesteps=12,
+            repeats=4,
+            augment=False,
+            task_type="multiclass",
+        )
+        self.assertEqual(ds._repeats, 1)
+        self.assertEqual(len(ds), len(self.df_training))
+        self.assertListEqual(ds.indices, list(range(len(self.df_training))))
+
+    def test_training_repeats_with_augmentation(self):
+        ds = WorldCerealTrainingDataset(
+            self.df_training,
+            num_timesteps=12,
+            repeats=4,
+            augment=True,
+            task_type="multiclass",
+        )
+        self.assertEqual(ds._repeats, 4)
+        self.assertEqual(len(ds), len(self.df_training) * 4)
+        expected = list(range(len(self.df_training))) * 4
+        self.assertListEqual(ds.indices, expected)
 
 
 if __name__ == "__main__":

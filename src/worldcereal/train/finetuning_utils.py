@@ -1,11 +1,169 @@
-from typing import List, Literal, Optional, Tuple
+from copy import deepcopy
+from pathlib import Path
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from loguru import logger
+from prometheo.finetune import Hyperparams
+from prometheo.finetune import _setup as _prometheo_setup
 from prometheo.predictors import NODATAVALUE, Predictors
+from prometheo.utils import device, seed_everything
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
-from worldcereal.train.datasets import WorldCerealLabelledDataset
+from worldcereal.train.datasets import SensorMaskingConfig, WorldCerealLabelledDataset
+
+
+class FocalLoss(nn.Module):
+    def __init__(
+        self,
+        alpha=1,
+        gamma=2.0,
+        reduction="mean",
+        ignore_index: Optional[int] = None,
+        label_smoothing: float = 0.0,
+    ):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(
+            inputs,
+            targets,
+            ignore_index=self.ignore_index,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        elif self.reduction == "sum":
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
+class MulticlassWithCroplandAuxBCELoss(nn.Module):
+    """
+    Combines standard multiclass CrossEntropy with an auxiliary binary cropland loss.
+
+    From logits z (shape [..., C]):
+        z_pos = logsumexp(z[k] for k in pos_classes)
+        z_neg = logsumexp(z[k] for k not in pos_classes)
+        z_bin = z_pos - z_neg
+        p_bin = sigmoid(z_bin)
+
+    Total loss = ce_weight * CE + aux_weight * BCEWithLogits(z_bin, y_bin)
+
+    y_bin = 1 if target in pos_classes else 0 (ignored if target == ignore_index).
+
+    """
+
+    def __init__(
+        self,
+        pos_class_indices: List[int],
+        ce_weight: float = 1.0,
+        aux_weight: float = 0.3,
+        ignore_index: int = -100,
+        pos_weight: Optional[float] = None,  # for BCE class imbalance
+        label_smoothing: float = 0.0,
+    ):
+        super().__init__()
+        self.pos_class_indices = sorted(pos_class_indices)
+        self.ce_weight = ce_weight
+        self.aux_weight = aux_weight
+        self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
+        self.pos_weight = (
+            torch.tensor([pos_weight], dtype=torch.float32)
+            if pos_weight is not None
+            else None
+        )
+
+    def _binary_logit(self, logits: torch.Tensor) -> torch.Tensor:
+        """
+        logits: (..., C)
+        returns: (...,) binary cropland logit
+        """
+        C = logits.shape[-1]
+        device = logits.device
+        pos_mask = torch.zeros(C, dtype=torch.bool, device=device)
+        pos_mask[self.pos_class_indices] = True
+        neg_mask = ~pos_mask
+
+        z_pos = torch.logsumexp(logits[..., pos_mask], dim=-1)
+        z_neg = torch.logsumexp(logits[..., neg_mask], dim=-1)
+        return z_pos - z_neg  # binary logit
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        """
+        logits: shape (B, C) or (B, T, C)
+        targets: shape (B,) or (B, T,) with class indices
+        """
+        is_time = logits.dim() == 3  # (B, T, C)
+
+        if is_time:
+            B, T, C = logits.shape
+            logits_flat = logits.view(B * T, C)
+            targets_flat = targets.view(B * T)
+        else:
+            logits_flat = logits
+            targets_flat = targets
+
+        # Multiclass CE
+        ce_loss = F.cross_entropy(
+            logits_flat,
+            targets_flat,
+            ignore_index=self.ignore_index,
+            reduction="mean",
+            label_smoothing=self.label_smoothing,
+        )
+
+        # Build binary targets (ignore positions with ignore_index)
+        with torch.no_grad():
+            valid_mask = (
+                targets_flat != self.ignore_index
+                if self.ignore_index is not None
+                else torch.ones_like(targets_flat, dtype=torch.bool)
+            )
+            y_bin = torch.zeros_like(targets_flat, dtype=torch.float32)
+            pos_set = set(self.pos_class_indices)
+            pos_mask = torch.tensor(
+                [t.item() in pos_set for t in targets_flat],
+                dtype=torch.bool,
+                device=targets_flat.device,
+            )
+            y_bin[pos_mask & valid_mask] = 1.0
+
+        # Compute binary logit only on valid positions
+        z_bin_all = self._binary_logit(logits_flat)  # shape (B*T,) or (B,)
+        z_bin = z_bin_all[valid_mask]
+        y_bin_valid = y_bin[valid_mask]
+
+        if z_bin.numel() == 0:
+            bce_loss = torch.tensor(0.0, device=logits.device)
+        else:
+            bce_loss_fn = nn.BCEWithLogitsLoss(
+                pos_weight=self.pos_weight.to(logits.device)
+                if self.pos_weight is not None
+                else None
+            )
+            bce_loss = bce_loss_fn(z_bin, y_bin_valid)
+
+        total_loss = self.ce_weight * ce_loss + self.aux_weight * bce_loss
+
+        return total_loss
 
 
 def prepare_training_datasets(
@@ -19,8 +177,7 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    # masking_strategy_train: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
-    # masking_strategy_val: MaskingStrategy = MaskingStrategy(MaskingMode.NONE),
+    masking_config: Optional[SensorMaskingConfig] = None,
     label_jitter=0,
     label_window=0,
 ) -> Tuple[
@@ -53,10 +210,8 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_strategy_train : MaskingStrategy, default=askingMode.NONE
-        Masking strategy for training dataset.
-    masking_strategy_val : MaskingStrategy, default=MaskingMode.NONE
-        Masking strategy for validation and test datasets.
+    masking_config : Optional[SensorMaskingConfig], default=None
+        Configuration for sensor masking during training and validation.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
@@ -76,7 +231,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        # masking_strategy=masking_strategy_train,
+        masking_config=masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
     )
@@ -89,7 +244,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
-        # masking_strategy=masking_strategy_val,
+        masking_config=None,  # No masking for validation
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
     )
@@ -102,7 +257,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
-        # masking_strategy=masking_strategy_val,
+        masking_config=None,  # No masking for testing
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
     )
@@ -116,7 +271,6 @@ def evaluate_finetuned_model(
     batch_size: int,
     time_explicit: bool = False,
     classes_list: Optional[List[str]] = None,
-    # mask_positions: Optional[Sequence[int]] = None,
     return_uncertainty: bool = False,
 ):
     """
@@ -155,60 +309,6 @@ def evaluate_finetuned_model(
 
     # storage for full distributions if we need entropy
     all_probs_full: list[np.ndarray] = [] if return_uncertainty else []
-
-    # if mask_positions is not None:
-    #     # for each mask‐from position, run the full classification_report,
-    #     # tag it with k, then concatenate
-    #     dfs = []
-    #     for k in mask_positions:
-    #         ds_k = InSeasonLabelledDataset(
-    #             test_ds.dataframe,
-    #             task_type=cast(Literal["binary", "multiclass"], test_ds.task_type),
-    #             num_outputs=cast(int, test_ds.num_outputs),
-    #             num_timesteps=test_ds.num_timesteps,
-    #             timestep_freq=test_ds.timestep_freq,
-    #             time_explicit=time_explicit,
-    #             classes_list=classes_list or [],
-    #             augment=False,
-    #             masking_strategy=MaskingStrategy(MaskingMode.FIXED, from_position=k),
-    #             label_jitter=0,
-    #             label_window=0,
-    #         )
-    #         df_k, cm, cm_norm = evaluate_finetuned_model(
-    #             finetuned_model,
-    #             ds_k,
-    #             num_workers,
-    #             batch_size,
-    #             time_explicit,
-    #             classes_list,
-    #             mask_positions=None,  # disable recursion
-    #             return_uncertainty=return_uncertainty,
-    #         )
-    #         df_k["masked_ts_from_pos"] = k
-    #         # Get the timestamp for this mask position
-    #         if ds_k.timestep_freq == "month":
-    #             # Get the first sample's timestamps (assume all samples aligned)
-    #             ts = ds_k[0].timestamps
-    #             # k is 1-based, so subtract 1 for index
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             import calendar
-
-    #             month_label = calendar.month_abbr[month_num]
-    #         elif ds_k.timestep_freq == "dekad":
-    #             ts = ds_k[0].timestamps
-    #             month_idx = min(k - 1, ts.shape[0] - 1)
-    #             month_num = int(ts[month_idx, 1])
-    #             day_num = int(ts[month_idx, 0])
-    #             import calendar
-
-    #             month_label = f"{calendar.month_abbr[month_num]} {day_num:02d}"
-    #         else:
-    #             month_label = "Unknown"
-
-    #         df_k["masked_ts_month_label"] = month_label
-    #         dfs.append(df_k)
-    #     return pd.concat(dfs, ignore_index=True), None, None
 
     # Put model in eval mode
     finetuned_model.eval()
@@ -357,3 +457,262 @@ def evaluate_finetuned_model(
         results_df["avg_entropy"] = ent.mean() if ent.size > 0 else np.nan
 
     return results_df, cm, cm_norm
+
+
+def compute_validation_metrics(
+    val_preds: torch.Tensor, val_targets: torch.Tensor, task_type: Optional[str]
+) -> tuple[dict, str]:
+    """Compute standard classification metrics for validation set.
+
+    Parameters
+    ----------
+    val_preds : torch.Tensor
+        Concatenated model predictions (logits) for all validation samples with ignored labels removed.
+        Shape (N,) for binary or (N, C) for multiclass.
+    val_targets : torch.Tensor
+        Concatenated ground truth targets with ignored labels removed. Shape (N,).
+    task_type : Optional[str]
+        Either 'binary', 'multiclass' or None. If not recognized metrics are skipped.
+
+    Returns
+    -------
+    metrics_dict : dict
+        Dictionary containing accuracy, macro_f1, weighted_f1 (keys absent if computation failed).
+    metrics_str : str
+        Pre-formatted string for console logging.
+
+    Notes
+    -----
+    This helper is designed for easy future expansion (e.g., adding per-class F1, confusion matrix
+    serialization, binary-specific metrics like precision/recall for the positive class, or figure logging).
+    """
+    metrics: dict[str, float] = {}
+    metrics_str = ""
+    if task_type not in {"binary", "multiclass"}:
+        return metrics, metrics_str
+
+    from sklearn.metrics import accuracy_score, f1_score
+
+    if val_targets.numel() == 0:
+        logger.warning(
+            "Empty validation targets encountered; skipping metrics computation."
+        )
+        return metrics, metrics_str
+
+    if task_type == "binary":
+        probs = torch.sigmoid(val_preds).detach().cpu().numpy()
+        preds_np = (probs > 0.5).astype(int)
+        targets_np = val_targets.detach().cpu().numpy().astype(int)
+    else:  # multiclass
+        preds_np = torch.argmax(val_preds, dim=-1).detach().cpu().numpy().astype(int)
+        targets_np = val_targets.detach().cpu().numpy().astype(int)
+
+    try:
+        acc = accuracy_score(targets_np, preds_np)
+        f1_macro = f1_score(targets_np, preds_np, average="macro", zero_division=0)
+        f1_weighted = f1_score(
+            targets_np, preds_np, average="weighted", zero_division=0
+        )
+        metrics.update(
+            {
+                "accuracy": acc,
+                "f1_macro": f1_macro,
+                "f1_weighted": f1_weighted,
+            }
+        )
+        metrics_str = f" | Acc: {acc:.4f} | F1(macro): {f1_macro:.4f} | F1(weighted): {f1_weighted:.4f}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed computing validation metrics: {e}")
+    return metrics, metrics_str
+
+
+def run_finetuning(
+    model: torch.nn.Module,
+    train_dl: DataLoader,
+    val_dl: DataLoader,
+    experiment_name: str,
+    output_dir: Union[Path, str],
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    hyperparams: Hyperparams,
+    loss_fn: torch.nn.Module,
+    *,
+    setup_logging: bool = False,
+    freeze_layers: Optional[List[str]] = None,
+    unfreeze_epoch: Optional[int] = None,
+):
+    """Perform the training loop for fine-tuning a model.
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    torch.nn.Module
+        The trained model.
+    """
+
+    output_dir = Path(output_dir)
+    _prometheo_setup(output_dir, experiment_name, setup_logging)
+    seed_everything()
+
+    train_loss = []
+    val_loss = []
+    best_loss = None
+    best_model_dict = None
+    epochs_since_improvement = 0
+
+    # Track layers that were originally frozen
+    originally_frozen_layers = set()
+
+    # Define checkpoint paths
+    best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
+    best_encoder_ckpt_path = Path(output_dir) / f"{experiment_name}_encoder.pt"
+
+    def _save_best(epoch_idx: int, model: torch.nn.Module, best_val: float):
+        """Persist best full-model checkpoint and encoder-only variant (head=None)."""
+        # Save full model
+        try:
+            torch.save(model.state_dict(), best_ckpt_path)
+            logger.debug(
+                f"Saved best checkpoint (val_loss={best_val:.4f}) to {best_ckpt_path}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed saving best full-model checkpoint: {e}")
+
+        # Save encoder-only by deepcopy + removing head
+        if hasattr(model, "head"):
+            try:
+                model.head = None
+                torch.save(model.state_dict(), best_encoder_ckpt_path)
+                logger.debug(
+                    f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed saving encoder-only checkpoint: {e}")
+        else:
+            logger.debug(
+                "Model has no 'head' attribute; skipping encoder-only checkpoint."
+            )
+
+    # Freeze specified layers initially
+    if freeze_layers:
+        for name, param in model.named_parameters():
+            if any(layer in name for layer in freeze_layers):
+                if not param.requires_grad:
+                    originally_frozen_layers.add(name)
+                param.requires_grad = False
+                logger.info(f"Freezing layer: {name}")
+
+    for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
+        model.train()
+
+        # Unfreezing logic
+        if freeze_layers and epoch == unfreeze_epoch:
+            for name, param in model.named_parameters():
+                if name not in originally_frozen_layers and any(
+                    layer in name for layer in freeze_layers
+                ):
+                    param.requires_grad = True
+                    logger.info(f"Unfreezing layer: {name}")
+
+        epoch_train_loss = 0.0
+
+        for batch in tqdm(train_dl, desc="Training", leave=False):
+            optimizer.zero_grad()
+            preds = model(batch)
+            targets = batch.label.to(device)
+
+            if preds.dim() > 1 and preds.size(-1) > 1:
+                # multiclass case: targets should be class indices
+                # predictions are multiclass logits
+                targets = targets.long().squeeze(axis=-1)
+            else:
+                # binary or regression case
+                targets = targets.float()
+
+            # Compute loss
+            loss = loss_fn(
+                preds[targets != NODATAVALUE], targets[targets != NODATAVALUE]
+            )
+
+            epoch_train_loss += loss.item()
+            loss.backward()
+            optimizer.step()
+
+        train_loss.append(epoch_train_loss / len(train_dl))
+
+        model.eval()
+        all_preds: List[torch.Tensor] = []
+        all_y: List[torch.Tensor] = []
+
+        for batch in val_dl:
+            with torch.no_grad():
+                preds = model(batch)
+                targets = batch.label.to(device)
+
+                if preds.dim() > 1 and preds.size(-1) > 1:
+                    # multiclass case: targets should be class indices
+                    # predictions are multiclass logits
+                    targets = targets.long().squeeze(axis=-1)
+                else:
+                    # binary or regression case
+                    targets = targets.float()
+
+                preds = preds[targets != NODATAVALUE]
+                targets = targets[targets != NODATAVALUE]
+                all_preds.append(preds)
+                all_y.append(targets)
+
+        val_preds = torch.cat(all_preds)
+        val_targets = torch.cat(all_y)
+        current_val_loss = loss_fn(val_preds, val_targets).item()
+        val_loss.append(current_val_loss)
+
+        # Additional classification metrics via helper
+        task_type = getattr(val_dl.dataset, "task_type", None)
+        _, metrics_str = compute_validation_metrics(val_preds, val_targets, task_type)
+
+        if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(current_val_loss)
+        else:
+            scheduler.step()
+
+        improved = best_loss is None or current_val_loss < best_loss
+        if improved:
+            best_loss = current_val_loss
+            best_model = deepcopy(model)
+            best_model_dict = model.state_dict()
+            epochs_since_improvement = 0
+            _save_best(epoch + 1, best_model, best_loss)
+        else:
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= hyperparams.patience:
+                logger.info("Early stopping!")
+                break
+
+        description = (
+            f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
+            f"Train Loss: {train_loss[-1]:.4f} | "
+            f"Val Loss: {current_val_loss:.4f} | "
+            f"Best Loss: {best_loss:.4f}"
+        ) + (metrics_str if "metrics_str" in locals() else "")
+
+        description += (
+            " (improved)"
+            if epochs_since_improvement == 0
+            else f" (no improvement for {epochs_since_improvement} epochs)"
+        )
+
+        pbar.set_description(description)
+        pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        logger.info(
+            f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
+        )  # Only log to file if console filters on "PROGRESS"
+
+    assert best_model_dict is not None
+
+    model.load_state_dict(best_model_dict)
+    model.eval()
+
+    return model

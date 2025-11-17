@@ -247,7 +247,7 @@ def main(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
@@ -273,7 +273,7 @@ def main(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     job_options : dict, optional
-        A dictionary of job options to customize the jobs.
+        A dictionary of job options to customize the jobs (may contain None values for unset options).
         If None, default options will be used.
         Recognized keys:
             executor-memory, python-memory, max-executors, image-name, etl_organization_id.
