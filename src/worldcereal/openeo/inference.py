@@ -709,7 +709,7 @@ class PrestoFeatureExtractor:
         """Compute and add slope band to array."""
         logger.warning("Slope band not found, computing...")
         resolution = CoordinateTransformer.get_resolution(inarr.isel(t=0), epsg)
-        elevation_data = inarr.sel(bands="elevation").isel(t=0).values
+        elevation_data = inarr.sel(bands="COP-DEM").isel(t=0).values
 
         slope_array = SlopeCalculator.compute(resolution, elevation_data)
         slope_da = (
