@@ -14,7 +14,7 @@ DEFAULT_JOB_OPTIONS: Dict[str, Union[str, int, None]] = {
 }
 
 
-def parse_job_options_from_args(args) -> Dict[str, Union[str, int]]:
+def parse_job_options_from_args(args) -> Dict[str, Union[str, int, None]]:
     """
     Parse openEO job options from command line arguments.
 
@@ -27,7 +27,7 @@ def parse_job_options_from_args(args) -> Dict[str, Union[str, int]]:
             executor-memoryOverhead, max-executors, image-name, etl_organization_id.
     Returns
     -------
-    dict [str, Union[str, int]]
+    dict [str, Union[str, int, None]]
     """
     parsed_job_options = {
         key: value
