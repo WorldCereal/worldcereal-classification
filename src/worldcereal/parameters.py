@@ -173,9 +173,26 @@ class CropLandParameters(BaseParameters):
         temporal_prediction=False,
         target_date=None,
     )
-    classifier_parameters: ClassifierParameters = BaseParameters.create_classifier_parameters(
-        classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun%3D202510301004.onnx"  # NOQA
+
+    @staticmethod
+    def _default_classifier_parameters() -> ClassifierParameters:
+        return BaseParameters.create_classifier_parameters(
+            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun%3D202510301004.onnx"  # NOQA
+        )
+
+    classifier_parameters: ClassifierParameters = Field(
+        default_factory=lambda: CropLandParameters._default_classifier_parameters()
     )
+
+    def __init__(self, classifier_url: Optional[str] = None, **kwargs):
+        # Allow overriding classifier URL unless explicit classifier_parameters provided
+        if "classifier_parameters" not in kwargs and classifier_url is not None:
+            kwargs["classifier_parameters"] = (
+                BaseParameters.create_classifier_parameters(
+                    classifier_url=classifier_url
+                )
+            )
+        super().__init__(**kwargs)
 
 
 class CropTypeParameters(BaseParameters):
@@ -207,22 +224,39 @@ class CropTypeParameters(BaseParameters):
             target_date=None,  # By default take the middle date
         )
 
+    @staticmethod
+    def _default_classifier_parameters() -> ClassifierParameters:
+        return BaseParameters.create_classifier_parameters(
+            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
+        )
+
     feature_parameters: FeaturesParameters = Field(
         default_factory=lambda: CropTypeParameters._default_feature_parameters()
     )
     classifier_parameters: ClassifierParameters = Field(
-        default_factory=lambda: BaseParameters.create_classifier_parameters(
-            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
-        )
+        default_factory=lambda: CropTypeParameters._default_classifier_parameters()
     )
     mask_cropland: bool = Field(default=True)
     save_mask: bool = Field(default=False)
 
-    def __init__(self, target_date: Optional[str] = None, **kwargs):
+    def __init__(
+        self,
+        target_date: Optional[str] = None,
+        classifier_url: Optional[str] = None,
+        **kwargs,
+    ):
+        # Override feature target_date if feature_parameters not supplied
         if "feature_parameters" not in kwargs:
             fp = self._default_feature_parameters().model_copy()
             fp.target_date = target_date  # type: ignore[attr-defined]
             kwargs["feature_parameters"] = fp
+        # Override classifier URL if classifier_parameters not supplied
+        if "classifier_parameters" not in kwargs and classifier_url is not None:
+            kwargs["classifier_parameters"] = (
+                BaseParameters.create_classifier_parameters(
+                    classifier_url=classifier_url
+                )
+            )
         super().__init__(**kwargs)
 
     @model_validator(mode="after")
