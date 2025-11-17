@@ -682,6 +682,7 @@ def run_finetuning(
         if improved:
             best_loss = current_val_loss
             best_model = deepcopy(model)
+            best_model_dict = model.state_dict()
             epochs_since_improvement = 0
             _save_best(epoch + 1, best_model, best_loss)
         else:
