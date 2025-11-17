@@ -498,7 +498,7 @@ def check_job_status(output_folder: Path) -> dict:
 
     print("-------------------------------------")
     print("Overall jobs status:")
-    print(tabulate(status_count, headers="keys", tablefmt="psql", showindex=True))
+    print(tabulate(status_count, headers="keys", tablefmt="psql", showindex=False))
 
     return status_histogram
 
@@ -551,31 +551,52 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
     else:
         succeeded_jobs = pd.DataFrame()
 
-    # Print costs (if not NaN)
-    if pd.notnull(succeeded_jobs["costs"]).all():
-        print(
-            f"""
-        -------------------------------------
-        Total credits consumed: {int(succeeded_jobs["costs"].sum())}
-        Average job cost: {int(succeeded_jobs["costs"].mean())} (over {succeeded_jobs.shape[0]} jobs)
-        -------------------------------------
-        """
-        )
-    # Print details of succeeded jobs
+    # Pretty reporting
     if not succeeded_jobs.empty:
-        print(
-            f"""
-        -------------------------------------
-        Number of samples successfully extracted:
-        -------------------------------------
-        {succeeded_jobs["n_samples"].sum()}
-        -------------------------------------
-        Details of succeeded jobs:
-        -------------------------------------
-        {succeeded_jobs.to_string(index=False, header=True)}
-        -------------------------------------
-        """
-        )
+        from tabulate import tabulate
+
+        total_samples = int(succeeded_jobs["n_samples"].sum())
+        n_jobs = succeeded_jobs.shape[0]
+        # Costs summary (only if all non-null)
+        if pd.notnull(succeeded_jobs["costs"]).all():
+            total_credits = int(succeeded_jobs["costs"].sum())
+            avg_cost = int(succeeded_jobs["costs"].mean())
+        else:
+            total_credits = 0
+            avg_cost = 0
+
+        summary_table = [
+            ["Succeeded jobs", n_jobs],
+            ["Total samples", f"{total_samples:,}"],
+            ["Total credits", total_credits],
+            ["Average job cost", avg_cost],
+        ]
+        print("\n" + "=" * 80)
+        print("SUCCEEDED JOBS SUMMARY")
+        print("=" * 80)
+        print(tabulate(summary_table, headers=["Metric", "Value"], tablefmt="grid"))
+
+        # Detailed job table
+        detail_cols = [
+            c
+            for c in ["id", "s2_tile", "n_samples", "duration_mins", "costs"]
+            if c in succeeded_jobs.columns
+        ]
+        detail_df = succeeded_jobs[detail_cols].copy()
+        # Sort by n_samples descending then duration
+        if "n_samples" in detail_df.columns:
+            sort_cols = ["n_samples"] + (
+                ["duration_mins"] if "duration_mins" in detail_df.columns else []
+            )
+            detail_df = detail_df.sort_values(
+                by=sort_cols, ascending=[False] + [True] * (len(sort_cols) - 1)
+            )
+
+        print("\nDetails per job:")
+        print(tabulate(detail_df, headers="keys", tablefmt="psql", showindex=False))
+        print("=" * 80 + "\n")
+    else:
+        print("No succeeded jobs to report.")
 
     return succeeded_jobs
 
