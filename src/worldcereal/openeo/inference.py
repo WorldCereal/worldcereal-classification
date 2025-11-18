@@ -20,6 +20,9 @@ from shapely.ops import transform
 try:
     from loguru import logger
 
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+
     class InterceptHandler(logging.Handler):
         def emit(self, record):
             level = record.levelname
