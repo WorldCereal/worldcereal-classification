@@ -19,6 +19,8 @@ from openeo_gfmap.preprocessing.compositing import mean_compositing, median_comp
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
+from worldcereal.openeo.masking import scl_mask_erode_dilate
+
 WORLDCEREAL_S2_BANDS = [
     "S2-L2A-B02",
     "S2-L2A-B03",
@@ -147,6 +149,7 @@ def raw_datacube_S2(
     additional_masks_flag: Optional[bool] = True,
     apply_mask_flag: Optional[bool] = False,
     tile_size: Optional[int] = None,
+    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -199,17 +202,26 @@ def raw_datacube_S2(
     # Resample to 10m resolution for the SCL layer
     scl_cube = scl_cube.resample_spatial(10)
 
-    # Compute the SCL dilation mask
-    scl_dilated_mask = scl_cube.process(
-        "to_scl_dilation_mask",
-        data=scl_cube,
-        scl_band_name="SCL",
-        kernel1_size=17,  # 17px dilation on a 10m layer
-        kernel2_size=77,  # 77px dilation on a 10m layer
-        mask1_values=[2, 4, 5, 6, 7],
-        mask2_values=[3, 8, 9, 10, 11],
-        erosion_kernel_size=3,
-    ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
+    if optical_mask_method == "mask_scl_dilation":
+        # Compute the SCL dilation mask
+        scl_dilated_mask = scl_cube.process(
+            "to_scl_dilation_mask",
+            data=scl_cube,
+            scl_band_name="SCL",
+            kernel1_size=17,  # 17px dilation on a 10m layer
+            kernel2_size=77,  # 77px dilation on a 10m layer
+            mask1_values=[2, 4, 5, 6, 7],
+            mask2_values=[3, 8, 9, 10, 11],
+            erosion_kernel_size=3,
+        ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
+    elif optical_mask_method == "satio":
+        # Compute satio-based mask
+        scl_dilated_mask = scl_mask_erode_dilate(scl_cube)
+    else:
+        raise ValueError(
+            f"Unknown optical_mask_method: {optical_mask_method}. "
+            f"Supported methods are 'mask_scl_dilation' and 'satio'."
+        )
 
     additional_masks = scl_dilated_mask
 
@@ -430,6 +442,7 @@ def worldcereal_preprocessed_inputs(
     s2_tile: Optional[str] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     target_epsg: Optional[int] = None,
+    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -453,6 +466,7 @@ def worldcereal_preprocessed_inputs(
         additional_masks_flag=False,
         apply_mask_flag=True,
         tile_size=tile_size,
+        optical_mask_method=optical_mask_method,
     )
 
     if target_epsg is not None:
