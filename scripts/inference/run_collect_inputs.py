@@ -453,18 +453,26 @@ if __name__ == "__main__":
         default=None,
         help="Name of the column in the grid file that contains the tile names. If not provided, tiles will be named as 'patch_0', 'patch_1', etc.",
     )
+    parser.add_argument(
+        "--compositing_window",
+        type=str,
+        choices=["month", "dekad"],
+        default="month",
+        help="The compositing window to use for the inputs.",
+    )
 
     args = parser.parse_args()
 
     job_options = parse_job_options_from_args(args)
 
     utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
-    convert_gdf_to_utm_grid(
-        in_path = Path(args.grid_path),
-        out_path = Path(utm_aware_grid_path),
-        id_col = args.tile_name_col,
-        web_mercator_grid = False
-        )
+    if not Path(utm_aware_grid_path).is_file():
+        convert_gdf_to_utm_grid(
+            in_path = Path(args.grid_path),
+            out_path = Path(utm_aware_grid_path),
+            id_col = args.tile_name_col,
+            web_mercator_grid = False
+            )
 
     main(
         grid_path=utm_aware_grid_path,
@@ -476,5 +484,6 @@ if __name__ == "__main__":
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
         job_options=job_options,
-        tile_name_col=args.tile_name_col
+        tile_name_col=args.tile_name_col,
+        compositing_window=args.compositing_window,
     )
