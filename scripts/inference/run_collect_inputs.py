@@ -410,42 +410,10 @@ if __name__ == "__main__":
         help="Specify the S1 orbit state to use for the jobs.",
     )
     parser.add_argument(
-        "--memory",
-        type=str,
-        default="1800m",
-        help="Memory to allocate for the executor.",
-    )
-    parser.add_argument(
-        "--python_memory",
-        type=str,
-        default="1900m",
-        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
-    )
-    parser.add_argument(
-        "--max_executors", type=int, default=22, help="Number of executors to run."
-    )
-    parser.add_argument(
         "--parallel_jobs",
         type=int,
         default=2,
         help="The maximum number of parallel jobs to run at the same time.",
-    )
-    parser.add_argument(
-        "--restart_failed",
-        action="store_true",
-        help="Restart the jobs that previously failed.",
-    )
-    parser.add_argument(
-        "--image_name",
-        type=str,
-        default=None,
-        help="Specific openEO image name to use for the jobs.",
-    )
-    parser.add_argument(
-        "--organization_id",
-        type=int,
-        default=None,
-        help="ID of the organization to use for the job.",
     )
     parser.add_argument(
         "--tile_name_col",
@@ -459,6 +427,39 @@ if __name__ == "__main__":
         choices=["month", "dekad"],
         default="month",
         help="The compositing window to use for the inputs.",
+    )
+    parser.add_argument(
+        "--restart_failed",
+        action="store_true",
+        help="Restart the jobs that previously failed.",
+    )
+    parser.add_argument("--driver_memory", type=str, default=None, help="Driver memory")
+    parser.add_argument(
+        "--driver_memoryOverhead",
+        type=str,
+        default=None,
+        help="Driver memory overhead.",
+    )
+    parser.add_argument(
+        "--executor_cores", type=int, default=None, help="Executor cores."
+    )
+    parser.add_argument(
+        "--executor_memory", type=str, default=None, help="Executor memory."
+    )
+    parser.add_argument(
+        "--executor_memoryOverhead",
+        type=str,
+        default=None,
+        help="Executor memory overhead.",
+    )
+    parser.add_argument(
+        "--max_executors", type=int, default=None, help="Max executors."
+    )
+    parser.add_argument(
+        "--image_name", type=str, default="python38", help="openEO image name."  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+    )
+    parser.add_argument(
+        "--organization_id", type=int, default=None, help="Organization id."
     )
 
     args = parser.parse_args()
