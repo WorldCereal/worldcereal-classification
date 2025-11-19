@@ -10,6 +10,7 @@ from typing import Dict, Literal, Optional, Union
 import geopandas as gpd
 import openeo
 import pandas as pd
+import shapely
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
@@ -18,11 +19,13 @@ from openeo_gfmap.backend import cdse_connection
 
 from worldcereal.job import create_inputs_process_graph
 from worldcereal.utils import parse_job_options_from_args
+from worldcereal.utils.production_grid import convert_gdf_to_utm_grid
 
 MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds
 MAX_DELAY = 10
 
+REQUIRED_ATTRIBUTES = ["tile_name", "geometry_utm_wkt", "epsg_utm"]
 
 class InferenceJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
@@ -98,13 +101,16 @@ def create_worldcereal_inputsjob(
         The created batch job.
     """
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
-    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
+    bounds = shapely.from_wkt(row.geometry_utm_wkt).bounds
+    rounded_bounds = tuple(round(coord / 20) * 20 for coord in bounds)
+    spatial_extent = BoundingBoxExtent(*rounded_bounds, epsg=int(row["epsg_utm"]))
+    # spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
 
     preprocessed_inputs = create_inputs_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
-        target_epsg=int(row["epsg"]),
+        target_epsg=int(row["epsg_utm"]),
         compositing_window=compositing_window,
     )
 
@@ -158,6 +164,16 @@ def create_job_dataframe_from_grid(
         production_gdf = gpd.read_parquet(grid_path)
     else:
         production_gdf = gpd.read_file(grid_path)
+
+    # Check if all required attributes are present in the production_gdf
+    missing_attributes = [
+        attr for attr in REQUIRED_ATTRIBUTES if attr not in production_gdf.columns
+    ]
+    if missing_attributes:
+        raise ValueError(
+            f"The following required attributes are missing in the production grid: {missing_attributes}"
+        )
+        
     assert (
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
@@ -178,7 +194,7 @@ def create_job_dataframe_from_grid(
         production_gdf["tile_name"] = [f"patch_{i}" for i in range(len(production_gdf))]
     else:
         production_gdf["tile_name"] = production_gdf[tile_name_col]
-    production_gdf["epsg"] = production_gdf.crs.to_epsg()
+    # production_gdf["epsg"] = production_gdf.crs.to_epsg()
 
     return production_gdf
 
@@ -189,6 +205,7 @@ def create_job_database(
     grid_path: Optional[Path] = None,
     extractions_start_date: Optional[str] = None,
     extractions_end_date: Optional[str] = None,
+    tile_name_col: Optional[str] = None,
 ) -> CsvJobDatabase:
     job_tracking_path = Path(output_folder) / "job_tracking.csv"
     job_db = CsvJobDatabase(path=job_tracking_path)
@@ -212,6 +229,7 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
+                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
     else:
@@ -232,6 +250,7 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
+                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
 
@@ -247,8 +266,9 @@ def main(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
+    job_options: Optional[Dict[str, Union[str, int]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    tile_name_col: Optional[str] = None,
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -273,7 +293,7 @@ def main(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     job_options : dict, optional
-        A dictionary of job options to customize the jobs (may contain None values for unset options).
+        A dictionary of job options to customize the jobs.
         If None, default options will be used.
         Recognized keys:
             executor-memory, python-memory, max-executors, image-name, etl_organization_id.
@@ -306,6 +326,7 @@ def main(
             grid_path=grid_path,
             extractions_start_date=extractions_start_date,
             extractions_end_date=extractions_end_date,
+            tile_name_col=tile_name_col,
         )
 
     # Retry loop starts here
@@ -360,22 +381,22 @@ if __name__ == "__main__":
         description="Collect preprocessed inputs for polygon patches."
     )
     parser.add_argument(
-        "grid_path",
+        "--grid_path",
         type=Path,
         help="Path to the grid file (GeoJSON or shapefile) defining the locations to extract.",
     )
     parser.add_argument(
-        "extractions_start_date",
+        "--extractions_start_date",
         type=str,
         help="Start date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "extractions_end_date",
+        "--extractions_end_date",
         type=str,
         help="End date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "output_folder", type=Path, help="The folder where to store the extracted data"
+        "--output_folder", type=Path, help="The folder where to store the extracted data"
     )
     parser.add_argument(
         "--overwrite_job_df",
@@ -426,13 +447,27 @@ if __name__ == "__main__":
         default=None,
         help="ID of the organization to use for the job.",
     )
+    parser.add_argument(
+        "--tile_name_col",
+        type=str,
+        default=None,
+        help="Name of the column in the grid file that contains the tile names. If not provided, tiles will be named as 'patch_0', 'patch_1', etc.",
+    )
 
     args = parser.parse_args()
 
     job_options = parse_job_options_from_args(args)
 
+    utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
+    convert_gdf_to_utm_grid(
+        in_path = Path(args.grid_path),
+        out_path = Path(utm_aware_grid_path),
+        id_col = args.tile_name_col,
+        web_mercator_grid = False
+        )
+
     main(
-        grid_path=args.grid_path,
+        grid_path=utm_aware_grid_path,
         extractions_start_date=args.extractions_start_date,
         extractions_end_date=args.extractions_end_date,
         output_folder=args.output_folder,
@@ -441,4 +476,5 @@ if __name__ == "__main__":
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
         job_options=job_options,
+        tile_name_col=args.tile_name_col
     )
