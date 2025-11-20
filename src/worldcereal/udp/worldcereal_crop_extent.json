@@ -1005,8 +1005,8 @@
   "default_job_options": {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "1g",
-    "python-memory": "3g",
+    "executor-memoryOverhead": "3g",
+    "python-memory": "disable",
     "soft-errors": 0.1,
     "udf-dependency-archives": [
       "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/onnx_deps_python311.zip#onnx_deps",
