@@ -22,7 +22,7 @@ import shutil
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Literal, Optional, Union
+from typing import Callable, Dict, List, Literal, Optional, Union
 
 import geopandas as gpd
 import openeo
@@ -41,7 +41,6 @@ from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
     EmbeddingsParameters,
-    PostprocessParameters,
     WorldCerealProductType,
 )
 from worldcereal.utils.models import load_model_lut
@@ -188,13 +187,13 @@ def create_inference_process_graph(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
-) -> openeo.DataCube:
+    connection: Optional[openeo.Connection] = None,
+) -> List[openeo.DataCube]:
     """Wrapper function that creates the inference openEO process graph.
 
     Parameters
@@ -211,8 +210,6 @@ def create_inference_process_graph(
         Parameters for the croptype product inference pipeline. Only required
         whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
         will be ignored otherwise.
-    postprocess_parameters: PostprocessParameters
-        Parameters for the postprocessing pipeline. By default disabled.
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]]
         Sentinel-1 orbit state to use for the inference. If not provided,
         the orbit state will be dynamically determined based on the spatial extent.
@@ -225,12 +222,15 @@ def create_inference_process_graph(
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
+    connection: Optional[openeo.Connection] = None,
+        Optional OpenEO connection to use. If not provided, a new connection
+        will be created based on the backend_context.
 
     Returns
     -------
-    openeo.DataCube
-        DataCube object representing the inference process graph.
-        This object can be used to execute the job on the OpenEO backend.
+    List[openeo.DataCube]
+        A list with one or more result objects or a list of DataCube objects, representing the inference
+        process graph. This object can be used to execute the job on the OpenEO backend.
         The result will be a DataCube with the classification results.
 
     Raises
@@ -247,7 +247,8 @@ def create_inference_process_graph(
         raise ValueError(f"Format {format} not supported.")
 
     # Make a connection to the OpenEO backend
-    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+    if connection is None:
+        connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
     # Preparing the input cube for inference
     inputs = worldcereal_preprocessed_inputs(
@@ -266,11 +267,10 @@ def create_inference_process_graph(
 
     # Construct the feature extraction and model inference pipeline
     if product_type == WorldCerealProductType.CROPLAND:
-        classes = _cropland_map(
+        results = _cropland_map(
             inputs,
             temporal_extent,
             cropland_parameters=cropland_parameters,
-            postprocess_parameters=postprocess_parameters,
         )
 
     elif product_type == WorldCerealProductType.CROPTYPE:
@@ -279,52 +279,16 @@ def create_inference_process_graph(
                 f"Please provide a valid `croptype_parameters` parameter."
                 f" Received: {croptype_parameters}"
             )
-        # First compute cropland map
-        if croptype_parameters.mask_cropland:
-            cropland_mask = _cropland_map(
-                inputs,
-                temporal_extent,
-                cropland_parameters=cropland_parameters,
-                postprocess_parameters=postprocess_parameters,
-            )
 
-            # Save final mask if required
-            if croptype_parameters.save_mask:
-                cropland_mask = cropland_mask.save_result(
-                    format="GTiff",
-                    options=dict(
-                        filename_prefix=f"{WorldCerealProductType.CROPLAND.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
-                    ),
-                )
-
-            # To use it as a mask, we need to filter out the classification band
-            # Use the generic 'process' to avoid client-side errors on missing metadata
-            cropland_mask = cropland_mask.process(
-                process_id="filter_bands",
-                arguments=dict(
-                    data=cropland_mask,
-                    bands=["classification"],
-                ),
-            )
-
-        # Generate crop type map
-        classes = _croptype_map(
+        # Generate crop type map with optional cropland masking
+        results = _croptype_map(
             inputs,
             temporal_extent,
+            cropland_parameters=cropland_parameters,
             croptype_parameters=croptype_parameters,
-            cropland_mask=cropland_mask if croptype_parameters.mask_cropland else None,
-            postprocess_parameters=postprocess_parameters,
         )
 
-    # Save the final result
-    classes = classes.save_result(
-        format=out_format,
-        options=dict(
-            filename_prefix=f"{product_type.value}_{temporal_extent.start_date}_{temporal_extent.end_date}",
-        ),
-    )
-
-    return classes
+    return results
 
 
 def create_embeddings_process_graph(
@@ -499,7 +463,6 @@ def create_inference_job(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPTYPE,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     target_epsg: Optional[int] = None,
     job_options: Optional[dict] = None,
@@ -533,8 +496,6 @@ def create_inference_job(
         will be ignored otherwise, by default None
     cropland_parameters : Optional[CropLandParameters], optional
         Parameters for the cropland product inference pipeline, by default None
-    postprocess_parameters : Optional[PostprocessParameters], optional
-        Parameters for the postprocessing pipeline. By default disabled.
     s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
         Sentinel-1 orbit state to use for the inference. If not provided, the
         best orbit will be dynamically derived from the catalogue.
@@ -573,16 +534,17 @@ def create_inference_job(
         product_type=product_type,
         croptype_parameters=croptype_parameters,
         cropland_parameters=cropland_parameters,
-        postprocess_parameters=postprocess_parameters,
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
+        connection=connection,
     )
 
     # Submit the job
-    return inference_result.create_job(
+    return connection.create_job(
+        inference_result,
         title=f"WorldCereal [{product_type.value}] job_{row.tile_name}",
         description="Job that performs end-to-end WorldCereal inference",
-        job_options=inference_job_options,
+        additional=inference_job_options,  # TODO: once openeo-python-client supports job_options, use that
     )
 
 
@@ -593,7 +555,6 @@ def generate_map(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
@@ -618,8 +579,6 @@ def generate_map(
         Parameters for the croptype product inference pipeline. Only required
         whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
         will be ignored otherwise.
-    postprocess_parameters: PostprocessParameters
-        Parameters for the postprocessing pipeline. By default disabled.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
@@ -645,17 +604,21 @@ def generate_map(
         if the out_format is not supported
     """
 
-    classes = create_inference_process_graph(
+    # Get a connection to the OpenEO backend
+    connection = BACKEND_CONNECTIONS[backend_context.backend]()
+
+    # Create the process graph
+    results = create_inference_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         product_type=product_type,
         cropland_parameters=cropland_parameters,
         croptype_parameters=croptype_parameters,
-        postprocess_parameters=postprocess_parameters,
         out_format=out_format,
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
+        connection=connection,
     )
 
     if output_dir is not None:
@@ -668,11 +631,12 @@ def generate_map(
         inference_job_options.update(job_options)
 
     # Execute the job
-    job = classes.execute_batch(
-        job_options=inference_job_options,
+    job = connection.create_job(
+        results,
+        additional=inference_job_options,  # TODO: once openeo-python-client supports job_options, use that
         title=f"WorldCereal [{product_type.value}] job",
         description="Job that performs end-to-end WorldCereal inference",
-    )
+    ).start_and_wait()
 
     # Get look-up tables
     luts = {}
@@ -793,7 +757,6 @@ def run_largescale_inference(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
@@ -820,8 +783,6 @@ def run_largescale_inference(
         Parameters for cropland inference.
     croptype_parameters : CropTypeParameters
         Parameters for crop type inference.
-    postprocess_parameters : PostprocessParameters
-        Parameters for postprocessing the inference results.
     backend_context : BackendContext
         Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
     target_epsg : Optional[int]
@@ -847,7 +808,6 @@ def run_largescale_inference(
         product_type=product_type,
         cropland_parameters=cropland_parameters,
         croptype_parameters=croptype_parameters,
-        postprocess_parameters=postprocess_parameters,
         backend_context=backend_context,
         target_epsg=target_epsg,
         s1_orbit_state=s1_orbit_state,
@@ -874,7 +834,6 @@ def setup_inference_job_manager(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
@@ -900,8 +859,6 @@ def setup_inference_job_manager(
         Parameters for cropland inference.
     croptype_parameters : CropTypeParameters
         Parameters for crop type inference.
-    postprocess_parameters : PostprocessParameters
-        Parameters for postprocessing the inference results.
     backend_context : BackendContext
         Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
     target_epsg : Optional[int]
@@ -968,9 +925,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
+            assert attr in production_gdf.columns, (
+                f"The production grid must contain a '{attr}' column."
+            )
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 
@@ -987,7 +944,6 @@ def setup_inference_job_manager(
         product_type=product_type,
         cropland_parameters=cropland_parameters,
         croptype_parameters=croptype_parameters,
-        postprocess_parameters=postprocess_parameters,
         s1_orbit_state=s1_orbit_state,
         job_options=job_options,
         target_epsg=target_epsg,

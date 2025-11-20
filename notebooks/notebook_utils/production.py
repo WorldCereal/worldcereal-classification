@@ -24,7 +24,6 @@ from worldcereal.job import setup_inference_job_manager
 from worldcereal.parameters import (
     CropLandParameters,
     CropTypeParameters,
-    PostprocessParameters,
     WorldCerealProductType,
 )
 
@@ -319,7 +318,6 @@ def run_map_production(
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
-    postprocess_parameters: PostprocessParameters = PostprocessParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
@@ -349,8 +347,6 @@ def run_map_production(
         Parameters for the cropland product, by default CropLandParameters()
     croptype_parameters : CropTypeParameters, optional
         Parameters for the crop type product, by default CropTypeParameters()
-    postprocess_parameters : PostprocessParameters, optional
-        Parameters for postprocessing, by default PostprocessParameters()
     backend_context : BackendContext, optional
         The backend context to use for the production, by default BackendContext(Backend.CDSE)
     target_epsg : Optional[int], optional
@@ -402,7 +398,6 @@ def run_map_production(
         product_type=product_type,
         cropland_parameters=cropland_parameters,
         croptype_parameters=croptype_parameters,
-        postprocess_parameters=postprocess_parameters,
         backend_context=backend_context,
         target_epsg=target_epsg,
         s1_orbit_state=s1_orbit_state,

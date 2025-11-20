@@ -8,7 +8,11 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
 from worldcereal.job import WorldCerealProductType, generate_map
-from worldcereal.parameters import PostprocessParameters
+from worldcereal.parameters import (
+    CropLandParameters,
+    CropTypeParameters,
+    PostprocessParameters,
+)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -76,14 +80,23 @@ if __name__ == "__main__":
 
     backend_context = BackendContext(Backend.CDSE)
 
+    postprocessing_params = PostprocessParameters(
+        enable=args.postprocess,
+        keep_class_probs=args.class_probabilities,
+        save_intermediate=True if args.postprocess else False,
+    )
+    cropland_params = CropLandParameters(postprocess_parameters=postprocessing_params)
+    croptype_params = CropTypeParameters(
+        postprocess_parameters=postprocessing_params, save_mask=False
+    )
+
     job_results = generate_map(
         spatial_extent,
         temporal_extent,
         args.output_path,
         product_type=WorldCerealProductType(product),
-        postprocess_parameters=PostprocessParameters(
-            enable=args.postprocess, keep_class_probs=args.class_probabilities
-        ),
+        cropland_parameters=cropland_params,
+        croptype_parameters=croptype_params,
         out_format="GTiff",
         backend_context=backend_context,
     )

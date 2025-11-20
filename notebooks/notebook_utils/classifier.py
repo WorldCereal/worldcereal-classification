@@ -31,9 +31,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
-from worldcereal.train.datasets import MIN_EDGE_BUFFER
+from worldcereal.train.datasets import MIN_EDGE_BUFFER, SensorMaskingConfig
 from worldcereal.utils.refdata import process_extractions_df
-from worldcereal.train.datasets import SensorMaskingConfig
 
 
 def get_input(label):
@@ -61,7 +60,6 @@ def align_extractions_to_season(
     season: TemporalContext,
     freq: Literal["month", "dekad"] = "month",
     valid_time_buffer: int = MIN_EDGE_BUFFER,
-
 ) -> pd.DataFrame:
     """Align raw extraction rows to a target season and enrich with labels.
 
@@ -192,8 +190,12 @@ def compute_presto_embeddings(
     elif task_type == "cropland":
         presto_model_url = CropLandParameters().feature_parameters.presto_model_url
     else:
-        raise ValueError((f"Unknown task type: `{task_type}` and no `custom_presto_url`"
-                          " given -> cannot infer Presto model"))
+        raise ValueError(
+            (
+                f"Unknown task type: `{task_type}` and no `custom_presto_url`"
+                " given -> cannot infer Presto model"
+            )
+        )
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
@@ -220,7 +222,10 @@ def compute_presto_embeddings(
         )
 
     # Initialize datasets
-    samples_train, samples_test = samples_train.reset_index(), samples_test.reset_index()
+    samples_train, samples_test = (
+        samples_train.reset_index(),
+        samples_test.reset_index(),
+    )
     if mask_on_training:
         masking_config = SensorMaskingConfig(
             enable=True,
@@ -231,7 +236,7 @@ def compute_presto_embeddings(
             s2_cloud_block_min=2,
             s2_cloud_block_max=3,
             meteo_timestep_dropout_prob=0.03,
-            dem_dropout_prob=0.01
+            dem_dropout_prob=0.01,
         )
     else:
         masking_config = SensorMaskingConfig(enable=False)
@@ -242,7 +247,7 @@ def compute_presto_embeddings(
         task_type="multiclass" if task_type == "croptype" else "binary",
         augment=augment,
         masking_config=masking_config,
-        repeats=repeats
+        repeats=repeats,
     )
 
     # No augmentations on test set
@@ -250,7 +255,7 @@ def compute_presto_embeddings(
         samples_test,
         task_type="multiclass" if task_type == "croptype" else "binary",
         augment=False,
-        masking_config=SensorMaskingConfig(enable=False)
+        masking_config=SensorMaskingConfig(enable=False),
     )
 
     # Compute embeddings
@@ -325,8 +330,12 @@ def train_classifier(
     """
 
     # Split into train and test set
-    samples_train = training_dataframe[training_dataframe["split"] == "train"].reset_index()
-    samples_test = training_dataframe[training_dataframe["split"] == "test"].reset_index()
+    samples_train = training_dataframe[
+        training_dataframe["split"] == "train"
+    ].reset_index()
+    samples_test = training_dataframe[
+        training_dataframe["split"] == "test"
+    ].reset_index()
 
     # Define loss function and eval metric
     if np.unique(samples_train["downstream_class"]).shape[0] < 2:
@@ -369,8 +378,10 @@ def train_classifier(
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
         iterations=2000,  # Not too high to avoid too large model size
-        depth=8,
+        depth=5,
+        learning_rate=0.15,
         early_stopping_rounds=20,
+        l2_leaf_reg=3,
         loss_function=loss_function,
         eval_metric=eval_metric,
         random_state=DEFAULT_SEED,
