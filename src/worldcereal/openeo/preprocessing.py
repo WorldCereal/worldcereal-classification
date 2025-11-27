@@ -147,6 +147,7 @@ def raw_datacube_S2(
     additional_masks_flag: Optional[bool] = True,
     apply_mask_flag: Optional[bool] = False,
     tile_size: Optional[int] = None,
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -175,6 +176,8 @@ def raw_datacube_S2(
     apply_mask : bool, optional
         Apply cloud masking, by default False. Can be enabled for high
         optimization of memory usage.
+    target_epsg : Optional[int], optional
+        Target EPSG to resample the data, by default None.
     """
     # Extract the SCL collection only
     scl_cube_properties = {"eo:cloud_cover": lambda val: val <= 95.0}
@@ -196,8 +199,8 @@ def raw_datacube_S2(
         properties=scl_cube_properties,
     )
 
-    # Resample to 10m resolution for the SCL layer
-    scl_cube = scl_cube.resample_spatial(10)
+    # Resample to 10m resolution for the SCL layer, using optional target_epsg
+    scl_cube = scl_cube.resample_spatial(projection=target_epsg, resolution=10)
 
     # Compute the SCL dilation mask
     scl_dilated_mask = scl_cube.process(
@@ -265,6 +268,7 @@ def raw_datacube_S1(
     target_resolution: float = 20.0,
     orbit_direction: Optional[str] = None,
     tile_size: Optional[int] = None,
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-1 datacube from OpenEO using GFMAP routines.
 
@@ -287,9 +291,12 @@ def raw_datacube_S1(
         Target resolution to resample the data to, by default 20.0.
     orbit_direction : Optional[str], optional
         Orbit direction to filter the data, by default None.
+    target_epsg : Optional[int], optional
+        Target EPSG to resample the data to, by default None.
     """
     extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
+        "target_crs": target_epsg,
     }
 
     if orbit_direction is not None:
@@ -453,6 +460,7 @@ def worldcereal_preprocessed_inputs(
         additional_masks_flag=False,
         apply_mask_flag=True,
         tile_size=tile_size,
+        target_epsg=target_epsg,
     )
 
     if target_epsg is not None:
@@ -483,6 +491,7 @@ def worldcereal_preprocessed_inputs(
         target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
         tile_size=tile_size,
+        target_epsg=target_epsg,
     )
 
     if target_epsg is not None:
