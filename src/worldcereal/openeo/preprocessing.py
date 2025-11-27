@@ -186,7 +186,8 @@ def raw_datacube_S2(
 
     # Create the job to extract S2
     extraction_parameters: dict[str, Any] = {
-        "target_resolution": None,  # Disable target resolution
+        "target_resolution": 10,
+        "target_crs": target_epsg,
         "load_collection": {
             "eo:cloud_cover": lambda val: val <= 95.0,
         },
@@ -240,8 +241,6 @@ def raw_datacube_S2(
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
         )
-    if apply_mask_flag:
-        extraction_parameters["pre_mask"] = scl_dilated_mask
 
     if tile_size is not None:
         extraction_parameters["update_arguments"] = {
@@ -254,6 +253,9 @@ def raw_datacube_S2(
         fetch_type=fetch_type,
         **extraction_parameters,
     ).get_cube(connection, None, temporal_extent)
+
+    if apply_mask_flag:
+        s2_cube = s2_cube.mask(scl_dilated_mask)
 
     return s2_cube
 
@@ -463,9 +465,6 @@ def worldcereal_preprocessed_inputs(
         target_epsg=target_epsg,
     )
 
-    if target_epsg is not None:
-        s2_data = s2_data.resample_spatial(projection=target_epsg, resolution=10.0)
-
     s2_data = median_compositing(s2_data, period=compositing_window)
 
     # Cast to uint16
@@ -494,9 +493,6 @@ def worldcereal_preprocessed_inputs(
         target_epsg=target_epsg,
     )
 
-    if target_epsg is not None:
-        s1_data = s1_data.resample_spatial(projection=target_epsg, resolution=10.0)
-
     s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
 
@@ -506,7 +502,9 @@ def worldcereal_preprocessed_inputs(
         fetch_type=fetch_type,
     )
 
-    # Explicitly resample DEM with bilinear interpolation
+    # Explicitly resample DEM with bilinear interpolation and based on S2 grid
+    # note: we use s2_data here as base to avoid issues at the edges because source
+    # data is not in UTM projection.
     dem_data = dem_data.resample_cube_spatial(s2_data, method="bilinear")
 
     # Cast DEM to UINT16
@@ -522,7 +520,9 @@ def worldcereal_preprocessed_inputs(
             compositing_window=compositing_window,
         )
 
-        # Explicitly resample meteo with bilinear interpolation
+        # Explicitly resample meteo with bilinear interpolation and based on S2 grid
+        # note: we use s2_data here as base to avoid issues at the edges because source
+        # data is not in UTM projection.
         meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
 
         data = data.merge_cubes(meteo_data)
