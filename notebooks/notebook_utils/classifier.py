@@ -289,6 +289,7 @@ def train_classifier(
     class_names: Optional[List[str]] = None,
     balance_classes: bool = False,
     show_confusion_matrix: Optional[Literal["absolute", "relative"]] = "relative",
+    iterations: int = 2000,
 ) -> Tuple[CatBoostClassifier, Union[str | dict], np.ndarray]:
     """Fit and evaluate a CatBoost classifier on Presto embeddings.
 
@@ -306,6 +307,9 @@ def train_classifier(
         weights to CatBoost.
     show_confusion_matrix : {'absolute', 'relative', None}, default='relative'
         Display a confusion matrix after training. ``'relative'`` normalizes per true row.
+    iterations : int, default=2000
+        Number of training iterations for CatBoost. Default (2000) is set not too high
+        to avoid too large model size.
 
     Returns
     -------
@@ -330,12 +334,25 @@ def train_classifier(
     """
 
     # Split into train and test set
+    if "split" not in training_dataframe.columns:
+        raise ValueError(
+            "Input dataframe must contain a `split` column with values"
+            " 'train' and 'test'."
+        )
     samples_train = training_dataframe[
         training_dataframe["split"] == "train"
     ].reset_index()
     samples_test = training_dataframe[
         training_dataframe["split"] == "test"
     ].reset_index()
+    if samples_train.empty or samples_test.empty:
+        raise ValueError(
+            "Train or test split is empty. Ensure the `split` column contains"
+            " both 'train' and 'test' values."
+        )
+    logger.info(
+        f"Training samples: {len(samples_train)}, Test samples: {len(samples_test)}"
+    )
 
     # Define loss function and eval metric
     if np.unique(samples_train["downstream_class"]).shape[0] < 2:
@@ -377,7 +394,7 @@ def train_classifier(
 
     # Define classifier
     custom_downstream_model = CatBoostClassifier(
-        iterations=2000,  # Not too high to avoid too large model size
+        iterations=iterations,
         depth=5,
         learning_rate=0.15,
         early_stopping_rounds=20,

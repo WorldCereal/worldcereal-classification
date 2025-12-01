@@ -160,30 +160,22 @@ def run_cropland_croptype_mapping(
     cropland_parameters: CropLandParameters = CropLandParameters(),
     croptype_parameters: CropTypeParameters = CropTypeParameters(),
 ):
-    """Run full croptype mapping inference workflow on local files.
+    """Run full croptype mapping inference workflow on a local xarray with
+    pre-processed inputs.
+
     Parameters
     ----------
-    input_patches : dict[str,Path]
-        Dictionary of input patch names and their corresponding file paths.
-    outdir : Path
-        Output directory to save results.
-    model_url : str, optional
-        URL to download the croptype classification model from. If None, uses
-        the default model provided by WorldCereal.
-    mask_croptype_with_cropland : bool, optional
-        Whether to mask croptype classification with cropland classification.
-        Defaults to True.
-    custom_landcover_presto_url : str, optional
-        URL to download the cropland feature extraction model from. If None, uses
-        the default model provided by WorldCereal.
-    custom_landcover_classifier_url : str, optional
-        URL to download the cropland classification model from. If None, uses
-        the default model provided by WorldCereal.
+    ds: xr.Dataset
+        Input satellite dataset with pre-processed inputs.
+    cropland_parameters : CropLandParameters, optional
+        Parameters for the cropland mapping pipeline. Default is CropLandParameters().
+    croptype_parameters : CropTypeParameters, optional
+        Parameters for the croptype mapping pipeline. Default is CropTypeParameters().
+
     Returns
     -------
-    dict[str, dict[str, Path]]
-        Dictionary with patch names as keys and another dictionary as values,
-        containing paths to cropland and croptype classification GeoTIFFs.
+    dict
+        dictionary with 'cropland' and 'croptype' classification results.
     """
 
     logger.info("Running combined cropland/croptype mapping workflow ...")
@@ -194,12 +186,8 @@ def run_cropland_croptype_mapping(
     # Optional cropland classification
     if cropland_parameters is not None and croptype_parameters.mask_cropland:
         cropland_classification = run_cropland_mapping(ds, cropland_parameters)
-
-        # Reconstruct dataset with CRS attributes
-        cropland_classification = reconstruct_dataset(cropland_classification, ds)
         results["cropland"] = cropland_classification
-
-        cropland_mask = cropland_classification.sel(bands="classification")
+        cropland_mask = cropland_classification["classification"]
     else:
         cropland_mask = None
 
@@ -207,22 +195,7 @@ def run_cropland_croptype_mapping(
     croptype_classification = run_croptype_mapping(
         ds, croptype_parameters, mask=cropland_mask
     )
-
-    # Reconstruct dataset with CRS attributes
-    croptype_classification = reconstruct_dataset(croptype_classification, ds)
     results["croptype"] = croptype_classification
-
-    # # Save cropland classification to GeoTIFF
-    # cropland_path = outdir / name / "cropland_classification.tif"
-    # cropland_path.parent.mkdir(exist_ok=True)
-    # classification_to_geotiff(cropland_classification, epsg, cropland_path)
-    # output_paths[name]["cropland"] = cropland_path
-
-    # # save crop type map to GeoTIFF
-    # croptype_path = outdir / name / "croptype_classification.tif"
-    # croptype_path.parent.mkdir(exist_ok=True)
-    # classification_to_geotiff(
-    #     classification=croptype_classification, epsg=epsg, out_path=croptype_path
 
     return results
 
