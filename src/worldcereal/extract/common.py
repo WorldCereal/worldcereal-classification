@@ -84,7 +84,12 @@ def extraction_job_quality_check(
     Exception
         Raised if the SAR backscatter error ratio exceeds the threshold.
     """
-    conn = BACKEND_CONNECTIONS[Backend[job_entry["backend_name"].upper()]]()
+    # TEMPORARY FIX FOR MISMATCH IN STAGING NAME; OTHER BACKENDS ARE NOT AFFECTED
+    backend_name = job_entry["backend_name"].upper()
+    if "-" in backend_name:
+        backend_name = backend_name.replace("-", "_")
+    job_backend = Backend[backend_name]
+    conn = BACKEND_CONNECTIONS[job_backend]()
     job = conn.job(job_entry.id)
 
     # Check if we have any assets resulting from the job
