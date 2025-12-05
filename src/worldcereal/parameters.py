@@ -168,7 +168,7 @@ class CropLandParameters(BaseParameters):
 
     feature_parameters: FeaturesParameters = BaseParameters.create_feature_parameters(
         rescale_s1=False,
-        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing%3D0.05-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",
+        presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt",  # NOQA
         compile_presto=False,
         temporal_prediction=False,
         target_date=None,
@@ -177,7 +177,7 @@ class CropLandParameters(BaseParameters):
     @staticmethod
     def _default_classifier_parameters() -> ClassifierParameters:
         return BaseParameters.create_classifier_parameters(
-            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun%3D202510301004.onnx"  # NOQA
+            classifier_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun=202510301004.onnx"  # NOQA
         )
 
     classifier_parameters: ClassifierParameters = Field(
@@ -218,7 +218,7 @@ class CropTypeParameters(BaseParameters):
         """Single source of truth for default croptype feature parameters."""
         return BaseParameters.create_feature_parameters(
             rescale_s1=False,
-            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",  # NOQA
+            presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",  # NOQA
             compile_presto=False,
             temporal_prediction=False,
             target_date=None,  # By default take the middle date
@@ -227,7 +227,7 @@ class CropTypeParameters(BaseParameters):
     @staticmethod
     def _default_classifier_parameters() -> ClassifierParameters:
         return BaseParameters.create_classifier_parameters(
-            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
+            classifier_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
         )
 
     feature_parameters: FeaturesParameters = Field(
@@ -289,7 +289,7 @@ class EmbeddingsParameters(BaseParameters):
         """
         return BaseParameters.create_feature_parameters(
             rescale_s1=False,
-            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
+            presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
             compile_presto=False,
             temporal_prediction=False,
             target_date=None,
