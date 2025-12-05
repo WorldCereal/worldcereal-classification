@@ -50,9 +50,9 @@ FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependenci
 INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "1g",
-    "max-executors": 10,
-    "python-memory": "3g",
+    "executor-memoryOverhead": "3g",
+    "max-executors": 20,
+    "python-memory": "disable",
     "soft-errors": 0.1,
     "image-name": "python311",
     "udf-dependency-archives": [
@@ -925,9 +925,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert attr in production_gdf.columns, (
-                f"The production grid must contain a '{attr}' column."
-            )
+            assert (
+                attr in production_gdf.columns
+            ), f"The production grid must contain a '{attr}' column."
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 

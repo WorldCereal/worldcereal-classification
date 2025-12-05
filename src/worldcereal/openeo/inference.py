@@ -98,12 +98,7 @@ def get_model_cache():
 
 def _ensure_prometheo_dependencies():
     """Non-cached dependency check."""
-    global \
-        _PROMETHEO_INSTALLED, \
-        Presto, \
-        load_presto_weights, \
-        run_model_inference, \
-        PoolingMethods
+    global _PROMETHEO_INSTALLED, Presto, load_presto_weights, run_model_inference, PoolingMethods
 
     if _PROMETHEO_INSTALLED:
         return
@@ -207,12 +202,29 @@ def load_presto_weights_cached(presto_model_url: str):
     return result
 
 
-def get_output_labels(lut_sorted: dict) -> list:
-    """Generate output band names from LUT - works in both contexts."""
-    class_names = lut_sorted.keys()
-    return ["classification", "probability"] + [
-        f"probability_{name}" for name in class_names
-    ]
+def get_output_labels(lut_sorted: dict, postprocess_parameters: dict = {}) -> list:
+    """Generate output band names from LUT - works in both contexts.
+    Parameters
+    ----------
+    lut_sorted : dict
+        Sorted lookup table mapping class names to labels.
+    postprocess_parameters : dict
+        Postprocessing parameters to determine whether to keep per-class probability bands.
+        If not provided, we assume all probabilities are kept."""
+
+    # Determine whether to remove per-class probability bands
+    # based on postprocessing parameters
+    postprocessing_enabled = postprocess_parameters.get("enabled", True)
+    keep_class_probs = postprocess_parameters.get("keep_class_probs", True)
+    if postprocessing_enabled and (not keep_class_probs):
+        # Only classification and overall probability
+        return ["classification", "probability"]
+    else:
+        # Include per-class probabilities
+        class_names = lut_sorted.keys()
+        return ["classification", "probability"] + [
+            f"probability_{name}" for name in class_names
+        ]
 
 
 def optimize_pytorch_cpu_performance(num_threads):
@@ -303,9 +315,9 @@ def majority_vote(
 
     # As the probabilities are in integers between 0 and 100,
     # we use uint16 matrices to store the vote scores
-    assert kernel_size <= 25, (
-        f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
-    )
+    assert (
+        kernel_size <= 25
+    ), f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
     unique_values = set(np.unique(prediction))
@@ -1122,14 +1134,14 @@ def apply_metadata(metadata, context: Dict) -> Any:
             ].get("classifier_url")
             if croptype_classifier_url:
                 _, croptype_lut = load_onnx_model_cached(croptype_classifier_url)
+                postprocess_parameters = context["croptype_params"].get(
+                    "postprocess_parameters", {}
+                )
                 croptype_bands = [
-                    f"croptype_{band}" for band in get_output_labels(croptype_lut)
+                    f"croptype_{band}"
+                    for band in get_output_labels(croptype_lut, postprocess_parameters)
                 ]
-                if (
-                    context["croptype_params"]
-                    .get("postprocess_parameters", {})
-                    .get("save_intermediate", False)
-                ):
+                if postprocess_parameters.get("save_intermediate", False):
                     croptype_bands += [
                         band.replace("croptype_", "croptype_raw_")
                         for band in croptype_bands
@@ -1143,14 +1155,14 @@ def apply_metadata(metadata, context: Dict) -> Any:
             ].get("classifier_url")
             if cropland_classifier_url:
                 _, cropland_lut = load_onnx_model_cached(cropland_classifier_url)
+                postprocess_parameters = context["cropland_params"].get(
+                    "postprocess_parameters", {}
+                )
                 cropland_bands = [
-                    f"cropland_{band}" for band in get_output_labels(cropland_lut)
+                    f"cropland_{band}"
+                    for band in get_output_labels(cropland_lut, postprocess_parameters)
                 ]
-                if (
-                    context["cropland_params"]
-                    .get("postprocess_parameters", {})
-                    .get("save_intermediate", False)
-                ):
+                if postprocess_parameters.get("save_intermediate", False):
                     cropland_bands += [
                         band.replace("cropland_", "cropland_raw_")
                         for band in cropland_bands
@@ -1165,10 +1177,9 @@ def apply_metadata(metadata, context: Dict) -> Any:
             classifier_url = context["classifier_parameters"].get("classifier_url")
             if classifier_url:
                 _, lut_sorted = load_onnx_model_cached(classifier_url)
-                output_labels = get_output_labels(lut_sorted)
-                if context.get("postprocess_parameters", {}).get(
-                    "save_intermediate", False
-                ):
+                postprocess_parameters = context.get("postprocess_parameters", {})
+                output_labels = get_output_labels(lut_sorted, postprocess_parameters)
+                if postprocess_parameters.get("save_intermediate", False):
                     output_labels += [f"raw_{band}" for band in output_labels]
             else:
                 raise ValueError("No classifier URL found in context")
