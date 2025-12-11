@@ -35,6 +35,7 @@ def merge_small_slices(
     df: pd.DataFrame,
     min_size: int = 100,
     label_col: str = "ewoc_code",
+    h3_level_name: str = "h3_l3_cell",
     max_iterations: int = 25,
     min_improvement: float = 0.05,
     mark_undersized: bool = True,
@@ -48,10 +49,10 @@ def merge_small_slices(
     """
 
     df = df.copy()
-    key_cols = ["ref_id", label_col, "h3_l3_cell"]
+    key_cols = ["ref_id", label_col, h3_level_name]
 
     # Precompute H3 neighbors for all cells present to avoid repeated calls
-    unique_cells = df["h3_l3_cell"].unique().tolist()
+    unique_cells = df[h3_level_name].unique().tolist()
     neighbour_map = {
         cell: list(set(h3.grid_disk(cell, 1)) - {cell}) for cell in unique_cells
     }
@@ -87,7 +88,7 @@ def merge_small_slices(
             break
 
         merge_df = pd.DataFrame(
-            merge_rows, columns=["ref_id", label_col, "h3_l3_cell", "target_cell"]
+            merge_rows, columns=["ref_id", label_col, h3_level_name, "target_cell"]
         )
 
         # Apply merges in bulk via join on keys
@@ -95,7 +96,7 @@ def merge_small_slices(
         # Where target_cell is set, update h3_l3_cell
         mask = df["target_cell"].notna()
         if mask.any():
-            df.loc[mask, "h3_l3_cell"] = df.loc[mask, "target_cell"].astype(str)
+            df.loc[mask, h3_level_name] = df.loc[mask, "target_cell"].astype(str)
         df = df.drop(columns=["target_cell"], errors="ignore")
 
         # Recompute counts and check improvement
@@ -119,7 +120,7 @@ def merge_small_slices(
 
 
 def compute_slice_centroids(
-    df: pd.DataFrame, label_col: str = "ewoc_code"
+    df: pd.DataFrame, label_col: str = "ewoc_code", h3_level_name: str = "h3_l3_cell"
 ) -> pd.DataFrame:
     """Compute centroids of embeddings per ``(ref_id, h3_l3_cell, label_col)``."""
 
@@ -128,7 +129,7 @@ def compute_slice_centroids(
         return arr.mean(axis=0)
 
     centroids = (
-        df.groupby(["ref_id", "h3_l3_cell", label_col])["embedding"]
+        df.groupby(["ref_id", h3_level_name, label_col])["embedding"]
         .apply(_centroid)
         .reset_index()
         .rename(columns={"embedding": "centroid"})
@@ -179,10 +180,13 @@ def flag_anomalies(
     df_scores: pd.DataFrame,
     label_col: str = "ewoc_code",
     threshold_mode: str = "percentile",
+    h3_level_name: str = "h3_l3_cell",
     percentile_q: float = 0.96,
     mad_k: float = 3.0,
     abs_threshold: Optional[float] = None,
     fdr_alpha: float = 0.05,
+    min_flagged_per_slice: Optional[int] = None,
+    max_flagged_fraction: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Flag anomalies within each (ref_id, h3_l3_cell, label_col) group.
 
@@ -191,10 +195,18 @@ def flag_anomalies(
     - mad: flag S above median + `mad_k` * MAD (robust)
     - absolute: flag S above `abs_threshold` (requires value)
     - fdr: Benjamini–Hochberg on S-as-scores converted to p via rank; flags those with q<=`fdr_alpha`
+    - min_flagged_per_slice: If not None and slice has fewer flagged samples than this, force the
+        top-S samples to be flagged up to this minimum (or n if n is smaller).
+    - max_flagged_fraction: If not None and slice has more flagged samples than this fraction of n,
+        keep only the top-S flagged samples up to that cap.
     """
 
     def _flag_group(group: pd.DataFrame) -> pd.DataFrame:
         g = group.copy()
+        if g.empty:
+            g["flagged"] = False
+            return g
+        
         g = g.sort_values("S", ascending=False)
         if threshold_mode == "percentile":
             thr = g["S"].quantile(percentile_q)
@@ -231,16 +243,47 @@ def flag_anomalies(
             raise ValueError(
                 "threshold_mode must be one of {'percentile','mad','absolute','fdr'}"
             )
+
+        # Enforce per-slice min/max constraints on flagged count
+        n = len(g)
+        flags = g["flagged"].to_numpy().astype(bool)
+        n_flag = int(flags.sum())
+
+        # Apply max_flagged_fraction (cap)
+        if max_flagged_fraction is not None:
+            # convert fraction to max allowed count in [0, n]
+            max_allowed = int(np.floor(max_flagged_fraction * n))
+            if max_allowed < 0:
+                max_allowed = 0
+            if n_flag > max_allowed:
+                if max_allowed == 0:
+                    flags[:] = False
+                else:
+                    # g is sorted by S descending; keep top-S points
+                    flags[:] = False
+                    flags[:max_allowed] = True
+                n_flag = int(flags.sum())
+
+        # Apply min_flagged_per_slice (floor)
+        if min_flagged_per_slice is not None and min_flagged_per_slice > 0:
+            if n_flag < min_flagged_per_slice:
+                k = min(min_flagged_per_slice, n)
+                # Force top-k S to be flagged
+                flags[:] = False
+                flags[:k] = True
+                n_flag = int(flags.sum())
+
+        g["flagged"] = flags
         return g
 
     flagged_df = (
-        df_scores.groupby(["ref_id", "h3_l3_cell", label_col], group_keys=False)
+        df_scores.groupby(["ref_id", h3_level_name, label_col], group_keys=False)
         .apply(_flag_group)
         .reset_index(drop=True)
     )
 
     summary = (
-        flagged_df.groupby(["ref_id", "h3_l3_cell", label_col])
+        flagged_df.groupby(["ref_id", h3_level_name, label_col])
         .agg(total_samples=("S", "size"), flagged_samples=("flagged", "sum"))
         .reset_index()
     )
@@ -254,12 +297,15 @@ def run_pipeline(
     label_domain: str = "ewoc_code",
     map_to_finetune: bool = False,
     class_mappings_name: str = "LANDCOVER10",
+    h3_level: int = 3,
     min_slice_size: int = 100,
     threshold_mode: str = "percentile",
     percentile_q: float = 0.96,
     mad_k: float = 3.0,
     abs_threshold: Optional[float] = None,
     fdr_alpha: float = 0.05,
+    min_flagged_per_slice: Optional[int] = None,
+    max_flagged_fraction: Optional[float] = None,
     output_samples_path: Optional[str] = None,
     output_summary_path: Optional[str] = None,
     debug: bool = False,
@@ -309,7 +355,16 @@ def run_pipeline(
         raise ValueError(
             "No rows loaded from embeddings_cache. Check model_hash or DB path."
         )
+    # from h3_l3_cell
+    h3_level_name = f"h3_l{h3_level}_cell"
+    if h3_level != 3:
+        df[h3_level_name] = df["h3_l3_cell"].apply(lambda h: h3.cell_to_parent(h, h3_level))
 
+    # or from lat/lon
+    # df[h3_level_name] = [
+    #     h3.latlng_to_cell(lat, lon, h3_level)  # or geo_to_h3, depending on h3 version
+    #     for lat, lon in zip(df["lat"], df["lon"])
+    # ]
     # Cast ewoc_code to int if needed
     if df["ewoc_code"].dtype != np.int64:
         df["ewoc_code"] = df["ewoc_code"].astype(np.int64)
@@ -333,16 +388,16 @@ def run_pipeline(
         )
 
     print(f"[anomaly] Merging small slices (min_size={min_slice_size})...")
-    df = merge_small_slices(df, min_size=min_slice_size, label_col=label_col)
+    df = merge_small_slices(df, min_size=min_slice_size, label_col=label_col, h3_level_name=h3_level_name)
     print("[anomaly] Computing per-slice centroids...")
-    centroids = compute_slice_centroids(df, label_col=label_col)
+    centroids = compute_slice_centroids(df, label_col=label_col, h3_level_name=h3_level_name)
 
     print("[anomaly] Scoring slices...")
     # Attach centroid vectors to each row via a merge, then groupby-apply without explicit Python loop
     centroids_df = centroids.rename(columns={label_col: "__label__"})
     df_with_centroid = df.merge(
         centroids_df.rename(columns={"__label__": label_col}),
-        on=["ref_id", "h3_l3_cell", label_col],
+        on=["ref_id", h3_level_name, label_col],
         how="left",
     )
 
@@ -351,7 +406,7 @@ def run_pipeline(
         return compute_scores_for_slice(g, centroid=g["centroid"].iloc[0])
 
     scored_df = (
-        df_with_centroid.groupby(["ref_id", "h3_l3_cell", label_col], group_keys=False)
+        df_with_centroid.groupby(["ref_id", h3_level_name, label_col], group_keys=False)
         .apply(_score_group)
         .reset_index(drop=True)
     )
@@ -361,11 +416,14 @@ def run_pipeline(
     flagged_df, summary_df = flag_anomalies(
         scored_df,
         label_col=label_col,
+        h3_level_name=h3_level_name,
         threshold_mode=threshold_mode,
         percentile_q=percentile_q,
         mad_k=mad_k,
         abs_threshold=abs_threshold,
         fdr_alpha=fdr_alpha,
+        min_flagged_per_slice=min_flagged_per_slice,
+        max_flagged_fraction=max_flagged_fraction,
     )
 
     # Add geometry and convert to GeoDataFrame
@@ -396,7 +454,7 @@ if __name__ == "__main__":
         embeddings_db_path="/projects/worldcereal/data/cached_embeddings/embeddings_cache_LANDCOVER10.duckdb",
         label_domain="finetune_class",
         map_to_finetune=True,
-        threshold_mode="percentile",
+        threshold_mode="mad",
         percentile_q=0.96,
         output_samples_path="LANDCOVER10_4%_outliers.parquet",
         output_summary_path="LANDCOVER10_4%_summary.parquet",
