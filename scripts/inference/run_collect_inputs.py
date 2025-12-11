@@ -23,6 +23,8 @@ MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds
 MAX_DELAY = 10
 
+REQUIRED_ATTRIBUTES = ["tile_name", "geometry_utm_wkt", "epsg_utm"]
+
 
 class InferenceJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
@@ -74,6 +76,9 @@ def create_worldcereal_inputsjob(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: str = "satio",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
     Parameters
@@ -98,14 +103,17 @@ def create_worldcereal_inputsjob(
         The created batch job.
     """
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
-    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
+    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg_utm"]))
 
     preprocessed_inputs = create_inputs_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
-        target_epsg=int(row["epsg"]),
+        target_epsg=int(row["epsg_utm"]),
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
+        erode_r=erode_r,
+        dilate_r=dilate_r,
     )
 
     # If no custom job options are provided, use these defaults
@@ -158,6 +166,16 @@ def create_job_dataframe_from_grid(
         production_gdf = gpd.read_parquet(grid_path)
     else:
         production_gdf = gpd.read_file(grid_path)
+
+    # Check if all required attributes are present in the production_gdf
+    missing_attributes = [
+        attr for attr in REQUIRED_ATTRIBUTES if attr not in production_gdf.columns
+    ]
+    if missing_attributes:
+        raise ValueError(
+            f"The following required attributes are missing in the production grid: {missing_attributes}"
+        )
+        
     assert (
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
@@ -178,10 +196,9 @@ def create_job_dataframe_from_grid(
         production_gdf["tile_name"] = [f"patch_{i}" for i in range(len(production_gdf))]
     else:
         production_gdf["tile_name"] = production_gdf[tile_name_col]
-    production_gdf["epsg"] = production_gdf.crs.to_epsg()
+    # production_gdf["epsg"] = production_gdf.crs.to_epsg()
 
     return production_gdf
-
 
 def create_job_database(
     output_folder: Path,
@@ -189,6 +206,7 @@ def create_job_database(
     grid_path: Optional[Path] = None,
     extractions_start_date: Optional[str] = None,
     extractions_end_date: Optional[str] = None,
+    tile_name_col : Optional[str] = None,
 ) -> CsvJobDatabase:
     job_tracking_path = Path(output_folder) / "job_tracking.csv"
     job_db = CsvJobDatabase(path=job_tracking_path)
@@ -212,6 +230,7 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
+                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
     else:
@@ -232,6 +251,7 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
+                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
 
@@ -249,6 +269,10 @@ def main(
     restart_failed: bool = False,
     job_options: Optional[Dict[str, Union[str, int, None]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    tile_name_col : Optional[str] = None,
+    optical_mask_method: str = "satio",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -306,6 +330,7 @@ def main(
             grid_path=grid_path,
             extractions_start_date=extractions_start_date,
             extractions_end_date=extractions_end_date,
+            tile_name_col=tile_name_col,
         )
 
     # Retry loop starts here
@@ -328,6 +353,9 @@ def main(
                     job_options=job_options,
                     connection=connection,
                     compositing_window=compositing_window,
+                    optical_mask_method=optical_mask_method,
+                    erode_r=erode_r,
+                    dilate_r=dilate_r,
                 ),
                 job_db=job_db,
             )
