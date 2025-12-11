@@ -77,6 +77,7 @@ def create_worldcereal_inputsjob(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
     Parameters
@@ -103,7 +104,20 @@ def create_worldcereal_inputsjob(
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
     bounds = shapely.from_wkt(row.geometry_utm_wkt).bounds
     rounded_bounds = tuple(round(coord / 20) * 20 for coord in bounds)
-    spatial_extent = BoundingBoxExtent(*rounded_bounds, epsg=int(row["epsg_utm"]))
+
+    # openEO filter_bbox keeps both bbox edges, so a 20 km extent at 10 m ends up as 2001 px.
+    # Shift the bbox inward by half a pixel on each side so the covered area stays the same
+    # but the grid is exactly 2000 x 2000.
+    pixel_size = 10  # final target resolution in metres
+    west, south, east, north = rounded_bounds
+    adjusted_bounds = (
+        west + pixel_size / 2,
+        south + pixel_size / 2,
+        east - pixel_size / 2,
+        north - pixel_size / 2,
+    )
+
+    spatial_extent = BoundingBoxExtent(*adjusted_bounds, epsg=int(row["epsg_utm"]))
     # spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
 
     preprocessed_inputs = create_inputs_process_graph(
@@ -112,6 +126,7 @@ def create_worldcereal_inputsjob(
         s1_orbit_state=s1_orbit_state,
         target_epsg=int(row["epsg_utm"]),
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
     )
 
     # If no custom job options are provided, use these defaults
@@ -269,6 +284,7 @@ def main(
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     tile_name_col: Optional[str] = None,
+    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -349,6 +365,7 @@ def main(
                     job_options=job_options,
                     connection=connection,
                     compositing_window=compositing_window,
+                    optical_mask_method=optical_mask_method,
                 ),
                 job_db=job_db,
             )
@@ -466,14 +483,28 @@ if __name__ == "__main__":
 
     job_options = parse_job_options_from_args(args)
 
-    utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
-    if not Path(utm_aware_grid_path).is_file():
-        convert_gdf_to_utm_grid(
-            in_path = Path(args.grid_path),
-            out_path = Path(utm_aware_grid_path),
-            id_col = args.tile_name_col,
-            web_mercator_grid = False
-            )
+    # check if the grid is in utm crs, if not convert it
+    if str(args.grid_path).endswith("parquet"):
+        grid = gpd.read_parquet(args.grid_path)
+    else:
+        grid = gpd.read_file(args.grid_path)
+    if grid.crs is None or not grid.crs.is_projected:
+        logger.info("Grid is not in a projected CRS. Converting to UTM.")
+        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
+        if not Path(utm_aware_grid_path).is_file():
+            convert_gdf_to_utm_grid(
+                in_path = Path(args.grid_path),
+                out_path = Path(utm_aware_grid_path),
+                id_col = args.tile_name_col,
+                web_mercator_grid = False
+                )
+    else:
+        logger.info("Grid is already in a projected CRS. Enriching with aux columns and proceeding to extractions...")
+        grid["tile_name"] = grid[args.tile_name_col] if args.tile_name_col else [f"patch_{i}" for i in range(len(grid))]
+        grid["geometry_utm_wkt"] = grid.geometry.to_wkt()
+        grid["epsg_utm"] = grid.crs.to_epsg()
+        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
+        grid.to_parquet(utm_aware_grid_path)
 
     main(
         grid_path=utm_aware_grid_path,
