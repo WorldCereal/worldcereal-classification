@@ -14,12 +14,12 @@ import geopandas as gpd
 import pandas as pd
 import pystac
 import pystac_client
-from tabulate import tabulate
 import xarray as xr
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
+from tabulate import tabulate
 
 from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
@@ -716,7 +716,7 @@ def _prepare_extraction_jobs(
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    extract_value: int = 1,
+    extract_value: int = 0,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
@@ -751,7 +751,8 @@ def _prepare_extraction_jobs(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
-        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 0
+        so all samples are extracted
     backend : _type_, optional
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
