@@ -5,6 +5,7 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
+import duckdb
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -327,7 +328,28 @@ def load_dataframe(
     pipeline_log.info("Reading the input dataframe with filters: %s", filters)
 
     if df_path.name.endswith("parquet"):
-        df = gpd.read_parquet(df_path, filters=filters)
+        db = duckdb.connect()
+        db.sql("INSTALL spatial")
+        db.load_extension("spatial")
+
+        filters_query = ""
+        for ii, f in enumerate(filters):
+            if ii == 0:
+                filters_query += f" WHERE {f[0]} {f[1]} {f[2]}"
+            else:
+                filters_query += f" AND {f[0]} {f[1]} {f[2]}"
+
+        query = f"""
+        SET enable_progress_bar=false;
+        SELECT sample_id, ewoc_code, valid_time, sampling_ewoc_code, h3_l3_cell,
+            irrigation_status, quality_score_lc, quality_score_ct, extract,
+            ST_Y(ST_Centroid(t.geometry)) AS lat,
+            ST_X(ST_Centroid(t.geometry)) AS lon
+        FROM read_parquet('{df_path}') AS t
+        {filters_query}
+        """
+        df = db.sql(query).df()
+        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
     else:
         df = gpd.read_file(df_path, filters=filters)
 
