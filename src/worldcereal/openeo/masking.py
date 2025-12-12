@@ -15,8 +15,8 @@ def convolve(img, radius):
 
 def scl_mask_erode_dilate(
     scl_cube: openeo.DataCube,
-    erode_r=3,
-    dilate_r=21,
+    erode_r: int = 3,
+    dilate_r: int = 21,
     target_crs=None,
 ):
     """OpenEO method to construct a Sentinel-2 mask based on SCL.

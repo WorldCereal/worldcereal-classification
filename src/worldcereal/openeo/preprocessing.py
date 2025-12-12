@@ -150,6 +150,8 @@ def raw_datacube_S2(
     apply_mask_flag: Optional[bool] = False,
     tile_size: Optional[int] = None,
     optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -216,7 +218,7 @@ def raw_datacube_S2(
         ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
     elif optical_mask_method == "satio":
         # Compute satio-based mask
-        scl_dilated_mask = scl_mask_erode_dilate(scl_cube)
+        scl_dilated_mask = scl_mask_erode_dilate(scl_cube, erode_r=erode_r, dilate_r=dilate_r)
     else:
         raise ValueError(
             f"Unknown optical_mask_method: {optical_mask_method}. "
@@ -443,6 +445,8 @@ def worldcereal_preprocessed_inputs(
     compositing_window: Literal["month", "dekad"] = "month",
     target_epsg: Optional[int] = None,
     optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -467,6 +471,8 @@ def worldcereal_preprocessed_inputs(
         apply_mask_flag=True,
         tile_size=tile_size,
         optical_mask_method=optical_mask_method,
+        erode_r=erode_r,
+        dilate_r=dilate_r,
     )
 
     if target_epsg is not None:
@@ -569,13 +575,13 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
         )
         raise InvalidTemporalContextError(error_msg)
 
-    if pd.Timedelta(end_date - start_date).days > 365:
-        error_msg = (
-            "WorldCereal currently does not support temporal ranges spanning "
-            "more than a year. Got: "
-            f"{temporal_context.start_date} - {temporal_context.end_date}."
-        )
-        raise InvalidTemporalContextError(error_msg)
+    # if pd.Timedelta(end_date - start_date).days > 365:
+    #     error_msg = (
+    #         "WorldCereal currently does not support temporal ranges spanning "
+    #         "more than a year. Got: "
+    #         f"{temporal_context.start_date} - {temporal_context.end_date}."
+    #     )
+    #     raise InvalidTemporalContextError(error_msg)
 
 
 def correct_temporal_context(temporal_context: TemporalContext) -> TemporalContext:
