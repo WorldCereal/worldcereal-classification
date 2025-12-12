@@ -80,7 +80,6 @@ def create_worldcereal_inputsjob(
     optical_mask_method: Literal["mask_scl_dilation", "satio"] = "satio",
     erode_r: int = 3,
     dilate_r: int = 21,
-    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
     Parameters
@@ -260,7 +259,6 @@ def create_job_database(
                 end_date=extractions_end_date,
                 output_folder=output_folder,
                 tile_name_col=tile_name_col,
-                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
     else:
@@ -281,7 +279,6 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
-                tile_name_col=tile_name_col,
                 tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
@@ -361,7 +358,6 @@ def main(
             grid_path=grid_path,
             extractions_start_date=extractions_start_date,
             extractions_end_date=extractions_end_date,
-            tile_name_col=tile_name_col,
             tile_name_col=tile_name_col,
         )
 
