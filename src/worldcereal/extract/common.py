@@ -893,7 +893,7 @@ def run_extractions(
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    extract_value: int = 1,
+    extract_value: int = 0,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
@@ -927,7 +927,8 @@ def run_extractions(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
-        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 0
+        so all samples are extracted
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
