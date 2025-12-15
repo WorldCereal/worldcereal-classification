@@ -182,117 +182,71 @@ def compute_slice_centroids(
     return centroids
 
 
+
 def compute_scores_for_slice(
     df_slice: pd.DataFrame,
     centroid: Optional[np.ndarray] = None,
     norm_percentiles: Tuple[float, float] = (5.0, 95.0),
+    max_full_pairwise_n: Optional[int] = None,
+    force_knn: bool = False,
+    knn_k: int = 10,
 ) -> pd.DataFrame:
     """Compute anomaly scores for a single slice×class dataframe.
 
+    This function auto-selects the kNN computation strategy:
+      - Full pairwise NxN distance matrix if feasible
+      - kNN-only computation (NearestNeighbors) if N is large or force_knn=True
+
     Returns:
-      - Existing outputs: cosine_distance, knn_distance, cos_norm, knn_norm, S, rank_percentile
-      - Added outputs: cos_rank, knn_rank, S_rank, cos_z, knn_z, S_z
+      - cosine_distance, knn_distance, cos_norm, knn_norm, S, rank_percentile
+      - cos_rank, knn_rank, S_rank, cos_z, knn_z, S_z
     """
 
     embeddings = np.vstack(df_slice["embedding"].to_numpy()).astype("float32", copy=False)
-    if centroid is None:
-        centroid = embeddings.mean(axis=0)
-
-    cos_dist = np.array([1 - _cosine_similarity(e, centroid) for e in embeddings])
-
-    dist_matrix = _cosine_distance_matrix(embeddings)
-    np.fill_diagonal(dist_matrix, np.inf)
-    k = min(10, dist_matrix.shape[0] - 1) if dist_matrix.shape[0] > 1 else 0
-    if k > 0:
-        knn_dist = np.partition(dist_matrix, k, axis=1)[:, :k].mean(axis=1).astype(np.float32, copy=False)
-    else:
-        knn_dist = np.zeros(len(df_slice), dtype=np.float32)
-    knn_dist = np.nan_to_num(knn_dist, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Existing percentile-based normalization (now parameterized)
-    cos_norm = _normalize_percentile_minmax(cos_dist, norm_percentiles=norm_percentiles)
-    knn_norm = _normalize_percentile_minmax(knn_dist, norm_percentiles=norm_percentiles)
-    scores = 0.5 * (cos_norm + knn_norm)
-
-    # Added: rank-based scores (stable across scaling / numeric differences)
-    cos_rank = _rank_pct(cos_dist)
-    knn_rank = _rank_pct(knn_dist)
-    s_rank = 0.5 * (cos_rank + knn_rank)
-
-    # Added: robust z-score scores (median/MAD) + sigmoid squashing to [0,1]
-    cos_z = _robust_z(cos_dist)
-    knn_z = _robust_z(knn_dist)
-    s_z = 0.5 * (_sigmoid(cos_z) + _sigmoid(knn_z))
-
-    ranks = pd.Series(scores).rank(pct=True, method="average").to_numpy()
-
-    df_scored = df_slice.copy()[[c for c in df_slice.columns if "embedding" not in c]]
-    df_scored["cosine_distance"] = cos_dist
-    df_scored["knn_distance"] = knn_dist
-    df_scored["cos_norm"] = cos_norm
-    df_scored["knn_norm"] = knn_norm
-    df_scored["S"] = scores
-    df_scored["rank_percentile"] = ranks
-
-    # New columns
-    df_scored["cos_rank"] = cos_rank
-    df_scored["knn_rank"] = knn_rank
-    df_scored["S_rank"] = s_rank
-    df_scored["cos_z"] = cos_z
-    df_scored["knn_z"] = knn_z
-    df_scored["S_z"] = s_z
-
-    return df_scored
-
-def compute_scores_for_slice_optimized(
-    df_slice: pd.DataFrame,
-    centroid: Optional[np.ndarray] = None,
-    norm_percentiles: Tuple[float, float] = (5.0, 95.0),
-) -> pd.DataFrame:
-    """Compute anomaly scores for a single slice×class dataframe (memory-friendlier kNN).
-
-    Returns:
-      - Existing outputs: cosine_distance, knn_distance, cos_norm, knn_norm, S, rank_percentile
-      - Added outputs: cos_rank, knn_rank, S_rank, cos_z, knn_z, S_z
-    """
-
-    embeddings = np.vstack(df_slice["embedding"].to_numpy()).astype("float32", copy=False)
-
-    if centroid is None:
-        centroid = embeddings.mean(axis=0)
-
-    cos_dist = np.array(
-        [1.0 - _cosine_similarity(e, centroid) for e in embeddings],
-        dtype="float32",
-    )
-
     n = embeddings.shape[0]
-    if n > 1:
-        k = min(10, n - 1)
+
+    if centroid is None:
+        centroid = embeddings.mean(axis=0)
+
+    # Cosine distance to centroid
+    cos_dist = np.array([1.0 - _cosine_similarity(e, centroid) for e in embeddings], dtype=np.float32)
+
+    # Choose kNN strategy
+    k = min(int(knn_k), n - 1) if n > 1 else 0
+    use_knn_only = force_knn or (max_full_pairwise_n is not None and n > max_full_pairwise_n)
+
+    if k <= 0:
+        knn_dist = np.zeros(n, dtype=np.float32)
+    elif use_knn_only:
+        # kNN-only (memory friendly)
         nn = NearestNeighbors(
-            n_neighbors=k + 1,
+            n_neighbors=k + 1,          # include self, then drop it
             metric="cosine",
             algorithm="brute",
             n_jobs=-1,
         )
         nn.fit(embeddings)
         distances, _ = nn.kneighbors(embeddings)
-        knn_dist = distances[:, 1:].mean(axis=1).astype("float32")
+        knn_dist = distances[:, 1:].mean(axis=1).astype(np.float32, copy=False)
     else:
-        print("\n\n[WARNING] Only one sample in slice; kNN distance set to zero.")
-        knn_dist = np.zeros(n, dtype="float32")
+        # Full pairwise NxN (more memory intensive)
+        dist_matrix = _cosine_distance_matrix(embeddings)
+        np.fill_diagonal(dist_matrix, np.inf)
+        knn_dist = np.partition(dist_matrix, k, axis=1)[:, :k].mean(axis=1).astype(np.float32, copy=False)
 
-    # Existing percentile-based normalization (now parameterized)
+    knn_dist = np.nan_to_num(knn_dist, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Existing percentile-based normalization (parameterized)
     cos_norm = _normalize_percentile_minmax(cos_dist, norm_percentiles=norm_percentiles)
     knn_norm = _normalize_percentile_minmax(knn_dist, norm_percentiles=norm_percentiles)
     scores = 0.5 * (cos_norm + knn_norm)
 
-    # Added: rank-based scores
+    # Rank-based scores
     cos_rank = _rank_pct(cos_dist)
     knn_rank = _rank_pct(knn_dist)
     s_rank = 0.5 * (cos_rank + knn_rank)
 
-    # Added: robust z-score scores + sigmoid squashing
+    # Robust z-score scores (median/MAD) + sigmoid squashing
     cos_z = _robust_z(cos_dist)
     knn_z = _robust_z(knn_dist)
     s_z = 0.5 * (_sigmoid(cos_z) + _sigmoid(knn_z))
@@ -307,7 +261,6 @@ def compute_scores_for_slice_optimized(
     df_scored["S"] = scores
     df_scored["rank_percentile"] = ranks
 
-    # New columns
     df_scored["cos_rank"] = cos_rank
     df_scored["knn_rank"] = knn_rank
     df_scored["S_rank"] = s_rank
@@ -553,8 +506,6 @@ def run_pipeline(
             g["knn_norm"] = 0.0
             g["S"] = 0.0
             g["rank_percentile"] = 0.0
-
-            # New columns (keep shapes consistent)
             g["cos_rank"] = 0.0
             g["knn_rank"] = 0.0
             g["S_rank"] = 0.0
@@ -563,29 +514,21 @@ def run_pipeline(
             g["S_z"] = 0.0
             return g
 
-        if (
-            max_full_pairwise_n is not None
-            and len(g) > max_full_pairwise_n
-        ):
-            print(
-                f"[WARNING] Group size {len(g)} exceeds max_full_pairwise_n={max_full_pairwise_n}; "
-                f"using kNN-based optimized scoring (h3_level={h3_level})."
-            )
-            return compute_scores_for_slice_optimized(
-                g,
-                centroid=g["centroid"].iloc[0],
-                norm_percentiles=norm_percentiles,
-            )
-
         return compute_scores_for_slice(
             g,
             centroid=g["centroid"].iloc[0],
             norm_percentiles=norm_percentiles,
+            max_full_pairwise_n=max_full_pairwise_n,  # <-- switch happens inside
+            force_knn=False,
+            knn_k=10,
         )
-
+        
+    # Can we have a progress bar here?
+    from tqdm import tqdm
+    tqdm.pandas()
     scored_df = (
         df_with_centroid.groupby(slice_keys, group_keys=False)
-        .apply(_score_group)
+        .progress_apply(_score_group)
         .reset_index(drop=True)
     )
 
