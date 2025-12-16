@@ -149,13 +149,10 @@ def raw_datacube_S2(
     additional_masks_flag: Optional[bool] = True,
     apply_mask_flag: Optional[bool] = False,
     tile_size: Optional[int] = None,
-<<<<<<< HEAD
+    target_epsg: Optional[int] = None,
     optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
     erode_r: int = 3,
     dilate_r: int = 21,
-=======
-    target_epsg: Optional[int] = None,
->>>>>>> origin/main
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -482,13 +479,10 @@ def worldcereal_preprocessed_inputs(
         additional_masks_flag=False,
         apply_mask_flag=True,
         tile_size=tile_size,
-<<<<<<< HEAD
+        target_epsg=target_epsg,
         optical_mask_method=optical_mask_method,
         erode_r=erode_r,
         dilate_r=dilate_r,
-=======
-        target_epsg=target_epsg,
->>>>>>> origin/main
     )
 
     s2_data = median_compositing(s2_data, period=compositing_window)
