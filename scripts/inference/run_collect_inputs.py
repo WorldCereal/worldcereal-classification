@@ -10,7 +10,6 @@ from typing import Dict, Literal, Optional, Union
 import geopandas as gpd
 import openeo
 import pandas as pd
-import shapely
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
@@ -19,13 +18,11 @@ from openeo_gfmap.backend import cdse_connection
 
 from worldcereal.job import create_inputs_process_graph
 from worldcereal.utils import parse_job_options_from_args
-from worldcereal.utils.production_grid import convert_gdf_to_utm_grid
 
 MAX_RETRIES = 50
 BASE_DELAY = 0.1  # initial delay in seconds
 MAX_DELAY = 10
 
-REQUIRED_ATTRIBUTES = ["tile_name", "geometry_utm_wkt", "epsg_utm"]
 
 class InferenceJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
@@ -77,9 +74,6 @@ def create_worldcereal_inputsjob(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     compositing_window: Literal["month", "dekad"] = "month",
-    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "satio",
-    erode_r: int = 3,
-    dilate_r: int = 21,
 ):
     """Function to create a job for collecting preprocessed inputs for WorldCereal.
     Parameters
@@ -104,33 +98,14 @@ def create_worldcereal_inputsjob(
         The created batch job.
     """
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
-    bounds = shapely.from_wkt(row.geometry_utm_wkt).bounds
-    rounded_bounds = tuple(round(coord / 20) * 20 for coord in bounds)
-
-    # openEO filter_bbox keeps both bbox edges, so a 20 km extent at 10 m ends up as 2001 px.
-    # Shift the bbox inward by half a pixel on each side so the covered area stays the same
-    # but the grid is exactly 2000 x 2000.
-    pixel_size = 10  # final target resolution in metres
-    west, south, east, north = rounded_bounds
-    adjusted_bounds = (
-        west + pixel_size / 2,
-        south + pixel_size / 2,
-        east - pixel_size / 2,
-        north - pixel_size / 2,
-    )
-
-    spatial_extent = BoundingBoxExtent(*adjusted_bounds, epsg=int(row["epsg_utm"]))
-    # spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
+    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
 
     preprocessed_inputs = create_inputs_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
-        target_epsg=int(row["epsg_utm"]),
+        target_epsg=int(row["epsg"]),
         compositing_window=compositing_window,
-        optical_mask_method=optical_mask_method,
-        erode_r=erode_r,
-        dilate_r=dilate_r,
     )
 
     # If no custom job options are provided, use these defaults
@@ -183,26 +158,6 @@ def create_job_dataframe_from_grid(
         production_gdf = gpd.read_parquet(grid_path)
     else:
         production_gdf = gpd.read_file(grid_path)
-
-    # Check if all required attributes are present in the production_gdf
-    missing_attributes = [
-        attr for attr in REQUIRED_ATTRIBUTES if attr not in production_gdf.columns
-    ]
-    if missing_attributes:
-        raise ValueError(
-            f"The following required attributes are missing in the production grid: {missing_attributes}"
-        )
-        
-
-    # Check if all required attributes are present in the production_gdf
-    missing_attributes = [
-        attr for attr in REQUIRED_ATTRIBUTES if attr not in production_gdf.columns
-    ]
-    if missing_attributes:
-        raise ValueError(
-            f"The following required attributes are missing in the production grid: {missing_attributes}"
-        )
-        
     assert (
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
@@ -223,10 +178,10 @@ def create_job_dataframe_from_grid(
         production_gdf["tile_name"] = [f"patch_{i}" for i in range(len(production_gdf))]
     else:
         production_gdf["tile_name"] = production_gdf[tile_name_col]
-    # production_gdf["epsg"] = production_gdf.crs.to_epsg()
-    # production_gdf["epsg"] = production_gdf.crs.to_epsg()
+    production_gdf["epsg"] = production_gdf.crs.to_epsg()
 
     return production_gdf
+
 
 def create_job_database(
     output_folder: Path,
@@ -234,7 +189,6 @@ def create_job_database(
     grid_path: Optional[Path] = None,
     extractions_start_date: Optional[str] = None,
     extractions_end_date: Optional[str] = None,
-    tile_name_col : Optional[str] = None,
 ) -> CsvJobDatabase:
     job_tracking_path = Path(output_folder) / "job_tracking.csv"
     job_db = CsvJobDatabase(path=job_tracking_path)
@@ -258,7 +212,6 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
-                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
     else:
@@ -279,7 +232,6 @@ def create_job_database(
                 start_date=extractions_start_date,
                 end_date=extractions_end_date,
                 output_folder=output_folder,
-                tile_name_col=tile_name_col,
             )
             job_db.initialize_from_df(production_gdf)
 
@@ -295,12 +247,8 @@ def main(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
-    tile_name_col : Optional[str] = None,
-    optical_mask_method: str = "satio",
-    erode_r: int = 3,
-    dilate_r: int = 21,
 ) -> None:
     """Main function responsible for creating and launching jobs to collect preprocessed inputs.
 
@@ -325,7 +273,7 @@ def main(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     job_options : dict, optional
-        A dictionary of job options to customize the jobs.
+        A dictionary of job options to customize the jobs (may contain None values for unset options).
         If None, default options will be used.
         Recognized keys:
             executor-memory, python-memory, max-executors, image-name, etl_organization_id.
@@ -358,7 +306,6 @@ def main(
             grid_path=grid_path,
             extractions_start_date=extractions_start_date,
             extractions_end_date=extractions_end_date,
-            tile_name_col=tile_name_col,
         )
 
     # Retry loop starts here
@@ -381,9 +328,6 @@ def main(
                     job_options=job_options,
                     connection=connection,
                     compositing_window=compositing_window,
-                    optical_mask_method=optical_mask_method,
-                    erode_r=erode_r,
-                    dilate_r=dilate_r,
                 ),
                 job_db=job_db,
             )
@@ -416,22 +360,22 @@ if __name__ == "__main__":
         description="Collect preprocessed inputs for polygon patches."
     )
     parser.add_argument(
-        "--grid_path",
+        "grid_path",
         type=Path,
         help="Path to the grid file (GeoJSON or shapefile) defining the locations to extract.",
     )
     parser.add_argument(
-        "--extractions_start_date",
+        "extractions_start_date",
         type=str,
         help="Start date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "--extractions_end_date",
+        "extractions_end_date",
         type=str,
         help="End date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "--output_folder", type=Path, help="The folder where to store the extracted data"
+        "output_folder", type=Path, help="The folder where to store the extracted data"
     )
     parser.add_argument(
         "--overwrite_job_df",
@@ -445,87 +389,50 @@ if __name__ == "__main__":
         help="Specify the S1 orbit state to use for the jobs.",
     )
     parser.add_argument(
+        "--memory",
+        type=str,
+        default="1800m",
+        help="Memory to allocate for the executor.",
+    )
+    parser.add_argument(
+        "--python_memory",
+        type=str,
+        default="1900m",
+        help="Memory to allocate for the python processes as well as OrfeoToolbox in the executors.",
+    )
+    parser.add_argument(
+        "--max_executors", type=int, default=22, help="Number of executors to run."
+    )
+    parser.add_argument(
         "--parallel_jobs",
         type=int,
         default=2,
         help="The maximum number of parallel jobs to run at the same time.",
     )
     parser.add_argument(
-        "--tile_name_col",
-        type=str,
-        default=None,
-        help="Name of the column in the grid file that contains the tile names. If not provided, tiles will be named as 'patch_0', 'patch_1', etc.",
-    )
-    parser.add_argument(
-        "--compositing_window",
-        type=str,
-        choices=["month", "dekad"],
-        default="month",
-        help="The compositing window to use for the inputs.",
-    )
-    parser.add_argument(
         "--restart_failed",
         action="store_true",
         help="Restart the jobs that previously failed.",
     )
-    parser.add_argument("--driver_memory", type=str, default=None, help="Driver memory")
     parser.add_argument(
-        "--driver_memoryOverhead",
+        "--image_name",
         type=str,
         default=None,
-        help="Driver memory overhead.",
+        help="Specific openEO image name to use for the jobs.",
     )
     parser.add_argument(
-        "--executor_cores", type=int, default=None, help="Executor cores."
-    )
-    parser.add_argument(
-        "--executor_memory", type=str, default=None, help="Executor memory."
-    )
-    parser.add_argument(
-        "--executor_memoryOverhead",
-        type=str,
+        "--organization_id",
+        type=int,
         default=None,
-        help="Executor memory overhead.",
-    )
-    parser.add_argument(
-        "--max_executors", type=int, default=None, help="Max executors."
-    )
-    parser.add_argument(
-        "--image_name", type=str, default="python38", help="openEO image name."  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
-    )
-    parser.add_argument(
-        "--organization_id", type=int, default=None, help="Organization id."
+        help="ID of the organization to use for the job.",
     )
 
     args = parser.parse_args()
 
     job_options = parse_job_options_from_args(args)
 
-    # check if the grid is in utm crs, if not convert it
-    if str(args.grid_path).endswith("parquet"):
-        grid = gpd.read_parquet(args.grid_path)
-    else:
-        grid = gpd.read_file(args.grid_path)
-    if grid.crs is None or not grid.crs.is_projected:
-        logger.info("Grid is not in a projected CRS. Converting to UTM.")
-        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
-        if not Path(utm_aware_grid_path).is_file():
-            convert_gdf_to_utm_grid(
-                in_path = Path(args.grid_path),
-                out_path = Path(utm_aware_grid_path),
-                id_col = args.tile_name_col,
-                web_mercator_grid = False
-                )
-    else:
-        logger.info("Grid is already in a projected CRS. Enriching with aux columns and proceeding to extractions...")
-        grid["tile_name"] = grid[args.tile_name_col] if args.tile_name_col else [f"patch_{i}" for i in range(len(grid))]
-        grid["geometry_utm_wkt"] = grid.geometry.to_wkt()
-        grid["epsg_utm"] = grid.crs.to_epsg()
-        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
-        grid.to_parquet(utm_aware_grid_path)
-
     main(
-        grid_path=utm_aware_grid_path,
+        grid_path=args.grid_path,
         extractions_start_date=args.extractions_start_date,
         extractions_end_date=args.extractions_end_date,
         output_folder=args.output_folder,
@@ -534,6 +441,4 @@ if __name__ == "__main__":
         parallel_jobs=args.parallel_jobs,
         restart_failed=args.restart_failed,
         job_options=job_options,
-        tile_name_col=args.tile_name_col,
-        compositing_window=args.compositing_window,
     )
