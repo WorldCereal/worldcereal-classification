@@ -211,8 +211,12 @@ def compute_scores_for_slice(
     # Cosine distance to centroid
     cos_dist = np.array([1.0 - _cosine_similarity(e, centroid) for e in embeddings], dtype=np.float32)
 
-    # Choose kNN strategy
-    k = min(int(knn_k), n - 1) if n > 1 else 0
+    # Choose kNN strategy, sqrt(N) or fixed k of 10
+    # k = min(int(knn_k), n - 1) if n > 1 else 0
+    
+    SQRT_N = int(np.sqrt(n))
+    k = min(max(int(knn_k), min(int(SQRT_N), 50)), n-1) if n > 1 else 0
+    
     use_knn_only = force_knn or (max_full_pairwise_n is not None and n > max_full_pairwise_n)
 
     if k <= 0:
@@ -613,9 +617,7 @@ def run_pipeline(
         flagged_df.loc[low_conf & (flagged_df[combined_anomaly] == "candidate"), combined_anomaly] = "suspect"
         flagged_df.loc[low_conf & (flagged_df[combined_anomaly] == "suspect"), combined_anomaly] = "flagged"
 
-    flagged_df["geometry"] = flagged_df.apply(
-        lambda row: Point(row["lon"], row["lat"]), axis=1
-    )
+    flagged_df["geometry"] = gpd.points_from_xy(flagged_df["lon"], flagged_df["lat"])
     flagged_gdf = gpd.GeoDataFrame(flagged_df, geometry="geometry", crs="EPSG:4326")
 
     if output_samples_path:
@@ -628,18 +630,23 @@ def run_pipeline(
     if output_summary_path:
         print(f"[anomaly] Writing summary -> {output_summary_path}")
         summary_df.to_parquet(output_summary_path, index=False)
+        summary_df.to_excel(Path(output_summary_path).with_suffix(".xlsx"),
+            index=False,)
 
         cross_long = (
             flagged_gdf.groupby([*slice_keys, S_anomaly, combined_anomaly])
             .size()
-            .reset_index(name="n")
-        )
+            .reset_index(name="n"))
         cross_long.to_parquet(
             Path(output_summary_path).with_name(
                 Path(output_summary_path).stem + "_anomalies_cross_long.parquet"
             ),
-            index=False,
-        )
+            index=False,)
+        cross_long.to_excel(
+            Path(output_summary_path).with_name(
+                Path(output_summary_path).stem + "_anomalies_cross_long.xlsx"
+            ),
+            index=False,)
 
         # wide matrix form per slice with flattened column names
         cross_wide = cross_long.pivot_table(
@@ -658,9 +665,13 @@ def run_pipeline(
             Path(output_summary_path).with_name(
                 Path(output_summary_path).stem + "_anomalies_cross_wide.parquet"
             ),
-            index=False,
-        )
-
+            index=False,)
+        cross_wide.to_excel(
+            Path(output_summary_path).with_name(
+                Path(output_summary_path).stem + "_anomalies_cross_wide.xlsx"
+            ),
+            index=True)
+    con.close()
     return flagged_df, summary_df
 
 
