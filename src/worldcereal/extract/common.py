@@ -5,6 +5,7 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
+import duckdb
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -14,12 +15,12 @@ import geopandas as gpd
 import pandas as pd
 import pystac
 import pystac_client
-from tabulate import tabulate
 import xarray as xr
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
+from tabulate import tabulate
 
 from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
@@ -327,7 +328,28 @@ def load_dataframe(
     pipeline_log.info("Reading the input dataframe with filters: %s", filters)
 
     if df_path.name.endswith("parquet"):
-        df = gpd.read_parquet(df_path, filters=filters)
+        db = duckdb.connect()
+        db.sql("INSTALL spatial")
+        db.load_extension("spatial")
+
+        filters_query = ""
+        for ii, f in enumerate(filters):
+            if ii == 0:
+                filters_query += f" WHERE {f[0]} {f[1]} {f[2]}"
+            else:
+                filters_query += f" AND {f[0]} {f[1]} {f[2]}"
+
+        query = f"""
+        SET enable_progress_bar=false;
+        SELECT sample_id, ewoc_code, valid_time, sampling_ewoc_code, h3_l3_cell,
+            irrigation_status, quality_score_lc, quality_score_ct, extract,
+            ST_Y(ST_Centroid(t.geometry)) AS lat,
+            ST_X(ST_Centroid(t.geometry)) AS lon
+        FROM read_parquet('{df_path}') AS t
+        {filters_query}
+        """
+        df = db.sql(query).df()
+        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
     else:
         df = gpd.read_file(df_path, filters=filters)
 
@@ -716,7 +738,7 @@ def _prepare_extraction_jobs(
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    extract_value: int = 1,
+    extract_value: int = 0,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
@@ -751,7 +773,8 @@ def _prepare_extraction_jobs(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
-        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 0
+        so all samples are extracted
     backend : _type_, optional
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
@@ -892,7 +915,7 @@ def run_extractions(
     job_options: Optional[Dict[str, Union[str, int]]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    extract_value: int = 1,
+    extract_value: int = 0,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
@@ -926,7 +949,8 @@ def run_extractions(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
-        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 0
+        so all samples are extracted
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
