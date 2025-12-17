@@ -693,14 +693,28 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
+    out_folder = Path("/home/vito/shahs/TestFolder/Outliers/h3l2_mad_4_maxrank_groupRefId_sqrtk_norm2_98_new")
+    out_folder.mkdir(parents=True, exist_ok=True)
     run_pipeline(
-        embeddings_db_path="/projects/worldcereal/data/cached_embeddings/embeddings_cache_LANDCOVER10.duckdb",
+        embeddings_db_path="/projects/worldcereal/data/cached_embeddings/embeddings_cache_LANDCOVER10_geo.duckdb",
+        restrict_model_hash=None,
         label_domain="finetune_class",
         map_to_finetune=True,
-        threshold_mode="percentile",
+        class_mappings_name="LANDCOVER10",
+        h3_level=2,
+        group_cols=["ref_id"],
+        min_slice_size=100,
+        merge_small_slice = True,
+        threshold_mode="mad",
         percentile_q=0.96,
-        group_cols=["ref_id"],  # <- can be [] or e.g. ["ref_id","year","country"]
-        output_samples_path="LANDCOVER10_4%_outliers.parquet",
-        output_summary_path="LANDCOVER10_4%_summary.parquet",
+        mad_k=4.0,
+        abs_threshold=None,
+        fdr_alpha=0.05,
+        min_flagged_per_slice=None,
+        max_flagged_fraction=0.1,
+        max_full_pairwise_n=0, # disable full pairwise matrix calculation
+        norm_percentiles=(2.0, 98.0),
+        output_samples_path=str(out_folder / "outliers_h3l2_mad_4_maxrank_groupRefId_ranked_sqrtk_norm2_98_new.parquet"),
+        output_summary_path=str(out_folder / "outliers_h3l2_mad_4_maxrank_groupRefId_summary_sqrtk_norm2_98_new.parquet"),
         debug=False,
     )
