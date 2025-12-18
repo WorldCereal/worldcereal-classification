@@ -3,7 +3,7 @@ from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 
 # Import the UDF functions directly
-from worldcereal.openeo.inference import apply_udf_data as inference_udf
+from worldcereal.openeo.inference_catboost import apply_udf_data as inference_udf
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 
 
@@ -86,7 +86,7 @@ def test_cropland_inference_with_intermediate(WorldCerealPreprocessedInputs):
 def test_croptype_inference(WorldCerealPreprocessedInputs):
     """Test the local generation of a croptype product using direct UDF calls"""
 
-    print("Predict crop type ...")
+    print("Get Presto croptype features")
 
     # Initialize CropTypeParameters with custom target_date
     croptype_params = CropTypeParameters(

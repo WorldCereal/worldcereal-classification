@@ -1,15 +1,14 @@
 """openEO UDF to compute Presto/Prometheo features with clean code structure."""
 
-import json
 import logging
 import os
 import random
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import requests
 import xarray as xr
 from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
@@ -75,6 +74,8 @@ POSTPROCESSING_NODATA = 255
 NUM_THREADS = 2
 
 sys.path.append("feature_deps")
+sys.path.append("onnx_deps")
+import onnxruntime as ort  # noqa: E402
 
 _PROMETHEO_INSTALLED = False
 
@@ -97,12 +98,7 @@ def get_model_cache():
 
 def _ensure_prometheo_dependencies():
     """Non-cached dependency check."""
-    global \
-        _PROMETHEO_INSTALLED, \
-        Presto, \
-        load_presto_weights, \
-        run_model_inference, \
-        PoolingMethods
+    global _PROMETHEO_INSTALLED, Presto, load_presto_weights, run_model_inference, PoolingMethods
 
     if _PROMETHEO_INSTALLED:
         return
@@ -136,6 +132,7 @@ def _ensure_prometheo_dependencies():
 
 def _install_prometheo():
     """Non-cached installation function."""
+    import shutil
     import tempfile
     import urllib.request
     import zipfile
@@ -160,140 +157,30 @@ def _install_prometheo():
         raise
 
 
-def load_torch_model_cached(model_url: str):
-    from urllib.parse import unquote
-
-    import torch
-    from torch import nn
-
-    def _download_and_unpack(model_url: str):
-        import urllib.request
-
-        extract_dir = Path.cwd() / "tmp" / "models" / Path(model_url).stem
-        extract_dir.mkdir(exist_ok=True, parents=True)
-
-        logger.info(f"Downloading modelfile: {model_url}")
-        try:
-            modelfile, _ = urllib.request.urlretrieve(
-                model_url, filename=extract_dir / Path(model_url).name
-            )
-        except Exception:
-            logger.error(f"Failed to download model from: {modelfile}.")
-            raise
-
-        try:
-            shutil.unpack_archive(modelfile, extract_dir=extract_dir)
-        except Exception:
-            logger.error("Failed to extract model archive.")
-
-        return Path(extract_dir)
-
-    class LinearHead(nn.Module):
-        def __init__(self, in_dim: int, num_classes: int):
-            super().__init__()
-            self.fc = nn.Linear(in_dim, num_classes)
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return self.fc(x)
-
-    class MLPHead(nn.Module):
-        def __init__(
-            self,
-            in_dim: int,
-            num_classes: int,
-            hidden_dim: int = 256,
-            dropout: float = 0.2,
-        ):
-            super().__init__()
-            self.net = nn.Sequential(
-                nn.Linear(in_dim, hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, num_classes),
-            )
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return self.net(x)
-
-    model_url = unquote(model_url)
+def load_onnx_model_cached(model_url: str):
+    """ONNX loading is fine since it's pure (no side effects)."""
 
     cache = get_model_cache()
     if model_url in cache:
-        logger.debug(f"PyTorch model cache hit for {model_url}.")
+        logger.debug(f"ONNX model cache hit for {model_url}.")
         return cache[model_url]
 
-    logger.info(f"Loading PyTorch model from {model_url}")
-    model_dir = _download_and_unpack(model_url)
+    logger.info(f"Loading ONNX model from {model_url}")
+    response = requests.get(model_url, timeout=120)
 
-    # 1) Load config
-    cfg_path = model_dir / "config.json"
-    with open(cfg_path, "r") as f:
-        cfg = json.load(f)
+    session_options, providers = optimize_onnx_cpu_performance(NUM_THREADS)
 
-    head_type = cfg["head_type"]
-    in_dim = int(cfg["in_dim"])
-    num_classes = int(cfg["num_classes"])
-    hidden_dim = int(cfg.get("hidden_dim", 256))
-    dropout = float(cfg.get("dropout", 0.2))
+    model = ort.InferenceSession(response.content, session_options, providers=providers)
 
-    # 2) Build model
-    if head_type == "linear":
-        model = LinearHead(in_dim, num_classes)
-    elif head_type == "mlp":
-        model = MLPHead(in_dim, num_classes, hidden_dim=hidden_dim, dropout=dropout)
-    else:
-        raise ValueError(f"Unknown head_type: {head_type}")
+    metadata = model.get_modelmeta().custom_metadata_map
+    class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
 
-    # 4) Load state dict
-    pt_path = model_dir / (model_dir.stem + ".pt")
-    state = torch.load(pt_path, map_location=torch.device("cpu"))
-    model.load_state_dict(state)
-    model.eval()
+    lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
+    sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
 
-    # 5) Build LUT
-    lut = dict(zip(cfg["classes_list"], range(len(cfg["classes_list"]))))
-
-    result = (model, lut)
+    result = (model, sorted_lut)
     cache[model_url] = result
     return result
-
-
-def load_croptype_model(modeldir: str, modeltag: str) -> Any:
-    """Load the crop type model, use cache if available
-
-    Parameters
-    ----------
-    modeldir : str
-        Directory or base path where models are stored
-    modeltag : str
-        Model identifier or tag
-
-    Returns
-    -------
-    Any
-        Loaded model and class names
-    """
-    from cropclass.utils import download_and_unpack
-    from vito_crop_classification.model import Model
-
-    cache = get_model_cache()
-
-    if modeltag in cache:
-        logger.debug(f"Model cache hit for {modeltag}.")
-        return cache[modeltag]
-
-    if str(modeldir).startswith("http"):
-        modeldir, modeltag = download_and_unpack(modeldir, modeltag)
-
-    # load a model from its tag
-    model = Model.load(mdl_f=Path(modeldir) / modeltag)
-
-    # Get classes that will be mapped
-    class_names = model.get_class_names()
-
-    cache[modeltag] = (model, class_names)
-
-    return model, class_names
 
 
 def load_presto_weights_cached(presto_model_url: str):
@@ -365,6 +252,26 @@ def optimize_pytorch_cpu_performance(num_threads):
     return num_threads
 
 
+def optimize_onnx_cpu_performance(num_threads):
+    """CPU-specific ONNX optimizations."""
+    session_options = ort.SessionOptions()
+
+    session_options.intra_op_num_threads = num_threads
+    session_options.inter_op_num_threads = (
+        num_threads  # TODO test setting to 1 due to sequential nature
+    )
+
+    # CPU-specific optimizations
+    session_options.enable_cpu_mem_arena = True
+    session_options.enable_mem_pattern = True
+    session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+    providers = ["CPUExecutionProvider"]
+
+    return session_options, providers
+
+
 # =============================================================================
 # POSTPROCESSING FUNCTIONS
 # =============================================================================
@@ -408,9 +315,9 @@ def majority_vote(
 
     # As the probabilities are in integers between 0 and 100,
     # we use uint16 matrices to store the vote scores
-    assert kernel_size <= 25, (
-        f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
-    )
+    assert (
+        kernel_size <= 25
+    ), f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
     unique_values = set(np.unique(prediction))
@@ -906,8 +813,8 @@ class PrestoFeatureExtractor:
         return features.sel(t=target_dt, method="nearest")
 
 
-class TorchClassifier:
-    """Handles Pytorch-based model inference for classification."""
+class ONNXClassifier:
+    """Handles ONNX model inference for classification."""
 
     def __init__(self, parameters: Dict[str, Any]):
         self.parameters = parameters
@@ -921,12 +828,12 @@ class TorchClassifier:
             )
             raise ValueError('Missing required parameter "classifier_url"')
 
-        model, lut = load_torch_model_cached(classifier_url)
+        session, lut = load_onnx_model_cached(classifier_url)
         features_flat = self._prepare_features(features)
 
-        logger.info("Running Torch model inference ...")
-        predictions = self._run_inference(model, lut, features_flat)
-        logger.info("Torch inference completed.")
+        logger.info("Running ONNX model inference ...")
+        predictions = self._run_inference(session, lut, features_flat)
+        logger.info("ONNX inference completed.")
 
         return self._reshape_predictions(predictions, features, lut)
 
@@ -939,25 +846,25 @@ class TorchClassifier:
             .values
         )
 
-    def _run_inference(self, model, lut: Dict, features: np.ndarray) -> np.ndarray:
-        """Run Torch model inference."""
-        import torch
+    def _run_inference(
+        self, session: Any, lut: Dict, features: np.ndarray
+    ) -> np.ndarray:
+        """Run ONNX model inference."""
+        outputs = session.run(None, {"features": features})
 
-        with torch.inference_mode():
-            inputs = torch.from_numpy(features.astype(np.float32))
-            outputs = model(inputs)
+        labels = np.zeros(len(outputs[0]), dtype=np.uint16)
+        probabilities = np.zeros(len(outputs[0]), dtype=np.uint8)
 
-            all_probabilities = torch.softmax(outputs, dim=1).numpy()
-            labels = np.argmax(all_probabilities, axis=1)
+        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
+            labels[i] = lut[label]
+            probabilities[i] = int(round(prob[label] * 100))
 
-        winning_probabilities = np.round(
-            np.max(all_probabilities, axis=1) * 100
-        ).astype(np.uint8)
-        all_probabilities = np.round(all_probabilities * 100).astype(np.uint8)
+        class_probs = np.array(
+            [[prob[label] for label in lut.keys()] for prob in outputs[1]]
+        )
+        class_probs = (class_probs * 100).round().astype(np.uint8)
 
-        return np.hstack(
-            [labels[:, None], winning_probabilities[:, None], all_probabilities]
-        ).T
+        return np.hstack([labels[:, None], probabilities[:, None], class_probs]).T
 
     def _reshape_predictions(
         self, predictions: np.ndarray, original_features: xr.DataArray, lut: Dict
@@ -989,7 +896,7 @@ class Postprocessor:
             "bands", "y", "x"
         )  # Ensure correct dimension order for openEO backend
 
-        _, lookup_table = load_torch_model_cached(self.classifier_url)
+        _, lookup_table = load_onnx_model_cached(self.classifier_url)
 
         if self.parameters.get("method") == "smooth_probabilities":
             # Cast to float for more accurate gaussian smoothing
@@ -1079,10 +986,10 @@ def run_single_workflow(
     logger.info("Presto embedding extraction done.")
 
     # Classify
-    logger.info("Torch classification ...")
-    classifier = TorchClassifier(parameters["classifier_parameters"])
+    logger.info("Onnx classification ...")
+    classifier = ONNXClassifier(parameters["classifier_parameters"])
     classes = classifier.predict(features)
-    logger.info("Torch classification done.")
+    logger.info("Onnx classification done.")
 
     # Postprocess
     postprocess_parameters: Dict[str, Any] = parameters.get(
@@ -1226,7 +1133,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
                 "classifier_parameters"
             ].get("classifier_url")
             if croptype_classifier_url:
-                _, croptype_lut = load_torch_model_cached(croptype_classifier_url)
+                _, croptype_lut = load_onnx_model_cached(croptype_classifier_url)
                 postprocess_parameters = context["croptype_params"].get(
                     "postprocess_parameters", {}
                 )
@@ -1247,7 +1154,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
                 "classifier_parameters"
             ].get("classifier_url")
             if cropland_classifier_url:
-                _, cropland_lut = load_torch_model_cached(cropland_classifier_url)
+                _, cropland_lut = load_onnx_model_cached(cropland_classifier_url)
                 postprocess_parameters = context["cropland_params"].get(
                     "postprocess_parameters", {}
                 )
@@ -1269,7 +1176,7 @@ def apply_metadata(metadata, context: Dict) -> Any:
             # Single workflow
             classifier_url = context["classifier_parameters"].get("classifier_url")
             if classifier_url:
-                _, lut_sorted = load_torch_model_cached(classifier_url)
+                _, lut_sorted = load_onnx_model_cached(classifier_url)
                 postprocess_parameters = context.get("postprocess_parameters", {})
                 output_labels = get_output_labels(lut_sorted, postprocess_parameters)
                 if postprocess_parameters.get("save_intermediate", False):
