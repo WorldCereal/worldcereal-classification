@@ -64,6 +64,180 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     x = np.clip(x, -50.0, 50.0)
     return 1.0 / (1.0 + np.exp(-x))
 
+def add_alt_class_centroid_metrics(
+    df: pd.DataFrame,
+    *,
+    label_col: str,
+    context_cols: Sequence[str],
+    embedding_col: str = "embedding",
+) -> pd.DataFrame:
+    """
+    For each context group (context_cols), compute per-label centroids and for each point:
+      - self_centroid_dist: cosine dist to centroid of its own label within context
+      - alt_label: closest other label centroid
+      - alt_centroid_dist: cosine dist to closest other label centroid
+      - alt_margin: alt_centroid_dist - self_centroid_dist  (<=0 suggests confusion)
+      - context_n_labels: number of labels present in context
+    """
+    df = df.copy()
+
+    out_alt_label = np.full(len(df), None, dtype=object)
+    out_self = np.full(len(df), np.nan, dtype=np.float32)
+    out_alt = np.full(len(df), np.nan, dtype=np.float32)
+    out_margin = np.full(len(df), np.nan, dtype=np.float32)
+    out_nlab = np.zeros(len(df), dtype=np.uint16)
+
+    # Pre-extract embeddings into ndarray-of-rows for fast vstack in groups
+    emb_series = df[embedding_col].to_numpy()
+
+    # Keep original row indices to write back
+    for _, g in df.groupby(list(context_cols), dropna=False, sort=False):
+        idx = g.index.to_numpy()
+        labels = g[label_col].to_numpy()
+
+        # If only one label in this context, nothing to compare against
+        uniq = pd.unique(labels)
+        out_nlab[idx] = len(uniq)
+        if len(uniq) < 2:
+            continue
+
+        X = np.vstack(emb_series[idx]).astype(np.float32, copy=False)
+        Xn = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+
+        # Centroids per label
+        centroids = []
+        cent_labels = []
+        for lab in uniq:
+            m = labels == lab
+            C = Xn[m].mean(axis=0)
+            C = C / (np.linalg.norm(C) + 1e-12)
+            centroids.append(C)
+            cent_labels.append(lab)
+
+        C = np.vstack(centroids).astype(np.float32, copy=False)          # (L, D)
+        sims = Xn @ C.T                                                  # (N, L)
+        dists = 1.0 - sims                                               # cosine distances
+
+        # Map each point to its own centroid column
+        lab_to_j = {lab: j for j, lab in enumerate(cent_labels)}
+        own_j = np.array([lab_to_j[lab] for lab in labels], dtype=np.int32)
+
+        self_dist = dists[np.arange(len(idx)), own_j]
+
+        # Mask own label to find nearest OTHER centroid
+        dists_other = dists.copy()
+        dists_other[np.arange(len(idx)), own_j] = np.inf
+        alt_j = np.argmin(dists_other, axis=1)
+        alt_dist = dists[np.arange(len(idx)), alt_j]
+        alt_lab = np.array([cent_labels[j] for j in alt_j], dtype=object)
+
+        out_self[idx] = self_dist.astype(np.float32, copy=False)
+        out_alt[idx] = alt_dist.astype(np.float32, copy=False)
+        out_alt_label[idx] = alt_lab
+        out_margin[idx] = (alt_dist - self_dist).astype(np.float32, copy=False)
+
+    df["context_n_labels"] = out_nlab
+    df["self_centroid_dist_ctx"] = out_self
+    df["alt_label_ctx"] = out_alt_label
+    df["alt_centroid_dist_ctx"] = out_alt
+    df["alt_margin_ctx"] = out_margin
+    return df
+
+def add_knn_label_purity_for_flagged(
+    df_all: pd.DataFrame,
+    flagged_df: pd.DataFrame,
+    *,
+    label_col: str,
+    context_cols: Sequence[str],
+    embedding_col: str = "embedding",
+    purity_knn_k: int = 10,
+    cap_sqrt_k: int = 50,
+) -> pd.DataFrame:
+    """
+    Compute kNN label-purity within each context group, but only for rows flagged==True.
+    Uses df_all for embeddings and full neighbourhood; writes results back into flagged_df.
+    """
+
+    # flagged subset keys (to limit work to only contexts that contain flagged points)
+    flagged_only = flagged_df.loc[flagged_df["flagged"] == True, ["sample_id", *context_cols, label_col]]
+    if flagged_only.empty:
+        flagged_df["knn_same_label_frac_ctx"] = np.nan
+        flagged_df["knn_majority_label_ctx"] = None
+        flagged_df["knn_majority_frac_ctx"] = np.nan
+        return flagged_df
+
+    # Restrict df_all to only relevant contexts
+    ctx_keys = flagged_only[context_cols].drop_duplicates()
+    df_sub = df_all.merge(ctx_keys, on=list(context_cols), how="inner")
+
+    # Prepare outputs keyed by sample_id (avoid attaching embeddings to flagged_df)
+    out_same = {}
+    out_maj_lab = {}
+    out_maj_frac = {}
+
+    # Fast membership check per context group
+    flagged_ids = set(flagged_only["sample_id"].tolist())
+
+    for _, g in df_sub.groupby(list(context_cols), dropna=False, sort=False):
+        n = len(g)
+        if n < 2:
+            continue
+
+        # Determine k similar to your scoring logic (sqrt(n) capped, but at least purity_knn_k)
+        k = min(max(int(purity_knn_k), min(int(np.sqrt(n)), int(cap_sqrt_k))), n - 1)
+        if k <= 0:
+            continue
+
+        sids = g["sample_id"].to_numpy()
+        labels = g[label_col].to_numpy()
+
+        # Indices of flagged samples inside this context
+        flagged_mask = np.array([sid in flagged_ids for sid in sids], dtype=bool)
+        if not flagged_mask.any():
+            continue
+
+        X = np.vstack(g[embedding_col].to_numpy()).astype(np.float32, copy=False)
+
+        nn = NearestNeighbors(
+            n_neighbors=k + 1,
+            metric="cosine",
+            algorithm="brute",
+            n_jobs=-1,
+        )
+        nn.fit(X)
+
+        q_idx = np.where(flagged_mask)[0]
+        distances, neigh = nn.kneighbors(X[q_idx], return_distance=True)
+
+        # Robustly drop self-neighbour if present
+        neigh = neigh[:, 1:]
+        neigh_labels = labels[neigh]  # (n_flagged, k)
+
+        for row_i, qi in enumerate(q_idx):
+            sid = sids[qi]
+            own = labels[qi]
+            nl = neigh_labels[row_i]
+
+            same_frac = float(np.mean(nl == own))
+
+            # majority label among neighbours
+            vals, counts = np.unique(nl, return_counts=True)
+            j = int(np.argmax(counts))
+            maj_lab = vals[j]
+            maj_frac = float(counts[j] / len(nl))
+
+            out_same[sid] = same_frac
+            out_maj_lab[sid] = maj_lab
+            out_maj_frac[sid] = maj_frac
+
+    # Write back to flagged_df
+    flagged_df = flagged_df.copy()
+    flagged_df["knn_same_label_frac_ctx"] = flagged_df["sample_id"].map(out_same).astype("float32")
+    flagged_df["knn_majority_label_ctx"] = flagged_df["sample_id"].map(out_maj_lab)
+    flagged_df["knn_majority_frac_ctx"] = flagged_df["sample_id"].map(out_maj_frac).astype("float32")
+    return flagged_df
+
+
 def merge_small_slices(
     df: pd.DataFrame,
     min_size: int = 100,
@@ -492,6 +666,17 @@ def run_pipeline(
         )
     else:
         print("[anomaly] Skipping merge_small_slices for coarse H3 level")
+    
+    # adding centext centroid metrics
+    print("[anomaly] Computing context centroid metrics...")
+    context_cols = [*group_cols, h3_level_name]
+    df = add_alt_class_centroid_metrics(
+        df,
+        label_col=label_col,
+        context_cols=context_cols,
+        embedding_col="embedding",
+    )
+
 
     print("[anomaly] Computing per-slice centroids...")
     centroids = compute_slice_centroids(
@@ -560,6 +745,18 @@ def run_pipeline(
         fdr_alpha=fdr_alpha,
         min_flagged_per_slice=min_flagged_per_slice,
         max_flagged_fraction=max_flagged_fraction,
+    )
+
+    print("[anomaly] Computing kNN label purity for flagged points...")
+    context_cols = [*group_cols, h3_level_name]
+    flagged_df = add_knn_label_purity_for_flagged(
+        df_all=df,                 # this df still has embeddings
+        flagged_df=flagged_df,      # from flag_anomalies
+        label_col=label_col,
+        context_cols=context_cols,
+        embedding_col="embedding",
+        purity_knn_k=10,
+        cap_sqrt_k=50,
     )
 
     import geopandas as gpd
