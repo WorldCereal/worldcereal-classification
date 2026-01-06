@@ -258,44 +258,6 @@ def load_torch_model_cached(model_url: str):
     return result
 
 
-def load_croptype_model(modeldir: str, modeltag: str) -> Any:
-    """Load the crop type model, use cache if available
-
-    Parameters
-    ----------
-    modeldir : str
-        Directory or base path where models are stored
-    modeltag : str
-        Model identifier or tag
-
-    Returns
-    -------
-    Any
-        Loaded model and class names
-    """
-    from cropclass.utils import download_and_unpack
-    from vito_crop_classification.model import Model
-
-    cache = get_model_cache()
-
-    if modeltag in cache:
-        logger.debug(f"Model cache hit for {modeltag}.")
-        return cache[modeltag]
-
-    if str(modeldir).startswith("http"):
-        modeldir, modeltag = download_and_unpack(modeldir, modeltag)
-
-    # load a model from its tag
-    model = Model.load(mdl_f=Path(modeldir) / modeltag)
-
-    # Get classes that will be mapped
-    class_names = model.get_class_names()
-
-    cache[modeltag] = (model, class_names)
-
-    return model, class_names
-
-
 def load_presto_weights_cached(presto_model_url: str):
     """Manual caching for Presto weights with dependency check."""
     cache = get_model_cache()
