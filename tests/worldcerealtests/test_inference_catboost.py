@@ -6,6 +6,9 @@ from openeo.udf.udf_data import UdfData
 from worldcereal.openeo.inference_catboost import apply_udf_data as inference_udf
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
 
+CROPLAND_CLASSIFIER_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun=202510301004.onnx"
+CROPTYPE_CLASSIFIER_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
+
 
 def create_udf_data(arr: xr.DataArray, parameters: dict, epsg: int = 32631) -> UdfData:
     """Create UdfData object from xarray DataArray and parameters."""
@@ -32,7 +35,9 @@ def test_cropland_inference(WorldCerealPreprocessedInputs):
     """Test the local generation of a cropland product using direct UDF calls"""
 
     # Initialize CropLandParameters
-    cropland_params = CropLandParameters().model_dump()
+    cropland_params = CropLandParameters(
+        classifier_url=CROPLAND_CLASSIFIER_URL
+    ).model_dump()
 
     # Create UDF data for the dual workflow
     udf_data = create_udf_data(WorldCerealPreprocessedInputs, cropland_params)
@@ -57,7 +62,9 @@ def test_cropland_inference_with_intermediate(WorldCerealPreprocessedInputs):
     """Test the local generation of a cropland product using direct UDF calls"""
 
     # Initialize CropLandParameters
-    cropland_params = CropLandParameters().model_dump()
+    cropland_params = CropLandParameters(
+        classifier_url=CROPLAND_CLASSIFIER_URL
+    ).model_dump()
     cropland_params["postprocess_parameters"]["save_intermediate"] = True
 
     # Create UDF data for the dual workflow
@@ -90,7 +97,7 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 
     # Initialize CropTypeParameters with custom target_date
     croptype_params = CropTypeParameters(
-        target_date=None, mask_cropland=False
+        classifier_url=CROPTYPE_CLASSIFIER_URL, target_date=None, mask_cropland=False
     ).model_dump()
 
     # Create UDF data for the dual workflow
@@ -143,8 +150,8 @@ def test_croptype_inference(WorldCerealPreprocessedInputs):
 def test_dual_workflow(WorldCerealPreprocessedInputs):
     """Test that dual workflow outputs contain exact replicas of individual classifications with prefixes."""
 
-    cropland_parameters = CropLandParameters()
-    croptype_parameters = CropTypeParameters()
+    cropland_parameters = CropLandParameters(classifier_url=CROPLAND_CLASSIFIER_URL)
+    croptype_parameters = CropTypeParameters(classifier_url=CROPTYPE_CLASSIFIER_URL)
 
     parameters = {
         "cropland_params": cropland_parameters.model_dump(),
@@ -240,8 +247,12 @@ def test_dual_workflow(WorldCerealPreprocessedInputs):
 def test_dual_workflow_with_intermediate_results(WorldCerealPreprocessedInputs):
     """Test that dual workflow outputs contain exact replicas of individual classifications with prefixes."""
 
-    cropland_parameters = CropLandParameters().model_dump()
-    croptype_parameters = CropTypeParameters().model_dump()
+    cropland_parameters = CropLandParameters(
+        classifier_url=CROPLAND_CLASSIFIER_URL
+    ).model_dump()
+    croptype_parameters = CropTypeParameters(
+        classifier_url=CROPTYPE_CLASSIFIER_URL
+    ).model_dump()
 
     cropland_parameters["postprocess_parameters"]["save_intermediate"] = True
     croptype_parameters["postprocess_parameters"]["save_intermediate"] = True
