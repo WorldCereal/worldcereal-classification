@@ -50,11 +50,11 @@ FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependenci
 INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "3g",
+    "executor-memoryOverhead": "5g",
+    "executor-request-cores": "1800m",
     "max-executors": 20,
     "python-memory": "disable",
     "soft-errors": 0.1,
-    "image-name": "python311",
     "udf-dependency-archives": [
         f"{ONNX_DEPS_URL}#onnx_deps",
         f"{FEATURE_DEPS_URL}#feature_deps",
