@@ -26,7 +26,6 @@ from typing import List
 import openeo
 from openeo import DataCube
 from openeo_gfmap import TemporalContext
-from openeo_gfmap.preprocessing.scaling import compress_uint16
 
 from worldcereal.openeo.inference import apply_metadata
 from worldcereal.parameters import (
@@ -85,7 +84,7 @@ def _cropland_map(
         classes.metadata, cropland_parameters.model_dump()
     )
     classes = _reduce_temporal_mean(classes)
-    classes = compress_uint16(classes)
+    classes = classes.linear_scale_range(0, 254, 0, 254)  # Compress to uint8
 
     bands = classes.metadata.band_names
     result_cubes: List[DataCube] = []
@@ -139,7 +138,7 @@ def _croptype_map(
     classes = _run_udf(inputs, inference_udf)
     classes.metadata = apply_metadata(classes.metadata, parameters)
     classes = _reduce_temporal_mean(classes)
-    classes = compress_uint16(classes)
+    classes = classes.linear_scale_range(0, 254, 0, 254)  # Compress to uint8
 
     bands = classes.metadata.band_names
     result_cubes: List[DataCube] = []
