@@ -1,5 +1,6 @@
 """openEO UDF to compute Presto/Prometheo features with clean code structure."""
 
+import io
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import random
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import numpy as np
 import xarray as xr
@@ -17,6 +18,11 @@ from pyproj import Transformer
 from scipy.ndimage import convolve, zoom
 from shapely.geometry import Point
 from shapely.ops import transform
+
+if TYPE_CHECKING:
+    import torch
+    from prometheo.models.pooling import PoolingMethods
+    from prometheo.predictors import Predictors
 
 try:
     from loguru import logger
@@ -270,11 +276,99 @@ def load_presto_weights_cached(presto_model_url: str):
 
     logger.info(f"Loading Presto weights from: {presto_model_url}")
 
-    model = Presto()  # type: ignore
-    result = load_presto_weights(model, presto_model_url)  # type: ignore
+    if presto_model_url.endswith((".jit.pt", ".torchscript.pt")):
+        result = load_torchscript_encoder_wrapper(presto_model_url)
+    else:
+        model = Presto()  # type: ignore
+        result = load_presto_weights(model, presto_model_url)  # type: ignore
 
     cache[presto_model_url] = result
     return result
+
+
+def load_torchscript_encoder_wrapper(presto_model_url: str):
+    """Load a TorchScripted Presto encoder and wrap it for Prometheo inference."""
+    import requests
+    import torch
+
+    if isinstance(presto_model_url, str) and presto_model_url.startswith("http"):
+        response = requests.get(presto_model_url, timeout=120)
+        scripted_encoder = torch.jit.load(io.BytesIO(response.content))
+    else:
+        scripted_encoder = torch.jit.load(presto_model_url)
+
+    scripted_encoder.eval()
+    return TorchScriptPrestoWrapper(scripted_encoder)
+
+
+class TorchScriptPrestoWrapper:
+    """Adapter to run a TorchScripted Presto encoder with Prometheo Predictors."""
+
+    def __init__(self, scripted_encoder: "torch.jit.ScriptModule"):
+        self.encoder = scripted_encoder
+        self._device = None
+
+        try:
+            self._device = next(self.encoder.parameters()).device
+        except (StopIteration, RuntimeError):
+            self._device = None
+
+    def eval(self):
+        self.encoder.eval()
+        return self
+
+    def __call__(
+        self,
+        x: "Predictors",
+        eval_pooling: Optional[str] = "global",
+    ):
+        return self.forward(x, eval_pooling=eval_pooling)
+
+    def forward(
+        self,
+        x: "Predictors",
+        eval_pooling: Optional[str] = "global",
+    ):
+        import torch
+        from einops import rearrange
+        from prometheo.models.presto.wrapper import dataset_to_model, to_torchtensor
+
+        s1_s2_era5_srtm, mask, dynamic_world, latlon, timestamps, h, w = (
+            dataset_to_model(x)
+        )
+        if x.timestamps is None:
+            raise ValueError("Presto requires input timestamps")
+
+        if eval_pooling not in ("global", "time", None):
+            raise ValueError(
+                f"Expected eval_pooling to be one of 'global', 'time', or None, got {eval_pooling}"
+            )
+
+        model_device = self._device or torch.device("cpu")
+        embeddings = self.encoder(
+            to_torchtensor(s1_s2_era5_srtm, device=model_device).float(),
+            to_torchtensor(dynamic_world, device=model_device).long(),
+            to_torchtensor(latlon, device=model_device).float(),
+            to_torchtensor(mask, device=model_device).long(),
+            # presto wants 0 indexed months, not 1 indexed months
+            to_torchtensor(timestamps[:, :, 1] - 1, device=model_device),
+        )
+
+        # Match Prometheo wrapper output shape
+        if eval_pooling == "global":
+            b = int(embeddings.shape[0] / (h * w))
+            embeddings = rearrange(embeddings, "(b h w) d -> b h w d", b=b, h=h, w=w)
+            embeddings = torch.unsqueeze(embeddings, 3)
+        elif eval_pooling == "time":
+            b = int(embeddings.shape[0] / (h * w))
+            embeddings = rearrange(
+                embeddings, "(b h w) t d -> b h w t d", b=b, h=h, w=w
+            )
+        else:
+            if (h != 1) or (w != 1):
+                raise ValueError("h w != 1 unsupported for SSL")
+
+        return embeddings
 
 
 def get_output_labels(lut_sorted: dict, postprocess_parameters: dict = {}) -> list:
@@ -837,7 +931,9 @@ class PrestoFeatureExtractor:
                     inarr,
                     model,
                     epsg=epsg,
-                    batch_size=self.parameters.get("batch_size", 256),  # TODO optimize?
+                    batch_size=self.parameters.get(
+                        "batch_size", 2048
+                    ),  # TODO optimize?
                     pooling_method=pooling_method,
                 )  # type: ignore
             logger.info("Inference completed.")
