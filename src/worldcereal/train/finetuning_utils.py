@@ -25,7 +25,7 @@ class FocalLoss(nn.Module):
         alpha=1,
         gamma=2.0,
         reduction="mean",
-        ignore_index: Optional[int] = None,
+        ignore_index: Optional[int] = -100,
         label_smoothing: float = 0.0,
     ):
         super(FocalLoss, self).__init__()
