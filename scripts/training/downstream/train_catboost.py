@@ -22,7 +22,6 @@ from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from prometheo.models import Presto
 from prometheo.models.presto.wrapper import load_presto_weights
-from prometheo.predictors import Predictors
 from prometheo.utils import device
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
@@ -32,14 +31,13 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
+from worldcereal.train.data import get_training_df
 from worldcereal.train.datasets import (
-    WorldCerealLabelledDataset,
+    SensorMaskingConfig,
+    WorldCerealTrainingDataset,
     get_class_weights,
 )
-from worldcereal.utils.refdata import map_classes
 
 
 class PrestoEmbeddingTrainer:
@@ -109,45 +107,21 @@ class PrestoEmbeddingTrainer:
         ]
         return all((self.output_dir / f).exists() for f in emb_files)
 
-    def _dataloader_to_encodings_and_ids(
-        self, model: Presto, dl: DataLoader
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Generate embeddings and sample IDs from a dataloader."""
-        encs: list[np.ndarray] = []
-        ids: list[np.ndarray] = []
-        model.eval()
-        if hasattr(model, "head"):
-            model.head = None
-        with torch.no_grad():
-            for predictors, sample_ids in tqdm(
-                dl, desc="Computing Embeddings", leave=False
-            ):
-                if not isinstance(predictors, Predictors):
-                    predictors = Predictors(**predictors)
-                out = model(predictors)
-                encs.append(out.cpu().numpy())
-                if isinstance(sample_ids, torch.Tensor):
-                    ids.append(sample_ids.cpu().numpy())
-                else:
-                    ids.append(np.asarray(sample_ids))
-        enc_np = np.concatenate(encs, axis=0)
-        id_np = np.concatenate([i.reshape(-1) for i in ids], axis=0)
-        return enc_np, id_np
-
-    def _emb_to_df(
-        self, embeddings: np.ndarray, ids: np.ndarray, original_df: pd.DataFrame
+    def _dataset_to_embeddings_with_label(
+        self, model: Presto, ds: WorldCerealTrainingDataset
     ) -> pd.DataFrame:
-        """Convert embeddings and IDs to DataFrame."""
-        df = pd.DataFrame(np.squeeze(embeddings))
-        df.columns = [f"emb_{i}" for i in range(df.shape[1])]
-        df["sample_id"] = ids
-        df["ewoc_code"] = df["sample_id"].map(
-            original_df.set_index("sample_id")["ewoc_code"].to_dict()
+        """Generate embeddings and attributes from a dataset."""
+
+        model.eval()
+
+        df = get_training_df(
+            ds,
+            model,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            time_explicit=self.time_explicit,
         )
-        # Also map finetune_class from original dataframe
-        df["finetune_class"] = df["sample_id"].map(
-            original_df.set_index("sample_id")["finetune_class"].to_dict()
-        )
+
         return df
 
     def _compute_embeddings(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -159,85 +133,78 @@ class PrestoEmbeddingTrainer:
 
         orig_classes = sorted(train_df["finetune_class"].unique())
 
+        # For dataset compatibility, we need to copy finetune_class to downstream_class
+        train_df["downstream_class"] = train_df["finetune_class"]
+        val_df["downstream_class"] = val_df["finetune_class"]
+        test_df["downstream_class"] = test_df["finetune_class"]
+
         # Load Presto model
         logger.info(f"Loading Presto model from {self.presto_model_path}...")
         num_timesteps = 12 if self.timestep_freq == "month" else 36
-        presto_model = Presto(num_outputs=len(orig_classes), regression=False)
+        presto_model = Presto()
         presto_model = load_presto_weights(presto_model, self.presto_model_path).to(
             device
         )
 
         # Create datasets and dataloaders
         logger.info("Creating datasets...")
-        trn_ds = WorldCerealLabelledDataset(
+
+        masking_config = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=0.05,
+            s1_timestep_dropout_prob=0.1,
+            s2_cloud_timestep_prob=0.1,
+            s2_cloud_block_prob=0.05,
+            s2_cloud_block_min=2,
+            s2_cloud_block_max=3,
+            meteo_timestep_dropout_prob=0.03,
+            dem_dropout_prob=0.01,
+        )
+
+        trn_ds = WorldCerealTrainingDataset(
             train_df,
             num_timesteps=num_timesteps,
             timestep_freq=self.timestep_freq,
             task_type="multiclass",
             num_outputs=len(orig_classes),
-            classes_list=orig_classes,
-            time_explicit=self.time_explicit,
             augment=True,
-            return_sample_id=True,
+            masking_config=masking_config,
+            repeats=5,
         )
-        val_ds = WorldCerealLabelledDataset(
+        val_ds = WorldCerealTrainingDataset(
             val_df,
             num_timesteps=num_timesteps,
             timestep_freq=self.timestep_freq,
             task_type="multiclass",
             num_outputs=len(orig_classes),
-            classes_list=orig_classes,
-            time_explicit=self.time_explicit,
-            return_sample_id=True,
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
         )
-        test_ds = WorldCerealLabelledDataset(
+        test_ds = WorldCerealTrainingDataset(
             test_df,
             num_timesteps=num_timesteps,
             timestep_freq=self.timestep_freq,
             task_type="multiclass",
             num_outputs=len(orig_classes),
-            classes_list=orig_classes,
-            time_explicit=self.time_explicit,
-            return_sample_id=True,
-        )
-
-        trn_dl = DataLoader(
-            trn_ds,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-        )
-        val_dl = DataLoader(
-            val_ds,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-        )
-        test_dl = DataLoader(
-            test_ds,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
         )
 
         # Compute embeddings
         logger.info("Computing embeddings...")
-        trn_emb, trn_ids = self._dataloader_to_encodings_and_ids(presto_model, trn_dl)
-        val_emb, val_ids = self._dataloader_to_encodings_and_ids(presto_model, val_dl)
-        tst_emb, tst_ids = self._dataloader_to_encodings_and_ids(presto_model, test_dl)
-
-        logger.info("Converting embeddings to DataFrames...")
-        trn_df_emb = self._emb_to_df(trn_emb, trn_ids, train_df)
-        val_df_emb = self._emb_to_df(val_emb, val_ids, val_df)
-        tst_df_emb = self._emb_to_df(tst_emb, tst_ids, test_df)
+        train_df = self._dataset_to_embeddings_with_label(presto_model, trn_ds)
+        val_df = self._dataset_to_embeddings_with_label(presto_model, val_ds)
+        test_df = self._dataset_to_embeddings_with_label(presto_model, test_ds)
 
         # Save embeddings for future use
         logger.info("Saving computed embeddings...")
-        trn_df_emb.to_parquet(self.output_dir / "train_embeddings.parquet")
-        val_df_emb.to_parquet(self.output_dir / "val_embeddings.parquet")
-        tst_df_emb.to_parquet(self.output_dir / "test_embeddings.parquet")
+        train_df.to_parquet(self.output_dir / "train_embeddings.parquet")
+        val_df.to_parquet(self.output_dir / "val_embeddings.parquet")
+        test_df.to_parquet(self.output_dir / "test_embeddings.parquet")
 
-        return trn_df_emb, val_df_emb, tst_df_emb
+        return train_df, val_df, test_df
 
     def _load_embeddings(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Load pre-computed embeddings."""
@@ -246,7 +213,37 @@ class PrestoEmbeddingTrainer:
         val_df_emb = pd.read_parquet(self.output_dir / "val_embeddings.parquet")
         tst_df_emb = pd.read_parquet(self.output_dir / "test_embeddings.parquet")
 
-        return trn_df_emb, val_df_emb, tst_df_emb
+        # We need to redo the train/val/test split for now
+        logger.info("Redoing train/val/test split based on ref_id...")
+        df = pd.concat([trn_df_emb, val_df_emb, tst_df_emb], ignore_index=True)
+
+        import json
+
+        logger.info(f"Size before filtering: {len(df)}")
+        ref_id_to_keep = list(
+            json.load(
+                open(
+                    "/home/vito/vtrichtk/git/worldcereal-classification/ref_id_to_keep.json",
+                    "r",
+                )
+            ).keys()
+        )
+        df = df[df["ref_id"].isin(ref_id_to_keep)]
+        logger.info(f"Size after filtering: {len(df)}")
+
+        unique_ref_ids = df["ref_id"].unique()
+        from sklearn.model_selection import train_test_split
+
+        train_ids, val_ids = train_test_split(
+            unique_ref_ids, test_size=0.3, random_state=42
+        )
+        val_ids, test_ids = train_test_split(val_ids, test_size=0.5, random_state=42)
+
+        train_df = df[df["ref_id"].isin(train_ids)].reset_index(drop=True)
+        val_df = df[df["ref_id"].isin(val_ids)].reset_index(drop=True)
+        test_df = df[df["ref_id"].isin(test_ids)].reset_index(drop=True)
+
+        return train_df, val_df, test_df
 
     def _get_training_data(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Get training data - either compute or load embeddings."""
@@ -271,8 +268,8 @@ class PrestoEmbeddingTrainer:
 
         model = CatBoostClassifier(
             iterations=6000,
-            depth=6,
-            learning_rate=0.05,
+            depth=5,
+            learning_rate=0.15,
             loss_function=loss_function,
             eval_metric=eval_metric,
             early_stopping_rounds=25,
@@ -300,7 +297,7 @@ class PrestoEmbeddingTrainer:
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Prepare training data with weights and feature selection."""
         # Get feature columns
-        feat_cols = [c for c in trn_df.columns if c.startswith("emb_")]
+        feat_cols = [c for c in trn_df.columns if c.startswith("presto_ft_")]
         self.feat_cols = feat_cols
 
         # Calculate class weights
@@ -308,7 +305,7 @@ class PrestoEmbeddingTrainer:
         class_weights = get_class_weights(
             trn_df[self.target_column].values,
             method="log",
-            clip_range=(0.2, 10),
+            # clip_range=(0.2, 10),
             normalize=True,
         )
 
@@ -359,11 +356,10 @@ class PrestoEmbeddingTrainer:
         # Get training data
         trn_df, val_df, tst_df = self._get_training_data()
 
-        # Map classes
-        logger.info("Mapping classes...")
-        trn_df = map_classes(trn_df, finetune_classes=self.finetune_classes)
-        val_df = map_classes(val_df, finetune_classes=self.finetune_classes)
-        tst_df = map_classes(tst_df, finetune_classes=self.finetune_classes)
+        # Column "downstream_class" is actually "finetune_class" at this point
+        trn_df = trn_df.rename(columns={"downstream_class": "finetune_class"})
+        val_df = val_df.rename(columns={"downstream_class": "finetune_class"})
+        tst_df = tst_df.rename(columns={"downstream_class": "finetune_class"})
 
         # Save class list
         self.classes_list = sorted(trn_df["finetune_class"].unique())
@@ -732,28 +728,29 @@ def main() -> None:
         # Manual configuration - edit these values as needed
         class ManualArgs:
             def __init__(self):
-                self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930.pt"
-                self.data_dir = "/projects/worldcereal/models/presto-prometheo-landcover-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-run=202507170930/"
-                self.output_dir = "./CROPLAND2"
-                self.finetune_classes = "LANDCOVER10"
+                self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing=0.05-month-CROPTYPE27-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing=0.05-month-CROPTYPE27-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt"
+                self.data_dir = "/projects/worldcereal/models/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing=0.05-month-CROPTYPE27-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004/"
+                self.output_dir = "/projects/worldcereal/models/downstream/CROPTYPE27"
+                self.finetune_classes = "CROPTYPE27"
                 self.timestep_freq = "month"
                 self.batch_size = 1024
                 self.num_workers = 8
-                self.modelversion = "001-debug"
+                self.modelversion = "201-prestorun=202510301004"
                 self.time_explicit = False  # Don't forget this important setting!
-                self.detector = "temporary-crops"
-                self.downstream_classes = {
-                    "temporary_crops": "cropland",
-                    "temporary_grasses": "other",
-                    "bare_sparsely_vegetated": "other",
-                    "permanent_crops": "other",
-                    "grasslands": "other",
-                    "wetlands": "other",
-                    "shrubland": "other",
-                    "trees": "other",
-                    "built_up": "other",
-                    "water": "other",
-                }
+                self.detector = "croptype"
+                self.downstream_classes = None
+                # self.downstream_classes = {
+                #     "temporary_crops": "cropland",
+                #     "temporary_grasses": "other",
+                #     "bare_sparsely_vegetated": "other",
+                #     "permanent_crops": "other",
+                #     "grasslands": "other",
+                #     "wetlands": "other",
+                #     "shrubland": "other",
+                #     "trees": "other",
+                #     "built_up": "other",
+                #     "water": "other",
+                # }
 
         args = ManualArgs()
         logger.info("Using manual configuration for debug mode")
