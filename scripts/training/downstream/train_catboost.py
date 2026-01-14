@@ -12,7 +12,7 @@ and on-the-fly embedding computation from the new version.
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -49,7 +49,7 @@ class PrestoEmbeddingTrainer:
         data_dir: str,
         output_dir: str,
         finetune_classes: str = "LANDCOVER10",
-        timestep_freq: str = "month",
+        timestep_freq: Literal["month", "dekad"] = "month",
         batch_size: int = 1024,
         num_workers: int = 8,
         modelversion: str = "001",

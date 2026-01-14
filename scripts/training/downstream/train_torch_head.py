@@ -11,7 +11,7 @@ import json
 import zipfile
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -99,7 +99,7 @@ class TorchHeadTrainer:
         detector: str = "cropland",
         downstream_classes: Optional[dict] = None,
         classes_scheme: str = "LANDCOVER10",
-        timestep_freq: str = "month",
+        timestep_freq: Literal["month", "dekad"] = "month",
         batch_size: int = 1024,
         num_workers: int = 8,
         hidden_dim: int = 256,
@@ -887,7 +887,7 @@ def create_confusion_matrix(
     y_true: NDArray[np.int_],
     y_pred: NDArray[np.int_],
     class_names: NDArray[np.str_],
-    title: str | None = None,
+    title: Optional[str] = None,
     normalize: bool = True,
 ) -> plt.figure:
     """Create the confusion matrix."""
@@ -895,8 +895,9 @@ def create_confusion_matrix(
     cm = confusion_matrix(y_true, y_pred, normalize="true" if normalize else None)
 
     # Create the figure
-    def _annot(x: str | float) -> str:
+    def _annot(x: Union[str, float]) -> str:
         """Annotation function."""
+        x = float(x)
         if normalize:
             return f"{100 * x:.1f}%" if x > 0.0 else ""
         else:
