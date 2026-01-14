@@ -168,7 +168,7 @@ class CropLandParameters(BaseParameters):
 
     feature_parameters: FeaturesParameters = BaseParameters.create_feature_parameters(
         rescale_s1=False,
-        presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt",  # NOQA
+        presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing%3D0.05-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.jit.pt",  # NOQA
         compile_presto=False,
         temporal_prediction=False,
         target_date=None,
@@ -218,7 +218,7 @@ class CropTypeParameters(BaseParameters):
         """Single source of truth for default croptype feature parameters."""
         return BaseParameters.create_feature_parameters(
             rescale_s1=False,
-            presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",  # NOQA
+            presto_model_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%253D0.05-month-CROPTYPE27-augment%253DTrue-balance%253DTrue-timeexplicit%253DFalse-masking%253Denabled-run%253D202510301004_encoder.jit.pt",  # NOQA
             compile_presto=False,
             temporal_prediction=False,
             target_date=None,  # By default take the middle date
