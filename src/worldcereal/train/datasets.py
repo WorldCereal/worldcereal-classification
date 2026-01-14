@@ -28,7 +28,7 @@ MIN_EDGE_BUFFER = 2
 
 def get_class_weights(
     labels: np.ndarray[Any, Any],
-    method: str = "balanced",  # 'balanced', 'log', or 'none'
+    method: str = "balanced",  # 'balanced', 'log', 'effective', or 'none'
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
 ) -> Dict[int, float]:
@@ -36,8 +36,12 @@ def get_class_weights(
     Compute class weights for classification tasks.
 
     Args:
-        labels: list of integer class labels.
-        method: 'balanced' (scikit-learn style), or 'log' (log-scaled), or 'none'.
+        labels: array of integer class labels.
+        method:
+            - 'balanced' : inverse frequency (sklearn-style)
+            - 'log'      : log-scaled inverse frequency
+            - 'effective': effective number of samples (Cui et al.)
+            - 'none'     : uniform weights
         clip_range: tuple (min, max) to clip weights.
         normalize: whether to rescale weights to mean = 1.
 
@@ -48,15 +52,28 @@ def get_class_weights(
     classes = sorted(counts.keys())
     total_samples = sum(counts.values())
     num_classes = len(classes)
-    freq = np.array([counts[c] for c in classes], dtype=np.float32)
+
+    freq = np.array([counts[c] for c in classes], dtype=np.float64)
+    freq = np.maximum(freq, 1.0)  # safety
 
     if method == "balanced":
         weights = total_samples / (num_classes * freq)
+
     elif method == "log":
         inv_freq = 1.0 / freq
         weights = np.log1p(inv_freq / np.mean(inv_freq))
+
+    elif method == "effective":
+        # Effective number of samples (Class-Balanced Loss)
+        # beta close to 1.0 -> smoother, less extreme weights
+        beta = 0.999
+
+        effective_num = (1.0 - np.power(beta, freq)) / (1.0 - beta)
+        weights = 1.0 / effective_num
+
     elif method == "none":
         weights = np.ones_like(freq)
+
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -68,7 +85,7 @@ def get_class_weights(
         logger.info("Renormalizing weights to mean = 1")
         weights = weights / weights.mean()
 
-    return dict(zip(classes, weights))
+    return dict(zip(classes, weights.astype(float)))
 
 
 @dataclass
@@ -249,9 +266,9 @@ class WorldCerealDataset(Dataset):
             )
 
         # Sanity check to make sure valid_position is still within the extracted timesteps
-        assert (
-            valid_position in timestep_positions
-        ), f"Valid position {valid_position} not in timestep positions {timestep_positions}"
+        assert valid_position in timestep_positions, (
+            f"Valid position {valid_position} not in timestep positions {timestep_positions}"
+        )
 
         return timestep_positions, valid_position
 
@@ -635,9 +652,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             else:
                 # apply jitter
                 # scalar valid_position must be an int here
-                assert isinstance(
-                    valid_position, int
-                ), f"Expected single int valid_position, got {type(valid_position)}"
+                assert isinstance(valid_position, int), (
+                    f"Expected single int valid_position, got {type(valid_position)}"
+                )
                 p = valid_position
                 if self.label_jitter > 0:
                     shift = np.random.randint(-self.label_jitter, self.label_jitter + 1)
