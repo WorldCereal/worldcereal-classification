@@ -758,6 +758,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             "sample_id",
             "downstream_class",
             "valid_time",
+            "quality_score_lc",
+            "quality_score_ct",
         ]
         attrs = [attr for attr in attrs if attr in row.index]
         attrs = row[attrs].to_dict()
