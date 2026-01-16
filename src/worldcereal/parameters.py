@@ -177,7 +177,7 @@ class CropLandParameters(BaseParameters):
     @staticmethod
     def _default_classifier_parameters() -> ClassifierParameters:
         return BaseParameters.create_classifier_parameters(
-            classifier_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_temporary-crops_v201-prestorun=202510301004.onnx"  # NOQA
+            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/torch/PrestoDownstreamTorchHead_linear_cropland_v010_prestorun%3D202510301004.zip"  # NOQA
         )
 
     classifier_parameters: ClassifierParameters = Field(
@@ -227,7 +227,7 @@ class CropTypeParameters(BaseParameters):
     @staticmethod
     def _default_classifier_parameters() -> ClassifierParameters:
         return BaseParameters.create_classifier_parameters(
-            classifier_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/PrestoDownstreamCatBoost_croptype_v201-prestorun%3D202510301004.onnx"
+            classifier_url="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/downstream/torch/PrestoDownstreamTorchHead_linear_croptype_v010_prestorun%3D202510301004.zip"
         )
 
     feature_parameters: FeaturesParameters = Field(
