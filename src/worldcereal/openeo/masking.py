@@ -1,4 +1,3 @@
-import openeo
 from skimage.morphology import footprints
 
 
@@ -14,7 +13,9 @@ def convolve(img, radius):
 
 
 def scl_mask_erode_dilate(
-    scl_cube: openeo.DataCube,
+    session,
+    bbox,
+    scl_layer_band="TERRASCOPE_S2_TOC_V2:SCL",
     erode_r=3,
     dilate_r=21,
     target_crs=None,
@@ -23,7 +24,9 @@ def scl_mask_erode_dilate(
     It involves an erosion step followed by a dilation step.
 
     Args:
-        ...
+        session (openeo.Session): the connection openeo session
+        scl_layer_band (str, optional): Which SCL band to use.
+                Defaults to "TERRASCOPE_S2_TOC_V2:SCL".
         erode_r (int, optional): Erosion radius (pixels). Defaults to 3.
         dilate_r (int, optional): Dilation radius (pixels). Defaults to 13.
 
@@ -31,9 +34,21 @@ def scl_mask_erode_dilate(
         DataCube: DataCube containing the resulting mask
     """
 
-    first_mask = scl_cube == 0
+    layer_band = scl_layer_band.split(":")
+    s2_sceneclassification = session.load_collection(
+        layer_band[0], bands=[layer_band[1]], spatial_extent=bbox
+    )
+
+    classification = s2_sceneclassification.band(layer_band[1])
+
+    # Force to go to 10m resolution for controlled erosion/dilation
+    classification = classification.resample_spatial(
+        projection=target_crs, resolution=10.0
+    )
+
+    first_mask = classification == 0
     for mask_value in [1, 3, 8, 9, 10, 11]:
-        first_mask = (first_mask == 1) | (scl_cube == mask_value)
+        first_mask = (first_mask == 1) | (classification == mask_value)
 
     # Invert mask for erosion
     first_mask = first_mask.apply(lambda x: (x == 1).not_())

@@ -1,6 +1,6 @@
 import copy
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import geopandas as gpd
 import openeo
@@ -137,14 +137,14 @@ def get_label_points(
     )
 
     logger.info("Querying S1/S2 STAC collections ...")
-    items_s1 = {}
-    for item in search_s1.items():
-        items_s1[item.properties["sample_id"]] = shape(item.geometry).buffer(1e-9)
-
-    items_s2 = {}
-    for item in search_s2.items():
-        sample_id = item.properties["sample_id"]
-        items_s2[sample_id] = shape(item.geometry).buffer(1e-9)
+    items_s1 = {
+        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
+        for item in search_s1.items()
+    }
+    items_s2 = {
+        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
+        for item in search_s2.items()
+    }
 
     # Find sample_ids which are present in either S2 or both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
@@ -231,10 +231,7 @@ def generate_output_path_patch_to_point_worldcereal(
 
 
 def create_job_dataframe_patch_to_point_worldcereal(
-    ref_id,
-    ground_truth_file=None,
-    only_flagged_samples: bool = False,
-    max_samples_per_job: Optional[int] = None,
+    ref_id, ground_truth_file=None, only_flagged_samples: bool = False
 ):
     """
     Create a job dataframe for patch-to-point extractions.
@@ -252,9 +249,6 @@ def create_job_dataframe_patch_to_point_worldcereal(
     only_flagged_samples : bool, optional
         If True, only samples with extract flag >0 will be retrieved, no collateral samples.
         (This is useful for very large and dense datasets like USDA).
-    max_samples_per_job : int, optional
-        Maximum number of samples allowed per EPSG job before splitting into multiple H3 L3 cells.
-        If None, additional splitting is disabled.
 
     Returns
     -------
@@ -332,23 +326,14 @@ def create_job_dataframe_patch_to_point_worldcereal(
             "ground_truth_file": ground_truth_file,
             "epsg": epsg,
             "geometry_url": None,
-            "h3l3_cell": "",
         }
         rows.append(pd.Series(variables))
 
     job_df = pd.DataFrame(rows)
-    if job_df.empty:
-        logger.warning(f"No EPSG codes found for ref_id {ref_id}")
-        return job_df
-
     job_df["geometry_url"] = job_df["geometry_url"].astype("string")
-    job_df["h3l3_cell"] = job_df["h3l3_cell"].astype("string")
-
-    final_rows: List[dict] = []
 
     # Now find matching ground truth by querying RDM
-    for _, row in job_df.iterrows():
-        row = row.copy()
+    for ix, row in job_df.iterrows():
         logger.info(f"Processing EPSG {row.epsg} for REF_ID {row.ref_id}")
 
         # Get the ground truth in the patches
@@ -366,140 +351,70 @@ def create_job_dataframe_patch_to_point_worldcereal(
         if gdf.empty:
             logger.warning(f"No samples found for {row.epsg} and {row.ref_id}")
             continue
-
-        logger.info(f"Found {len(gdf)} samples for {row.epsg} and {row.ref_id}")
-
-        # Keep essential attributes only (H3 identifiers are part of the defaults)
-        gdf = gdf[RDM_DEFAULT_COLUMNS].copy()
-
-        total_samples = len(gdf)
-        logger.info(f"Total samples for EPSG {row.epsg}: {total_samples}")
-
-        has_h3_column = "h3_l3_cell" in gdf.columns
-        if not has_h3_column:
-            logger.warning(
-                "Column 'h3_l3_cell' missing in ground truth samples; "
-                f"falling back to single job for EPSG {row.epsg}."
-            )
-
-        split_applied = (
-            max_samples_per_job is not None
-            and total_samples > max_samples_per_job
-            and has_h3_column
-        )
-
-        groups: List[Tuple[Optional[str], gpd.GeoDataFrame]]
-        if split_applied:
-            logger.info(
-                f"EPSG {row.epsg} exceeds threshold with {total_samples} samples. "
-                "Applying further split by H3 L3 cells."
-            )
-            missing_cells = gdf["h3_l3_cell"].isna().sum()
-
-            if missing_cells > 0:
-                logger.warning(
-                    "H3 L3 cell information missing for some samples; "
-                    f"skipping split for EPSG {row.epsg}."
-                )
-                split_applied = False
-                groups = [(None, gdf.copy())]
-            else:
-                grouped: List[Tuple[Optional[str], gpd.GeoDataFrame]] = []
-                for cell_value, cell_df in gdf.groupby("h3_l3_cell", dropna=False):
-                    grouped.append((cell_value, cell_df.copy()))
-                groups = grouped
-                logger.info(
-                    f"Splitting EPSG {row.epsg} into {len(groups)} H3 L3 cells "
-                    f"(threshold {max_samples_per_job}, {total_samples} samples)."
-                )
         else:
-            groups = [(None, gdf.copy())]
+            logger.info(f"Found {len(gdf)} samples for {row.epsg} and {row.ref_id}")
 
-        for cell_value, group_df in groups:
-            cell_str = None if cell_value is None or pd.isna(cell_value) else str(cell_value)
-            job_row_dict = row.to_dict()
-            job_row_dict["h3l3_cell"] = (
-                cell_str if split_applied and cell_str is not None else ""
-            )
+        # Keep essential attributes only
+        gdf = gdf[RDM_DEFAULT_COLUMNS]
 
-            if not disable_s1:
-                # Determine S1 orbit; very small buffer to cover cases with < 3 samples
-                try:
-                    orbit_state = select_s1_orbitstate_vvvh(
-                        BackendContext(Backend.CDSE),
-                        BoundingBoxExtent(
-                            *group_df.to_crs(epsg=3857)
-                            .buffer(1)
-                            .to_crs(epsg=4326)
-                            .total_bounds
-                        ),
-                        TemporalContext(row.start_date, row.end_date),
-                    )
-                except UncoveredS1Exception:
-                    logger.warning(
-                        f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
-                        "This will result in no S1 data being extracted."
-                    )
-                    orbit_state = "DESCENDING"  # Just a placeholder
-            else:
-                # Disabling S1 which cannot be automatically handled yet by openEO
-                orbit_state = None
+        if not disable_s1:
+            # Determine S1 orbit; very small buffer to cover cases with < 3 samples
+            try:
+                job_df.loc[ix, "orbit_state"] = select_s1_orbitstate_vvvh(
+                    BackendContext(Backend.CDSE),
+                    BoundingBoxExtent(
+                        *gdf.to_crs(epsg=3857).buffer(1).to_crs(epsg=4326).total_bounds
+                    ),
+                    TemporalContext(row.start_date, row.end_date),
+                )
+            except UncoveredS1Exception:
+                logger.warning(
+                    f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
+                    "This will result in no S1 data being extracted."
+                )
+                job_df.loc[ix, "orbit_state"] = "DESCENDING"  # Just a placeholder
+        else:
+            # Disabling S1 which cannot be automatically handled yet by openEO
+            job_df.loc[ix, "orbit_state"] = None
 
-            job_row_dict["orbit_state"] = orbit_state
+        # Determine S2 tiles
+        logger.info("Finding S2 tiles ...")
+        original_crs = gdf.crs
+        gdf = gdf.to_crs(epsg=3857)
+        gdf["centroid"] = gdf.geometry.centroid
 
-            # Determine S2 tiles
-            logger.info("Finding S2 tiles ...")
-            original_crs = group_df.crs
-            group_df = group_df.to_crs(epsg=3857)
-            group_df["centroid"] = group_df.geometry.centroid
+        gdf = gpd.sjoin(
+            gdf.set_geometry("centroid"),
+            S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
+            predicate="intersects",
+        ).drop(columns=["index_right", "centroid"])
+        gdf = gdf.set_geometry("geometry").to_crs(original_crs)
 
-            group_df = gpd.sjoin(
-                group_df.set_geometry("centroid"),
-                S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
-                predicate="intersects",
-            ).drop(columns=["index_right", "centroid"])
-            group_df = group_df.set_geometry("geometry").to_crs(original_crs)
+        # Set back the valid_time in the geometry as string
+        gdf["valid_time"] = gdf.valid_time.dt.strftime("%Y-%m-%d")
 
-            # Set back the valid_time in the geometry as string
-            group_df["valid_time"] = group_df.valid_time.dt.strftime("%Y-%m-%d")
+        # Add other attributes we want to keep in the result
+        logger.info(f"Determined start and end date: {row.start_date} - {row.end_date}")
+        gdf["start_date"] = row.start_date
+        gdf["end_date"] = row.end_date
+        gdf["lat"] = gdf.geometry.y
+        gdf["lon"] = gdf.geometry.x
 
-            # Add other attributes we want to keep in the result
-            logger.info(
-                f"Determined start and end date: {row.start_date} - {row.end_date}"
-            )
-            group_df["start_date"] = row.start_date
-            group_df["end_date"] = row.end_date
-            group_df["lat"] = group_df.geometry.y
-            group_df["lon"] = group_df.geometry.x
+        # Reset index for certain openEO compatibility
+        gdf = gdf.reset_index(drop=True)
 
-            # Reset index for certain openEO compatibility
-            group_df = group_df.reset_index(drop=True)
+        # Upload the geoparquet file to Artifactory
+        logger.info("Deploying geoparquet file to Artifactory ...")
+        # url = upload_geoparquet_s3("cdse", gdf, ref_id, collection=f"{row.epsg}")
+        url = upload_geoparquet_artifactory(gdf, ref_id, collection=f"{row.epsg}")
 
-            # Upload the geoparquet file to Artifactory
-            logger.info("Deploying geoparquet file to Artifactory ...")
-            collection_suffix = f"{row.epsg}"
-            if split_applied and cell_str is not None:
-                collection_suffix = f"{collection_suffix}_{cell_str}"
-
-            url = upload_geoparquet_artifactory(
-                group_df, ref_id, collection=collection_suffix
-            )
-
-            job_row_dict["geometry_url"] = url
-            final_rows.append(job_row_dict)
-
-    final_job_df = pd.DataFrame(final_rows)
-    if final_job_df.empty:
-        logger.warning(f"No valid jobs created for ref_id {ref_id}")
-        return final_job_df
-
-    final_job_df["geometry_url"] = final_job_df["geometry_url"].astype("string")
-    final_job_df["h3l3_cell"] = final_job_df["h3l3_cell"].astype("string")
+        # Get sample points from RDM
+        job_df.loc[ix, "geometry_url"] = url
 
     # Remove rows without geometry URL as indication for jobs to skip
-    final_job_df = final_job_df[final_job_df["geometry_url"].notna()]
+    job_df = job_df[job_df["geometry_url"].notna()]
 
-    return final_job_df
+    return job_df
 
 
 def create_job_patch_to_point_worldcereal(

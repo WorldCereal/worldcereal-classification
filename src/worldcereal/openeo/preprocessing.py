@@ -19,8 +19,6 @@ from openeo_gfmap.preprocessing.compositing import mean_compositing, median_comp
 from openeo_gfmap.preprocessing.sar import compress_backscatter_uint16
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 
-from worldcereal.openeo.masking import scl_mask_erode_dilate
-
 WORLDCEREAL_S2_BANDS = [
     "S2-L2A-B02",
     "S2-L2A-B03",
@@ -149,7 +147,7 @@ def raw_datacube_S2(
     additional_masks_flag: Optional[bool] = True,
     apply_mask_flag: Optional[bool] = False,
     tile_size: Optional[int] = None,
-    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-2 datacube from OpenEO using GFMAP routines.
     Raw data is extracted with no cloud masking applied by default (can be
@@ -178,6 +176,8 @@ def raw_datacube_S2(
     apply_mask : bool, optional
         Apply cloud masking, by default False. Can be enabled for high
         optimization of memory usage.
+    target_epsg : Optional[int], optional
+        Target EPSG to resample the data, by default None.
     """
     # Extract the SCL collection only
     scl_cube_properties = {"eo:cloud_cover": lambda val: val <= 95.0}
@@ -186,7 +186,8 @@ def raw_datacube_S2(
 
     # Create the job to extract S2
     extraction_parameters: dict[str, Any] = {
-        "target_resolution": None,  # Disable target resolution
+        "target_resolution": 10,
+        "target_crs": target_epsg,
         "load_collection": {
             "eo:cloud_cover": lambda val: val <= 95.0,
         },
@@ -199,29 +200,20 @@ def raw_datacube_S2(
         properties=scl_cube_properties,
     )
 
-    # Resample to 10m resolution for the SCL layer
-    scl_cube = scl_cube.resample_spatial(10)
+    # Resample to 10m resolution for the SCL layer, using optional target_epsg
+    scl_cube = scl_cube.resample_spatial(projection=target_epsg, resolution=10)
 
-    if optical_mask_method == "mask_scl_dilation":
-        # Compute the SCL dilation mask
-        scl_dilated_mask = scl_cube.process(
-            "to_scl_dilation_mask",
-            data=scl_cube,
-            scl_band_name="SCL",
-            kernel1_size=17,  # 17px dilation on a 10m layer
-            kernel2_size=77,  # 77px dilation on a 10m layer
-            mask1_values=[2, 4, 5, 6, 7],
-            mask2_values=[3, 8, 9, 10, 11],
-            erosion_kernel_size=3,
-        ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
-    elif optical_mask_method == "satio":
-        # Compute satio-based mask
-        scl_dilated_mask = scl_mask_erode_dilate(scl_cube)
-    else:
-        raise ValueError(
-            f"Unknown optical_mask_method: {optical_mask_method}. "
-            f"Supported methods are 'mask_scl_dilation' and 'satio'."
-        )
+    # Compute the SCL dilation mask
+    scl_dilated_mask = scl_cube.process(
+        "to_scl_dilation_mask",
+        data=scl_cube,
+        scl_band_name="SCL",
+        kernel1_size=17,  # 17px dilation on a 10m layer
+        kernel2_size=77,  # 77px dilation on a 10m layer
+        mask1_values=[2, 4, 5, 6, 7],
+        mask2_values=[3, 8, 9, 10, 11],
+        erosion_kernel_size=3,
+    ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
 
     additional_masks = scl_dilated_mask
 
@@ -249,8 +241,6 @@ def raw_datacube_S2(
         extraction_parameters["load_collection"]["tileId"] = (
             lambda val: val == filter_tile
         )
-    if apply_mask_flag:
-        extraction_parameters["pre_mask"] = scl_dilated_mask
 
     if tile_size is not None:
         extraction_parameters["update_arguments"] = {
@@ -263,6 +253,9 @@ def raw_datacube_S2(
         fetch_type=fetch_type,
         **extraction_parameters,
     ).get_cube(connection, None, temporal_extent)
+
+    if apply_mask_flag:
+        s2_cube = s2_cube.mask(scl_dilated_mask)
 
     return s2_cube
 
@@ -277,6 +270,7 @@ def raw_datacube_S1(
     target_resolution: float = 20.0,
     orbit_direction: Optional[str] = None,
     tile_size: Optional[int] = None,
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     """Extract Sentinel-1 datacube from OpenEO using GFMAP routines.
 
@@ -299,9 +293,12 @@ def raw_datacube_S1(
         Target resolution to resample the data to, by default 20.0.
     orbit_direction : Optional[str], optional
         Orbit direction to filter the data, by default None.
+    target_epsg : Optional[int], optional
+        Target EPSG to resample the data to, by default None.
     """
     extractor_parameters: Dict[str, Any] = {
         "target_resolution": target_resolution,
+        "target_crs": target_epsg,
     }
 
     if orbit_direction is not None:
@@ -442,7 +439,6 @@ def worldcereal_preprocessed_inputs(
     s2_tile: Optional[str] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     target_epsg: Optional[int] = None,
-    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -466,11 +462,8 @@ def worldcereal_preprocessed_inputs(
         additional_masks_flag=False,
         apply_mask_flag=True,
         tile_size=tile_size,
-        optical_mask_method=optical_mask_method,
+        target_epsg=target_epsg,
     )
-
-    if target_epsg is not None:
-        s2_data = s2_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
     s2_data = median_compositing(s2_data, period=compositing_window)
 
@@ -497,10 +490,8 @@ def worldcereal_preprocessed_inputs(
         target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
         orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
         tile_size=tile_size,
+        target_epsg=target_epsg,
     )
-
-    if target_epsg is not None:
-        s1_data = s1_data.resample_spatial(projection=target_epsg, resolution=10.0)
 
     s1_data = mean_compositing(s1_data, period=compositing_window)
     s1_data = compress_backscatter_uint16(backend_context, s1_data)
@@ -511,7 +502,9 @@ def worldcereal_preprocessed_inputs(
         fetch_type=fetch_type,
     )
 
-    # Explicitly resample DEM with bilinear interpolation
+    # Explicitly resample DEM with bilinear interpolation and based on S2 grid
+    # note: we use s2_data here as base to avoid issues at the edges because source
+    # data is not in UTM projection.
     dem_data = dem_data.resample_cube_spatial(s2_data, method="bilinear")
 
     # Cast DEM to UINT16
@@ -527,7 +520,9 @@ def worldcereal_preprocessed_inputs(
             compositing_window=compositing_window,
         )
 
-        # Explicitly resample meteo with bilinear interpolation
+        # Explicitly resample meteo with bilinear interpolation and based on S2 grid
+        # note: we use s2_data here as base to avoid issues at the edges because source
+        # data is not in UTM projection.
         meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
 
         data = data.merge_cubes(meteo_data)
