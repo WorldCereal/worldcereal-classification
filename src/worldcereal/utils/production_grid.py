@@ -146,9 +146,7 @@ def _batch_reproject(
         try:
             reproj = subset.to_crs(epsg=int(epsg))
         except Exception as e:  # pragma: no cover - log & skip
-            logger.warning(
-                f"Warning: failed to reproject subset to EPSG:{epsg} -> {e}"
-            )
+            logger.warning(f"Warning: failed to reproject subset to EPSG:{epsg} -> {e}")
             continue
         wkt_series.loc[idxs] = reproj.geometry.apply(
             lambda g: to_wkt(g, rounding_precision=6)
@@ -170,12 +168,12 @@ def enrich_with_utm(
 
 
 def convert_gdf_to_utm_grid(
-    in_path: str,
-    out_path: str,
+    in_path: Path | str,
+    out_path: Path | str,
     id_col: str,
-    web_mercator_grid: bool = False
-    ) -> int:
-
+    web_mercator_grid: bool = False,
+) -> None:
+    in_path = Path(in_path)
     out_path = Path(out_path)
 
     logger.info(f"Loading GeoDataFrame: {in_path}")

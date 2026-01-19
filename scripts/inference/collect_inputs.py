@@ -263,7 +263,7 @@ def main(
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int]]] = None,
+    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     tile_name_col: Optional[str] = None,
 ) -> None:
