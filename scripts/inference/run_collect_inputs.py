@@ -503,7 +503,7 @@ if __name__ == "__main__":
         grid["tile_name"] = grid[args.tile_name_col] if args.tile_name_col else [f"patch_{i}" for i in range(len(grid))]
         grid["geometry_utm_wkt"] = grid.geometry.to_wkt()
         grid["epsg_utm"] = grid.crs.to_epsg()
-        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
+        utm_aware_grid_path = Path(args.grid_path).parent / (Path(args.grid_path).stem + "_utm_grid.parquet")
         grid.to_parquet(utm_aware_grid_path)
 
     main(
