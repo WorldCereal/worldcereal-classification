@@ -40,8 +40,11 @@ from typing import Optional
 
 import geopandas as gpd
 import pandas as pd
+import numpy as np
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from shapely.geometry import box
 
 
 def _load_gdf(path: Path) -> gpd.GeoDataFrame:
@@ -209,3 +212,162 @@ def convert_gdf_to_utm_grid(
     # Note: Only one active geometry w/ single CRS allowed. UTM variants stored as WKT per row.
     enriched.to_parquet(out_path)
     logger.info("Done.")
+
+
+def lon_to_utm_zone(lon: float) -> int:
+    return int((lon + 180) / 6) + 1
+
+
+def utm_zone_bounds(zone: int) -> tuple[float, float]:
+    min_lon = (zone - 1) * 6 - 180
+    max_lon = min_lon + 6
+    return min_lon, max_lon
+
+
+def split_bbox_by_utm_and_hemisphere(
+    west: float, south: float, east: float, north: float
+) -> list[dict]:
+    """
+    Split a bounding box into UTM zones and hemispheres.
+
+    Coordinates must be in WGS84 (EPSG:4326) format.
+    """
+    zone_start = lon_to_utm_zone(west)
+    zone_end = lon_to_utm_zone(east)
+    hemi_splits = []
+
+    if south < 0 and north > 0:
+        lat_splits = [("S", south, 0), ("N", 0, north)]
+    else:
+        hemisphere = "N" if south >= 0 else "S"
+        lat_splits = [(hemisphere, south, north)]
+
+    for zone in range(zone_start, zone_end + 1):
+        zmin_lon, zmax_lon = utm_zone_bounds(zone)
+        lon_min_clipped = max(west, zmin_lon)
+        lon_max_clipped = min(east, zmax_lon)
+
+        if lon_min_clipped >= lon_max_clipped:
+            continue
+
+        for hemisphere, hemi_min_lat, hemi_max_lat in lat_splits:
+            hemi_min_clipped = max(south, hemi_min_lat)
+            hemi_max_clipped = min(north, hemi_max_lat)
+
+            if hemi_min_clipped < hemi_max_clipped:
+                hemi_splits.append(
+                    {
+                        "west": lon_min_clipped,
+                        "south": hemi_min_clipped,
+                        "east": lon_max_clipped,
+                        "north": hemi_max_clipped,
+                        "crs": "EPSG:4326",
+                        "zone": zone,
+                        "hemisphere": hemisphere,
+                    }
+                )
+
+    return hemi_splits
+
+
+def create_tiling_grid(
+    bbox: dict,
+    basename: str = "tile",
+    output_crs: str = "EPSG:4326",
+    grid_size_m: float = 20000,
+    tiling_crs: Optional[str] = None,
+) -> gpd.GeoDataFrame:
+    """
+    Create a grid of square tiles over a bounding box (with CRS).
+
+    Tiles in `tiling_crs`, output in `output_crs`.
+    """
+    if not {"west", "south", "east", "north", "crs"}.issubset(bbox):
+        raise ValueError("bbox must include 'west', 'south', 'east', 'north', 'crs'.")
+
+    bbox_geom = box(bbox["west"], bbox["south"], bbox["east"], bbox["north"])
+    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=bbox["crs"])
+    if tiling_crs is None:
+        crs = bbox_gdf.estimate_utm_crs()
+        epsg = int(crs.to_epsg())
+        tiling_crs = f"EPSG:{epsg}"
+    bbox_gdf = bbox_gdf.to_crs(tiling_crs)
+
+    minx, miny, maxx, maxy = bbox_gdf.total_bounds
+    x_coords = np.arange(minx, maxx, grid_size_m)
+    y_coords = np.arange(miny, maxy, grid_size_m)
+    coordinates = [
+        (x, y, min(x + grid_size_m, maxx), min(y + grid_size_m, maxy))
+        for x in x_coords
+        for y in y_coords
+    ]
+    bounds_tiling = [repr(coords) for coords in coordinates]
+
+    geometries_tiling = [box(*coords) for coords in coordinates]
+
+    grid = gpd.GeoDataFrame(geometry=geometries_tiling, crs=tiling_crs).to_crs(
+        output_crs
+    )
+    grid["tile_name"] = [f"{basename}_{i}" for i in range(len(grid))]
+    grid["epsg"] = (
+        int(tiling_crs.split(":")[1]) if tiling_crs.startswith("EPSG:") else None
+    )
+    grid["bounds_epsg"] = bounds_tiling
+
+    return grid
+
+
+def create_production_grid(
+    spatial_extent: BoundingBoxExtent,
+    temporal_extent: TemporalContext,
+    resolution: int = 20,
+    tiling_crs: Optional[str] = None,
+) -> gpd.GeoDataFrame:
+    """Create a production grid for the given extent."""
+    if not spatial_extent.epsg == 4326:
+        logger.info(
+            '"Spatial extent is not in WGS84 (EPSG:4326). Reprojecting to WGS84.")'
+        )
+        bbox_geom = box(
+            spatial_extent.west,
+            spatial_extent.south,
+            spatial_extent.east,
+            spatial_extent.north,
+        )
+        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=spatial_extent.epsg)
+        bbox_gdf = bbox_gdf.to_crs("EPSG:4326")
+        spatial_extent = BoundingBoxExtent(
+            west=bbox_gdf.total_bounds[0],
+            south=bbox_gdf.total_bounds[1],
+            east=bbox_gdf.total_bounds[2],
+            north=bbox_gdf.total_bounds[3],
+            epsg=4326,
+        )
+
+    bbox_splits = split_bbox_by_utm_and_hemisphere(
+        spatial_extent.west,
+        spatial_extent.south,
+        spatial_extent.east,
+        spatial_extent.north,
+    )
+
+    logger.info(f"Splitted bounding box into {len(bbox_splits)} UTM zone splits.")
+    grid_dfs = []
+    for split in bbox_splits:
+        tile_name = f"tile_{split['zone']}{split['hemisphere']}"
+        grid_dfs.append(
+            create_tiling_grid(
+                split,
+                basename=tile_name,
+                grid_size_m=resolution * 1000,
+                tiling_crs=tiling_crs,
+            )
+        )
+
+    grid = gpd.GeoDataFrame(pd.concat(grid_dfs, ignore_index=True))
+    grid["start_date"] = temporal_extent.start_date
+    grid["end_date"] = temporal_extent.end_date
+
+    logger.info(f"Created production grid with {len(grid)} tiles.")
+
+    return grid
