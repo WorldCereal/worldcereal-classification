@@ -10,7 +10,6 @@ from typing import Dict, Literal, Optional, Union
 import geopandas as gpd
 import openeo
 import pandas as pd
-import shapely
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
@@ -26,6 +25,7 @@ BASE_DELAY = 0.1  # initial delay in seconds
 MAX_DELAY = 10
 
 REQUIRED_ATTRIBUTES = ["tile_name", "geometry_utm_wkt", "epsg_utm"]
+
 
 class InferenceJobManager(MultiBackendJobManager):
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
@@ -170,7 +170,7 @@ def create_job_dataframe_from_grid(
         raise ValueError(
             f"The following required attributes are missing in the production grid: {missing_attributes}"
         )
-        
+
     assert (
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
@@ -393,7 +393,9 @@ if __name__ == "__main__":
         help="End date for the extractions in 'YYYY-MM-DD' format",
     )
     parser.add_argument(
-        "--output_folder", type=Path, help="The folder where to store the extracted data"
+        "--output_folder",
+        type=Path,
+        help="The folder where to store the extracted data",
     )
     parser.add_argument(
         "--overwrite_job_df",
@@ -453,7 +455,10 @@ if __name__ == "__main__":
         "--max_executors", type=int, default=None, help="Max executors."
     )
     parser.add_argument(
-        "--image_name", type=str, default="python38", help="openEO image name."  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+        "--image_name",
+        type=str,
+        default="python38",
+        help="openEO image name.",  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
     )
     parser.add_argument(
         "--organization_id", type=int, default=None, help="Organization id."
@@ -470,20 +475,30 @@ if __name__ == "__main__":
         grid = gpd.read_file(args.grid_path)
     if grid.crs is None or not grid.crs.is_projected:
         logger.info("Grid is not in a projected CRS. Converting to UTM.")
-        utm_aware_grid_path = str(args.grid_path).split('.')[0] + "_utm_grid.parquet"
+        utm_aware_grid_path = Path(args.grid_path).parent / (
+            Path(args.grid_path).stem + "_utm_grid.parquet"
+        )
         if not Path(utm_aware_grid_path).is_file():
             convert_gdf_to_utm_grid(
-                in_path = Path(args.grid_path),
-                out_path = Path(utm_aware_grid_path),
-                id_col = args.tile_name_col,
-                web_mercator_grid = False
-                )
+                in_path=Path(args.grid_path),
+                out_path=Path(utm_aware_grid_path),
+                id_col=args.tile_name_col,
+                web_mercator_grid=False,
+            )
     else:
-        logger.info("Grid is already in a projected CRS. Enriching with aux columns and proceeding to extractions...")
-        grid["tile_name"] = grid[args.tile_name_col] if args.tile_name_col else [f"patch_{i}" for i in range(len(grid))]
+        logger.info(
+            "Grid is already in a projected CRS. Enriching with aux columns and proceeding to extractions..."
+        )
+        grid["tile_name"] = (
+            grid[args.tile_name_col]
+            if args.tile_name_col
+            else [f"patch_{i}" for i in range(len(grid))]
+        )
         grid["geometry_utm_wkt"] = grid.geometry.to_wkt()
         grid["epsg_utm"] = grid.crs.to_epsg()
-        utm_aware_grid_path = Path(args.grid_path).parent / (Path(args.grid_path).stem + "_utm_grid.parquet")
+        utm_aware_grid_path = Path(args.grid_path).parent / (
+            Path(args.grid_path).stem + "_utm_grid.parquet"
+        )
         grid.to_parquet(utm_aware_grid_path)
 
     main(
