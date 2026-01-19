@@ -1,36 +1,35 @@
-"""Utility to enrich a GeoParquet with per-feature UTM CRS and geometry (S2-based).
+"""Utilities for production grid creation and UTM enrichment.
 
-For every feature in the input GeoDataFrame:
-1. Determine the Sentinel-2 MGRS tile (by centroid) using the same S2 grid
-    parquet as used in `openeo-gfmap` (see job_splitters.split_job_s2grid).
-2. Derive the appropriate UTM EPSG code from the MGRS tile (zone + hemisphere).
-3. Append new attributes:
-    - `tile_name` (string) Identifier copied from a user-provided column (--id-source)
-    - `epsg_utm`  (int) EPSG code of feature-specific UTM zone (always WGS84 UTM)
-    - `geometry_utm_wkt` (str) WKT of reprojected geometry in its per-row UTM CRS
-
-The result is written to a new GeoParquet.
+This module supports two complementary steps:
+1) Grid creation (tiling): build a production grid from a WGS84 bounding box
+   and temporal extent. The resulting GeoDataFrame includes:
+   `tile_name`, `epsg`, `bounds_epsg`, `start_date`, and `end_date`.
+2) UTM enrichment: attach per-feature UTM geometry and EPSG information using
+   the Sentinel-2 MGRS grid:
+   `geometry_utm_wkt` and `epsg_utm`.
 
 Notes
 -----
 * Efficiency: Reprojection is done per unique EPSG to avoid many single-row
-    reprojections.
+  reprojections.
 * Storage: Because each feature may have a different CRS, we store the UTM
-    geometry as WKT text in a separate column (`geometry_utm_wkt`) instead
-    of as a second active GeoSeries (GeoParquet only supports one geometry with a
-    single CRS). Downstream code can reconstruct a geometry per row using
-    shapely.from_wkt and the EPSG stored in `epsg_utm`.
+  geometry as WKT text in a separate column (`geometry_utm_wkt`) instead of as
+  a second active GeoSeries (GeoParquet only supports one geometry with a
+  single CRS). Downstream code can reconstruct geometry per row using
+  shapely.from_wkt and the EPSG stored in `epsg_utm`.
 
-The script DOES NOT derive `tile_name` from Sentinel-2; it is an external
-identifier you supply via --id-source. The S2 grid is only used to determine
-the UTM EPSG per feature.
+Examples
+--------
+Create a production grid and persist it:
+    grid = create_production_grid(spatial_extent, temporal_extent, resolution=20)
+    grid.to_parquet("production_grid.parquet")
 
-Example
--------
-python scripts/convert_gdf_to_production_grid.py \
-    --input path/to/input.geoparquet \
-    --id-source production_unit_id \
-    --output path/to/output_with_utm.geoparquet
+Enrich an existing grid with UTM columns:
+    convert_gdf_to_utm_grid(
+        in_path="production_grid.parquet",
+        out_path="production_grid_utm.parquet",
+        id_col="tile_name",
+    )
 """
 
 from __future__ import annotations
@@ -39,11 +38,11 @@ from pathlib import Path
 from typing import Optional
 
 import geopandas as gpd
-import pandas as pd
 import numpy as np
+import pandas as pd
 from loguru import logger
-from openeo_gfmap.manager.job_splitters import load_s2_grid
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely.geometry import box
 
 
@@ -176,6 +175,12 @@ def convert_gdf_to_utm_grid(
     id_col: str,
     web_mercator_grid: bool = False,
 ) -> None:
+    """Load a grid file, enrich it with UTM columns, and write a GeoParquet.
+
+    The input file must contain a geometry column and the provided `id_col`,
+    which is copied into the output `tile_name` column. The output contains
+    `geometry_utm_wkt` and `epsg_utm` columns derived from the Sentinel-2 grid.
+    """
     in_path = Path(in_path)
     out_path = Path(out_path)
 
@@ -323,7 +328,7 @@ def create_production_grid(
     resolution: int = 20,
     tiling_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
-    """Create a production grid for the given extent."""
+    """Create a production grid GeoDataFrame for the given extent."""
     if not spatial_extent.epsg == 4326:
         logger.info(
             '"Spatial extent is not in WGS84 (EPSG:4326). Reprojecting to WGS84.")'
