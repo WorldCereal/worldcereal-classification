@@ -471,7 +471,7 @@ def smooth_probabilities(
     base_labels_vals = base_labels.values
     probabilities_vals = class_probabilities.values
 
-    excluded_mask = np.in1d(
+    excluded_mask = np.isin(
         base_labels_vals.reshape(-1),
         POSTPROCESSING_EXCLUDED_VALUES,
     ).reshape(*base_labels_vals.shape)
@@ -510,7 +510,7 @@ def reclassify(
     base_labels_vals = base_labels.values
     base_max_probs_vals = base_max_probs.values
 
-    excluded_mask = np.in1d(
+    excluded_mask = np.isin(
         base_labels_vals.reshape(-1),
         POSTPROCESSING_EXCLUDED_VALUES,
     ).reshape(*base_labels_vals.shape)
