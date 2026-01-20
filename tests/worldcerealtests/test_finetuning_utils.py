@@ -457,8 +457,8 @@ class _DummySeasonalDataset(Dataset):
             {
                 "label": 0,
                 "attrs": {
-                    "finetune_class": "temporary_crops",
                     "landcover_label": "temporary_crops",
+                    "croptype_label": "wheat",
                     "label_task": "landcover",
                     "season_masks": base_mask.copy(),
                     "in_seasons": base_in.copy(),
@@ -468,7 +468,7 @@ class _DummySeasonalDataset(Dataset):
             {
                 "label": 0,
                 "attrs": {
-                    "finetune_class": "temporary_crops",
+                    "landcover_label": "temporary_crops",
                     "croptype_label": "wheat",
                     "label_task": "croptype",
                     "season_masks": base_mask.copy(),
@@ -479,7 +479,7 @@ class _DummySeasonalDataset(Dataset):
             {
                 "label": 0,
                 "attrs": {
-                    "finetune_class": "temporary_crops",
+                    "landcover_label": "temporary_crops",
                     "croptype_label": "maize",
                     "label_task": "croptype",
                     "season_masks": base_mask.copy(),
