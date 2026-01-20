@@ -1,12 +1,25 @@
+import calendar
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from math import log, pi, radians, tan
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from einops import rearrange, repeat
 from loguru import logger
+from openeo_gfmap import BoundingBoxExtent
 from prometheo.infer import extract_features_from_model
 from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import (
@@ -21,9 +34,198 @@ from pyproj import Transformer
 from torch import nn
 from torch.utils.data import Dataset, WeightedRandomSampler
 
+from worldcereal.seasons import get_season_dates_for_extent
+
 # minimum distance from valid_position to the edges when augmenting
 # we need to define it globally so that it can be used in process_parquet as well
 MIN_EDGE_BUFFER = 2
+
+GLOBAL_SEASON_IDS: Tuple[str, ...] = ("tc-s1", "tc-s2")
+SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
+SeasonEngine = Literal["manual", "calendar", "off"]
+SEASON_BBOX_BUFFER_M = 10000
+WEB_MERCATOR_RADIUS_M = 6_378_137.0
+
+
+@dataclass(frozen=True)
+class SeasonWindow:
+    start_month: int
+    start_day: int
+    end_month: int
+    end_day: int
+    year_offset: int = 0
+
+
+SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
+    "lat",
+    "lon",
+    "ref_id",
+    "sample_id",
+    "finetune_class",
+    "landcover_label",
+    "croptype_label",
+    "valid_time",
+    "quality_score_lc",
+    "quality_score_ct",
+)
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    if isinstance(value, (float, int, np.floating, np.integer)):
+        if value == NODATAVALUE:
+            return True
+        if isinstance(value, (float, np.floating)) and np.isnan(value):
+            return True
+    if pd.isna(value):
+        return True
+    return False
+
+
+def _extract_float(value: Any) -> Optional[float]:
+    if _is_missing_value(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_datetime64(value: Any) -> Optional[np.datetime64]:
+    if _is_missing_value(value):
+        return None
+    try:
+        ts = pd.to_datetime(value)
+    except (ValueError, TypeError):
+        return None
+    if pd.isna(ts):
+        return None
+    return np.datetime64(ts, "D")
+
+
+def _timestamps_to_datetime_array(timestamps: np.ndarray) -> np.ndarray:
+    """Convert array of (day, month, year) to np.datetime64[D] array.
+
+    Parameters
+    ----------
+    timestamps : np.ndarray
+        Array of shape (N, 3) or (3,) with (day, month, year) entries.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape (N,) with dtype np.datetime64[D].
+    """
+    timestamps = np.asarray(timestamps)
+    if timestamps.ndim == 1:
+        timestamps = timestamps.reshape(-1, 3)
+    dates = [
+        np.datetime64(f"{int(year):04d}-{int(month):02d}-{int(day):02d}", "D")
+        for day, month, year in timestamps.tolist()
+    ]
+    return np.array(dates, dtype="datetime64[D]")
+
+
+def _default_season_mask(num_timesteps: int, num_seasons: int) -> np.ndarray:
+    num_seasons = max(1, num_seasons)
+    return np.ones((num_seasons, num_timesteps), dtype=bool)
+
+
+def _resolve_season_engine(
+    mode: SeasonCalendarMode, has_manual_windows: bool
+) -> SeasonEngine:
+    if mode == "custom":
+        if not has_manual_windows:
+            raise ValueError(
+                "season_calendar_mode='custom' requires explicit season_windows to be provided."
+            )
+        return "manual"
+    if mode == "calendar":
+        return "calendar"
+    if mode == "auto":
+        return "manual" if has_manual_windows else "calendar"
+    if mode == "off":
+        return "off"
+    raise ValueError(f"Unknown season_calendar_mode: {mode}")
+
+
+def _coerce_date_for_year(year: int, month: int, day: int) -> np.datetime64:
+    """Build a numpy datetime64, clamping the day to the month's max if needed."""
+    last_day = calendar.monthrange(year, month)[1]
+    safe_day = min(day, last_day)
+    return np.datetime64(f"{year:04d}-{month:02d}-{safe_day:02d}", "D")
+
+
+def _normalize_season_windows(
+    season_windows: Optional[Mapping[str, Tuple[Any, Any]]],
+) -> Dict[str, SeasonWindow]:
+    normalized: Dict[str, SeasonWindow] = {}
+    if not season_windows:
+        return normalized
+
+    for season, window in season_windows.items():
+        if window is None:
+            raise ValueError(
+                f"Season window for '{season}' must be a (start, end) tuple, got None."
+            )
+        try:
+            start_value, end_value = window
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Season window for '{season}' must be an iterable of two datetime-like values."
+            ) from None
+
+        start_dt = _safe_datetime64(start_value)
+        end_dt = _safe_datetime64(end_value)
+        if start_dt is None or end_dt is None:
+            raise ValueError(
+                f"Season window for '{season}' must contain valid datetime-like values."
+            )
+
+        start_np = np.datetime64(start_dt, "D")
+        end_np = np.datetime64(end_dt, "D")
+        if end_np < start_np:
+            raise ValueError(
+                f"Season window for '{season}' has end date {end_dt} before start date {start_dt}."
+            )
+
+        start_ts = pd.Timestamp(start_np)
+        end_ts = pd.Timestamp(end_np)
+        year_offset = end_ts.year - start_ts.year
+        if year_offset < 0:
+            raise ValueError(
+                f"Season window for '{season}' has end date {end_dt} before start date {start_dt}."
+            )
+        if year_offset > 1:
+            raise ValueError(
+                f"Season window for '{season}' spans more than one year; only single-year crossings are supported."
+            )
+
+        normalized[season] = SeasonWindow(
+            start_month=start_ts.month,
+            start_day=start_ts.day,
+            end_month=end_ts.month,
+            end_day=end_ts.day,
+            year_offset=year_offset,
+        )
+
+    return normalized
+
+
+def _latlon_to_web_mercator(lat: float, lon: float) -> Tuple[float, float]:
+    """Project WGS84 coordinates to Web Mercator (EPSG:3857) using closed-form math."""
+    lat = float(lat)
+    lon = float(lon)
+    # Clamp latitude to avoid singularities at the poles
+    lat = max(min(lat, 89.9), -89.9)
+    lat_rad = radians(lat)
+    lon_rad = radians(lon)
+    x = WEB_MERCATOR_RADIUS_M * lon_rad
+    y = WEB_MERCATOR_RADIUS_M * log(tan(pi / 4 + lat_rad / 2))
+    return x, y
 
 
 def get_class_weights(
@@ -229,6 +431,12 @@ class WorldCerealDataset(Dataset):
                 logger.info(
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
+
+        # Cache for season context lookups
+        self._season_context_cache: Dict[
+            Tuple[str, Union[str, Tuple[float, float]], int],
+            Tuple[np.datetime64, np.datetime64],
+        ] = {}
 
     def __len__(self):
         return self.dataframe.shape[0]
@@ -490,6 +698,408 @@ class WorldCerealDataset(Dataset):
 
         return s1, s2, meteo, dem
 
+    def _build_sample_attrs(
+        self,
+        row: Mapping[str, Any],
+        valid_position: int,
+        timestamps: np.ndarray,
+        season_ids: Sequence[str],
+        season_windows: Optional[Mapping[str, SeasonWindow]],
+        season_engine: SeasonEngine,
+        derive_from_calendar: bool,
+        label_datetime: Optional[np.datetime64] = None,
+    ) -> Dict[str, Any]:
+        """Build sample attributes dictionary.
+
+        Parameters
+        ----------
+        row : Mapping[str, Any]
+            input row from the dataframe
+        valid_position : int
+            Valid position index within the time series
+        timestamps : np.ndarray
+            Array of timestamps corresponding to the time series
+        season_ids : Sequence[str]
+            List of season identifiers
+        season_windows : Optional[Mapping[str, SeasonWindow]]
+            Optional mapping with explicit (start, end) datetimes per season id.
+        season_engine : SeasonEngine
+            Execution strategy for season metadata (manual/calendar/off).
+        derive_from_calendar : bool
+            Whether to derive season information from official crop calendars
+        label_datetime : Optional[np.datetime64], optional
+            Label datetime, by default None
+
+        Returns
+        -------
+        Dict[str, Any]
+            Sample attributes dictionary
+        """
+        attrs: Dict[str, Any] = {}
+        for key in SAMPLE_ATTR_COLUMNS:
+            value = row.get(key)
+            if key in row and not _is_missing_value(value):
+                attrs[key] = value
+
+        label_task = row.get("label_task")
+        if label_task is not None and not _is_missing_value(label_task):
+            attrs["label_task"] = label_task
+
+        attrs["valid_position"] = int(valid_position)
+
+        if season_engine == "off":
+            attrs["season_masks"] = None
+            attrs["in_seasons"] = None
+            return attrs
+
+        season_masks, in_seasons = self._compute_season_metadata(
+            row=row,
+            timestamps=timestamps,
+            season_ids=season_ids,
+            season_windows=season_windows,
+            derive_from_calendar=derive_from_calendar,
+            label_datetime=label_datetime,
+        )
+        attrs["season_masks"] = season_masks
+        if in_seasons is not None:
+            attrs["in_seasons"] = in_seasons
+
+        return attrs
+
+    def _compute_season_metadata(
+        self,
+        row: Mapping[str, Any],
+        timestamps: np.ndarray,
+        season_ids: Sequence[str],
+        season_windows: Optional[Mapping[str, SeasonWindow]],
+        derive_from_calendar: bool,
+        label_datetime: Optional[np.datetime64],
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Resolve per-season temporal masks for a single sample.
+
+        This helper consolidates the three supported season sources:
+        1. Manual windows (`season_windows`): we normalize the dates and build masks
+           by repeating those month/day windows for every year present in
+           ``timestamps``. When manual windows are provided the configuration is
+           treated as fully manual—every requested season id must have a window
+           and no crop-calendar lookup happens.
+        2. Calendar-driven windows (`derive_from_calendar=True`): for each requested
+           season id we query ``worldcereal.seasons`` using the sample lat/lon and
+           an inferred target year (label datetime when available, otherwise the
+           final timestep's year). This path requires lat/lon coordinates and a
+           label datetime so we can determine whether the label falls inside the
+           season window.
+        3. Global defaults: when neither of the above are specified we fall back to
+           ``GLOBAL_SEASON_IDS``.
+
+        The method returns a boolean mask ``(num_seasons, num_timesteps)`` and,
+        when ``label_datetime`` is provided, a boolean vector indicating whether
+        that label falls inside each season window. Masks are only emitted for
+        seasons where the sample covers *every* composite timestep inside the
+        season window (monthly or dekadal); partial coverage results in an
+        all-False mask and a False entry in ``in_seasons``.
+        """
+
+        timestamps_arr = np.asarray(timestamps)
+        normalized_windows = season_windows or {}
+        # Prefer the user's explicit `season_ids`; if not provided, fall back to the
+        # manual window keys, and only if both are missing do we use the global defaults.
+        if season_ids:
+            target_seasons: Tuple[str, ...] = tuple(season_ids)
+        elif normalized_windows:
+            target_seasons = tuple(normalized_windows.keys())
+        else:
+            target_seasons = GLOBAL_SEASON_IDS
+
+        num_seasons = len(target_seasons)
+        if timestamps_arr.size == 0:
+            season_masks = _default_season_mask(0, num_seasons)
+            return season_masks, None
+
+        num_timesteps = int(timestamps_arr.shape[0])
+        composite_dates = _timestamps_to_datetime_array(timestamps_arr)
+        if composite_dates.size == 0:
+            masks = _default_season_mask(num_timesteps, num_seasons)
+            in_seasons = (
+                np.zeros(num_seasons, dtype=bool)
+                if label_datetime is not None
+                else None
+            )
+            return masks, in_seasons
+
+        lat = _extract_float(row.get("lat"))
+        lon = _extract_float(row.get("lon"))
+
+        manual_season_names = set(normalized_windows.keys())
+        if manual_season_names:
+            # When users provide explicit windows we treat the configuration as fully manual;
+            # any season listed in `season_ids` must therefore have an accompanying window.
+            missing_manual = [
+                season for season in target_seasons if season not in manual_season_names
+            ]
+            if missing_manual:
+                raise ValueError(
+                    "season_ids references seasons without manual windows; mixing "
+                    "manual and calendar seasons is not supported. Missing windows for "
+                    f"{tuple(missing_manual)}."
+                )
+            has_calendar_seasons = False
+        else:
+            has_calendar_seasons = bool(target_seasons)
+        if has_calendar_seasons and not derive_from_calendar:
+            missing = tuple(
+                season for season in target_seasons if season not in manual_season_names
+            )
+            raise ValueError(
+                "Season calendar derivation disabled but required for seasons "
+                f"{missing}. Configure season_calendar_mode='calendar' or provide windows."
+            )
+        if derive_from_calendar and has_calendar_seasons and label_datetime is None:
+            sample_id = row.get("sample_id")
+            raise ValueError(
+                "WorldCerealDataset requires a label datetime for season metadata"
+                + (f" (sample_id={sample_id})" if sample_id is not None else "")
+            )
+        calendar_ready = False
+        extent: Optional[BoundingBoxExtent] = None
+        if has_calendar_seasons and derive_from_calendar:
+            if lat is None or lon is None:
+                sample_id = row.get("sample_id")
+                raise ValueError(
+                    "WorldCerealDataset requires lat/lon coordinates to derive season calendars"
+                    + (f" (sample_id={sample_id})" if sample_id is not None else "")
+                )
+            try:
+                extent = self._extent_from_latlon(lat, lon)
+                calendar_ready = True
+            except Exception as exc:  # pragma: no cover - rare reprojection failures
+                sample_id = row.get("sample_id", "n/a")
+                raise RuntimeError(
+                    "Failed to derive spatial extent for calendar-based seasons "
+                    f"(sample_id={sample_id}): {exc}"
+                ) from exc
+
+        if label_datetime is not None:
+            target_year = pd.Timestamp(label_datetime).year
+        else:
+            target_year = int(timestamps_arr[-1][2])
+
+        season_masks: List[np.ndarray] = []
+        in_flags: List[bool] = []
+        for season in target_seasons:
+            manual_window = normalized_windows.get(season)
+            if manual_window is not None:
+                mask, in_flag = self._season_mask_from_window(
+                    window=manual_window,
+                    composite_dates=composite_dates,
+                    label_datetime=label_datetime,
+                )
+            else:
+                mask, in_flag = self._season_mask_from_calendar(
+                    season_name=season,
+                    composite_dates=composite_dates,
+                    calendar_ready=calendar_ready,
+                    extent=extent,
+                    target_year=target_year,
+                    row=row,
+                    label_datetime=label_datetime,
+                    lat=lat,
+                    lon=lon,
+                )
+
+            season_masks.append(mask)
+            in_flags.append(in_flag)
+
+        if season_masks:
+            masks_arr = np.stack(season_masks, axis=0)
+        else:
+            masks_arr = np.zeros((0, num_timesteps), dtype=bool)
+
+        in_seasons = (
+            np.array(in_flags, dtype=bool) if label_datetime is not None else None
+        )
+        return masks_arr, in_seasons
+
+    def _season_mask_from_window(
+        self,
+        window: SeasonWindow,
+        composite_dates: np.ndarray,
+        label_datetime: Optional[np.datetime64],
+    ) -> Tuple[np.ndarray, bool]:
+        """Build a mask for a manual ``SeasonWindow`` when the sample spans it."""
+        mask = np.zeros(composite_dates.shape, dtype=bool)
+        if composite_dates.size == 0:
+            return mask, False
+
+        years = composite_dates.astype("datetime64[Y]").astype(int) + 1970
+        base_years = set(int(y) for y in np.unique(years).tolist())
+        if window.year_offset > 0 and base_years:
+            shifted = {year - window.year_offset for year in base_years}
+            base_years.update(shifted)
+
+        cycles: List[Tuple[np.datetime64, np.datetime64]] = []
+        for year in sorted(base_years):
+            start_dt = _coerce_date_for_year(year, window.start_month, window.start_day)
+            end_year = year + window.year_offset
+            end_dt = _coerce_date_for_year(end_year, window.end_month, window.end_day)
+            start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
+            end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
+            if end_aligned < start_aligned:
+                continue
+            slots = self._enumerate_composite_slots(start_aligned, end_aligned)
+            if not slots:
+                continue
+            if not self._has_full_window_coverage(composite_dates, slots):
+                continue
+            cycles.append((start_aligned, end_aligned))
+            mask |= (composite_dates >= start_aligned) & (
+                composite_dates <= end_aligned
+            )
+
+        in_flag = False
+        if label_datetime is not None:
+            for start_aligned, end_aligned in cycles:
+                if start_aligned <= label_datetime <= end_aligned:
+                    in_flag = True
+                    break
+
+        return mask.astype(bool, copy=False), in_flag
+
+    def _season_mask_from_calendar(
+        self,
+        season_name: str,
+        composite_dates: np.ndarray,
+        calendar_ready: bool,
+        extent: Optional[BoundingBoxExtent],
+        target_year: int,
+        row: Mapping[str, Any],
+        label_datetime: Optional[np.datetime64],
+        lat: Optional[float],
+        lon: Optional[float],
+    ) -> Tuple[np.ndarray, bool]:
+        """Build a mask from calendar dates only when every timestep is present."""
+        if not calendar_ready or extent is None:
+            sample_id = row.get("sample_id", "n/a")
+            raise RuntimeError(
+                "Season calendar derivation was requested but extent was unavailable "
+                f"(sample_id={sample_id}, season={season_name})."
+            )
+
+        try:
+            start_dt, end_dt = self._season_context_for(
+                season_name, row, target_year, extent, lat, lon
+            )
+        except Exception as exc:  # pragma: no cover - guard rare failures
+            sample_id = row.get("sample_id", "n/a")
+            raise RuntimeError(
+                f"Failed to derive season '{season_name}' for sample {sample_id}: {exc}"
+            ) from exc
+
+        start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
+        end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
+        slots = self._enumerate_composite_slots(start_aligned, end_aligned)
+        has_full_coverage = self._has_full_window_coverage(composite_dates, slots)
+        if has_full_coverage:
+            mask = (composite_dates >= start_aligned) & (composite_dates <= end_aligned)
+        else:
+            mask = np.zeros_like(composite_dates, dtype=bool)
+        if label_datetime is not None and has_full_coverage:
+            in_flag = bool(start_dt <= label_datetime <= end_dt)
+        else:
+            in_flag = False
+        return mask.astype(bool, copy=False), in_flag
+
+    def _has_full_window_coverage(
+        self, composite_dates: np.ndarray, slots: Sequence[np.datetime64]
+    ) -> bool:
+        """Return True when every composite slot in ``slots`` exists in the sample."""
+        if not slots or composite_dates.size == 0:
+            return False
+        available = set(
+            composite_dates.astype("datetime64[D]").astype(np.int64).tolist()
+        )
+        required = set(
+            np.array(list(slots), dtype="datetime64[D]").astype(np.int64).tolist()
+        )
+        return required.issubset(available)
+
+    def _enumerate_composite_slots(
+        self, start: np.datetime64, end: np.datetime64
+    ) -> List[np.datetime64]:
+        if end < start:
+            return []
+        slots: List[np.datetime64] = []
+        current = start
+        while True:
+            slots.append(current)
+            if current >= end:
+                break
+            current = self._advance_composite_slot(current)
+        return slots
+
+    def _advance_composite_slot(self, current: np.datetime64) -> np.datetime64:
+        current = np.datetime64(current, "D")
+        if self.timestep_freq == "month":
+            month_step = np.datetime64(current, "M") + np.timedelta64(1, "M")
+            return np.datetime64(month_step, "D")
+        if self.timestep_freq == "dekad":
+            month_start = np.datetime64(current, "M")
+            # Offset from first day determines which dekad we are in.
+            offset_days = (current - month_start).astype(int)
+            if offset_days == 0:
+                return current + np.timedelta64(10, "D")
+            if offset_days == 10:
+                return current + np.timedelta64(10, "D")
+            if offset_days == 20:
+                next_month = month_start + np.timedelta64(1, "M")
+                return np.datetime64(next_month, "D")
+            raise ValueError("Dekad slots must align to days 1, 11, or 21.")
+        raise ValueError(f"Unknown timestep frequency '{self.timestep_freq}'")
+
+    def _season_context_for(
+        self,
+        season_id: str,
+        row: Mapping[str, Any],
+        year: int,
+        extent: BoundingBoxExtent,
+        lat: float,
+        lon: float,
+    ) -> Tuple[np.datetime64, np.datetime64]:
+        """Fetch (start, end) dates for a season/extent, caching by location."""
+        cache_key = self._season_cache_key(season_id, year, lat, lon)
+        context = self._season_context_cache.get(cache_key)
+        if context is None:
+            tc = get_season_dates_for_extent(extent, year, season=season_id)
+            context = (
+                np.datetime64(tc.start_date, "D"),
+                np.datetime64(tc.end_date, "D"),
+            )
+            self._season_context_cache[cache_key] = context
+        return context
+
+    def _season_cache_key(
+        self,
+        season_id: str,
+        year: int,
+        lat: float,
+        lon: float,
+    ) -> Tuple[str, Tuple[float, float], int]:
+        # Use spatially-derived key so caches remain valid even when ref_id refers to
+        # a global collection (multiple lat/lon pairs per ref).
+        location_key = (round(lat, 4), round(lon, 4))
+        return (season_id, location_key, year)
+
+    def _extent_from_latlon(self, lat: float, lon: float) -> BoundingBoxExtent:
+        x, y = _latlon_to_web_mercator(lat, lon)
+        buffer = SEASON_BBOX_BUFFER_M
+        return BoundingBoxExtent(
+            west=x - buffer,
+            south=y - buffer,
+            east=x + buffer,
+            north=y + buffer,
+            epsg=3857,
+        )
+
 
 class WorldCerealLabelledDataset(WorldCerealDataset):
     def __init__(
@@ -502,6 +1112,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         label_jitter: int = 0,  # ± timesteps to jitter true label pos, for time_explicit only
         label_window: int = 0,  # ± timesteps to expand around label pos (true or moved), for time_explicit only
         return_sample_id: bool = False,
+        season_calendar_mode: SeasonCalendarMode = "auto",
+        season_ids: Optional[Sequence[str]] = None,
+        season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
         **kwargs,
     ):
         """Labelled version of WorldCerealDataset for supervised training.
@@ -526,6 +1139,23 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return_sample_id : bool, optional
             whether to return the sample_id in the output, by default False.
             If True, the sample_id will be included in the output as a separate element.
+        season_calendar_mode : {"calendar", "custom", "auto", "off"}, optional
+            Controls how `season_masks`/`in_seasons` are derived.
+            - "calendar": use `worldcereal.seasons` lookup for every season id.
+            - "custom": require `season_windows` and use them directly.
+            - "auto" (default): use custom windows when provided, otherwise fall back to calendars.
+            - "off": skip season metadata entirely (attrs contain None).
+        season_ids : Optional[Sequence[str]], optional
+            For calendar-driven modes, select which official seasons to fetch
+            (defaults to `GLOBAL_SEASON_IDS`). When `season_windows` is provided,
+            these ids must be a subset of the manual window keys—mixing manual
+            windows with unspecified calendar ids is not supported.
+        season_windows : Optional[Mapping[str, Tuple[Any, Any]]], optional
+            Optional mapping from season identifier to a `(start, end)` datetime-like
+            tuple. When specified, those seasons bypass crop calendars and use the
+            provided windows directly. Dates repeat annually—only the month/day
+            information (with an optional cross-year span) is used when building
+            masks, so a window defined for 2021 will apply to samples from any year.
         """
         assert task_type in [
             "binary",
@@ -543,6 +1173,19 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         self.label_jitter = label_jitter
         self.label_window = label_window
         self.return_sample_id = return_sample_id
+        self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
+            season_windows
+        )
+        self._season_engine: SeasonEngine = _resolve_season_engine(
+            season_calendar_mode, bool(self._season_windows)
+        )
+        if season_ids:
+            resolved_seasons = tuple(season_ids)
+        elif self._season_windows:
+            resolved_seasons = tuple(self._season_windows.keys())
+        else:
+            resolved_seasons = GLOBAL_SEASON_IDS
+        self._season_ids: Tuple[str, ...] = resolved_seasons
 
         if self.return_sample_id and "sample_id" not in self.dataframe.columns:
             raise ValueError(
@@ -552,21 +1195,28 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
     def __getitem__(self, idx):
         row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
+        relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
         label = self.get_label(
             row,
             task_type=self.task_type,
             classes_list=self.classes_list,
-            valid_position=valid_position - timestep_positions[0],
+            valid_position=relative_valid,
+        )
+
+        attrs = self._build_sample_attrs(
+            row=row,
+            valid_position=relative_valid,
+            timestamps=inputs["timestamps"],
+            season_ids=self._season_ids,
+            season_windows=self._season_windows,
+            season_engine=self._season_engine,
+            derive_from_calendar=self._season_engine == "calendar",
+            label_datetime=_safe_datetime64(row.get("valid_time")),
         )
 
         predictors = Predictors(**inputs, label=label)
-
-        if self.return_sample_id:
-            sample_id = row["sample_id"]
-            return predictors, sample_id
-        else:
-            return predictors
+        return predictors, attrs
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -734,6 +1384,9 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
         repeats: int = 1,
+        season_ids: Optional[Sequence[str]] = None,
+        season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
+        season_calendar_mode: SeasonCalendarMode = "auto",
     ):
         super().__init__(
             dataframe=dataframe,
@@ -744,6 +1397,20 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             augment=augment,
             masking_config=masking_config,
         )
+
+        self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
+            season_windows
+        )
+        self._season_engine: SeasonEngine = _resolve_season_engine(
+            season_calendar_mode, bool(self._season_windows)
+        )
+        if season_ids:
+            resolved_seasons = tuple(season_ids)
+        elif self._season_windows:
+            resolved_seasons = tuple(self._season_windows.keys())
+        else:
+            resolved_seasons = GLOBAL_SEASON_IDS
+        self._season_ids: Tuple[str, ...] = resolved_seasons
 
         repeats = _check_augmentation_settings(augment, masking_config, repeats)
 
@@ -765,22 +1432,21 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
 
         # Get the sample
         sample = super().__getitem__(real_idx)
-        row = self.dataframe.iloc[real_idx, :]
+        row_series = self.dataframe.iloc[real_idx, :]
+        row = pd.Series.to_dict(row_series)
         timestep_positions, valid_position = self.get_timestep_positions(row)
-        valid_position = valid_position - timestep_positions[0]
-        attrs = [
-            "lat",
-            "lon",
-            "ref_id",
-            "sample_id",
-            "downstream_class",
-            "valid_time",
-            "quality_score_lc",
-            "quality_score_ct",
-        ]
-        attrs = [attr for attr in attrs if attr in row.index]
-        attrs = row[attrs].to_dict()
-        attrs["valid_position"] = valid_position
+        relative_valid = valid_position - timestep_positions[0]
+
+        attrs = self._build_sample_attrs(
+            row=row,
+            valid_position=relative_valid,
+            timestamps=sample.timestamps,
+            season_ids=self._season_ids,
+            season_windows=self._season_windows,
+            season_engine=self._season_engine,
+            derive_from_calendar=self._season_engine == "calendar",
+            label_datetime=_safe_datetime64(row.get("valid_time")),
+        )
 
         return sample, attrs
 

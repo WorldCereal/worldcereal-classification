@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,7 @@ class TestWorldCerealDataset(unittest.TestCase):
             "lon": [5.1, 5.2, 5.3, 5.4, 5.5],
             "start_date": ["2021-01-01"] * self.num_samples,
             "end_date": ["2022-01-01"] * self.num_samples,
+            "valid_time": ["2021-07-01"] * self.num_samples,
             "available_timesteps": [self.num_timesteps] * self.num_samples,
             "valid_position": [6] * self.num_samples,  # Middle of the time series
         }
@@ -100,6 +102,27 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.time_explicit_ds = WorldCerealLabelledDataset(
             self.df, task_type="binary", num_outputs=1, time_explicit=True
         )
+        self.expected_calendar_masks = np.array(
+            [
+                [False] * self.num_timesteps,
+                [
+                    False,
+                    False,
+                    False,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    True,
+                    False,
+                    False,
+                ],
+            ],
+            dtype=bool,
+        )
+        self.expected_calendar_in_flags = np.array([False, True], dtype=bool)
 
     def test_dataset_length(self):
         """Test that dataset length matches dataframe length."""
@@ -185,35 +208,426 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertEqual(type(item).__name__, "Predictors")
 
         # Test labelled dataset
-        item = self.binary_ds[0]
-        self.assertEqual(type(item).__name__, "Predictors")
-        self.assertTrue(hasattr(item, "label"))
+        predictors, attrs = self.binary_ds[0]
+        self.assertEqual(type(predictors).__name__, "Predictors")
+        self.assertTrue(hasattr(predictors, "label"))
+        self.assertIn("season_masks", attrs)
+        self.assertEqual(attrs["season_masks"].shape[1], self.num_timesteps)
+        self.assertIn("in_seasons", attrs)
+        self.assertEqual(attrs["in_seasons"].shape[0], attrs["season_masks"].shape[0])
+        self.assertIn("in_seasons", attrs)
+        self.assertEqual(attrs["in_seasons"].shape[0], attrs["season_masks"].shape[0])
+
+    def test_labelled_dataset_season_mode_off(self):
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_compute_season_metadata",
+        ) as mocked:
+            ds = WorldCerealLabelledDataset(
+                self.df,
+                task_type="binary",
+                num_outputs=1,
+                season_calendar_mode="off",
+            )
+            _, attrs = ds[0]
+
+        mocked.assert_not_called()
+        self.assertIsNone(attrs["season_masks"])
+        self.assertIsNone(attrs["in_seasons"])
+
+    def test_labelled_dataset_season_calendar_enabled(self):
+        mock_masks = np.ones((1, self.num_timesteps), dtype=bool)
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_compute_season_metadata",
+            return_value=(mock_masks, None),
+        ) as mocked:
+            ds = WorldCerealLabelledDataset(
+                self.df,
+                task_type="binary",
+                num_outputs=1,
+                season_calendar_mode="calendar",
+            )
+            _, attrs = ds[0]
+
+        self.assertTrue(mocked.call_args.kwargs["derive_from_calendar"])
+        np.testing.assert_array_equal(attrs["season_masks"], mock_masks)
+        self.assertNotIn("in_seasons", attrs)
+
+    def test_labelled_dataset_season_auto_falls_back_to_calendar(self):
+        mock_masks = np.ones((1, self.num_timesteps), dtype=bool)
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_compute_season_metadata",
+            return_value=(mock_masks, None),
+        ) as mocked:
+            ds = WorldCerealLabelledDataset(
+                self.df,
+                task_type="binary",
+                num_outputs=1,
+                season_calendar_mode="auto",
+            )
+            _, attrs = ds[0]
+
+        self.assertTrue(mocked.call_args.kwargs["derive_from_calendar"])
+        np.testing.assert_array_equal(attrs["season_masks"], mock_masks)
+
+    def test_labelled_dataset_season_auto_prefers_custom_windows(self):
+        mock_masks = np.ones((1, self.num_timesteps), dtype=bool)
+        season_windows = {
+            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_compute_season_metadata",
+            return_value=(mock_masks, None),
+        ) as mocked:
+            ds = WorldCerealLabelledDataset(
+                self.df,
+                task_type="binary",
+                num_outputs=1,
+                season_calendar_mode="auto",
+                season_ids=("custom",),
+                season_windows=season_windows,
+            )
+            _, attrs = ds[0]
+
+        self.assertFalse(mocked.call_args.kwargs["derive_from_calendar"])
+        np.testing.assert_array_equal(attrs["season_masks"], mock_masks)
+
+    def test_season_calendar_custom_requires_windows(self):
+        with self.assertRaisesRegex(ValueError, "season_calendar_mode='custom'"):
+            WorldCerealLabelledDataset(
+                self.df,
+                task_type="binary",
+                num_outputs=1,
+                season_calendar_mode="custom",
+            )
+
+    def test_training_dataset_season_mode_off(self):
+        with mock.patch.object(
+            WorldCerealTrainingDataset,
+            "_compute_season_metadata",
+        ) as mocked:
+            ds = WorldCerealTrainingDataset(
+                self.df,
+                num_timesteps=self.num_timesteps,
+                season_calendar_mode="off",
+            )
+            _, attrs = ds[0]
+
+        mocked.assert_not_called()
+        self.assertIsNone(attrs["season_masks"])
+
+    def test_training_dataset_season_calendar_enabled(self):
+        mock_masks = np.ones((2, self.num_timesteps), dtype=bool)
+        with mock.patch.object(
+            WorldCerealTrainingDataset,
+            "_compute_season_metadata",
+            return_value=(mock_masks, None),
+        ) as mocked:
+            ds = WorldCerealTrainingDataset(
+                self.df,
+                num_timesteps=self.num_timesteps,
+                season_calendar_mode="calendar",
+            )
+            _, attrs = ds[0]
+
+        self.assertTrue(mocked.call_args.kwargs["derive_from_calendar"])
+        np.testing.assert_array_equal(attrs["season_masks"], mock_masks)
+
+    def test_labelled_dataset_calendar_masks_real_data(self):
+        ds = WorldCerealLabelledDataset(
+            self.df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+
+        np.testing.assert_array_equal(
+            attrs["season_masks"], self.expected_calendar_masks
+        )
+        np.testing.assert_array_equal(
+            attrs["in_seasons"], self.expected_calendar_in_flags
+        )
+
+    def test_training_dataset_calendar_masks_real_data(self):
+        ds = WorldCerealTrainingDataset(
+            self.df,
+            num_timesteps=self.num_timesteps,
+            season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+
+        np.testing.assert_array_equal(
+            attrs["season_masks"], self.expected_calendar_masks
+        )
+        np.testing.assert_array_equal(
+            attrs["in_seasons"], self.expected_calendar_in_flags
+        )
+
+    def test_custom_season_windows(self):
+        df = self.df.copy()
+        df["valid_time"] = ["2021-04-01"] * self.num_samples
+
+        season_windows = {
+            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="custom",
+            season_ids=("custom",),
+            season_windows=season_windows,
+        )
+
+        row = pd.Series.to_dict(ds.dataframe.iloc[0, :])
+        timestep_positions, _ = ds.get_timestep_positions(row)
+        timestamps = ds.get_inputs(row, timestep_positions)["timestamps"]
+        composite_dates = np.array(
+            [
+                np.datetime64(f"{int(year):04d}-{int(month):02d}-{int(day):02d}", "D")
+                for day, month, year in timestamps
+            ]
+        )
+        start_aligned = align_to_composite_window(np.datetime64("2021-03-15"), "month")
+        end_aligned = align_to_composite_window(np.datetime64("2021-06-15"), "month")
+        expected_mask = (composite_dates >= start_aligned) & (
+            composite_dates <= end_aligned
+        )
+
+        _, attrs = ds[0]
+        np.testing.assert_array_equal(attrs["season_masks"][0], expected_mask)
+        self.assertTrue(attrs["in_seasons"][0])
+
+    def test_custom_season_windows_different_year(self):
+        df = self.df.copy()
+        df["start_date"] = ["2023-01-01"] * self.num_samples
+        df["end_date"] = ["2024-01-01"] * self.num_samples
+        df["valid_time"] = ["2023-04-01"] * self.num_samples
+
+        season_windows = {
+            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="custom",
+            season_ids=("custom",),
+            season_windows=season_windows,
+        )
+
+        row = pd.Series.to_dict(ds.dataframe.iloc[0, :])
+        timestep_positions, _ = ds.get_timestep_positions(row)
+        timestamps = ds.get_inputs(row, timestep_positions)["timestamps"]
+        composite_dates = np.array(
+            [
+                np.datetime64(f"{int(year):04d}-{int(month):02d}-{int(day):02d}", "D")
+                for day, month, year in timestamps
+            ]
+        )
+        start_aligned = align_to_composite_window(np.datetime64("2023-03-15"), "month")
+        end_aligned = align_to_composite_window(np.datetime64("2023-06-15"), "month")
+        expected_mask = (composite_dates >= start_aligned) & (
+            composite_dates <= end_aligned
+        )
+
+        _, attrs = ds[0]
+        np.testing.assert_array_equal(attrs["season_masks"][0], expected_mask)
+        self.assertTrue(attrs["in_seasons"][0])
+
+    def test_custom_season_windows_cross_year_repeat(self):
+        df = self.df.copy()
+        df["start_date"] = ["2023-07-01"] * self.num_samples
+        df["end_date"] = ["2024-07-01"] * self.num_samples
+        df["valid_time"] = ["2023-12-15"] * self.num_samples
+
+        season_windows = {
+            "winter": (np.datetime64("2021-10-01"), np.datetime64("2022-02-01"))
+        }
+
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="custom",
+            season_ids=("winter",),
+            season_windows=season_windows,
+        )
+
+        row = pd.Series.to_dict(ds.dataframe.iloc[0, :])
+        timestep_positions, _ = ds.get_timestep_positions(row)
+        timestamps = ds.get_inputs(row, timestep_positions)["timestamps"]
+        composite_dates = np.array(
+            [
+                np.datetime64(f"{int(year):04d}-{int(month):02d}-{int(day):02d}", "D")
+                for day, month, year in timestamps
+            ]
+        )
+        months = (composite_dates.astype("datetime64[M]").astype(int) % 12) + 1
+        expected_mask = np.isin(months, [10, 11, 12, 1, 2])
+
+        _, attrs = ds[0]
+        np.testing.assert_array_equal(attrs["season_masks"][0], expected_mask)
+        self.assertTrue(attrs["in_seasons"][0])
+
+    def test_training_dataset_custom_windows_without_valid_time(self):
+        df = self.df.copy()
+        df["valid_time"] = [np.nan] * self.num_samples
+
+        season_windows = {
+            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+
+        ds = WorldCerealTrainingDataset(
+            df,
+            num_timesteps=self.num_timesteps,
+            season_windows=season_windows,
+            season_ids=("custom",),
+            season_calendar_mode="custom",
+        )
+
+        row = pd.Series.to_dict(ds.dataframe.iloc[0, :])
+        timestep_positions, _ = ds.get_timestep_positions(row)
+        timestamps = ds.get_inputs(row, timestep_positions)["timestamps"]
+        composite_dates = np.array(
+            [
+                np.datetime64(f"{int(year):04d}-{int(month):02d}-{int(day):02d}", "D")
+                for day, month, year in timestamps
+            ]
+        )
+        start_aligned = align_to_composite_window(np.datetime64("2021-03-15"), "month")
+        end_aligned = align_to_composite_window(np.datetime64("2021-06-15"), "month")
+        expected_mask = (composite_dates >= start_aligned) & (
+            composite_dates <= end_aligned
+        )
+
+        _, attrs = ds[0]
+        np.testing.assert_array_equal(attrs["season_masks"][0], expected_mask)
+        self.assertNotIn("in_seasons", attrs)
+
+    def test_calendar_seasons_require_label_datetime(self):
+        df = self.df.copy()
+        df["valid_time"] = [np.nan] * self.num_samples
+
+        ds = WorldCerealTrainingDataset(
+            df,
+            num_timesteps=self.num_timesteps,
+            season_calendar_mode="calendar",
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires a label datetime"):
+            ds[0]
+
+    def test_calendar_seasons_require_lat_lon(self):
+        df = self.df.copy()
+        df["lat"] = [np.nan] * self.num_samples
+
+        ds = WorldCerealTrainingDataset(
+            df,
+            num_timesteps=self.num_timesteps,
+            season_calendar_mode="calendar",
+        )
+
+        with self.assertRaisesRegex(ValueError, "lat/lon"):
+            ds[0]
+
+    def test_manual_mode_rejects_missing_calendar_support(self):
+        season_windows = {
+            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+
+        ds = WorldCerealLabelledDataset(
+            self.df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="auto",
+            season_ids=("custom", "tc-s1"),
+            season_windows=season_windows,
+        )
+
+        with self.assertRaisesRegex(ValueError, "manual windows"):
+            ds[0]
+
+    def test_custom_season_windows_require_full_coverage(self):
+        df = self.df.copy()
+        df["valid_time"] = ["2021-04-01"] * self.num_samples
+
+        season_windows = {
+            "spring": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+        }
+
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="custom",
+            season_ids=("spring",),
+            season_windows=season_windows,
+            num_timesteps=4,  # Force insufficient coverage
+        )
+
+        _, attrs = ds[0]
+        self.assertFalse(attrs["season_masks"][0].any())
+        self.assertFalse(attrs["in_seasons"][0])
+
+    def test_calendar_seasons_require_full_coverage(self):
+        df = self.df.copy()
+        df["valid_time"] = ["2021-04-01"] * self.num_samples
+
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            season_calendar_mode="calendar",
+            season_ids=("tc-s1",),
+            num_timesteps=4,  # Force insufficient coverage
+        )
+
+        fake_window = (np.datetime64("2021-03-01"), np.datetime64("2021-06-01"))
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_season_context_for",
+            return_value=fake_window,
+        ):
+            # Mock the season window to ensure coverage would be sufficient if all timesteps were present
+            _, attrs = ds[0]
+
+        self.assertFalse(attrs["season_masks"][0].any())
+        self.assertFalse(attrs["in_seasons"][0])
 
     def test_binary_label(self):
         """Test binary labelled dataset returns correct labels."""
-        item = self.binary_ds[0]
+        item, _ = self.binary_ds[0]
         # Cropland should be mapped to 1 (positive class)
         self.assertEqual(item.label[0, 0, 0, 0], 1)
 
-        item = self.binary_ds[1]
+        item, _ = self.binary_ds[1]
         # not_cropland should be mapped to 0 (negative class)
         self.assertEqual(item.label[0, 0, 0, 0], 0)
 
     def test_multiclass_label(self):
         """Test multiclass labelled dataset returns correct labels."""
-        item = self.multiclass_ds[0]
+        item, _ = self.multiclass_ds[0]
         # First sample should have class index 0
         self.assertEqual(item.label[0, 0, 0, 0], 0)
 
-        item = self.multiclass_ds[4]
+        item, _ = self.multiclass_ds[4]
         # Fifth sample should have class index 1
         self.assertEqual(item.label[0, 0, 0, 0], 1)
 
     def test_time_explicit_label(self):
         """Test time explicit labelled dataset returns correct label shape."""
-        item = self.time_explicit_ds[0]
+        item, attrs = self.time_explicit_ds[0]
         # Label should have temporal dimension
         self.assertEqual(item.label.shape, (1, 1, self.num_timesteps, 1))
+        self.assertIn("season_masks", attrs)
+        self.assertEqual(attrs["season_masks"].shape[1], self.num_timesteps)
 
         # For time_explicit, valid_position should have a value, other positions should be NODATAVALUE
         row = pd.Series.to_dict(self.df.iloc[0, :])
@@ -264,6 +678,7 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
             "lon": [5.1, 5.2, 5.3, 5.4, 5.5],
             "start_date": ["2022-07-17"] * self.num_samples,
             "end_date": ["2023-09-28"] * self.num_samples,
+            "valid_time": ["2023-04-01"] * self.num_samples,
             "available_timesteps": [self.num_timesteps] * self.num_samples,
             "valid_position": [18] * self.num_samples,  # Middle of the time series
         }
@@ -431,35 +846,39 @@ class TestWorldCerealDekadalDataset(unittest.TestCase):
         self.assertEqual(type(item).__name__, "Predictors")
 
         # Test labelled dataset
-        item = self.binary_ds[0]
+        item, attrs = self.binary_ds[0]
         self.assertEqual(type(item).__name__, "Predictors")
         self.assertTrue(hasattr(item, "label"))
+        self.assertIn("season_masks", attrs)
+        self.assertEqual(attrs["season_masks"].shape[1], self.num_timesteps)
 
     def test_binary_label(self):
         """Test binary labelled dataset returns correct labels."""
-        item = self.binary_ds[0]
+        item, _ = self.binary_ds[0]
         # Cropland should be mapped to 1 (positive class)
         self.assertEqual(item.label[0, 0, 0, 0], 1)
 
-        item = self.binary_ds[1]
+        item, _ = self.binary_ds[1]
         # not_cropland should be mapped to 0 (negative class)
         self.assertEqual(item.label[0, 0, 0, 0], 0)
 
     def test_multiclass_label(self):
         """Test multiclass labelled dataset returns correct labels."""
-        item = self.multiclass_ds[0]
+        item, _ = self.multiclass_ds[0]
         # First sample should have class index 0
         self.assertEqual(item.label[0, 0, 0, 0], 0)
 
-        item = self.multiclass_ds[4]
+        item, _ = self.multiclass_ds[4]
         # Fifth sample should have class index 1
         self.assertEqual(item.label[0, 0, 0, 0], 1)
 
     def test_time_explicit_label(self):
         """Test time explicit labelled dataset returns correct label shape."""
-        item = self.time_explicit_ds[0]
+        item, attrs = self.time_explicit_ds[0]
         # Label should have temporal dimension
         self.assertEqual(item.label.shape, (1, 1, self.num_timesteps, 1))
+        self.assertIn("season_masks", attrs)
+        self.assertEqual(attrs["season_masks"].shape[1], self.num_timesteps)
 
         # For time_explicit, valid_position should have a value, other positions should be NODATAVALUE
         row = pd.Series.to_dict(self.df.iloc[0, :])

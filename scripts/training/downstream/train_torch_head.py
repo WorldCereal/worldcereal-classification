@@ -9,9 +9,8 @@ and benchmarks accuracy/F1 against the CatBoost approach.
 import argparse
 import json
 import zipfile
-from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,15 +18,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from loguru import logger
-from numpy.typing import NDArray
 from prometheo.models import Presto
 from prometheo.models.presto.wrapper import load_presto_weights
 from prometheo.utils import device
-from seaborn import heatmap
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
-    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
@@ -42,6 +38,7 @@ from worldcereal.train.datasets import (
     WorldCerealTrainingDataset,
     get_class_weights,
 )
+from worldcereal.train.finetuning_utils import build_confusion_matrix_figure
 
 
 class EmbeddingsDataset(Dataset):
@@ -721,38 +718,33 @@ class TorchHeadTrainer:
     def _plot_confusion_matrices(
         self, true_labels: np.ndarray, preds: np.ndarray
     ) -> None:
-        # Ensure numpy integer arrays and fixed label order
+        # Ensure numpy integer arrays and convert to class-name sequences
         true_labels = np.asarray(true_labels, dtype=np.int64)
         pred_labels = np.asarray(preds, dtype=np.int64)
+        class_names = [str(cls) for cls in self.classes_list]
+        idx_to_name = {idx: name for idx, name in enumerate(class_names)}
+        true_named = [idx_to_name[int(idx)] for idx in true_labels]
+        pred_named = [idx_to_name[int(idx)] for idx in pred_labels]
 
-        # Create confusion matrices
-        f_abs = create_confusion_matrix(
-            true_labels,
-            pred_labels,
-            self.classes_list,
+        fig_abs = build_confusion_matrix_figure(
+            true_named,
+            pred_named,
+            labels=class_names,
             normalize=False,
             title="Confusion Matrix (Absolute)",
         )
+        fig_abs.savefig(self.output_dir / "CM_abs.png", bbox_inches="tight")
+        plt.close(fig_abs)
 
-        try:
-            plt.tight_layout()
-            plt.savefig(self.output_dir / "CM_abs.png")
-        except Exception:
-            plt.savefig(self.output_dir / "CM_abs.png", bbox_inches="tight")
-        plt.close(f_abs)
-        f_norm = create_confusion_matrix(
-            true_labels,
-            pred_labels,
-            self.classes_list,
+        fig_norm = build_confusion_matrix_figure(
+            true_named,
+            pred_named,
+            labels=class_names,
             normalize=True,
             title="Confusion Matrix (Normalized)",
         )
-        try:
-            plt.tight_layout()
-            plt.savefig(self.output_dir / "CM_norm.png")
-        except Exception:
-            plt.savefig(self.output_dir / "CM_norm.png", bbox_inches="tight")
-        plt.close(f_norm)
+        fig_norm.savefig(self.output_dir / "CM_norm.png", bbox_inches="tight")
+        plt.close(fig_norm)
 
     def evaluate(self, model: nn.Module, test_loader: DataLoader) -> Dict[str, float]:
         model.eval()
@@ -881,59 +873,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
-
-
-def create_confusion_matrix(
-    y_true: NDArray[np.int_],
-    y_pred: NDArray[np.int_],
-    class_names: NDArray[np.str_],
-    title: Optional[str] = None,
-    normalize: bool = True,
-) -> plt.figure:
-    """Create the confusion matrix."""
-    # Create the confusion matrix
-    cm = confusion_matrix(y_true, y_pred, normalize="true" if normalize else None)
-
-    # Create the figure
-    def _annot(x: Union[str, float]) -> str:
-        """Annotation function."""
-        x = float(x)
-        if normalize:
-            return f"{100 * x:.1f}%" if x > 0.0 else ""
-        else:
-            return f"{x}" if x > 0 else ""
-
-    # class_tags = [f"{x}\n({y})" for x, y in zip(class_ids, class_names)]
-    class_tags = class_names
-    figsize = (ceil(0.7 * len(class_tags)) + 1, ceil(0.7 * len(class_tags)))
-    figsize = (10, 9) if figsize[0] < 10 else figsize
-    fig = plt.figure(figsize=figsize)
-    plt.title(title)
-    heatmap(
-        100 * cm if normalize else cm,
-        vmin=0,
-        vmax=100 if normalize else None,
-        annot=np.asarray([_annot(x) for x in cm.flatten()]).reshape(cm.shape),
-        fmt="",
-        xticklabels=class_tags,
-        yticklabels=class_tags,
-        linewidths=0.01,
-        square=True,
-    )
-    plt.xticks(
-        [i + 0.5 for i in range(len(class_tags))],
-        class_tags,
-        rotation=90,
-    )
-    plt.yticks(
-        [i + 0.5 for i in range(len(class_tags))],
-        class_tags,
-        rotation=0,
-    )
-    plt.xlabel("Predicted")
-    plt.ylabel("Target")
-    plt.tight_layout()
-    return fig
 
 
 def main() -> None:

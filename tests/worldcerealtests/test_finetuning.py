@@ -1,24 +1,38 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from typing import List
 
 import torch
-from prometheo.finetune import Hyperparams, run_finetuning
+from prometheo.finetune import Hyperparams
 from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
-from prometheo.predictors import NODATAVALUE
+from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device
 from torch import nn
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 
-from worldcereal.train.data import get_training_dfs_from_parquet
+from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.finetuning_utils import (
     evaluate_finetuned_model,
     prepare_training_datasets,
+    SeasonalMultiTaskLoss,
+    run_finetuning,
+)
+from worldcereal.train.seasonal_head import (
+    SeasonalFinetuningHead,
+    WorldCerealSeasonalModel,
 )
 
 LANDCOVER_KEY = "TEST_BINARY"
 CROPTYPE_KEY = "CROPTYPE27"
+
+
+def _sample_to_predictors(sample):
+    if isinstance(sample, tuple):
+        return sample[0]
+    return sample
 
 
 class TestFinetunePrestoEndToEnd(unittest.TestCase):
@@ -36,8 +50,12 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
     def _build_and_run_training(
         self, task_type, num_outputs, train_ds, val_ds, output_dir
     ):
-        train_dl = DataLoader(train_ds, batch_size=2, shuffle=True)
-        val_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
+        train_dl = DataLoader(
+            train_ds, batch_size=2, shuffle=True, collate_fn=collate_fn
+        )
+        val_dl = DataLoader(
+            val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn
+        )
 
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
@@ -141,7 +159,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
             # 🚨 Extra Sanity Check: Consistency of valid labels
             with torch.no_grad():
                 for i in range(min(10, len(test_ds))):
-                    label = test_ds[i].label.squeeze()  # [T, 1]
+                    label = _sample_to_predictors(test_ds[i]).label.squeeze()
                     if label.ndim == 1:
                         label = label.reshape(-1, 1)
                     valid = (label != 65535).sum()
@@ -171,8 +189,12 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
     def _build_and_run_training(
         self, task_type, num_outputs, train_ds, val_ds, output_dir
     ):
-        train_dl = DataLoader(train_ds, batch_size=2, shuffle=True)
-        val_dl = DataLoader(val_ds, batch_size=2, shuffle=False)
+        train_dl = DataLoader(
+            train_ds, batch_size=2, shuffle=True, collate_fn=collate_fn
+        )
+        val_dl = DataLoader(
+            val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn
+        )
 
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
@@ -295,7 +317,7 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
             # 🚨 Extra Sanity Check: Consistency of valid labels
             with torch.no_grad():
                 for i in range(min(10, len(test_ds))):
-                    label = test_ds[i].label.squeeze()  # [T, 1]
+                    label = _sample_to_predictors(test_ds[i]).label.squeeze()
                     if label.ndim == 1:
                         label = label.reshape(-1, 1)
                     valid = (label != 65535).sum()
@@ -306,6 +328,170 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
             # 🚨 Extra Sanity Check: No NaNs in predictions
             self.assertFalse(
                 results_df.isna().any().any(), "NaN values found in evaluation results"
+            )
+
+
+SEASONAL_TIMESTEPS = 3
+SEASONAL_LANDCOVER_CLASSES = ["background", "cropland"]
+SEASONAL_CROPTYPE_CLASSES = ["maize", "wheat"]
+_SEASONAL_MASK_TEMPLATES = [
+    torch.tensor([[True, True, False], [False, False, True]], dtype=torch.bool),
+    torch.tensor([[False, True, True], [True, False, False]], dtype=torch.bool),
+]
+
+
+class _MemoryLoader:
+    def __init__(self, batches, task_type=None):
+        self._batches = batches
+        self.dataset = SimpleNamespace(task_type=task_type)
+
+    def __iter__(self):
+        return iter(self._batches)
+
+    def __len__(self):
+        return len(self._batches)
+
+
+class _DummySeasonalBackbone(nn.Module):
+    def __init__(self, timesteps: int, embedding_dim: int):
+        super().__init__()
+        self.timesteps = timesteps
+        self.proj = nn.Linear(1, embedding_dim)
+        self.encoder = nn.Identity()
+        self.encoder.embedding_size = embedding_dim
+
+    def forward(self, predictors: Predictors, eval_pooling=None):
+        if predictors.label is None:
+            raise ValueError("Synthetic predictors must include labels")
+        label_tensor = predictors.label.to(self.proj.weight.device)
+        batch_size = label_tensor.shape[0]
+        features = label_tensor.view(batch_size, self.timesteps, 1)
+        return self.proj(features)
+
+
+def _build_synthetic_seasonal_batch(label_tasks: List[str]):
+    batch_size = len(label_tasks)
+    label_values = torch.arange(
+        batch_size * SEASONAL_TIMESTEPS, dtype=torch.float32
+    ).view(batch_size, 1, 1, SEASONAL_TIMESTEPS, 1)
+    timestamps = torch.zeros(batch_size, SEASONAL_TIMESTEPS, 3, dtype=torch.float32)
+    predictors = Predictors(label=label_values, timestamps=timestamps)
+
+    season_masks = torch.stack(
+        [
+            _SEASONAL_MASK_TEMPLATES[i % len(_SEASONAL_MASK_TEMPLATES)].clone()
+            for i in range(batch_size)
+        ],
+        dim=0,
+    )
+    in_seasons = torch.stack(
+        [
+            torch.tensor([True, False], dtype=torch.bool)
+            if task == "landcover"
+            else torch.tensor([False, True], dtype=torch.bool)
+            for task in label_tasks
+        ],
+        dim=0,
+    )
+
+    attrs = {
+        "season_masks": season_masks,
+        "in_seasons": in_seasons,
+        "valid_position": [
+            min(i, SEASONAL_TIMESTEPS - 1) for i in range(batch_size)
+        ],
+        "landcover_label": [
+            SEASONAL_LANDCOVER_CLASSES[i % len(SEASONAL_LANDCOVER_CLASSES)]
+            for i in range(batch_size)
+        ],
+        "croptype_label": [
+            SEASONAL_CROPTYPE_CLASSES[i % len(SEASONAL_CROPTYPE_CLASSES)]
+            for i in range(batch_size)
+        ],
+        "label_task": label_tasks,
+    }
+    return predictors, attrs
+
+
+class TestSeasonalHeadFinetuning(unittest.TestCase):
+    def test_dual_branch_seasonal_training(self):
+        backbone = _DummySeasonalBackbone(
+            timesteps=SEASONAL_TIMESTEPS, embedding_dim=8
+        )
+        head = SeasonalFinetuningHead(
+            embedding_dim=8,
+            landcover_num_outputs=len(SEASONAL_LANDCOVER_CLASSES),
+            crop_num_outputs=len(SEASONAL_CROPTYPE_CLASSES),
+        )
+        model = WorldCerealSeasonalModel(backbone=backbone, head=head).to(device)
+
+        loss_fn = SeasonalMultiTaskLoss(
+            landcover_classes=SEASONAL_LANDCOVER_CLASSES,
+            croptype_classes=SEASONAL_CROPTYPE_CLASSES,
+        )
+
+        train_batches = [
+            _build_synthetic_seasonal_batch(["landcover", "croptype"]),
+            _build_synthetic_seasonal_batch(["croptype", "landcover"]),
+        ]
+        val_batches = [
+            _build_synthetic_seasonal_batch(["landcover", "croptype"]),
+        ]
+        train_loader = _MemoryLoader(train_batches)
+        val_loader = _MemoryLoader(val_batches)
+
+        hyperparams = Hyperparams(max_epochs=2, batch_size=2, patience=1, num_workers=0)
+        optimizer = AdamW(model.parameters(), lr=0.05)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.8)
+
+        with TemporaryDirectory() as tmpdir:
+            trained_model = run_finetuning(
+                model=model,
+                train_dl=train_loader,
+                val_dl=val_loader,
+                experiment_name="seasonal-dual-test",
+                output_dir=Path(tmpdir),
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                hyperparams=hyperparams,
+                setup_logging=False,
+            )
+
+            sample_predictors, sample_attrs = _build_synthetic_seasonal_batch(
+                ["landcover", "croptype"]
+            )
+            trained_model.zero_grad(set_to_none=True)
+            output = trained_model(sample_predictors, attrs=sample_attrs)
+
+            self.assertIsNotNone(output.global_logits)
+            self.assertIsNotNone(output.season_logits)
+            self.assertEqual(
+                output.global_logits.shape[-1], len(SEASONAL_LANDCOVER_CLASSES)
+            )
+            self.assertEqual(
+                output.season_logits.shape[-1], len(SEASONAL_CROPTYPE_CLASSES)
+            )
+
+            loss = loss_fn(output, sample_predictors, sample_attrs)
+            self.assertGreater(loss.item(), 0.0)
+
+            loss.backward()
+
+            landcover_grads = [
+                p.grad for p in trained_model.head.landcover_head.parameters()
+            ]
+            croptype_grads = [
+                p.grad for p in trained_model.head.crop_head.parameters()
+            ]
+
+            self.assertTrue(
+                any(g is not None and torch.any(g != 0) for g in landcover_grads),
+                "Landcover branch did not receive gradients",
+            )
+            self.assertTrue(
+                any(g is not None and torch.any(g != 0) for g in croptype_grads),
+                "Crop-type branch did not receive gradients",
             )
 
 

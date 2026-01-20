@@ -1,8 +1,12 @@
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-from prometheo.predictors import NODATAVALUE
+import torch
+from prometheo.predictors import NODATAVALUE, Predictors
+from torch import nn
+from torch.utils.data import Dataset
 
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.datasets import (
@@ -11,9 +15,11 @@ from worldcereal.train.datasets import (
     # MaskingStrategy,
 )
 from worldcereal.train.finetuning_utils import (
+    _select_representative_season,
     evaluate_finetuned_model,
     prepare_training_datasets,
 )
+from worldcereal.train.seasonal_head import SeasonalHeadOutput
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
@@ -124,9 +130,10 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
         self.assertFalse(test_ds.augment)  # Test dataset should not have augmentation
 
         # Check actual class values from the dataset
-        sample = train_ds[0]
-        self.assertIsNotNone(sample)
-        self.assertTrue(hasattr(sample, "label"))
+        predictors, attrs = train_ds[0]
+        self.assertIsNotNone(predictors)
+        self.assertTrue(hasattr(predictors, "label"))
+        self.assertIn("season_masks", attrs)
 
     def test_prepare_training_datasets_multiclass(self):
         """Test preparing datasets for multiclass classification using real data."""
@@ -159,8 +166,9 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
 
         # Verify dataset output shape
         if len(train_ds) > 0:
-            sample = train_ds[0]
+            sample, attrs = train_ds[0]
             self.assertEqual(sample.label.shape, (1, 1, 1, 1))  # (H, W, T, 1)
+            self.assertIn("season_masks", attrs)
 
     def test_prepare_training_datasets_time_explicit(self):
         """Test preparing datasets with time_explicit=True using real data."""
@@ -182,7 +190,7 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
 
         # Get a sample from dataset to check label shape
         if len(train_ds) > 0:
-            sample = train_ds[0]
+            sample, attrs = train_ds[0]
             # Check that label has temporal dimension
             self.assertEqual(sample.label.shape[2], train_ds.num_timesteps)
             # Verify correct shape using expected timesteps
@@ -190,91 +198,7 @@ class TestPrepareTrainingDatasets(unittest.TestCase):
             self.assertEqual(
                 sample.label.shape, (1, 1, timesteps, train_ds.num_outputs)
             )  # (H, W, T, num_classes)
-
-    # def test_prepare_training_datasets_with_masking(self):
-    #     """Test dataset preparation with in-season masking using real data."""
-
-    #     # Test with fixed mask position
-    #     mask_position = 5
-    #     train_ds, val_ds, test_ds = prepare_training_datasets(
-    #         self.train_df_binary,
-    #         self.val_df_binary,
-    #         self.test_df_binary,
-    #         augment=False,
-    #         time_explicit=False,
-    #         task_type="binary",
-    #         num_outputs=1,
-    #         masking_strategy_train=MaskingStrategy(
-    #             MaskingMode.FIXED, from_position=mask_position
-    #         ),
-    #         masking_strategy_val=MaskingStrategy(
-    #             MaskingMode.FIXED, from_position=mask_position
-    #         ),
-    #     )
-
-    #     # Check mask position was set
-    #     self.assertEqual(train_ds.masking_strategy.from_position, mask_position)
-    #     self.assertEqual(val_ds.masking_strategy.from_position, mask_position)
-    #     self.assertEqual(test_ds.masking_strategy.from_position, mask_position)
-
-    #     # Verify random mask flag
-    #     self.assertEqual(train_ds.masking_strategy.mode, MaskingMode.FIXED)
-    #     self.assertEqual(val_ds.masking_strategy.mode, MaskingMode.FIXED)
-    #     self.assertEqual(test_ds.masking_strategy.mode, MaskingMode.FIXED)
-
-    #     # Check that masking is applied - we can verify this by getting a sample
-    #     if len(train_ds) > 0:
-    #         sample = train_ds[0]
-    #         # The data beyond mask position should contain NODATAVALUE
-    #         # Get the non-masked shape first from sample
-    #         data_channels = sample.s2.shape[0]
-    #         timesteps = sample.s2.shape[2]
-
-    #         # Create expected mask for testing - all positions after mask_position should be NODATAVALUE
-    #         for ts in range(mask_position, timesteps):
-    #             # Check a subset of data channels for NODATAVALUE
-    #             # Note: If there was already NODATAVALUE in the data, this might not catch everything
-    #             # But it should detect if masking isn't being applied at all
-    #             # channel_indices = [0, 1]  # Check the first two channels only
-    #             for channel in range(data_channels):
-    #                 # If masking is working, these positions should all be NODATAVALUE
-    #                 data_at_masked_position = sample.s2[
-    #                     0, 0, ts, channel
-    #                 ]  # [H, W, T, BAND]
-    #                 self.assertTrue(
-    #                     (data_at_masked_position == NODATAVALUE).all()
-    #                     or np.isnan(data_at_masked_position).all(),
-    #                     f"Expected NODATAVALUE for S2 data at position {ts} but got {data_at_masked_position}",
-    #                 )
-
-    # def test_prepare_training_datasets_with_random_masking(self):
-    #     """Test dataset preparation with random in-season masking using real data."""
-
-    #     min_mask_position = 3
-    #     train_ds, val_ds, test_ds = prepare_training_datasets(
-    #         self.train_df_binary,
-    #         self.val_df_binary,
-    #         self.test_df_binary,
-    #         augment=False,
-    #         time_explicit=False,
-    #         task_type="binary",
-    #         num_outputs=1,
-    #         masking_strategy_train=MaskingStrategy(
-    #             MaskingMode.RANDOM, from_position=min_mask_position
-    #         ),
-    #     )
-
-    #     # Check random mask settings
-    #     self.assertEqual(train_ds.masking_strategy.mode, MaskingMode.RANDOM)
-    #     self.assertEqual(
-    #         val_ds.masking_strategy.mode, MaskingMode.NONE
-    #     )  # No masking for val in this case
-    #     self.assertEqual(
-    #         test_ds.masking_strategy.mode, MaskingMode.NONE
-    #     )  # No masking for test in this case
-
-    #     # Check min mask position
-    #     self.assertEqual(train_ds.masking_strategy.from_position, min_mask_position)
+            self.assertIn("season_masks", attrs)
 
 
 class TestEvaluateFinetunedModel(unittest.TestCase):
@@ -381,6 +305,31 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
             self.model.to(device)
 
             self.model_loaded = True
+
+    class TestSeasonSelectionHelper(unittest.TestCase):
+        def test_returns_all_overlapping_seasons(self):
+            output = SeasonalHeadOutput(
+                global_logits=None,
+                season_logits=None,
+                global_embedding=torch.zeros(1, 4),
+                season_embeddings=torch.zeros(1, 2, 4),
+                season_masks=torch.tensor([[[True, False], [True, False]]]),
+            )
+            attrs = {
+                "in_seasons": np.array([[True, True]], dtype=bool),
+                "valid_position": np.array([0]),
+            }
+            # With allow_multiple=True, should return both seasons
+            selections = _select_representative_season(
+                output, attrs, [0], allow_multiple=True
+            )
+            self.assertEqual(selections[0], [0, 1])
+
+            # With allow_multiple=False, should return only the first season
+            single = _select_representative_season(
+                output, attrs, [0], allow_multiple=False
+            )
+            self.assertTrue(torch.equal(single.cpu(), torch.tensor([0])))
 
     def test_evaluate_binary_classification(self):
         """Test evaluation for binary classification task using real data."""
@@ -496,72 +445,132 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
         self.assertTrue("f1-score" in results_df.columns)
         self.assertTrue("support" in results_df.columns)
 
-    # def test_evaluate_binary_with_mask_positions(self):
-    #     """Binary eval with mask_positions should tag each block correctly."""
-    #     self._load_model_if_needed()
 
-    #     mask_positions = [1, 3]
-    #     df_masked, _, _ = evaluate_finetuned_model(
-    #         self.model,
-    #         self.binary_ds,
-    #         num_workers=0,
-    #         batch_size=1,
-    #         mask_positions=mask_positions,
-    #     )
+class _DummySeasonalDataset(Dataset):
+    task_type = "multiclass"
+    time_explicit = False
 
-    #     # common report columns still present
-    #     for col in ("class", "precision", "recall", "f1-score", "support"):
-    #         self.assertIn(col, df_masked.columns)
+    def __init__(self):
+        base_mask = np.array([[True, False]], dtype=bool)
+        base_in = np.array([True], dtype=bool)
+        self.samples = [
+            {
+                "label": 0,
+                "attrs": {
+                    "finetune_class": "temporary_crops",
+                    "landcover_label": "temporary_crops",
+                    "label_task": "landcover",
+                    "season_masks": base_mask.copy(),
+                    "in_seasons": base_in.copy(),
+                    "valid_position": 0,
+                },
+            },
+            {
+                "label": 0,
+                "attrs": {
+                    "finetune_class": "temporary_crops",
+                    "croptype_label": "wheat",
+                    "label_task": "croptype",
+                    "season_masks": base_mask.copy(),
+                    "in_seasons": base_in.copy(),
+                    "valid_position": 0,
+                },
+            },
+            {
+                "label": 0,
+                "attrs": {
+                    "finetune_class": "temporary_crops",
+                    "croptype_label": "maize",
+                    "label_task": "croptype",
+                    "season_masks": base_mask.copy(),
+                    "in_seasons": base_in.copy(),
+                    "valid_position": 0,
+                },
+            },
+        ]
 
-    #     # new column and correct values
-    #     self.assertIn("masked_ts_from_pos", df_masked.columns)
-    #     self.assertEqual(
-    #         set(df_masked["masked_ts_from_pos"].unique()), set(mask_positions)
-    #     )
+    def __len__(self):
+        return len(self.samples)
 
-    #     # for each k, ensure at least the macro avg row exists
-    #     for k in mask_positions:
-    #         sub = df_masked[df_masked["masked_ts_from_pos"] == k]
-    #         self.assertTrue(len(sub) > 0)
-    #         self.assertIn("macro avg", sub["class"].values)
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        label_tensor = torch.tensor(sample["label"], dtype=torch.long).view(
+            1, 1, 1, 1, 1
+        )
+        attrs = {}
+        for key, value in sample["attrs"].items():
+            if isinstance(value, np.ndarray):
+                attrs[key] = value.copy()
+            else:
+                attrs[key] = value
+        return Predictors(label=label_tensor), attrs
 
-    # def test_evaluate_multiclass_with_mask_positions(self):
-    #     """Multiclass eval with mask_positions should tag each block correctly."""
-    #     from prometheo.models.presto.single_file_presto import FinetuningHead
-    #     from prometheo.utils import device
 
-    #     self._load_model_if_needed()
-    #     # attach a head for multiclass
-    #     self.model.head = FinetuningHead(
-    #         hidden_size=self.model.encoder.embedding_size,
-    #         num_outputs=len(self.multiclass_classes),
-    #         regression=False,
-    #     ).to(device)
+class _DummySeasonalModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.global_logits = torch.tensor(
+            [
+                [5.0, 1.0],
+                [4.0, 2.0],
+                [1.0, 5.0],
+            ]
+        )
+        self.season_logits = torch.tensor(
+            [
+                [[5.0, 1.0]],
+                [[5.0, 1.0]],
+                [[1.0, 5.0]],
+            ]
+        )
 
-    #     mask_positions = [2]
-    #     df_masked, _, _ = evaluate_finetuned_model(
-    #         self.model,
-    #         self.multiclass_ds,
-    #         num_workers=0,
-    #         batch_size=1,
-    #         classes_list=self.multiclass_classes,
-    #         mask_positions=mask_positions,
-    #     )
+    def forward(self, predictors, attrs=None):
+        assert attrs is not None
+        batch = attrs["season_masks"].shape[0]
+        season_masks = torch.as_tensor(attrs["season_masks"], dtype=torch.bool)
+        global_logits = self.global_logits[:batch]
+        season_logits = self.season_logits[:batch]
+        emb_dim = 4
+        global_embedding = torch.zeros(batch, emb_dim)
+        season_embeddings = torch.zeros(batch, season_logits.shape[1], emb_dim)
+        return SeasonalHeadOutput(
+            global_logits=global_logits,
+            season_logits=season_logits,
+            global_embedding=global_embedding,
+            season_embeddings=season_embeddings,
+            season_masks=season_masks,
+        )
 
-    #     # report columns
-    #     for col in ("class", "precision", "recall", "f1-score", "support"):
-    #         self.assertIn(col, df_masked.columns)
-    #     # mask column
-    #     self.assertIn("masked_ts_from_pos", df_masked.columns)
-    #     self.assertEqual(
-    #         set(df_masked["masked_ts_from_pos"].unique()), set(mask_positions)
-    #     )
 
-    #     # for position 2, ensure we see at least one expected class row
-    #     sub = df_masked[df_masked["masked_ts_from_pos"] == 2]
-    #     self.assertTrue(len(sub) > 0)
-    #     found = any(cls in sub["class"].values for cls in self.multiclass_classes)
-    #     self.assertTrue(found, "No expected multiclass label in masked report")
+class TestSeasonalEvaluation(unittest.TestCase):
+    def setUp(self):
+        self.dataset = _DummySeasonalDataset()
+        self.model = _DummySeasonalModel()
+        self.landcover_classes = ["temporary_crops", "water"]
+        self.croptype_classes = ["wheat", "maize"]
+
+    def test_seasonal_evaluation_with_gating(self):
+        results = evaluate_finetuned_model(
+            self.model,
+            self.dataset,
+            num_workers=0,
+            batch_size=len(self.dataset),
+            seasonal_landcover_classes=self.landcover_classes,
+            seasonal_croptype_classes=self.croptype_classes,
+            cropland_class_names=["temporary_crops"],
+        )
+        self.assertIn("landcover", results)
+        self.assertIn("croptype", results)
+
+        landcover_df = results["landcover"]["results"]
+        self.assertFalse(landcover_df.empty)
+
+        croptype_df = results["croptype"]["results"]
+        gate_row = croptype_df[croptype_df["class"] == "croptype_gate_rejections"]
+        self.assertFalse(gate_row.empty)
+        self.assertEqual(int(gate_row["support"].iloc[0]), 1)
+        self.assertEqual(results["croptype"]["gate_rejections"], 1)
+        self.assertEqual(results["croptype"]["num_samples"], 1)
 
 
 if __name__ == "__main__":

@@ -1,22 +1,90 @@
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Sequence, Tuple, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
+from matplotlib.figure import Figure
 from prometheo.finetune import Hyperparams
 from prometheo.finetune import _setup as _prometheo_setup
 from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device, seed_everything
+from seaborn import heatmap
+from sklearn.metrics import classification_report, confusion_matrix
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from worldcereal.train.datasets import SensorMaskingConfig, WorldCerealLabelledDataset
+from worldcereal.train.data import collate_fn
+from worldcereal.train.datasets import (
+    SensorMaskingConfig,
+    WorldCerealLabelledDataset,
+    _is_missing_value,
+)
+from worldcereal.train.seasonal_head import SeasonalHeadOutput
+
+
+def build_confusion_matrix_figure(
+    y_true: Sequence[Any],
+    y_pred: Sequence[Any],
+    *,
+    labels: Optional[Sequence[str]] = None,
+    normalize: bool = True,
+    title: Optional[str] = None,
+) -> Figure:
+    """Render a confusion matrix heatmap."""
+
+    if labels is not None:
+        label_order = list(labels)
+    else:
+        combined = list(y_true) + list(y_pred)
+        label_order = list(dict.fromkeys(combined)) if combined else []
+    if not label_order:
+        label_order = ["n/a"]
+
+    cm = confusion_matrix(
+        y_true,
+        y_pred,
+        labels=label_order,
+        normalize="true" if normalize else None,
+    )
+
+    def _annot(value: float) -> str:
+        if normalize:
+            return f"{100 * value:.1f}%" if value > 0 else ""
+        return f"{int(value)}" if value > 0 else ""
+
+    max_label_length = max(len(str(label)) for label in label_order)
+    base = max(len(label_order) * 0.7 + max_label_length * 0.15, 6)
+    fig = plt.figure(figsize=(max(10, base), max(9, base - 1)))
+    if title:
+        plt.title(title)
+    data = 100 * cm if normalize else cm
+    annotations = np.asarray([_annot(x) for x in cm.flatten()]).reshape(cm.shape)
+    ax = fig.add_subplot(111)
+    heatmap(
+        data,
+        vmin=0,
+        vmax=100 if normalize else None,
+        annot=annotations,
+        fmt="",
+        xticklabels=label_order,
+        yticklabels=label_order,
+        linewidths=0.01,
+        square=True,
+        cmap="Blues",
+        ax=ax,
+    )
+    ax.set_xticklabels(label_order, rotation=90)
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Target")
+    plt.tight_layout()
+    return fig
 
 
 class FocalLoss(nn.Module):
@@ -166,6 +234,148 @@ class MulticlassWithCroplandAuxBCELoss(nn.Module):
         return total_loss
 
 
+class SeasonalMultiTaskLoss(nn.Module):
+    """Compute landcover and crop-type losses from SeasonalHeadOutput."""
+
+    def __init__(
+        self,
+        landcover_classes: List[str],
+        croptype_classes: List[str],
+        *,
+        ignore_index: int = NODATAVALUE,
+        landcover_weight: float = 1.0,
+        croptype_weight: float = 1.0,
+        landcover_task_name: str = "landcover",
+        croptype_task_name: str = "croptype",
+    ) -> None:
+        super().__init__()
+        if not landcover_classes:
+            raise ValueError("landcover_classes cannot be empty for seasonal loss")
+        if not croptype_classes:
+            raise ValueError("croptype_classes cannot be empty for seasonal loss")
+
+        self.landcover_classes = landcover_classes
+        self.croptype_classes = croptype_classes
+        self.landcover_weight = landcover_weight
+        self.croptype_weight = croptype_weight
+        self.landcover_task_name = landcover_task_name
+        self.croptype_task_name = croptype_task_name
+
+        self._lc_to_idx = {name: idx for idx, name in enumerate(landcover_classes)}
+        self._ct_to_idx = {name: idx for idx, name in enumerate(croptype_classes)}
+
+        self._lc_loss = nn.CrossEntropyLoss()
+        self._ct_loss = nn.CrossEntropyLoss()
+        self._ignore_index = ignore_index
+
+    def forward(
+        self,
+        output: SeasonalHeadOutput,
+        predictors: Predictors,
+        attrs: dict,
+    ) -> torch.Tensor:
+        batch_size = output.global_embedding.shape[0]
+        device = output.global_embedding.device
+
+        if attrs is None:
+            raise ValueError("SeasonalMultiTaskLoss requires attrs from the DataLoader")
+
+        landcover_labels = _ensure_list(
+            attrs.get("landcover_label"), batch_size, fill=None
+        )
+        croptype_labels = _ensure_list(
+            attrs.get("croptype_label"), batch_size, fill=None
+        )
+        label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
+
+        tasks: List[str] = []
+        for idx in range(batch_size):
+            if label_tasks[idx] is not None:
+                tasks.append(str(label_tasks[idx]))
+            elif croptype_labels[idx] is not None and not _is_missing_value(
+                croptype_labels[idx]
+            ):
+                tasks.append(self.croptype_task_name)
+            else:
+                tasks.append(self.landcover_task_name)
+
+        loss = torch.zeros(1, device=device, dtype=torch.float32)
+
+        # Landcover pathway
+        landcover_indices = [
+            i for i, task in enumerate(tasks) if task == self.landcover_task_name
+        ]
+        if landcover_indices:
+            if output.global_logits is None:
+                raise ValueError(
+                    "Seasonal head missing global logits for landcover supervision"
+                )
+            lc_logits = output.global_logits[landcover_indices]
+            lc_targets: List[int] = []
+            valid_idx: List[int] = []
+            for batch_idx, sample_idx in enumerate(landcover_indices):
+                class_name = landcover_labels[sample_idx]
+                if class_name is None or _is_missing_value(class_name):
+                    continue
+                mapped = self._lc_to_idx.get(str(class_name))
+                if mapped is None:
+                    continue
+                lc_targets.append(mapped)
+                valid_idx.append(batch_idx)
+
+            if lc_targets:
+                logits = lc_logits[valid_idx]
+                targets = torch.tensor(lc_targets, device=device, dtype=torch.long)
+                loss = loss + self.landcover_weight * self._lc_loss(logits, targets)
+
+        # Crop-type pathway
+        croptype_indices = [
+            i for i, task in enumerate(tasks) if task == self.croptype_task_name
+        ]
+        if croptype_indices:
+            if output.season_logits is None:
+                raise ValueError(
+                    "Seasonal head missing season logits for crop-type supervision"
+                )
+
+            season_selection = _select_representative_season(
+                output, attrs, croptype_indices, allow_multiple=True
+            )
+
+            selected_logits: List[torch.Tensor] = []
+            selected_targets: List[int] = []
+            for local_idx, sample_idx in enumerate(croptype_indices):
+                class_name = croptype_labels[sample_idx]
+                if class_name is None or _is_missing_value(class_name):
+                    continue
+                mapped = self._ct_to_idx.get(str(class_name))
+                if mapped is None:
+                    continue
+
+                seasons = season_selection[local_idx]
+                if not seasons:
+                    continue
+
+                season_ids = torch.as_tensor(
+                    seasons, device=output.season_logits.device, dtype=torch.long
+                )
+                logits = output.season_logits[sample_idx, season_ids, :]
+                if logits.dim() == 1:
+                    logits = logits.unsqueeze(0)
+
+                selected_logits.append(logits)
+                selected_targets.extend([mapped] * logits.shape[0])
+
+            if selected_logits:
+                logits_tensor = torch.cat(selected_logits, dim=0)
+                targets = torch.tensor(selected_targets, device=device, dtype=torch.long)
+                loss = loss + self.croptype_weight * self._ct_loss(
+                    logits_tensor, targets
+                )
+
+        return loss
+
+
 def prepare_training_datasets(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -272,40 +482,94 @@ def evaluate_finetuned_model(
     time_explicit: bool = False,
     classes_list: Optional[List[str]] = None,
     return_uncertainty: bool = False,
-):
-    """
-    Evaluates a fine-tuned Presto model on a test dataset and calculates performance metrics.
-    This function runs the provided model through the test dataset and computes classification
-    metrics including precision, recall, F1-score, and support for each class.
+    *,
+    seasonal_landcover_classes: Optional[List[str]] = None,
+    seasonal_croptype_classes: Optional[List[str]] = None,
+    cropland_class_names: Optional[Sequence[str]] = None,
+) -> Union[dict, Tuple[pd.DataFrame, Figure, Figure]]:
+    """Evaluate a fine-tuned model on a labelled dataset and report metrics.
 
     Parameters
     ----------
-    finetuned_model : PretrainedPrestoWrapper
-        The fine-tuned Presto model to evaluate.
-    test_ds : InSeasonLabelledDataset
-        The test dataset containing samples and ground truth labels.
+    finetuned_model : torch.nn.Module
+        Model to evaluate; can emit logits or ``SeasonalHeadOutput``.
+    test_ds : WorldCerealLabelledDataset
+        Dataset containing samples and ground-truth labels.
     num_workers : int
-        Number of worker processes for the DataLoader.
+        Number of workers for the evaluation ``DataLoader``.
     batch_size : int
-        Batch size for model evaluation.
-    time_explicit : bool, default=False
-        Whether to handle time-explicit predictions by only evaluating valid timesteps. Defaults to False.
-    classes_list : Optional[List[str]], default=None
-        List of class names for multiclass classification.
-        Used to map numeric indices to class names in the output.
-        Defaults to None. Required for multiclass task.
+        Batch size used during evaluation.
+    time_explicit : bool, default False
+        Whether the labels/logits are time-explicit, in which case only valid
+        timesteps are scored.
+    classes_list : Optional[List[str]]
+        Mapping from class index to class name for multiclass/binary outputs.
+    return_uncertainty : bool, default False
+        When True, also compute average predictive entropy from the stored
+        probability distributions.
+    seasonal_landcover_classes : Optional[List[str]]
+        Required when the model returns ``SeasonalHeadOutput``; names for the
+        landcover logits.
+    seasonal_croptype_classes : Optional[List[str]]
+        Required when the model returns ``SeasonalHeadOutput``; names for the
+        crop-type logits.
+    cropland_class_names : Optional[Sequence[str]]
+        Optional list of class names that should trigger cropland gating during
+        seasonal evaluation.
 
     Returns
     -------
-        pd.DataFrame: A DataFrame containing classification metrics (precision, recall, F1-score, support)
-                     for each class, with class names as rows and metrics as columns.
+    Union[dict, Tuple[pd.DataFrame, Figure, Figure]]
+        Seasonal heads return a dictionary with per-task reports and confusion
+        matrices. Standard heads return ``(results_df, cm, cm_norm)`` similar to
+        ``sklearn.metrics.classification_report`` where each confusion matrix is a
+        Matplotlib ``Figure`` instance.
 
-    Raises:
-    -------
-    ValueError : If the task type in the test dataset is not supported (must be 'binary' or 'multiclass').
+    Raises
+    ------
+    ValueError
+        If ``test_ds.task_type`` is unsupported or if seasonal outputs are
+        encountered without the necessary class lists.
     """
-    from sklearn.metrics import ConfusionMatrixDisplay, classification_report
-    from torch.utils.data import DataLoader
+
+    def _compute_metrics_from_records(
+        records: List[dict], label_order: Optional[List[str]]
+    ) -> Tuple[pd.DataFrame, Figure, Figure]:
+        columns = ["class", "precision", "recall", "f1-score", "support"]
+        if not records:
+            df = pd.DataFrame(columns=columns)
+            labels = label_order or ["n/a"]
+            cm = build_confusion_matrix_figure([], [], labels=labels, normalize=False)
+            cm_norm = build_confusion_matrix_figure(
+                [], [], labels=labels, normalize=True
+            )
+            return df, cm, cm_norm
+
+        y_true = [rec["target_class"] for rec in records]
+        y_pred = [rec["pred_class"] for rec in records]
+        labels = label_order
+        results = classification_report(
+            y_true,
+            y_pred,
+            labels=labels,
+            output_dict=True,
+            zero_division=0,
+        )
+        df = pd.DataFrame(results).transpose().reset_index()
+        df.columns = pd.Index(columns)
+        cm = build_confusion_matrix_figure(
+            y_true,
+            y_pred,
+            labels=labels,
+            normalize=False,
+        )
+        cm_norm = build_confusion_matrix_figure(
+            y_true,
+            y_pred,
+            labels=labels,
+            normalize=True,
+        )
+        return df, cm, cm_norm
 
     # storage for full distributions if we need entropy
     all_probs_full: list[np.ndarray] = [] if return_uncertainty else []
@@ -319,6 +583,7 @@ def evaluate_finetuned_model(
         batch_size=batch_size,
         shuffle=False,  # keep as False!
         num_workers=num_workers,
+        collate_fn=collate_fn,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
 
@@ -326,15 +591,42 @@ def evaluate_finetuned_model(
     all_probs = []
     all_preds = []
     all_targets = []
+    seasonal_mode = False
+    seasonal_records = {
+        "landcover": [],
+        "croptype": [],
+        "croptype_gate_rejections": 0,
+    }
 
     for batch in val_dl:
+        predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
-            # batch may already be a Predictors or a dict collated by DataLoader
-            if isinstance(batch, dict):
-                batch = Predictors(**batch)
-
-            model_output = finetuned_model(batch)
-            targets = batch.label.cpu().numpy().astype(int)
+            model_output = _forward_with_optional_attrs(
+                finetuned_model, predictors, attrs
+            )
+            if isinstance(model_output, SeasonalHeadOutput):
+                if (
+                    seasonal_landcover_classes is None
+                    or seasonal_croptype_classes is None
+                ):
+                    raise ValueError(
+                        "Seasonal evaluation requires landcover and crop-type class lists"
+                    )
+                batch_summary = summarize_seasonal_predictions(
+                    model_output,
+                    attrs or {},
+                    seasonal_landcover_classes,
+                    seasonal_croptype_classes,
+                    cropland_class_names=cropland_class_names,
+                )
+                seasonal_records["landcover"].extend(batch_summary["landcover"])
+                seasonal_records["croptype"].extend(batch_summary["croptype"])
+                seasonal_records["croptype_gate_rejections"] += batch_summary[
+                    "croptype_gate_rejections"
+                ]
+                seasonal_mode = True
+                continue
+            targets = predictors.label.cpu().numpy().astype(int)
 
             if test_ds.task_type == "binary":
                 probs = torch.sigmoid(model_output).cpu().numpy()
@@ -384,6 +676,46 @@ def evaluate_finetuned_model(
                 all_preds.append(preds.flatten())
                 all_targets.append(targets.flatten())
 
+    if seasonal_mode:
+        landcover_df, landcover_cm, landcover_cm_norm = _compute_metrics_from_records(
+            seasonal_records["landcover"], seasonal_landcover_classes
+        )
+        croptype_df, croptype_cm, croptype_cm_norm = _compute_metrics_from_records(
+            seasonal_records["croptype"], seasonal_croptype_classes
+        )
+        gate_rejections = seasonal_records["croptype_gate_rejections"]
+        if gate_rejections:
+            rejection_row = pd.DataFrame(
+                [
+                    {
+                        "class": "croptype_gate_rejections",
+                        "precision": np.nan,
+                        "recall": np.nan,
+                        "f1-score": np.nan,
+                        "support": gate_rejections,
+                    }
+                ]
+            )
+            croptype_df = pd.concat([croptype_df, rejection_row], ignore_index=True)
+
+        return {
+            "landcover": {
+                "results": landcover_df,
+                "cm": landcover_cm,
+                "cm_norm": landcover_cm_norm,
+                "classes": seasonal_landcover_classes,
+                "num_samples": len(seasonal_records["landcover"]),
+            },
+            "croptype": {
+                "results": croptype_df,
+                "cm": croptype_cm,
+                "cm_norm": croptype_cm_norm,
+                "classes": seasonal_croptype_classes,
+                "num_samples": len(seasonal_records["croptype"]),
+                "gate_rejections": gate_rejections,
+            },
+        }
+
     if time_explicit:
         all_probs = np.concatenate(all_probs) if all_probs else np.array([])
         all_preds = np.concatenate(all_preds) if all_preds else np.array([])
@@ -393,8 +725,12 @@ def evaluate_finetuned_model(
         all_preds = np.concatenate(all_preds)
         all_targets = np.concatenate(all_targets)
 
+    classes_to_use: Optional[List[str]] = None
+    label_order: Optional[List[str]] = None
+
     # Map numeric indices to class names if necessary
     if test_ds.task_type == "multiclass" and classes_list:
+        label_order = [str(cls) for cls in classes_list]
         all_targets_classes = np.array(
             [classes_list[x] if x != NODATAVALUE else "unknown" for x in all_targets]
         )
@@ -416,9 +752,9 @@ def evaluate_finetuned_model(
             np.array(["crop" if x > 0.5 else "not_crop" for x in all_preds])
         )
         classes_to_use = ["not_crop", "crop"]
+        label_order = classes_to_use
     else:
-        # Just use the classes as is
-        classes_to_use = classes_list if classes_list is not None else []
+        label_order = [str(cls) for cls in classes_list] if classes_list else None
 
     results = classification_report(
         all_targets,
@@ -428,18 +764,17 @@ def evaluate_finetuned_model(
         zero_division=0,
     )
 
-    cm = ConfusionMatrixDisplay.from_predictions(
+    cm = build_confusion_matrix_figure(
         all_targets,
         all_preds,
-        xticks_rotation="vertical",
-        labels=classes_to_use if test_ds.task_type == "binary" else None,
+        labels=label_order,
+        normalize=False,
     )
-    cm_norm = ConfusionMatrixDisplay.from_predictions(
+    cm_norm = build_confusion_matrix_figure(
         all_targets,
         all_preds,
-        xticks_rotation="vertical",
-        normalize="true",
-        labels=classes_to_use if test_ds.task_type == "binary" else None,
+        labels=label_order,
+        normalize=True,
     )
 
     results_df = pd.DataFrame(results).transpose().reset_index()
@@ -524,6 +859,308 @@ def compute_validation_metrics(
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed computing validation metrics: {e}")
     return metrics, metrics_str
+
+
+def _unpack_predictor_batch(batch: Any) -> Tuple[Predictors, dict]:
+    """Normalize DataLoader outputs so callers always receive Predictors + attrs."""
+
+    if isinstance(batch, Predictors):
+        return batch, {}
+
+    if isinstance(batch, tuple):
+        if len(batch) == 2 and isinstance(batch[0], Predictors):
+            attrs = batch[1] if isinstance(batch[1], dict) else {}
+            return batch[0], attrs
+        if len(batch) == 1:
+            return _unpack_predictor_batch(batch[0])
+
+    if isinstance(batch, list) and batch:
+        return _unpack_predictor_batch(tuple(batch))
+
+    if isinstance(batch, dict):
+        return Predictors(**batch), {}
+
+    raise TypeError(f"Unsupported batch type from DataLoader: {type(batch)}")
+
+
+def _forward_with_optional_attrs(
+    model: torch.nn.Module, predictors: Predictors, attrs: Optional[dict]
+):
+    """Attempt to call model with attrs; gracefully fallback when unsupported."""
+
+    if attrs:
+        try:
+            return model(predictors, attrs=attrs)
+        except TypeError as exc:  # model might not accept attrs
+            if "unexpected keyword argument 'attrs'" not in str(exc):
+                raise
+    return model(predictors)
+
+
+def _ensure_list(value, expected_len: int, fill=None) -> List:
+    """Normalize assorted attr containers (list/np/tensor) into Python lists."""
+
+    if value is None:
+        return [fill] * expected_len
+
+    if isinstance(value, list):
+        result = value
+    elif isinstance(value, tuple):
+        result = list(value)
+    elif isinstance(value, np.ndarray):
+        result = value.tolist()
+    elif torch.is_tensor(value):
+        result = value.detach().cpu().tolist()
+    else:
+        result = list(value)
+
+    if len(result) != expected_len:
+        raise ValueError(
+            f"Attribute list has length {len(result)}, expected {expected_len}"
+        )
+    return result
+
+
+def _select_representative_season(
+    output: SeasonalHeadOutput,
+    attrs: dict,
+    sample_indices: List[int],
+    *,
+    allow_multiple: bool = True,
+) -> Union[torch.Tensor, List[List[int]]]:
+    """Choose one or more season indices per sample using metadata cues.
+
+    When ``allow_multiple`` is True the function returns a ``List[List[int]]`` where
+    each inner list enumerates all seasons whose masks overlap the label date. When
+    False it falls back to a single representative per sample and returns a
+    tensor of indices, matching the previous behavior expected by evaluation utilities.
+    """
+
+    season_masks = output.season_masks
+    if not torch.is_tensor(season_masks):
+        season_masks = torch.as_tensor(season_masks, dtype=torch.bool)
+    season_masks = season_masks.to(device=output.global_embedding.device)
+
+    in_seasons = attrs.get("in_seasons")
+    if in_seasons is not None:
+        in_seasons_tensor = torch.as_tensor(
+            in_seasons, device=season_masks.device, dtype=torch.bool
+        )
+        if in_seasons_tensor.dim() == 1:
+            in_seasons_tensor = in_seasons_tensor.unsqueeze(0)
+    else:
+        in_seasons_tensor = None
+
+    valid_position = attrs.get("valid_position")
+    if valid_position is None:
+        raise ValueError(
+            "valid_position must be present in attrs for seasonal operations"
+        )
+    valid_position_tensor = torch.as_tensor(
+        valid_position, device=season_masks.device, dtype=torch.long
+    )
+
+    num_timesteps = season_masks.shape[-1]
+    selections: List[List[int]] = []
+    for sample_idx in sample_indices:
+        candidate_indices: List[int] = []
+        if in_seasons_tensor is not None:
+            season_flags = in_seasons_tensor[sample_idx].flatten()
+            if season_flags.any():
+                candidate_indices.extend(
+                    torch.nonzero(season_flags, as_tuple=False).view(-1).tolist()
+                )
+
+        if not candidate_indices:
+            vp = int(valid_position_tensor[sample_idx].item())
+            vp = max(0, min(vp, num_timesteps - 1))
+            mask = season_masks[sample_idx, :, vp]
+            mask = mask.flatten()
+            if mask.any():
+                candidate_indices.extend(
+                    torch.nonzero(mask, as_tuple=False).view(-1).tolist()
+                )
+
+        if not candidate_indices:
+            sample_id = attrs.get("sample_id")
+            raise ValueError(
+                "Unable to determine representative season for sample"
+                + (f" (sample_id={sample_id})" if sample_id is not None else "")
+            )
+
+        selections.append(candidate_indices)
+
+    if allow_multiple:
+        return selections
+
+    first_indices = [indices[0] for indices in selections]
+    return torch.tensor(first_indices, device=season_masks.device, dtype=torch.long)
+
+
+def summarize_seasonal_predictions(
+    output: SeasonalHeadOutput,
+    attrs: dict,
+    landcover_classes: List[str],
+    croptype_classes: List[str],
+    *,
+    cropland_class_names: Optional[Sequence[str]] = None,
+    landcover_task_name: str = "landcover",
+    croptype_task_name: str = "croptype",
+) -> dict:
+    """Convert seasonal logits into per-branch classification records.
+
+    Returns dictionaries for landcover and crop-type predictions so that
+    evaluation and inference code can independently consume whichever branch
+    they need. Crop-type predictions are automatically gated by the landcover
+    head: if the predicted landcover class is not part of ``cropland_class_names``
+    (when provided), the crop-type prediction is marked invalid and excluded.
+    """
+
+    batch_size = output.global_embedding.shape[0]
+    landcover_labels = _ensure_list(
+        attrs.get("landcover_label"), batch_size, fill=None
+    )
+    croptype_labels = _ensure_list(
+        attrs.get("croptype_label"), batch_size, fill=None
+    )
+    label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
+
+    tasks: List[str] = []
+    for idx in range(batch_size):
+        label_task = label_tasks[idx]
+        if label_task is not None and not _is_missing_value(label_task):
+            tasks.append(str(label_task))
+        elif croptype_labels[idx] is not None and not _is_missing_value(
+            croptype_labels[idx]
+        ):
+            tasks.append(croptype_task_name)
+        else:
+            tasks.append(landcover_task_name)
+
+    landcover_records: List[dict] = []
+    croptype_records: List[dict] = []
+    croptype_gate_rejections = 0
+
+    lc_probs: Optional[torch.Tensor] = None
+    if output.global_logits is not None:
+        lc_probs = torch.softmax(output.global_logits, dim=-1)
+    elif landcover_task_name in tasks:
+        raise ValueError("Landcover supervision requested but global logits are None")
+
+    landcover_pred_names: List[Optional[str]] = []
+    if lc_probs is not None:
+        for idx in range(batch_size):
+            pred_idx = int(torch.argmax(lc_probs[idx]).item())
+            landcover_pred_names.append(landcover_classes[pred_idx])
+    else:
+        landcover_pred_names = [None] * batch_size
+
+    landcover_indices = [
+        idx for idx, task in enumerate(tasks) if task == landcover_task_name
+    ]
+    if lc_probs is not None:
+        for sample_idx in landcover_indices:
+            target_name = landcover_labels[sample_idx]
+            if target_name is None or _is_missing_value(target_name):
+                continue
+            if str(target_name) not in landcover_classes:
+                continue
+            probs = lc_probs[sample_idx]
+            pred_idx = int(torch.argmax(probs).item())
+            landcover_records.append(
+                {
+                    "pred_class": landcover_classes[pred_idx],
+                    "target_class": str(target_name),
+                    "prob": float(torch.max(probs).item()),
+                }
+            )
+
+    cropland_set = {
+        str(name)
+        for name in (cropland_class_names or [])
+        if name is not None and not _is_missing_value(name)
+    }
+    croptype_indices = [
+        idx for idx, task in enumerate(tasks) if task == croptype_task_name
+    ]
+    if croptype_indices:
+        if output.season_logits is None:
+            raise ValueError(
+                "Seasonal head missing season logits for crop-type supervision"
+            )
+        season_selection = _select_representative_season(
+            output, attrs, croptype_indices, allow_multiple=True
+        )
+        for local_idx, sample_idx in enumerate(croptype_indices):
+            target_name = croptype_labels[sample_idx]
+            if target_name is None or _is_missing_value(target_name):
+                continue
+            if str(target_name) not in croptype_classes:
+                continue
+
+            landcover_pred = landcover_pred_names[sample_idx]
+            is_cropland = not cropland_set or (
+                landcover_pred is not None and landcover_pred in cropland_set
+            )
+            if not is_cropland:
+                croptype_gate_rejections += 1
+                continue
+
+            seasons = season_selection[local_idx]
+            if not seasons:
+                continue
+
+            season_ids = torch.as_tensor(
+                seasons, device=output.season_logits.device, dtype=torch.long
+            )
+            logits = output.season_logits[sample_idx, season_ids, :]
+            if logits.dim() == 1:
+                logits = logits.unsqueeze(0)
+
+            probs = torch.softmax(logits, dim=-1).mean(dim=0)
+            pred_idx = int(torch.argmax(probs).item())
+            croptype_records.append(
+                {
+                    "pred_class": croptype_classes[pred_idx],
+                    "target_class": str(target_name),
+                    "prob": float(torch.max(probs).item()),
+                }
+            )
+
+    return {
+        "landcover": landcover_records,
+        "croptype": croptype_records,
+        "croptype_gate_rejections": croptype_gate_rejections,
+    }
+
+
+def _compute_loss(
+    loss_fn: torch.nn.Module,
+    preds,
+    predictors: Predictors,
+    attrs: Optional[dict],
+):
+    """Route to the appropriate loss implementation and return masked outputs."""
+
+    if isinstance(preds, SeasonalHeadOutput):
+        loss = loss_fn(preds, predictors, attrs or {})
+        return loss, None, None
+
+    targets = predictors.label.to(device)
+    if preds.dim() > 1 and preds.size(-1) > 1:
+        targets = targets.long().squeeze(axis=-1)
+    else:
+        targets = targets.float()
+
+    mask = targets != NODATAVALUE
+    if not torch.any(mask):
+        loss = torch.zeros(1, device=preds.device, dtype=preds.dtype)
+        return loss, None, None
+
+    masked_preds = preds[mask]
+    masked_targets = targets[mask]
+    loss = loss_fn(masked_preds, masked_targets)
+    return loss, masked_preds.detach(), masked_targets.detach()
 
 
 def run_finetuning(
@@ -619,22 +1256,10 @@ def run_finetuning(
         epoch_train_loss = 0.0
 
         for batch in tqdm(train_dl, desc="Training", leave=False):
+            predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
-            preds = model(batch)
-            targets = batch.label.to(device)
-
-            if preds.dim() > 1 and preds.size(-1) > 1:
-                # multiclass case: targets should be class indices
-                # predictions are multiclass logits
-                targets = targets.long().squeeze(axis=-1)
-            else:
-                # binary or regression case
-                targets = targets.float()
-
-            # Compute loss
-            loss = loss_fn(
-                preds[targets != NODATAVALUE], targets[targets != NODATAVALUE]
-            )
+            preds = _forward_with_optional_attrs(model, predictors, attrs)
+            loss, _, _ = _compute_loss(loss_fn, preds, predictors, attrs)
 
             epoch_train_loss += loss.item()
             loss.backward()
@@ -643,35 +1268,50 @@ def run_finetuning(
         train_loss.append(epoch_train_loss / len(train_dl))
 
         model.eval()
-        all_preds: List[torch.Tensor] = []
-        all_y: List[torch.Tensor] = []
+        weighted_loss_sum = 0.0
+        weighted_count = 0.0
+        fallback_loss_sum = 0.0
+        fallback_batches = 0
+        val_pred_chunks: List[torch.Tensor] = []
+        val_target_chunks: List[torch.Tensor] = []
 
         for batch in val_dl:
+            predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
-                preds = model(batch)
-                targets = batch.label.to(device)
-
-                if preds.dim() > 1 and preds.size(-1) > 1:
-                    # multiclass case: targets should be class indices
-                    # predictions are multiclass logits
-                    targets = targets.long().squeeze(axis=-1)
+                preds = _forward_with_optional_attrs(model, predictors, attrs)
+                loss_value, flat_preds, flat_targets = _compute_loss(
+                    loss_fn, preds, predictors, attrs
+                )
+                if flat_preds is not None and flat_targets is not None:
+                    chunk_weight = float(flat_targets.numel())
+                    weighted_loss_sum += loss_value.item() * chunk_weight
+                    weighted_count += chunk_weight
+                    val_pred_chunks.append(flat_preds)
+                    val_target_chunks.append(flat_targets)
                 else:
-                    # binary or regression case
-                    targets = targets.float()
+                    fallback_loss_sum += loss_value.item()
+                    fallback_batches += 1
 
-                preds = preds[targets != NODATAVALUE]
-                targets = targets[targets != NODATAVALUE]
-                all_preds.append(preds)
-                all_y.append(targets)
-
-        val_preds = torch.cat(all_preds)
-        val_targets = torch.cat(all_y)
-        current_val_loss = loss_fn(val_preds, val_targets).item()
+        if weighted_count > 0:
+            current_val_loss = weighted_loss_sum / weighted_count
+            val_preds = torch.cat(val_pred_chunks)
+            val_targets = torch.cat(val_target_chunks)
+        elif fallback_batches > 0:
+            current_val_loss = fallback_loss_sum / fallback_batches
+            val_preds = None
+            val_targets = None
+        else:
+            current_val_loss = 0.0
+            val_preds = None
+            val_targets = None
         val_loss.append(current_val_loss)
 
-        # Additional classification metrics via helper
-        task_type = getattr(val_dl.dataset, "task_type", None)
-        _, metrics_str = compute_validation_metrics(val_preds, val_targets, task_type)
+        metrics_str = ""
+        if val_preds is not None and val_targets is not None:
+            task_type = getattr(val_dl.dataset, "task_type", None)
+            _, metrics_str = compute_validation_metrics(
+                val_preds, val_targets, task_type
+            )
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)

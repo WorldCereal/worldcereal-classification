@@ -2,34 +2,101 @@
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal, Optional
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
+from matplotlib.figure import Figure
 from prometheo.finetune import Hyperparams
 from prometheo.models import Presto
 from prometheo.models.presto import param_groups_lrd
 from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
-from torch import nn
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 
-# from worldcereal_in_season.datasets import MaskingStrategy
-from worldcereal.train.data import get_training_dfs_from_parquet
+from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (
-    FocalLoss,  # noqa: F401
-    MulticlassWithCroplandAuxBCELoss,
+    SeasonalMultiTaskLoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
     run_finetuning,
 )
+from worldcereal.train.seasonal_head import (
+    SeasonalFinetuningHead,
+    WorldCerealSeasonalModel,
+)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
+
+
+def _unique_preserve_order(values):
+    """Return unique items from iterable while preserving their first occurrence."""
+
+    seen = set()
+    ordered = []
+    for value in values:
+        if value is None or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _annotate_dual_task_labels(
+    df: pd.DataFrame,
+    *,
+    split_name: str,
+    landcover_key: str,
+    croptype_key: str,
+    cropland_class_names: List[str],
+) -> pd.DataFrame:
+    """Attach landcover/croptype labels and task routing metadata to a split dataframe."""
+
+    if df.empty:
+        logger.warning("%s split is empty before seasonal label annotation", split_name)
+        return df
+
+    updated = df.copy()
+    landcover_map = {
+        int(code): label for code, label in CLASS_MAPPINGS[landcover_key].items()
+    }
+    updated["landcover_label"] = updated["ewoc_code"].map(landcover_map)
+    missing_landcover = updated["landcover_label"].isna()
+    if missing_landcover.any():
+        removed = int(missing_landcover.sum())
+        logger.warning(
+            "Removing %d samples from %s split without '%s' landcover mapping",
+            removed,
+            split_name,
+            landcover_key,
+        )
+        updated = updated.loc[~missing_landcover].copy()
+        if updated.empty:
+            raise ValueError(
+                f"No samples remain in {split_name} split after applying landcover mapping {landcover_key}."
+            )
+
+    croptype_map = {
+        int(code): label for code, label in CLASS_MAPPINGS[croptype_key].items()
+    }
+    updated["croptype_label"] = updated["ewoc_code"].map(croptype_map)
+
+    cropland_targets = set(cropland_class_names)
+    is_cropland = updated["landcover_label"].isin(cropland_targets)
+    has_croptype_label = updated["croptype_label"].notna()
+    updated["label_task"] = np.where(
+        is_cropland & has_croptype_label,
+        "croptype",
+        "landcover",
+    )
+
+    return updated
 
 
 def get_parquet_file_list(timestep_freq: Literal["month", "dekad"] = "month"):
@@ -73,6 +140,11 @@ def main(args):
     enable_masking = args.enable_masking
     debug = args.debug
     use_balancing = args.use_balancing  # If True, use class balancing for training
+    cropland_class_names = [
+        cls.strip() for cls in args.landcover_cropland_classes.split(",") if cls.strip()
+    ]
+    if not cropland_class_names:
+        cropland_class_names = ["temporary_crops"]
 
     # ± timesteps to jitter true label pos, for time_explicit only; will only be set for training
     label_jitter = args.label_jitter
@@ -116,6 +188,54 @@ def main(args):
     experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-{finetune_classes}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    def _export_eval_artifacts(
+        eval_results: pd.DataFrame,
+        cm: Figure,
+        cm_norm: Figure,
+        class_names: Optional[List[str]],
+        *,
+        suffix: Optional[str] = None,
+    ) -> None:
+        """Persist confusion matrices and metrics CSV for a given evaluation split.
+
+        Parameters
+        ----------
+        eval_results : pd.DataFrame
+            Tabular metrics as returned by ``evaluate_finetuned_model``.
+        cm : matplotlib.figure.Figure
+            Confusion-matrix plot using raw counts.
+        cm_norm : matplotlib.figure.Figure
+            Normalized confusion-matrix plot (per-class percentages).
+        class_names : Optional[List[str]]
+            Explicit label ordering to use for filenames/logging; falls back
+            to the classes present in ``eval_results``.
+        suffix : Optional[str], default None
+            Optional suffix injected in the filenames so train/val/test
+            exports do not overwrite each other.
+        """
+        label_set = class_names or [
+            cls
+            for cls in eval_results["class"].tolist()
+            if cls not in {"accuracy", "macro avg", "weighted avg"}
+        ]
+        if not label_set:
+            label_set = ["class"]
+        logger.debug("Saving confusion matrices with %d label entries", len(label_set))
+
+        suffix_part = f"_{suffix}" if suffix else ""
+        cm_path = Path(output_dir) / f"CM_{experiment_name}{suffix_part}.png"
+        cm_norm_path = Path(output_dir) / f"CM_{experiment_name}{suffix_part}_norm.png"
+
+        cm.savefig(cm_path, bbox_inches="tight")
+        plt.close(cm)
+        cm_norm.savefig(cm_norm_path, bbox_inches="tight")
+        plt.close(cm_norm)
+
+        eval_results.to_csv(
+            Path(output_dir) / f"results_{experiment_name}{suffix_part}.csv",
+            index=False,
+        )
 
     # setup path for processed wide parquet file so that it can be reused across experiments
     if not debug:
@@ -176,10 +296,40 @@ def main(args):
         val_df.to_parquet(val_df_path)
         test_df.to_parquet(test_df_path)
 
-    classes_list = list(sorted(set(CLASS_MAPPINGS[finetune_classes].values())))
-    classes_list = [
-        xx for xx in classes_list if xx in train_df["finetune_class"].unique()
-    ]
+    landcover_key = args.landcover_classes_key or "LANDCOVER10"
+    croptype_key = args.croptype_classes_key or finetune_classes
+    if landcover_key not in CLASS_MAPPINGS:
+        raise ValueError(
+            f"Unknown landcover_classes_key '{landcover_key}'. Available keys: {list(CLASS_MAPPINGS)}"
+        )
+    if croptype_key not in CLASS_MAPPINGS:
+        raise ValueError(
+            f"Unknown croptype_classes_key '{croptype_key}'. Available keys: {list(CLASS_MAPPINGS)}"
+        )
+
+    annotated_splits = {}
+    for split_name, df in (
+        ("train", train_df),
+        ("val", val_df),
+        ("test", test_df),
+    ):
+        annotated_splits[split_name] = _annotate_dual_task_labels(
+            df,
+            split_name=split_name,
+            landcover_key=landcover_key,
+            croptype_key=croptype_key,
+            cropland_class_names=cropland_class_names,
+        )
+
+    train_df = annotated_splits["train"]
+    val_df = annotated_splits["val"]
+    test_df = annotated_splits["test"]
+
+    mapping_values = _unique_preserve_order(CLASS_MAPPINGS[finetune_classes].values())
+    present_classes = {
+        str(xx) for xx in train_df["finetune_class"].dropna().unique().tolist()
+    }
+    classes_list = [xx for xx in mapping_values if xx in present_classes]
     logger.info(f"classes_list: {classes_list}")
     num_classes = train_df["finetune_class"].nunique()
     if num_classes == 2:
@@ -219,39 +369,39 @@ def main(args):
     )
 
     # Construct the finetuning model based on the pretrained model
-    model = Presto(
-        num_outputs=num_outputs,
-        regression=False,
-        pretrained_model_path=pretrained_model_path,
-    ).to(device)
-
-    # Define the loss function based on the task type
-    if task_type == "binary":
-        loss_fn = nn.BCEWithLogitsLoss()
-    elif task_type == "multiclass":
-        if finetune_classes == "LANDCOVER10":
-            # Custom loss function combining CE on landcover and BCE on crop-nocrop
-            loss_fn = MulticlassWithCroplandAuxBCELoss(
-                ignore_index=NODATAVALUE,
-                label_smoothing=0.05,
-                pos_class_indices=[classes_list.index("temporary_crops")],
-            )
-        elif finetune_classes == "CROPTYPE27":
-            # Normal CE with label smoothing, maybe we can try focal loss as well
-            # loss_fn = nn.CrossEntropyLoss(
-            #     ignore_index=NODATAVALUE, label_smoothing=0.05
-            # )
-            loss_fn = FocalLoss(ignore_index=NODATAVALUE, label_smoothing=0.05)
-        else:
-            raise NotImplementedError(
-                f"Multiclass loss function for finetune_classes {finetune_classes} is not implemented."
-            )
-    else:
+    landcover_classes = _unique_preserve_order(CLASS_MAPPINGS[landcover_key].values())
+    croptype_classes = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
+    if not landcover_classes or not croptype_classes:
         raise ValueError(
-            f"Task type {task_type} is not supported. "
-            f"Supported task types are 'binary' and 'multiclass'."
+            "Both landcover and croptype class mappings must contain at least one class."
         )
-    logger.info(f"Using loss function: {loss_fn}")
+
+    backbone = Presto(pretrained_model_path=pretrained_model_path)
+    seasonal_head = SeasonalFinetuningHead(
+        embedding_dim=backbone.encoder.embedding_size,
+        landcover_num_outputs=len(landcover_classes),
+        crop_num_outputs=len(croptype_classes),
+        dropout=args.seasonal_head_dropout,
+    )
+    model = WorldCerealSeasonalModel(
+        backbone=backbone,
+        head=seasonal_head,
+    ).to(device)
+    loss_fn = SeasonalMultiTaskLoss(
+        landcover_classes=landcover_classes,
+        croptype_classes=croptype_classes,
+        ignore_index=NODATAVALUE,
+        landcover_weight=args.seasonal_loss_landcover_weight,
+        croptype_weight=args.seasonal_loss_croptype_weight,
+    )
+    logger.info(
+        "Using seasonal head with landcover key {} ({} classes) and croptype key {} ({} classes)",
+        landcover_key,
+        len(landcover_classes),
+        croptype_key,
+        len(croptype_classes),
+    )
+    logger.info("Using loss function: {}", loss_fn)
 
     # Set the parameters
     hyperparams = Hyperparams(
@@ -282,6 +432,7 @@ def main(args):
         else None,
         generator=generator if not use_balancing else None,
         num_workers=hyperparams.num_workers,
+        collate_fn=collate_fn,
     )
 
     val_dl = DataLoader(
@@ -289,6 +440,7 @@ def main(args):
         batch_size=hyperparams.batch_size,
         shuffle=False,
         num_workers=hyperparams.num_workers,
+        collate_fn=collate_fn,
     )
 
     # Run the finetuning
@@ -308,58 +460,36 @@ def main(args):
         unfreeze_epoch=unfreeze_epoch,
     )
 
-    # Evaluate the finetuned model
-    logger.info("Evaluating the finetuned model...")
-    eval_results, confusionmatrix, confusionmatrix_norm = evaluate_finetuned_model(
+    logger.info("Evaluating seasonal head outputs...")
+    seasonal_results = evaluate_finetuned_model(
         finetuned_model,
         test_ds,
         num_workers,
         batch_size,
         time_explicit=time_explicit,
-        classes_list=classes_list,
+        seasonal_landcover_classes=landcover_classes,
+        seasonal_croptype_classes=croptype_classes,
+        cropland_class_names=cropland_class_names,
     )
-
-    # Adjust figure size based on label length
-    max_label_length = max(len(label) for label in classes_list)
-    per_label_size = 0.45  # Width/height in inches per label
-    label_length_factor = 0.1  # Additional size per character in the longest label
-
-    # Define minimum and maximum limits if desired
-    min_size = 6
-    max_size = 30
-
-    # Compute figure size dynamically
-    fig_size = min(
-        max(
-            len(classes_list) * per_label_size + max_label_length * label_length_factor,
-            min_size,
-        ),
-        max_size,
-    )
-
-    _, ax = plt.subplots(figsize=(fig_size, fig_size))
-    confusionmatrix.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
-    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
-    plt.tight_layout()
-    plt.savefig(str(Path(output_dir) / f"CM_{experiment_name}.png"))
-    plt.close()
-
-    _, ax = plt.subplots(figsize=(fig_size, fig_size))
-    confusionmatrix_norm.plot(ax=ax, cmap=plt.cm.Blues, colorbar=False)
-    # Format the text annotations: keep 2 decimal places
-    for text in ax.texts:
-        val = float(text.get_text())
-        text.set_text(f"{val:.2f}")
-    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
-    plt.tight_layout()
-    plt.savefig(str(Path(output_dir) / f"CM_{experiment_name}_norm.png"))
-    plt.close()
-
-    eval_results.to_csv(
-        Path(output_dir) / f"results_{experiment_name}.csv", index=False
-    )
-    logger.info("Evaluation results:")
-    logger.info("\n" + eval_results.to_string(index=False))
+    for task_name, artifacts in seasonal_results.items():
+        results_df = artifacts["results"]
+        cm = artifacts["cm"]
+        cm_norm = artifacts["cm_norm"]
+        task_classes = artifacts.get("classes")
+        _export_eval_artifacts(
+            results_df,
+            cm,
+            cm_norm,
+            task_classes,
+            suffix=task_name,
+        )
+        logger.info("%s evaluation results:", task_name.capitalize())
+        logger.info("\n" + results_df.to_string(index=False))
+        if task_name == "croptype" and artifacts.get("gate_rejections"):
+            logger.info(
+                "Croptype predictions skipped due to landcover gate: %d",
+                artifacts["gate_rejections"],
+            )
 
     logger.info("Finetuning completed!")
 
@@ -393,6 +523,42 @@ def parse_args(arg_list=None):
         type=bool,
         default=True,
         help="Whether to use the 'valid_time' column for processing timesteps.",
+    )
+    parser.add_argument(
+        "--landcover_classes_key",
+        type=str,
+        default=None,
+        help="Class mapping key used for landcover targets in the dual-head configuration.",
+    )
+    parser.add_argument(
+        "--croptype_classes_key",
+        type=str,
+        default="CROPTYPE27",
+        help="Class mapping key used for crop-type targets in the dual-head configuration.",
+    )
+    parser.add_argument(
+        "--seasonal_head_dropout",
+        type=float,
+        default=0.0,
+        help="Dropout rate applied inside the seasonal head before projection layers.",
+    )
+    parser.add_argument(
+        "--seasonal_loss_landcover_weight",
+        type=float,
+        default=1.0,
+        help="Relative weight for the landcover branch when using the seasonal loss.",
+    )
+    parser.add_argument(
+        "--seasonal_loss_croptype_weight",
+        type=float,
+        default=1.0,
+        help="Relative weight for the crop-type branch when using the seasonal loss.",
+    )
+    parser.add_argument(
+        "--landcover_cropland_classes",
+        type=str,
+        default="temporary_crops",
+        help="Comma-separated list of landcover class names treated as cropland during gating.",
     )
 
     # Data paths
@@ -428,24 +594,24 @@ def parse_args(arg_list=None):
 
 
 if __name__ == "__main__":
-    # manual_args = [
-    #     "--experiment_tag",
-    #     "debug-run",
-    #     "--timestep_freq",
-    #     "month",
-    #     "--enable_masking",
-    #     # "--time_explicit",
-    #     # "--label_jitter",
-    #     # "1",
-    #     "--augment",
-    #     "--finetune_classes",
-    #     "CROPTYPE27",  # CROPTYPE27
-    #     "--use_balancing",
-    #     "--debug",
-    #     # "--use_balancing",
-    #     # "--debug",
-    # ]
-    manual_args = None
+    manual_args = [
+        "--experiment_tag",
+        "debug-run",
+        "--timestep_freq",
+        "month",
+        "--enable_masking",
+        # "--time_explicit",
+        # "--label_jitter",
+        # "1",
+        "--augment",
+        "--finetune_classes",
+        "CROPTYPE27",  # CROPTYPE27
+        "--use_balancing",
+        "--debug",
+        # "--use_balancing",
+        # "--debug",
+    ]
+    # manual_args = None
 
     args = parse_args(manual_args)
     main(args)
