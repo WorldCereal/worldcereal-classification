@@ -19,6 +19,12 @@ from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
 
+_ATTR_KEYS_ALLOW_PARTIAL_NONE = {
+    "landcover_label",
+    "croptype_label",
+    "label_task",
+}
+
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
     predictor_dicts = [item.as_dict(ignore_nones=True) for item, _ in batch]
@@ -62,6 +68,10 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
             continue
 
         if any(v is None for v in values):
+            if key in _ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                # Keep per-sample values so downstream helpers can handle missing labels.
+                collated[key] = values
+                continue
             missing_indices = [i for i, v in enumerate(values) if v is None]
             raise ValueError(
                 f"_collate_attrs received None values for key '{key}' at indices {missing_indices}"
@@ -346,7 +356,7 @@ def get_training_dfs_from_parquet(
 
     if debug:
         # select first 3 files in debug mode
-        parquet_files = parquet_files[:10]
+        parquet_files = parquet_files[:5]
         logger.warning("Debug mode is enabled.")
 
     db = duckdb.connect()
@@ -450,6 +460,12 @@ def get_training_dfs_from_parquet(
             # --- drop big Python objects ASAP ---
             del _data_pivot, _data
             gc.collect()
+
+        if not initialized:
+            raise RuntimeError(
+                "No parquet files were processed; the wide table was never created. "
+                "Ensure the `parquet_files` list is not empty and points to readable files."
+            )
 
         # write a single Parquet file
         con.execute(

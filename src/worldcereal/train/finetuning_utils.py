@@ -368,7 +368,9 @@ class SeasonalMultiTaskLoss(nn.Module):
 
             if selected_logits:
                 logits_tensor = torch.cat(selected_logits, dim=0)
-                targets = torch.tensor(selected_targets, device=device, dtype=torch.long)
+                targets = torch.tensor(
+                    selected_targets, device=device, dtype=torch.long
+                )
                 loss = loss + self.croptype_weight * self._ct_loss(
                     logits_tensor, targets
                 )
@@ -961,6 +963,13 @@ def _select_representative_season(
     )
 
     num_timesteps = season_masks.shape[-1]
+    sample_ids = attrs.get("sample_id")
+    sample_id_list = (
+        _ensure_list(sample_ids, season_masks.shape[0], fill=None)
+        if sample_ids is not None
+        else None
+    )
+
     selections: List[List[int]] = []
     for sample_idx in sample_indices:
         candidate_indices: List[int] = []
@@ -982,18 +991,26 @@ def _select_representative_season(
                 )
 
         if not candidate_indices:
-            sample_id = attrs.get("sample_id")
-            raise ValueError(
-                "Unable to determine representative season for sample"
-                + (f" (sample_id={sample_id})" if sample_id is not None else "")
-            )
+            # sample_id = (
+            #     sample_id_list[sample_idx] if sample_id_list is not None else None
+            # )
+            # logger.warning(
+            #     "Skipping sample without representative season"
+            #     + (f" (sample_id={sample_id})" if sample_id is not None else "")
+            # )
+            selections.append([])
+            continue
 
         selections.append(candidate_indices)
 
     if allow_multiple:
         return selections
 
-    first_indices = [indices[0] for indices in selections]
+    first_indices = [indices[0] for indices in selections if indices]
+    if len(first_indices) != len(selections):
+        logger.warning(
+            "Dropping samples without representative season while returning tensor"
+        )
     return torch.tensor(first_indices, device=season_masks.device, dtype=torch.long)
 
 
@@ -1017,12 +1034,8 @@ def summarize_seasonal_predictions(
     """
 
     batch_size = output.global_embedding.shape[0]
-    landcover_labels = _ensure_list(
-        attrs.get("landcover_label"), batch_size, fill=None
-    )
-    croptype_labels = _ensure_list(
-        attrs.get("croptype_label"), batch_size, fill=None
-    )
+    landcover_labels = _ensure_list(attrs.get("landcover_label"), batch_size, fill=None)
+    croptype_labels = _ensure_list(attrs.get("croptype_label"), batch_size, fill=None)
     label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
 
     tasks: List[str] = []

@@ -103,7 +103,7 @@ def get_parquet_file_list(timestep_freq: Literal["month", "dekad"] = "month"):
     if timestep_freq == "month":
         parquet_files = list(
             Path(
-                "/projects/TAP/worldcereal/data/WORLDCEREAL_ALL_EXTRACTIONS/worldcereal_all_extractions.parquet"
+                "/projects/TAP/worldcereal/data/worldcereal_all_extractions.parquet"
             ).rglob("*.parquet")
         )
     elif timestep_freq == "dekad":
@@ -243,7 +243,10 @@ def main(args):
             f"/projects/TAP/worldcereal/data/cached_wide_parquets/worldcereal_all_extractions_wide_{timestep_freq}_{finetune_classes}.parquet"
         )
     else:
-        wide_parquet_output_path = None
+        # wide_parquet_output_path = None
+        wide_parquet_output_path = Path(
+            "/projects/worldcereal/data/cached_wide_merged305/merged_305_wide.parquet"
+        )
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
@@ -332,6 +335,7 @@ def main(args):
     classes_list = [xx for xx in mapping_values if xx in present_classes]
     logger.info(f"classes_list: {classes_list}")
     num_classes = train_df["finetune_class"].nunique()
+    # TODO: check what happens if land cover only has one class
     if num_classes == 2:
         task_type = "binary"
         num_outputs = 1
@@ -600,16 +604,14 @@ if __name__ == "__main__":
         "--timestep_freq",
         "month",
         "--enable_masking",
-        # "--time_explicit",
-        # "--label_jitter",
-        # "1",
+        "--time_explicit",
+        "--label_jitter",
+        "1",
         "--augment",
         "--finetune_classes",
-        "CROPTYPE27",  # CROPTYPE27
+        "LANDCOVER10",  # CROPTYPE27
         "--use_balancing",
         "--debug",
-        # "--use_balancing",
-        # "--debug",
     ]
     # manual_args = None
 
