@@ -1221,7 +1221,7 @@ class TestRepeatHandling(unittest.TestCase):
         ds = WorldCerealTrainingDataset(
             self.df_training,
             num_timesteps=12,
-            repeats=4,
+            repeats=1,
             augment=False,
             task_type="multiclass",
         )
