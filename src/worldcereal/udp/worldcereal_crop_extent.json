@@ -849,9 +849,9 @@
             "linearscalerange5": {
               "process_id": "linear_scale_range",
               "arguments": {
-                "inputMax": 65534,
+                "inputMax": 254,
                 "inputMin": 0,
-                "outputMax": 65534,
+                "outputMax": 254,
                 "outputMin": 0,
                 "x": {
                   "from_parameter": "x"
