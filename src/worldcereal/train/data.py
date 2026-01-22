@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 import duckdb
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from loguru import logger
 from prometheo.models import Presto
@@ -476,8 +477,14 @@ def get_training_dfs_from_parquet(
         """
         )
 
-    # Load the merged Parquet
-    df = pd.read_parquet(wide_parquet_output_path)
+    # Load the merged Parquet -> use pyarrow for efficient chunked reading
+    logger.info(f"Loading wide parquet file from {wide_parquet_output_path} ...")
+    pf = pq.ParquetFile(wide_parquet_output_path)
+    parts = []
+    for i in range(pf.num_row_groups):
+        table = pf.read_row_group(i)  # arrow Table (usually lower overhead than pandas)
+        parts.append(table.to_pandas())  # convert one chunk at a time
+    df = pd.concat(parts, ignore_index=True)
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
