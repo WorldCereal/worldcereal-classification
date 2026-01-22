@@ -99,6 +99,45 @@ def _annotate_dual_task_labels(
     return updated
 
 
+def _validate_seasonal_task_labels(
+    df: pd.DataFrame, *, split_name: str, strict: bool = True
+) -> None:
+    """Ensure each seasonal task has at least two unique labels when present."""
+
+    if df.empty:
+        logger.warning(
+            "%s split is empty; skipping seasonal task diversity validation",
+            split_name,
+        )
+        return
+
+    landcover_values = sorted(
+        {str(label) for label in df["landcover_label"].dropna().unique()}
+    )
+    croptype_values = sorted(
+        {
+            str(label)
+            for label in df.loc[df["label_task"] == "croptype", "croptype_label"]
+            .dropna()
+            .unique()
+        }
+    )
+
+    def _handle_violation(task_name: str, values: List[str]) -> None:
+        msg = (
+            f"{split_name} split has {len(values)} unique {task_name} label(s): {values or ['<none>']}. "
+            "Seasonal dual-task training requires at least two distinct labels per task."
+        )
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
+
+    if len(landcover_values) < 2:
+        _handle_violation("landcover", landcover_values)
+    if len(croptype_values) < 2:
+        _handle_violation("croptype", croptype_values)
+
+
 def get_parquet_file_list(timestep_freq: Literal["month", "dekad"] = "month"):
     if timestep_freq == "month":
         parquet_files = list(
@@ -155,11 +194,11 @@ def main(args):
     # Presto freezing settings
     freeze_layers = None
     unfreeze_epoch = None
-    if args.freeze_encoder_epochs > 0:
+    if args.head_only_training > 0:
         freeze_layers = ["encoder"]
-        unfreeze_epoch = args.freeze_encoder_epochs
+        unfreeze_epoch = args.head_only_training
         logger.info(
-            f"Freezing encoder for the first {args.freeze_encoder_epochs} epoch(s)"
+            f"Training head only for the first {args.head_only_training} epoch(s)"
         )
 
     # Masking parameters
@@ -250,8 +289,8 @@ def main(args):
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
-    epochs = 100
-    batch_size = 1024
+    epochs = 25
+    batch_size = 2024
     patience = 6
     num_workers = 8
 
@@ -270,6 +309,9 @@ def main(args):
     test_df_path = Path(output_dir) / "test_df.parquet"
 
     # Get / load the train/val/test dataframes
+    # TODO: alternative pathway without mapping the classes early (so classes are being removed unwanted)
+    # TODO: build-in confidence score handling for both tasks
+    # TODO: handle outliers
     if (
         train_df_path.exists()
         and val_df_path.exists()
@@ -328,6 +370,20 @@ def main(args):
     val_df = annotated_splits["val"]
     test_df = annotated_splits["test"]
 
+    if debug:
+        train_df = train_df.sample(n=10000, random_state=DEFAULT_SEED).reset_index(
+            drop=True
+        )
+        val_df = val_df.sample(n=2000, random_state=DEFAULT_SEED).reset_index(drop=True)
+        test_df = test_df.sample(n=2000, random_state=DEFAULT_SEED).reset_index(
+            drop=True
+        )
+        logger.info("Debug mode: reduced dataset sizes.")
+
+    _validate_seasonal_task_labels(train_df, split_name="train", strict=True)
+    _validate_seasonal_task_labels(val_df, split_name="val", strict=False)
+    _validate_seasonal_task_labels(test_df, split_name="test", strict=False)
+
     mapping_values = _unique_preserve_order(CLASS_MAPPINGS[finetune_classes].values())
     present_classes = {
         str(xx) for xx in train_df["finetune_class"].dropna().unique().tolist()
@@ -335,7 +391,6 @@ def main(args):
     classes_list = [xx for xx in mapping_values if xx in present_classes]
     logger.info(f"classes_list: {classes_list}")
     num_classes = train_df["finetune_class"].nunique()
-    # TODO: check what happens if land cover only has one class
     if num_classes == 2:
         task_type = "binary"
         num_outputs = 1
@@ -414,9 +469,45 @@ def main(args):
         patience=patience,
         num_workers=num_workers,
     )
+
+    # ----------------------------
+    # Definining the optimizer and scheduler
+    # ----------------------------
+
+    # Define optimizer
+    head_lr = 1e-2
+    full_lr = 1e-4
+
     parameters = param_groups_lrd(model)
-    optimizer = AdamW(parameters, lr=1e-4)
-    scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
+    optimizer = AdamW(parameters, lr=head_lr)
+    for group in optimizer.param_groups:
+        group["initial_lr"] = head_lr  # required by some schedulers.
+
+    # Phase 1: constant LR = base_lr
+    const_sched = lr_scheduler.ConstantLR(
+        optimizer,
+        factor=1.0,  # keep LR = base_lr
+        total_iters=unfreeze_epoch
+        if unfreeze_epoch is not None
+        else 0,  # number of epochs before unfreeze
+    )
+
+    # Phase 2: exponential decay but starting from a reduced LR
+    for group in optimizer.param_groups:
+        group["lr"] = (
+            full_lr  # Manually scale the optimizer LR before building the second scheduler
+        )
+    exp_sched = lr_scheduler.ExponentialLR(
+        optimizer,
+        gamma=0.99,
+    )
+
+    # Create the scheduler
+    scheduler = lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[const_sched, exp_sched],
+        milestones=[unfreeze_epoch if unfreeze_epoch is not None else 0],
+    )
 
     # Setup dataloaders
     generator = torch.Generator()
@@ -581,7 +672,7 @@ def parse_args(arg_list=None):
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--use_balancing", action="store_true")
     parser.add_argument(
-        "--freeze_encoder_epochs",
+        "--head_only_training",
         type=int,
         default=0,
         help="Freeze encoder weights for this many initial epochs (0 disables freezing)",
@@ -611,6 +702,8 @@ if __name__ == "__main__":
         "--finetune_classes",
         "LANDCOVER10",  # CROPTYPE27
         "--use_balancing",
+        "--head_only_training",
+        "5",
         "--debug",
     ]
     # manual_args = None

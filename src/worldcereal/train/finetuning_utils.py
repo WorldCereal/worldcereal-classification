@@ -77,7 +77,6 @@ def build_confusion_matrix_figure(
         yticklabels=label_order,
         linewidths=0.01,
         square=True,
-        cmap="Blues",
         ax=ax,
     )
     ax.set_xticklabels(label_order, rotation=90)
@@ -1091,7 +1090,7 @@ def summarize_seasonal_predictions(
     cropland_set = {
         str(name)
         for name in (cropland_class_names or [])
-        if name is not None and not _is_missing_value(name)
+        if not _is_missing_value(name)
     }
     croptype_indices = [
         idx for idx, task in enumerate(tasks) if task == croptype_task_name
@@ -1106,14 +1105,15 @@ def summarize_seasonal_predictions(
         )
         for local_idx, sample_idx in enumerate(croptype_indices):
             target_name = croptype_labels[sample_idx]
-            if target_name is None or _is_missing_value(target_name):
+            if _is_missing_value(target_name):
                 continue
             if str(target_name) not in croptype_classes:
                 continue
 
-            landcover_pred = landcover_pred_names[sample_idx]
+            landcover_target = landcover_labels[sample_idx]
+            has_landcover_label = not _is_missing_value(landcover_target)
             is_cropland = not cropland_set or (
-                landcover_pred is not None and landcover_pred in cropland_set
+                has_landcover_label and str(landcover_target) in cropland_set
             )
             if not is_cropland:
                 croptype_gate_rejections += 1

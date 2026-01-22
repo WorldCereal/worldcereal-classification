@@ -1,7 +1,8 @@
 import calendar
 from collections import Counter
 from dataclasses import dataclass
-from math import log, pi, radians, tan
+from math import floor
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -19,7 +20,6 @@ import pandas as pd
 import xarray as xr
 from einops import rearrange, repeat
 from loguru import logger
-from openeo_gfmap import BoundingBoxExtent
 from prometheo.infer import extract_features_from_model
 from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import (
@@ -34,7 +34,7 @@ from pyproj import Transformer
 from torch import nn
 from torch.utils.data import Dataset, WeightedRandomSampler
 
-from worldcereal.seasons import get_season_dates_for_extent
+from worldcereal.seasons import season_doys_to_dates_refyear
 
 # minimum distance from valid_position to the edges when augmenting
 # we need to define it globally so that it can be used in process_parquet as well
@@ -43,8 +43,27 @@ MIN_EDGE_BUFFER = 2
 GLOBAL_SEASON_IDS: Tuple[str, ...] = ("tc-s1", "tc-s2")
 SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
-SEASON_BBOX_BUFFER_M = 10000
-WEB_MERCATOR_RADIUS_M = 6_378_137.0
+
+SEASONALITY_LOOKUP_FILENAME = "seasonality_lookup.parquet"
+SEASONALITY_LOOKUP_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "cropcalendars"
+    / SEASONALITY_LOOKUP_FILENAME
+)
+SEASONALITY_LOOKUP_COLUMNS: Tuple[str, ...] = (
+    "s1_sos_doy",
+    "s1_eos_doy",
+    "s2_sos_doy",
+    "s2_eos_doy",
+)
+SEASONALITY_COLUMN_MAP: Dict[str, Tuple[str, str]] = {
+    "tc-s1": ("s1_sos_doy", "s1_eos_doy"),
+    "tc-s2": ("s2_sos_doy", "s2_eos_doy"),
+}
+SEASONALITY_LAT_RANGE = (-89.999, 89.999)
+SEASONALITY_LON_RANGE = (-179.999, 179.999)
+_SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
 
 
 @dataclass(frozen=True)
@@ -215,17 +234,49 @@ def _normalize_season_windows(
     return normalized
 
 
-def _latlon_to_web_mercator(lat: float, lon: float) -> Tuple[float, float]:
-    """Project WGS84 coordinates to Web Mercator (EPSG:3857) using closed-form math."""
-    lat = float(lat)
-    lon = float(lon)
-    # Clamp latitude to avoid singularities at the poles
-    lat = max(min(lat, 89.9), -89.9)
-    lat_rad = radians(lat)
-    lon_rad = radians(lon)
-    x = WEB_MERCATOR_RADIUS_M * lon_rad
-    y = WEB_MERCATOR_RADIUS_M * log(tan(pi / 4 + lat_rad / 2))
-    return x, y
+def _ensure_seasonality_lookup() -> pd.DataFrame:
+    """Load and cache the seasonality lookup table indexed by lat/lon centers."""
+
+    global _SEASONALITY_LOOKUP_TABLE
+    if _SEASONALITY_LOOKUP_TABLE is not None:
+        return _SEASONALITY_LOOKUP_TABLE
+
+    if not SEASONALITY_LOOKUP_PATH.exists():
+        raise FileNotFoundError(
+            f"Seasonality lookup parquet not found at {SEASONALITY_LOOKUP_PATH}"
+        )
+
+    table = pd.read_parquet(SEASONALITY_LOOKUP_PATH)
+    required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
+    missing = required.difference(table.columns)
+    if missing:
+        raise ValueError(
+            f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
+        )
+
+    table = table.astype({"lat": np.float64, "lon": np.float64})
+    table = table.set_index(["lat", "lon"])
+    if not table.index.is_unique:
+        raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
+
+    _SEASONALITY_LOOKUP_TABLE = table[list(SEASONALITY_LOOKUP_COLUMNS)].sort_index()
+    return _SEASONALITY_LOOKUP_TABLE
+
+
+def _snap_coordinate_to_grid(value: float, bounds: Tuple[float, float]) -> float:
+    """Snap a coordinate to the 0.5° grid center used by the lookup."""
+
+    min_value, max_value = bounds
+    if value is None:
+        raise ValueError("Cannot snap a missing coordinate to the seasonality grid.")
+    clamped = max(min(float(value), max_value), min_value)
+    return (floor(clamped * 2.0) / 2.0) + 0.25
+
+
+def _snap_latlon_to_calendar_grid(lat: float, lon: float) -> Tuple[float, float]:
+    lat_center = _snap_coordinate_to_grid(lat, SEASONALITY_LAT_RANGE)
+    lon_center = _snap_coordinate_to_grid(lon, SEASONALITY_LON_RANGE)
+    return lat_center, lon_center
 
 
 def get_class_weights(
@@ -431,12 +482,6 @@ class WorldCerealDataset(Dataset):
                 logger.info(
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
-
-        # Cache for season context lookups
-        self._season_context_cache: Dict[
-            Tuple[str, Union[str, Tuple[float, float]], int],
-            Tuple[np.datetime64, np.datetime64],
-        ] = {}
 
     def __len__(self):
         return self.dataframe.shape[0]
@@ -856,8 +901,6 @@ class WorldCerealDataset(Dataset):
                 "WorldCerealDataset requires a label datetime for season metadata"
                 + (f" (sample_id={sample_id})" if sample_id is not None else "")
             )
-        calendar_ready = False
-        extent: Optional[BoundingBoxExtent] = None
         if has_calendar_seasons and derive_from_calendar:
             if lat is None or lon is None:
                 sample_id = row.get("sample_id")
@@ -865,15 +908,6 @@ class WorldCerealDataset(Dataset):
                     "WorldCerealDataset requires lat/lon coordinates to derive season calendars"
                     + (f" (sample_id={sample_id})" if sample_id is not None else "")
                 )
-            try:
-                extent = self._extent_from_latlon(lat, lon)
-                calendar_ready = True
-            except Exception as exc:  # pragma: no cover - rare reprojection failures
-                sample_id = row.get("sample_id", "n/a")
-                raise RuntimeError(
-                    "Failed to derive spatial extent for calendar-based seasons "
-                    f"(sample_id={sample_id}): {exc}"
-                ) from exc
 
         if label_datetime is not None:
             target_year = pd.Timestamp(label_datetime).year
@@ -894,8 +928,6 @@ class WorldCerealDataset(Dataset):
                 mask, in_flag = self._season_mask_from_calendar(
                     season_name=season,
                     composite_dates=composite_dates,
-                    calendar_ready=calendar_ready,
-                    extent=extent,
                     target_year=target_year,
                     row=row,
                     label_datetime=label_datetime,
@@ -965,8 +997,6 @@ class WorldCerealDataset(Dataset):
         self,
         season_name: str,
         composite_dates: np.ndarray,
-        calendar_ready: bool,
-        extent: Optional[BoundingBoxExtent],
         target_year: int,
         row: Mapping[str, Any],
         label_datetime: Optional[np.datetime64],
@@ -974,16 +1004,16 @@ class WorldCerealDataset(Dataset):
         lon: Optional[float],
     ) -> Tuple[np.ndarray, bool]:
         """Build a mask from calendar dates only when every timestep is present."""
-        if not calendar_ready or extent is None:
+        if lat is None or lon is None:
             sample_id = row.get("sample_id", "n/a")
             raise RuntimeError(
-                "Season calendar derivation was requested but extent was unavailable "
+                "Season calendar derivation was requested but lat/lon were missing "
                 f"(sample_id={sample_id}, season={season_name})."
             )
 
         try:
             start_dt, end_dt = self._season_context_for(
-                season_name, row, target_year, extent, lat, lon
+                season_name, row, target_year, lat, lon
             )
         except Exception as exc:  # pragma: no cover - guard rare failures
             sample_id = row.get("sample_id", "n/a")
@@ -1057,43 +1087,52 @@ class WorldCerealDataset(Dataset):
         season_id: str,
         row: Mapping[str, Any],
         year: int,
-        extent: BoundingBoxExtent,
         lat: float,
         lon: float,
     ) -> Tuple[np.datetime64, np.datetime64]:
-        """Fetch (start, end) dates for a season/extent, caching by location."""
-        cache_key = self._season_cache_key(season_id, year, lat, lon)
-        context = self._season_context_cache.get(cache_key)
-        if context is None:
-            tc = get_season_dates_for_extent(extent, year, season=season_id)
-            context = (
-                np.datetime64(tc.start_date, "D"),
-                np.datetime64(tc.end_date, "D"),
+        """Fetch (start, end) dates for a season/grid cell from the lookup."""
+
+        lat_center, lon_center = _snap_latlon_to_calendar_grid(lat, lon)
+        try:
+            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"Season '{season_id}' is not available in the seasonality lookup."
+            ) from exc
+
+        table = _ensure_seasonality_lookup()
+        try:
+            doy_row = table.loc[(lat_center, lon_center)]
+        except KeyError as exc:  # pragma: no cover - unexpected gaps
+            lat_vals = table.index.get_level_values("lat").to_numpy()
+            lon_vals = table.index.get_level_values("lon").to_numpy()
+            if lat_vals.size == 0:
+                raise ValueError(
+                    "No seasonality record found for snapped lat/lon "
+                    f"({lat_center}, {lon_center})."
+                ) from exc
+            distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
+            best_idx = int(distances.argmin())
+            fallback_key = (lat_vals[best_idx], lon_vals[best_idx])
+            logger.debug(
+                f"Seasonality lookup missing ({lat_center}, {lon_center}); using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
             )
-            self._season_context_cache[cache_key] = context
-        return context
+            lat_center, lon_center = float(fallback_key[0]), float(fallback_key[1])
+            doy_row = table.iloc[best_idx]
 
-    def _season_cache_key(
-        self,
-        season_id: str,
-        year: int,
-        lat: float,
-        lon: float,
-    ) -> Tuple[str, Tuple[float, float], int]:
-        # Use spatially-derived key so caches remain valid even when ref_id refers to
-        # a global collection (multiple lat/lon pairs per ref).
-        location_key = (round(lat, 4), round(lon, 4))
-        return (season_id, location_key, year)
+        sos_doy = int(doy_row[sos_col])
+        eos_doy = int(doy_row[eos_col])
+        if sos_doy <= 0 or eos_doy <= 0:
+            sample_id = row.get("sample_id", "n/a")
+            raise ValueError(
+                "Seasonality lookup returned nodata DOY values for "
+                f"season '{season_id}' (sample_id={sample_id})."
+            )
 
-    def _extent_from_latlon(self, lat: float, lon: float) -> BoundingBoxExtent:
-        x, y = _latlon_to_web_mercator(lat, lon)
-        buffer = SEASON_BBOX_BUFFER_M
-        return BoundingBoxExtent(
-            west=x - buffer,
-            south=y - buffer,
-            east=x + buffer,
-            north=y + buffer,
-            epsg=3857,
+        start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, year)
+        return (
+            np.datetime64(start_dt, "D"),
+            np.datetime64(end_dt, "D"),
         )
 
 
