@@ -3,8 +3,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import List
+from unittest import mock
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 from prometheo.finetune import Hyperparams
 from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
 from prometheo.predictors import NODATAVALUE, Predictors
@@ -15,18 +18,19 @@ from torch.utils.data import DataLoader
 
 from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.finetuning_utils import (
+    SeasonalMultiTaskLoss,
     evaluate_finetuned_model,
     prepare_training_datasets,
-    SeasonalMultiTaskLoss,
     run_finetuning,
 )
 from worldcereal.train.seasonal_head import (
     SeasonalFinetuningHead,
+    SeasonalHeadOutput,
     WorldCerealSeasonalModel,
 )
 
 LANDCOVER_KEY = "TEST_BINARY"
-CROPTYPE_KEY = "CROPTYPE27"
+CROPTYPE_KEY = "CROPTYPE28"
 
 
 def _sample_to_predictors(sample):
@@ -53,9 +57,7 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
         train_dl = DataLoader(
             train_ds, batch_size=2, shuffle=True, collate_fn=collate_fn
         )
-        val_dl = DataLoader(
-            val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn
-        )
+        val_dl = DataLoader(val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn)
 
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
@@ -192,9 +194,7 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
         train_dl = DataLoader(
             train_ds, batch_size=2, shuffle=True, collate_fn=collate_fn
         )
-        val_dl = DataLoader(
-            val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn
-        )
+        val_dl = DataLoader(val_ds, batch_size=2, shuffle=False, collate_fn=collate_fn)
 
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
@@ -331,6 +331,50 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
             )
 
 
+class TestValidationImprovementCallback(unittest.TestCase):
+    def test_callback_runs_only_on_improvements(self):
+        model = _ToyBinaryModel().to(device)
+        train_batch = _build_binary_predictor_batch()
+        val_batch = _build_binary_predictor_batch()
+        train_loader = _MemoryLoader([train_batch], task_type="binary")
+        val_loader = _MemoryLoader([val_batch], task_type="binary")
+
+        loss_fn = _CallbackProbeLoss(val_losses=[0.9, 0.8, 0.8])
+        hyperparams = Hyperparams(max_epochs=3, batch_size=4, patience=3, num_workers=0)
+        optimizer = AdamW(model.parameters(), lr=0.01)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+
+        callback_calls = []
+
+        def _on_improved(epoch_idx, model_snapshot, best_loss):
+            callback_calls.append((epoch_idx, float(best_loss)))
+            self.assertFalse(
+                model_snapshot.training,
+                "Model should remain in eval mode while running the callback",
+            )
+            context = getattr(model_snapshot, "_last_validation_context", None)
+            self.assertIsNotNone(context)
+            self.assertIn("metrics", context)
+
+        with TemporaryDirectory() as tmpdir:
+            run_finetuning(
+                model=model,
+                train_dl=train_loader,
+                val_dl=val_loader,
+                experiment_name="callback-test",
+                output_dir=Path(tmpdir),
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                hyperparams=hyperparams,
+                setup_logging=False,
+                on_validation_improved=_on_improved,
+            )
+
+        self.assertEqual([1, 2], [epoch for epoch, _ in callback_calls])
+        self.assertEqual(2, len(callback_calls))
+
+
 SEASONAL_TIMESTEPS = 3
 SEASONAL_LANDCOVER_CLASSES = ["background", "cropland"]
 SEASONAL_CROPTYPE_CLASSES = ["maize", "wheat"]
@@ -350,6 +394,45 @@ class _MemoryLoader:
 
     def __len__(self):
         return len(self._batches)
+
+
+def _build_binary_predictor_batch(batch_size: int = 4):
+    label = torch.zeros(batch_size, 1, dtype=torch.float32)
+    timestamps = torch.zeros(batch_size, 1, 3, dtype=torch.float32)
+    return Predictors(label=label, timestamps=timestamps)
+
+
+class _ToyBinaryModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, predictors: Predictors, attrs=None):
+        if predictors.label is None:
+            raise ValueError("Predictors must include labels for the toy model")
+        logits = torch.ones_like(predictors.label, dtype=torch.float32)
+        logits = logits.to(self.weight.device)
+        return logits * self.weight
+
+
+class _CallbackProbeLoss(nn.Module):
+    def __init__(self, val_losses: List[float]):
+        super().__init__()
+        if not val_losses:
+            raise ValueError("val_losses must contain at least one value")
+        self.val_losses = val_losses
+        self.val_call_idx = 0
+
+    def forward(self, inputs, targets):
+        base = inputs.sum() * 0
+        if torch.is_grad_enabled():
+            value = 1.0
+        else:
+            idx = min(self.val_call_idx, len(self.val_losses) - 1)
+            value = self.val_losses[idx]
+            self.val_call_idx += 1
+        loss_value = torch.tensor(float(value), device=inputs.device)
+        return base + loss_value
 
 
 class _DummySeasonalBackbone(nn.Module):
@@ -397,9 +480,7 @@ def _build_synthetic_seasonal_batch(label_tasks: List[str]):
     attrs = {
         "season_masks": season_masks,
         "in_seasons": in_seasons,
-        "valid_position": [
-            min(i, SEASONAL_TIMESTEPS - 1) for i in range(batch_size)
-        ],
+        "valid_position": [min(i, SEASONAL_TIMESTEPS - 1) for i in range(batch_size)],
         "landcover_label": [
             SEASONAL_LANDCOVER_CLASSES[i % len(SEASONAL_LANDCOVER_CLASSES)]
             for i in range(batch_size)
@@ -415,9 +496,7 @@ def _build_synthetic_seasonal_batch(label_tasks: List[str]):
 
 class TestSeasonalHeadFinetuning(unittest.TestCase):
     def test_dual_branch_seasonal_training(self):
-        backbone = _DummySeasonalBackbone(
-            timesteps=SEASONAL_TIMESTEPS, embedding_dim=8
-        )
+        backbone = _DummySeasonalBackbone(timesteps=SEASONAL_TIMESTEPS, embedding_dim=8)
         head = SeasonalFinetuningHead(
             embedding_dim=8,
             landcover_num_outputs=len(SEASONAL_LANDCOVER_CLASSES),
@@ -481,9 +560,7 @@ class TestSeasonalHeadFinetuning(unittest.TestCase):
             landcover_grads = [
                 p.grad for p in trained_model.head.landcover_head.parameters()
             ]
-            croptype_grads = [
-                p.grad for p in trained_model.head.crop_head.parameters()
-            ]
+            croptype_grads = [p.grad for p in trained_model.head.crop_head.parameters()]
 
             self.assertTrue(
                 any(g is not None and torch.any(g != 0) for g in landcover_grads),
@@ -493,6 +570,54 @@ class TestSeasonalHeadFinetuning(unittest.TestCase):
                 any(g is not None and torch.any(g != 0) for g in croptype_grads),
                 "Crop-type branch did not receive gradients",
             )
+
+
+class TestSeasonalLossWeighting(unittest.TestCase):
+    def test_sample_weights_rescale_branch_losses(self):
+        output = SeasonalHeadOutput(
+            global_logits=torch.tensor([[2.0, 0.0], [0.0, 2.0]], dtype=torch.float32),
+            season_logits=torch.tensor(
+                [[[0.0, 1.0]], [[1.5, 0.5]]], dtype=torch.float32
+            ),
+            global_embedding=torch.zeros(2, 2),
+            season_embeddings=torch.zeros(2, 1, 2),
+            season_masks=torch.ones(2, 1, 1, dtype=torch.bool),
+        )
+        attrs = {
+            "landcover_label": ["forest", None],
+            "croptype_label": [None, "wheat"],
+            "label_task": ["landcover", "croptype"],
+            "valid_position": [0, 0],
+            "in_seasons": np.ones((2, 1), dtype=bool),
+            "quality_score_lc": [0.5, None],
+            "quality_score_ct": [None, 2.0],
+        }
+
+        loss_fn = SeasonalMultiTaskLoss(
+            landcover_classes=["forest", "water"],
+            croptype_classes=["wheat", "maize"],
+            task_sample_weight_attrs={
+                "landcover": "quality_score_lc",
+                "croptype": "quality_score_ct",
+            },
+            sample_weight_clip=(0.1, 5.0),
+            sample_weight_default=1.0,
+        )
+
+        predictors = mock.MagicMock(spec=Predictors)
+        weighted_loss = loss_fn(output, predictors, attrs)
+
+        lc_ce = F.cross_entropy(
+            output.global_logits[0:1], torch.tensor([0]), reduction="none"
+        )
+        lc_expected = torch.sum(lc_ce * torch.tensor([0.5])) / 0.5
+
+        ct_logits = output.season_logits[1, 0:1, :]
+        ct_ce = F.cross_entropy(ct_logits, torch.tensor([0]), reduction="none")
+        ct_expected = torch.sum(ct_ce * torch.tensor([2.0])) / 2.0
+
+        expected_total = lc_expected + ct_expected
+        self.assertAlmostEqual(weighted_loss.item(), expected_total.item(), places=6)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from worldcereal.utils.refdata import (
 )
 
 LANDCOVER_KEY = "LANDCOVER10"
-CROPTYPE_KEY = "CROPTYPE27"
+CROPTYPE_KEY = "CROPTYPE28"
 
 
 def test_query_public_extractions():
@@ -195,7 +195,7 @@ class TestMapClasses(unittest.TestCase):
         result_df = map_classes(self.df, finetune_classes=CROPTYPE_KEY)
 
         # Check that filter classes were removed
-        self.assertEqual(len(result_df), 3)
+        self.assertEqual(len(result_df), 4)
 
         # Check that classes match the expected ones
         for i, ewoc_code in enumerate([1101060000, 1101010000, 1106000032]):

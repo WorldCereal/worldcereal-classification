@@ -24,7 +24,7 @@ from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
 LANDCOVER_KEY = "LANDCOVER10"
-CROPTYPE_KEY = "CROPTYPE27"
+CROPTYPE_KEY = "CROPTYPE28"
 
 
 class TestPrepareTrainingDatasets(unittest.TestCase):
@@ -566,11 +566,10 @@ class TestSeasonalEvaluation(unittest.TestCase):
         self.assertFalse(landcover_df.empty)
 
         croptype_df = results["croptype"]["results"]
-        gate_row = croptype_df[croptype_df["class"] == "croptype_gate_rejections"]
-        self.assertFalse(gate_row.empty)
-        self.assertEqual(int(gate_row["support"].iloc[0]), 1)
-        self.assertEqual(results["croptype"]["gate_rejections"], 1)
-        self.assertEqual(results["croptype"]["num_samples"], 1)
+        gate_mask = croptype_df["class"] == "croptype_gate_rejections"
+        self.assertFalse(gate_mask.any())
+        self.assertEqual(results["croptype"]["gate_rejections"], 0)
+        self.assertEqual(results["croptype"]["num_samples"], 2)
 
 
 if __name__ == "__main__":

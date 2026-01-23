@@ -1,4 +1,5 @@
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -13,7 +14,9 @@ from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
     WorldCerealTrainingDataset,
+    _spatial_bins_from_latlon,
     align_to_composite_window,
+    get_class_weights,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
     run_model_inference,
@@ -85,6 +88,29 @@ class TestWorldCerealDataset(unittest.TestCase):
             "cropland",
             "not_cropland",
         ]
+        self.df["label_task"] = [
+            "landcover",
+            "croptype",
+            "croptype",
+            "landcover",
+            "croptype",
+        ]
+        self.df["landcover_label"] = [
+            "lc_a",
+            "lc_b",
+            "lc_a",
+            "lc_b",
+            "lc_a",
+        ]
+        self.df["croptype_label"] = [
+            "ct_a",
+            "ct_b",
+            "ct_a",
+            "ct_b",
+            "ct_a",
+        ]
+        self.df["quality_score_lc"] = [0.5, 1.0, 1.0, 2.0, 1.0]
+        self.df["quality_score_ct"] = [1.5, 0.5, 2.0, 1.0, 0.8]
 
         # Initialize the datasets
         self.base_ds = WorldCerealDataset(
@@ -201,6 +227,74 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertTrue(np.any(inputs["s2"] != NODATAVALUE))
         self.assertTrue(np.any(inputs["meteo"] != NODATAVALUE))
         self.assertTrue(np.any(inputs["dem"] != NODATAVALUE))
+
+    def test_task_balanced_sampler_combines_weights(self):
+        """Ensure the sampler composes task, class, sample, and spatial weights."""
+
+        class_column_map = {
+            "landcover": "landcover_label",
+            "croptype": "croptype_label",
+        }
+
+        spatial_bin_size = 0.2
+
+        sampler = self.binary_ds.get_task_balanced_sampler(
+            class_column_map=class_column_map,
+            task_weight_method="balanced",
+            class_weight_method="balanced",
+            spatial_bin_size_degrees=spatial_bin_size,
+            spatial_weight_method="log",
+            normalize=True,
+        )
+
+        weights = sampler.weights.double().cpu().numpy()
+        self.assertEqual(weights.shape[0], self.num_samples)
+
+        df = self.binary_ds.dataframe
+        tasks = df["label_task"].astype(str).to_numpy()
+
+        # landcover supervises every sample when croptype labels exist
+        effective_task_counts = Counter(tasks)
+        if {"landcover", "croptype"}.issubset(effective_task_counts):
+            effective_task_counts["landcover"] = len(tasks)
+        task_weights = get_class_weights(
+            tasks,
+            method="balanced",
+            normalize=True,
+            counts_override=effective_task_counts,
+        )
+        expected_task = np.array([task_weights[t] for t in tasks], dtype=np.float64)
+
+        expected_class = np.ones_like(expected_task)
+        for task_name, column in class_column_map.items():
+            mask = tasks == task_name
+            if not np.any(mask):
+                continue
+            class_values = df.loc[mask, column].astype(str).to_numpy()
+            class_weights = get_class_weights(
+                class_values,
+                method="balanced",
+                clip_range=(0.1, 10.0),
+                normalize=True,
+            )
+            expected_class[mask] = np.array(
+                [class_weights[val] for val in class_values], dtype=np.float64
+            )
+
+        spatial_bins = _spatial_bins_from_latlon(df["lat"], df["lon"], spatial_bin_size)
+        spatial_weights = get_class_weights(
+            spatial_bins,
+            method="log",
+            clip_range=(0.1, 10.0),
+            normalize=True,
+        )
+        expected_spatial = np.array(
+            [spatial_weights[str(bin_id)] for bin_id in spatial_bins], dtype=np.float64
+        )
+
+        expected = expected_task * expected_class * expected_spatial
+
+        np.testing.assert_allclose(weights, expected, rtol=1e-6, atol=1e-6)
 
     def test_getitem(self):
         """Test __getitem__ returns correct type."""

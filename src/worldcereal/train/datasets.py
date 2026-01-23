@@ -17,6 +17,7 @@ from typing import (
 
 import numpy as np
 import pandas as pd
+import torch
 import xarray as xr
 from einops import rearrange, repeat
 from loguru import logger
@@ -88,6 +89,11 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "quality_score_ct",
 )
 
+_LABEL_DATETIME_COLUMNS: Tuple[str, ...] = (
+    "valid_time",
+    "valid_date",
+)
+
 
 def _is_missing_value(value: Any) -> bool:
     if value is None:
@@ -123,6 +129,18 @@ def _safe_datetime64(value: Any) -> Optional[np.datetime64]:
     if pd.isna(ts):
         return None
     return np.datetime64(ts, "D")
+
+
+def _resolve_label_datetime(row: Mapping[str, Any]) -> Optional[np.datetime64]:
+    """Pick the first non-missing label timestamp available in the sample row."""
+
+    for column in _LABEL_DATETIME_COLUMNS:
+        if column not in row:
+            continue
+        candidate = _safe_datetime64(row.get(column))
+        if candidate is not None:
+            return candidate
+    return None
 
 
 def _timestamps_to_datetime_array(timestamps: np.ndarray) -> np.ndarray:
@@ -284,6 +302,7 @@ def get_class_weights(
     method: str = "balanced",  # 'balanced', 'log', 'effective', or 'none'
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
+    counts_override: Optional[Mapping[Any, int]] = None,
 ) -> Dict[int, float]:
     """
     Compute class weights for classification tasks.
@@ -301,10 +320,17 @@ def get_class_weights(
     Returns:
         class_weights_dict: dict mapping class index → weight
     """
-    counts = Counter(labels)
+    if counts_override is not None:
+        counts = {k: int(v) for k, v in counts_override.items()}
+    else:
+        counts = {k: int(v) for k, v in Counter(labels).items()}
+
     classes = sorted(counts.keys())
     total_samples = sum(counts.values())
     num_classes = len(classes)
+
+    if num_classes == 0:
+        return {}
 
     freq = np.array([counts[c] for c in classes], dtype=np.float64)
     freq = np.maximum(freq, 1.0)  # safety
@@ -338,7 +364,31 @@ def get_class_weights(
         logger.info("Renormalizing weights to mean = 1")
         weights = weights / weights.mean()
 
-    return dict(zip(classes, weights.astype(float)))
+    return dict(zip(classes, np.round(weights, 3)))
+
+
+def _spatial_bins_from_latlon(
+    latitudes: pd.Series, longitudes: pd.Series, bin_size: float
+) -> np.ndarray:
+    """Quantize latitude/longitude pairs into coarse grid bins."""
+
+    if bin_size <= 0:
+        raise ValueError("spatial_bin_size_degrees must be a positive number")
+
+    lat_array = latitudes.to_numpy(dtype=np.float64, copy=True)
+    lon_array = longitudes.to_numpy(dtype=np.float64, copy=True)
+
+    if np.isnan(lat_array).any() or np.isnan(lon_array).any():
+        raise ValueError(
+            "Latitude/longitude contain missing values; cannot build spatial bins"
+        )
+
+    lat_bins = np.floor((lat_array + 90.0) / bin_size).astype(np.int64)
+    lon_bins = np.floor((lon_array + 180.0) / bin_size).astype(np.int64)
+
+    lat_str = lat_bins.astype(str)
+    lon_str = lon_bins.astype(str)
+    return np.char.add(np.char.add(lat_str, "_"), lon_str)
 
 
 @dataclass
@@ -1142,6 +1192,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         dataframe,
         task_type: Literal["binary", "multiclass"] = "binary",
         num_outputs: int = 1,
+        emit_label_tensor: bool = True,
         classes_list: Union[np.ndarray, List[str]] = [],
         time_explicit: bool = False,
         label_jitter: int = 0,  # ± timesteps to jitter true label pos, for time_explicit only
@@ -1159,6 +1210,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         ----------
         num_outputs : int, optional
             number of outputs to supervise training on, by default 1
+        emit_label_tensor : bool, optional
+            whether to emit the label tensor in __getitem__, by default True.
+            If False, no label tensor is created or returned.
         classes_list : List, optional
             list of column names in the dataframe containing class labels for multiclass tasks,
             used to extract labels from each row of the dataframe, by default []
@@ -1204,6 +1258,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             **kwargs,
         )
         self.classes_list = classes_list
+        self.emit_label_tensor = emit_label_tensor
         self.time_explicit = time_explicit
         self.label_jitter = label_jitter
         self.label_window = label_window
@@ -1232,12 +1287,16 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
-        label = self.get_label(
-            row,
-            task_type=self.task_type,
-            classes_list=self.classes_list,
-            valid_position=relative_valid,
-        )
+
+        if self.emit_label_tensor:
+            label = self.get_label(
+                row,
+                task_type=self.task_type,
+                classes_list=self.classes_list,
+                valid_position=relative_valid,
+            )
+        else:
+            label = None
 
         attrs = self._build_sample_attrs(
             row=row,
@@ -1247,7 +1306,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             season_windows=self._season_windows,
             season_engine=self._season_engine,
             derive_from_calendar=self._season_engine == "calendar",
-            label_datetime=_safe_datetime64(row.get("valid_time")),
+            label_datetime=_resolve_label_datetime(row),
         )
 
         predictors = Predictors(**inputs, label=label)
@@ -1407,6 +1466,163 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         )
         return sampler
 
+    def get_task_balanced_sampler(
+        self,
+        *,
+        task_column: str = "label_task",
+        task_weight_method: str = "balanced",
+        class_column_map: Optional[Mapping[str, str]] = None,
+        class_weight_method: str = "balanced",
+        spatial_group_column: Optional[str] = None,
+        spatial_bin_size_degrees: Optional[float] = None,
+        spatial_weight_method: str = "log",
+        clip_range: Optional[Tuple[float, float]] = None,
+        normalize: bool = True,
+        generator: Optional[Any] = None,
+        fallback_sampling_class: str = "finetune_class",
+    ) -> "WeightedRandomSampler":
+        """Build weights that balance tasks, classes, and spatial density."""
+
+        def _log_weight_stats(name: str, values: np.ndarray) -> None:
+            if values.size == 0:
+                logger.warning(f"{name}: no values to describe")
+                return
+            stats = {
+                "min": float(values.min()),
+                "max": float(values.max()),
+                "mean": float(values.mean()),
+                "std": float(values.std(ddof=0)),
+            }
+            logger.info(f"{name} stats: {stats}")
+
+        if task_column not in self.dataframe.columns:
+            raise ValueError(f"Task column '{task_column}' not found in dataframe")
+
+        task_series = self.dataframe[task_column]
+        if task_series.isna().any():
+            raise ValueError(
+                "Task column contains missing values; balancing requires explicit task IDs"
+            )
+
+        tasks = task_series.astype(str).to_numpy()
+        unique_tasks = sorted(set(tasks.tolist()))
+        task_counts = {task: int((tasks == task).sum()) for task in unique_tasks}
+        logger.info(
+            f"Building task-balanced sampler for {len(tasks)} samples across tasks: {task_counts}"
+        )
+
+        effective_task_counts = dict(task_counts)
+        if {"landcover", "croptype"}.issubset(effective_task_counts):
+            effective_task_counts["landcover"] = len(tasks)
+            logger.info(
+                f"Treating landcover as supervising all samples for task weighting: {effective_task_counts}"
+            )
+
+        # Task-level weights
+        task_weights = get_class_weights(
+            tasks,
+            method=task_weight_method,
+            clip_range=None,
+            normalize=normalize,
+            counts_override=effective_task_counts,
+        )
+        logger.info(f"Task weights per task: {task_weights}")
+        task_weight_vec = np.array(
+            [task_weights[str(task)] for task in tasks], dtype=np.float64
+        )
+        _log_weight_stats("Task weight vector", task_weight_vec)
+
+        # Class-level weights (within each task)
+        class_weight_vec = np.ones_like(task_weight_vec)
+        class_column_map = class_column_map or {}
+        for task_name in unique_tasks:
+            class_column = class_column_map.get(task_name, fallback_sampling_class)
+            if class_column not in self.dataframe.columns:
+                raise ValueError(
+                    f"Class column '{class_column}' required for task '{task_name}' but not found in dataframe"
+                )
+
+            mask = tasks == task_name
+            if not np.any(mask):
+                continue
+
+            class_values = self.dataframe.loc[mask, class_column].astype(str).to_numpy()
+            class_counts = Counter(class_values.tolist())
+            class_weights = get_class_weights(
+                class_values,
+                method=class_weight_method,
+                clip_range=(0.1, 10.0),
+                normalize=normalize,
+            )
+            logger.info(f"[Task={task_name}] class counts: {class_counts}")
+            logger.info(f"[Task={task_name}] class weights: {class_weights}")
+
+            class_weight_vec[mask] = np.array(
+                [class_weights[str(value)] for value in class_values], dtype=np.float64
+            )
+        _log_weight_stats("Class weight vector", class_weight_vec)
+
+        # Spatial weights (down-weight dense regions, up-weight sparse ones)
+        spatial_weight_vec = np.ones_like(task_weight_vec)
+        if spatial_group_column or spatial_bin_size_degrees is not None:
+            if spatial_group_column:
+                if spatial_group_column not in self.dataframe.columns:
+                    raise ValueError(
+                        f"Spatial group column '{spatial_group_column}' not found in dataframe"
+                    )
+                spatial_groups = (
+                    self.dataframe[spatial_group_column].astype(str).to_numpy()
+                )
+                if pd.isna(spatial_groups).any():
+                    raise ValueError(
+                        f"Spatial group column '{spatial_group_column}' contains missing values"
+                    )
+            else:
+                if spatial_bin_size_degrees is None:
+                    raise ValueError(
+                        "spatial_bin_size_degrees must be provided when spatial_group_column is not set"
+                    )
+                if (
+                    "lat" not in self.dataframe.columns
+                    or "lon" not in self.dataframe.columns
+                ):
+                    raise ValueError(
+                        "Latitude/longitude columns are required to compute spatial bins"
+                    )
+                spatial_groups = _spatial_bins_from_latlon(
+                    self.dataframe["lat"],
+                    self.dataframe["lon"],
+                    spatial_bin_size_degrees,
+                )
+
+            spatial_weights = get_class_weights(
+                spatial_groups,
+                method=spatial_weight_method,
+                clip_range=(0.1, 10.0),
+                normalize=normalize,
+            )
+            spatial_weight_vec = np.array(
+                [spatial_weights[str(group)] for group in spatial_groups],
+                dtype=np.float64,
+            )
+            logger.info(f"Spatial weights: {spatial_weights}")
+        _log_weight_stats("Spatial weight vector", spatial_weight_vec)
+
+        combined = task_weight_vec * class_weight_vec * spatial_weight_vec
+        if clip_range is not None:
+            combined = np.clip(combined, clip_range[0], clip_range[1])
+        else:
+            combined = np.clip(combined, 1e-6, None)
+        _log_weight_stats("Combined sampling weights", combined)
+
+        sampler = WeightedRandomSampler(
+            weights=torch.as_tensor(combined, dtype=torch.double),
+            num_samples=len(combined),
+            replacement=True,
+            generator=generator,
+        )
+        return sampler
+
 
 class WorldCerealTrainingDataset(WorldCerealDataset):
     def __init__(
@@ -1480,7 +1696,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             season_windows=self._season_windows,
             season_engine=self._season_engine,
             derive_from_calendar=self._season_engine == "calendar",
-            label_datetime=_safe_datetime64(row.get("valid_time")),
+            label_datetime=_resolve_label_datetime(row),
         )
 
         return sample, attrs
