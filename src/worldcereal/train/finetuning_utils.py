@@ -52,6 +52,7 @@ def _compute_metrics_from_records(
     records: List[dict], label_order: Optional[Sequence[str]]
 ) -> Tuple[pd.DataFrame, Figure, Figure]:
     columns = ["class", "precision", "recall", "f1-score", "support"]
+    labels: Optional[List[str]]
     if not records:
         df = pd.DataFrame(columns=columns)
         labels = list(label_order) if label_order else ["n/a"]
@@ -346,7 +347,9 @@ class SeasonalMultiTaskLoss(nn.Module):
         self._task_sample_weight_attrs = dict(task_sample_weight_attrs or {})
         self._sample_weight_clip = sample_weight_clip
         self._sample_weight_default = float(sample_weight_default)
-        self.cropland_class_names = list(cropland_class_names or [])
+        self.cropland_class_names = (
+            list(cropland_class_names) if cropland_class_names is not None else []
+        )
 
         self._lc_to_idx = {name: idx for idx, name in enumerate(landcover_classes)}
         self._ct_to_idx = {name: idx for idx, name in enumerate(croptype_classes)}
@@ -794,15 +797,13 @@ def evaluate_finetuned_model(
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
 
     # Run the model on the test set
-    all_probs = []
-    all_preds = []
-    all_targets = []
+    prob_batches: List[np.ndarray] = []
+    pred_batches: List[np.ndarray] = []
+    target_batches: List[np.ndarray] = []
     seasonal_mode = False
-    seasonal_records = {
-        "landcover": [],
-        "croptype": [],
-        "croptype_gate_rejections": 0,
-    }
+    seasonal_landcover_records: List[dict[str, Any]] = []
+    seasonal_croptype_records: List[dict[str, Any]] = []
+    croptype_gate_rejections = 0
 
     for batch in val_dl:
         predictors, attrs = _unpack_predictor_batch(batch)
@@ -825,11 +826,9 @@ def evaluate_finetuned_model(
                     seasonal_croptype_classes,
                     cropland_class_names=cropland_class_names,
                 )
-                seasonal_records["landcover"].extend(batch_summary["landcover"])
-                seasonal_records["croptype"].extend(batch_summary["croptype"])
-                seasonal_records["croptype_gate_rejections"] += batch_summary[
-                    "croptype_gate_rejections"
-                ]
+                seasonal_landcover_records.extend(batch_summary["landcover"])
+                seasonal_croptype_records.extend(batch_summary["croptype"])
+                croptype_gate_rejections += batch_summary["croptype_gate_rejections"]
                 seasonal_mode = True
                 continue
             targets = predictors.label.cpu().numpy().astype(int)
@@ -873,24 +872,23 @@ def evaluate_finetuned_model(
                         sample_preds = preds[i].flatten()[sample_valid_mask]
                         sample_targets = targets[i].flatten()[sample_valid_mask]
 
-                        all_probs.append(sample_probs)
-                        all_preds.append(sample_preds)
-                        all_targets.append(sample_targets)
+                        prob_batches.append(sample_probs)
+                        pred_batches.append(sample_preds)
+                        target_batches.append(sample_targets)
             else:
                 # For non-time-explicit, just flatten and add everything
-                all_probs.append(probs.flatten())
-                all_preds.append(preds.flatten())
-                all_targets.append(targets.flatten())
+                prob_batches.append(probs.flatten())
+                pred_batches.append(preds.flatten())
+                target_batches.append(targets.flatten())
 
     if seasonal_mode:
         landcover_df, landcover_cm, landcover_cm_norm = _compute_metrics_from_records(
-            seasonal_records["landcover"], seasonal_landcover_classes
+            seasonal_landcover_records, seasonal_landcover_classes
         )
         croptype_df, croptype_cm, croptype_cm_norm = _compute_metrics_from_records(
-            seasonal_records["croptype"], seasonal_croptype_classes
+            seasonal_croptype_records, seasonal_croptype_classes
         )
-        gate_rejections = seasonal_records["croptype_gate_rejections"]
-        if gate_rejections:
+        if croptype_gate_rejections:
             rejection_row = pd.DataFrame(
                 [
                     {
@@ -898,7 +896,7 @@ def evaluate_finetuned_model(
                         "precision": np.nan,
                         "recall": np.nan,
                         "f1-score": np.nan,
-                        "support": gate_rejections,
+                        "support": croptype_gate_rejections,
                     }
                 ]
             )
@@ -910,57 +908,71 @@ def evaluate_finetuned_model(
                 "cm": landcover_cm,
                 "cm_norm": landcover_cm_norm,
                 "classes": seasonal_landcover_classes,
-                "num_samples": len(seasonal_records["landcover"]),
+                "num_samples": len(seasonal_landcover_records),
             },
             "croptype": {
                 "results": croptype_df,
                 "cm": croptype_cm,
                 "cm_norm": croptype_cm_norm,
                 "classes": seasonal_croptype_classes,
-                "num_samples": len(seasonal_records["croptype"]),
-                "gate_rejections": gate_rejections,
+                "num_samples": len(seasonal_croptype_records),
+                "gate_rejections": croptype_gate_rejections,
             },
         }
 
     if time_explicit:
-        all_probs = np.concatenate(all_probs) if all_probs else np.array([])
-        all_preds = np.concatenate(all_preds) if all_preds else np.array([])
-        all_targets = np.concatenate(all_targets) if all_targets else np.array([])
+        all_probs_array = np.concatenate(prob_batches) if prob_batches else np.array([])
+        all_preds_array = np.concatenate(pred_batches) if pred_batches else np.array([])
+        all_targets_array = (
+            np.concatenate(target_batches) if target_batches else np.array([])
+        )
     else:
-        all_probs = np.concatenate(all_probs)
-        all_preds = np.concatenate(all_preds)
-        all_targets = np.concatenate(all_targets)
+        all_probs_array = np.concatenate(prob_batches)
+        all_preds_array = np.concatenate(pred_batches)
+        all_targets_array = np.concatenate(target_batches)
 
     classes_to_use: Optional[List[str]] = None
     label_order: Optional[List[str]] = None
 
     # Map numeric indices to class names if necessary
+    all_targets: List[Any]
+    all_preds: List[Any]
+    all_probs: List[Any]
+
     if test_ds.task_type == "multiclass" and classes_list:
         label_order = [str(cls) for cls in classes_list]
         all_targets_classes = np.array(
-            [classes_list[x] if x != NODATAVALUE else "unknown" for x in all_targets]
+            [
+                classes_list[x] if x != NODATAVALUE else "unknown"
+                for x in all_targets_array
+            ]
         )
-        all_preds_classes = np.array([classes_list[x] for x in all_preds])
+        all_preds_classes = np.array([classes_list[x] for x in all_preds_array])
 
         # Remove any "unknown" targets before classification report
         valid_indices = all_targets_classes != "unknown"
-        all_targets = list(all_targets_classes[valid_indices])
-        all_preds = list(all_preds_classes[valid_indices])
-        if len(all_probs) > 0:
-            all_probs_array = np.array(all_probs)[valid_indices]
-            all_probs = list(all_probs_array)
+        all_targets = all_targets_classes[valid_indices].tolist()
+        all_preds = all_preds_classes[valid_indices].tolist()
+        if all_probs_array.size > 0:
+            all_probs = all_probs_array[valid_indices].tolist()
         else:
             all_probs = []
     elif test_ds.task_type == "binary":
         # For binary classification, convert to class names
-        all_targets = ["crop" if x > 0.5 else "not_crop" for x in all_targets]
-        all_preds = list(
-            np.array(["crop" if x > 0.5 else "not_crop" for x in all_preds])
-        )
+        all_targets = [
+            "crop" if x > 0.5 else "not_crop" for x in all_targets_array.tolist()
+        ]
+        all_preds = [
+            "crop" if x > 0.5 else "not_crop" for x in all_preds_array.tolist()
+        ]
         classes_to_use = ["not_crop", "crop"]
         label_order = classes_to_use
+        all_probs = all_probs_array.tolist()
     else:
         label_order = [str(cls) for cls in classes_list] if classes_list else None
+        all_targets = all_targets_array.tolist()
+        all_preds = all_preds_array.tolist()
+        all_probs = all_probs_array.tolist()
 
     results = classification_report(
         all_targets,
@@ -1167,12 +1179,6 @@ def _select_representative_season(
     )
 
     num_timesteps = season_masks.shape[-1]
-    sample_ids = attrs.get("sample_id")
-    sample_id_list = (
-        _ensure_list(sample_ids, season_masks.shape[0], fill=None)
-        if sample_ids is not None
-        else None
-    )
 
     selections: List[List[int]] = []
     for sample_idx in sample_indices:
@@ -1193,17 +1199,6 @@ def _select_representative_season(
                 candidate_indices.extend(
                     torch.nonzero(mask, as_tuple=False).view(-1).tolist()
                 )
-
-        if not candidate_indices:
-            # sample_id = (
-            #     sample_id_list[sample_idx] if sample_id_list is not None else None
-            # )
-            # logger.warning(
-            #     "Skipping sample without representative season"
-            #     + (f" (sample_id={sample_id})" if sample_id is not None else "")
-            # )
-            selections.append([])
-            continue
 
         selections.append(candidate_indices)
 
@@ -1296,10 +1291,11 @@ def summarize_seasonal_predictions(
                 }
             )
 
+    source_cropland_names = (
+        list(cropland_class_names) if cropland_class_names is not None else []
+    )
     cropland_set = {
-        str(name)
-        for name in (cropland_class_names or [])
-        if not _is_missing_value(name)
+        str(name) for name in source_cropland_names if not _is_missing_value(name)
     }
     croptype_indices = [
         idx for idx, task in enumerate(tasks) if task == croptype_task_name
@@ -1521,8 +1517,9 @@ def run_finetuning(
         # Save encoder-only by deepcopy + removing head
         if hasattr(model, "head"):
             try:
-                model.head = None
-                torch.save(model.state_dict(), best_encoder_ckpt_path)
+                encoder_only = deepcopy(model)
+                encoder_only.head = None  # type: ignore[assignment]
+                torch.save(encoder_only.state_dict(), best_encoder_ckpt_path)
                 logger.debug(
                     f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
                 )
@@ -1591,14 +1588,11 @@ def run_finetuning(
         fallback_batches = 0
         val_pred_chunks: List[torch.Tensor] = []
         val_target_chunks: List[torch.Tensor] = []
-        seasonal_records = None
-        seasonal_metrics_supported = isinstance(loss_fn, SeasonalMultiTaskLoss)
-        if seasonal_metrics_supported:
-            seasonal_records = {
-                "landcover": [],
-                "croptype": [],
-                "croptype_gate_rejections": 0,
-            }
+        seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
+        seasonal_metrics_supported = seasonal_loss is not None
+        seasonal_landcover_records: List[dict[str, Any]] = []
+        seasonal_croptype_records: List[dict[str, Any]] = []
+        seasonal_gate_rejections = 0
 
         for batch in val_dl:
             predictors, attrs = _unpack_predictor_batch(batch)
@@ -1625,23 +1619,21 @@ def run_finetuning(
                     getattr(loss_fn, "last_croptype_supervision", None),
                 )
 
-                if seasonal_records is not None and isinstance(
-                    preds, SeasonalHeadOutput
-                ):
+                if seasonal_loss is not None and isinstance(preds, SeasonalHeadOutput):
                     try:
                         batch_summary = summarize_seasonal_predictions(
                             preds,
                             attrs or {},
-                            loss_fn.landcover_classes,
-                            loss_fn.croptype_classes,
+                            seasonal_loss.landcover_classes,
+                            seasonal_loss.croptype_classes,
                             cropland_class_names=getattr(
-                                loss_fn, "cropland_class_names", None
+                                seasonal_loss, "cropland_class_names", None
                             ),
                             landcover_task_name=getattr(
-                                loss_fn, "landcover_task_name", "landcover"
+                                seasonal_loss, "landcover_task_name", "landcover"
                             ),
                             croptype_task_name=getattr(
-                                loss_fn, "croptype_task_name", "croptype"
+                                seasonal_loss, "croptype_task_name", "croptype"
                             ),
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -1649,9 +1641,9 @@ def run_finetuning(
                             f"Failed summarizing seasonal predictions during validation: {exc}"
                         )
                     else:
-                        seasonal_records["landcover"].extend(batch_summary["landcover"])
-                        seasonal_records["croptype"].extend(batch_summary["croptype"])
-                        seasonal_records["croptype_gate_rejections"] += batch_summary[
+                        seasonal_landcover_records.extend(batch_summary["landcover"])
+                        seasonal_croptype_records.extend(batch_summary["croptype"])
+                        seasonal_gate_rejections += batch_summary[
                             "croptype_gate_rejections"
                         ]
 
@@ -1692,25 +1684,26 @@ def run_finetuning(
             )
 
         seasonal_metrics_flat: dict[str, float] = {}
-        if seasonal_records is not None:
-            lc_metrics = _records_to_scalar_metrics(seasonal_records["landcover"])
+        if seasonal_metrics_supported:
+            lc_metrics = _records_to_scalar_metrics(seasonal_landcover_records)
             if lc_metrics:
                 for key, value in lc_metrics.items():
                     seasonal_metrics_flat[f"landcover/{key}"] = value
-            ct_metrics = _records_to_scalar_metrics(seasonal_records["croptype"])
+            ct_metrics = _records_to_scalar_metrics(seasonal_croptype_records)
             if ct_metrics:
                 for key, value in ct_metrics.items():
                     seasonal_metrics_flat[f"croptype/{key}"] = value
 
-            gate_rejections = seasonal_records["croptype_gate_rejections"]
-            if gate_rejections:
-                total_attempts = gate_rejections + len(seasonal_records["croptype"])
+            if seasonal_gate_rejections:
+                total_attempts = seasonal_gate_rejections + len(
+                    seasonal_croptype_records
+                )
                 seasonal_metrics_flat["croptype/gate_rejections"] = float(
-                    gate_rejections
+                    seasonal_gate_rejections
                 )
                 if total_attempts > 0:
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
-                        gate_rejections / total_attempts
+                        seasonal_gate_rejections / total_attempts
                     )
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
