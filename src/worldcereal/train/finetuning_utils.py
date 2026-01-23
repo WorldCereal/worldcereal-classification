@@ -729,7 +729,6 @@ def evaluate_finetuned_model(
     batch_size: int,
     time_explicit: bool = False,
     classes_list: Optional[List[str]] = None,
-    return_uncertainty: bool = False,
     *,
     seasonal_landcover_classes: Optional[List[str]] = None,
     seasonal_croptype_classes: Optional[List[str]] = None,
@@ -752,9 +751,6 @@ def evaluate_finetuned_model(
         timesteps are scored.
     classes_list : Optional[List[str]]
         Mapping from class index to class name for multiclass/binary outputs.
-    return_uncertainty : bool, default False
-        When True, also compute average predictive entropy from the stored
-        probability distributions.
     seasonal_landcover_classes : Optional[List[str]]
         Required when the model returns ``SeasonalHeadOutput``; names for the
         landcover logits.
@@ -779,9 +775,6 @@ def evaluate_finetuned_model(
         If ``test_ds.task_type`` is unsupported or if seasonal outputs are
         encountered without the necessary class lists.
     """
-
-    # storage for full distributions if we need entropy
-    all_probs_full: list[np.ndarray] = [] if return_uncertainty else []
 
     # Put model in eval mode
     finetuned_model.eval()
@@ -849,12 +842,6 @@ def evaluate_finetuned_model(
                 probs_all = probs_all[(targets != NODATAVALUE)[..., -1], :]
                 targets = targets[targets != NODATAVALUE]
 
-                if return_uncertainty:
-                    # flatten batch×timesteps into (N,C)
-                    if all_probs_full is not None:
-                        all_probs_full.append(
-                            probs_all.reshape(-1, probs_all.shape[-1])
-                        )
             else:
                 raise ValueError(f"Unsupported task type: {test_ds.task_type}")
 
@@ -921,13 +908,11 @@ def evaluate_finetuned_model(
         }
 
     if time_explicit:
-        all_probs_array = np.concatenate(prob_batches) if prob_batches else np.array([])
         all_preds_array = np.concatenate(pred_batches) if pred_batches else np.array([])
         all_targets_array = (
             np.concatenate(target_batches) if target_batches else np.array([])
         )
     else:
-        all_probs_array = np.concatenate(prob_batches)
         all_preds_array = np.concatenate(pred_batches)
         all_targets_array = np.concatenate(target_batches)
 
@@ -937,7 +922,6 @@ def evaluate_finetuned_model(
     # Map numeric indices to class names if necessary
     all_targets: List[Any]
     all_preds: List[Any]
-    all_probs: List[Any]
 
     if test_ds.task_type == "multiclass" and classes_list:
         label_order = [str(cls) for cls in classes_list]
@@ -953,10 +937,7 @@ def evaluate_finetuned_model(
         valid_indices = all_targets_classes != "unknown"
         all_targets = all_targets_classes[valid_indices].tolist()
         all_preds = all_preds_classes[valid_indices].tolist()
-        if all_probs_array.size > 0:
-            all_probs = all_probs_array[valid_indices].tolist()
-        else:
-            all_probs = []
+
     elif test_ds.task_type == "binary":
         # For binary classification, convert to class names
         all_targets = [
@@ -967,12 +948,10 @@ def evaluate_finetuned_model(
         ]
         classes_to_use = ["not_crop", "crop"]
         label_order = classes_to_use
-        all_probs = all_probs_array.tolist()
     else:
         label_order = [str(cls) for cls in classes_list] if classes_list else None
         all_targets = all_targets_array.tolist()
         all_preds = all_preds_array.tolist()
-        all_probs = all_probs_array.tolist()
 
     results = classification_report(
         all_targets,
@@ -999,15 +978,6 @@ def evaluate_finetuned_model(
     results_df.columns = pd.Index(
         ["class", "precision", "recall", "f1-score", "support"]
     )
-    # compute average predictive entropy if requested
-    if return_uncertainty:
-        from scipy.stats import entropy
-
-        pf = (
-            np.concatenate(all_probs_full, axis=0) if all_probs_full else np.empty((0,))
-        )  # shape (N, C)
-        ent = entropy(pf.T) if pf.size > 0 else np.array([])  # length N
-        results_df["avg_entropy"] = ent.mean() if ent.size > 0 else np.nan
 
     return results_df, cm, cm_norm
 
