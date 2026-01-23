@@ -2,7 +2,7 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import List, Union
+from typing import List, Literal, Union
 
 import geopandas as gpd
 import openeo
@@ -111,6 +111,7 @@ def main(
     restart_failed: bool = False,
     only_flagged_samples: bool = False,
     parallel_jobs: int = 1,
+    optical_mask_method: Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"] = "mask_scl_dilation",
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -136,6 +137,12 @@ def main(
         (This is useful for very large and dense datasets like USDA).
     parallel_jobs : int, optional
         Number of local parallel jobs to run concurrently. Default is 1.
+    optical_mask_method : Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"], optional
+        Method to use for optical masking. Default is 'mask_scl_dilation' which uses the default precomputed mask with large erosion/dilation radius.
+        This method is the fastest.
+        'satio' allows to configure custom erode/dilation radius but can make the whole process a lot slower as the mask is computed on-the-fly.
+        A proxy between speed and quality is 'mask_raw_scl_values' which uses the raw SCL values for masking without erosion/dilation.
+        This option is available for patch-to-point only. 
 
     Returns
     -------
@@ -179,6 +186,7 @@ def main(
             create_job_patch_to_point_worldcereal,
             period=period,
             job_options=job_options,
+            optical_mask_method=optical_mask_method,
         ),
         job_db=job_db,
     )
@@ -223,6 +231,15 @@ if __name__ == "__main__":
         choices=["month", "dekad"],
         default="month",
         help="Period for extractions, either 'month' or 'dekad'. Default is 'month'.",
+    )
+    parser.add_argument(
+        "--optical-mask-method",
+        type=str,
+        choices=["mask_scl_dilation", "satio", "mask_raw_scl_values"],
+        default="mask_scl_dilation",
+        help="Method to use for optical masking. Default is 'mask_scl_dilation' which uses the default precomputed mask with large erosion/dilation radius. "
+        "This method is the fastest. 'satio' allows to configure custom erode/dilation radius but can make the whole process a lot slower as the mask is computed on-the-fly. "
+        "A proxy between speed and quality is 'mask_raw_scl_values' which uses the raw SCL values for masking without erosion/dilation. This option is available for patch-to-point only.",
     )
     parser.add_argument(
         "--ref-ids",
@@ -280,6 +297,7 @@ if __name__ == "__main__":
 
     root_folder = Path(args.root_folder)
     period = args.period
+    optical_mask_method = args.optical_mask_method
     ref_ids = args.ref_ids
     restart_failed = args.restart_failed
     only_flagged_samples = args.only_flagged_samples
@@ -308,6 +326,7 @@ if __name__ == "__main__":
             only_flagged_samples=only_flagged_samples,
             parallel_jobs=parallel_jobs,
             job_options=job_options,
+            optical_mask_method=optical_mask_method,
         )
 
     logger.success("All done!")
