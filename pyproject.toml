@@ -73,7 +73,8 @@ train = [
   "scikit-learn==1.6.1",
   "torch==2.3.1",
   "pystac==1.10.1",
-  "pystac-client==0.8.3"
+  "pystac-client==0.8.3",
+  "seaborn"
 ]
 notebooks = [
   "ipyleaflet==0.19.2",
