@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import (
     Any,
     Dict,
+    Hashable,
     List,
     Literal,
     Mapping,
@@ -222,8 +223,8 @@ def _normalize_season_windows(
                 f"Season window for '{season}' must contain valid datetime-like values."
             )
 
-        start_np = np.datetime64(start_dt, "D")
-        end_np = np.datetime64(end_dt, "D")
+        start_np = start_dt.astype("datetime64[D]")
+        end_np = end_dt.astype("datetime64[D]")
         if end_np < start_np:
             raise ValueError(
                 f"Season window for '{season}' has end date {end_dt} before start date {start_dt}."
@@ -298,12 +299,12 @@ def _snap_latlon_to_calendar_grid(lat: float, lon: float) -> Tuple[float, float]
 
 
 def get_class_weights(
-    labels: np.ndarray[Any, Any],
+    labels: Union[np.ndarray[Any, Any], Sequence[Hashable]],
     method: str = "balanced",  # 'balanced', 'log', 'effective', or 'none'
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
     counts_override: Optional[Mapping[Any, int]] = None,
-) -> Dict[int, float]:
+) -> Dict[Hashable, float]:
     """
     Compute class weights for classification tasks.
 
@@ -321,11 +322,11 @@ def get_class_weights(
         class_weights_dict: dict mapping class index → weight
     """
     if counts_override is not None:
-        counts = {k: int(v) for k, v in counts_override.items()}
+        counts: Dict[Hashable, int] = {k: int(v) for k, v in counts_override.items()}
     else:
         counts = {k: int(v) for k, v in Counter(labels).items()}
 
-    classes = sorted(counts.keys())
+    classes = sorted(counts.keys(), key=lambda value: str(value))
     total_samples = sum(counts.values())
     num_classes = len(classes)
 
@@ -364,7 +365,14 @@ def get_class_weights(
         logger.info("Renormalizing weights to mean = 1")
         weights = weights / weights.mean()
 
-    return dict(zip(classes, np.round(weights, 3)))
+    rounded = np.round(weights, 3)
+    return {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
+
+
+def _stringify_weight_dict(weights: Dict[Hashable, float]) -> Dict[str, float]:
+    """Convert potentially mixed-type keys to strings for deterministic indexing."""
+
+    return {str(key): float(value) for key, value in weights.items()}
 
 
 def _spatial_bins_from_latlon(
@@ -904,8 +912,8 @@ class WorldCerealDataset(Dataset):
 
         num_seasons = len(target_seasons)
         if timestamps_arr.size == 0:
-            season_masks = _default_season_mask(0, num_seasons)
-            return season_masks, None
+            masks = _default_season_mask(0, num_seasons)
+            return masks, None
 
         num_timesteps = int(timestamps_arr.shape[0])
         composite_dates = _timestamps_to_datetime_array(timestamps_arr)
@@ -964,7 +972,7 @@ class WorldCerealDataset(Dataset):
         else:
             target_year = int(timestamps_arr[-1][2])
 
-        season_masks: List[np.ndarray] = []
+        season_mask_list: List[np.ndarray] = []
         in_flags: List[bool] = []
         for season in target_seasons:
             manual_window = normalized_windows.get(season)
@@ -985,11 +993,11 @@ class WorldCerealDataset(Dataset):
                     lon=lon,
                 )
 
-            season_masks.append(mask)
+            season_mask_list.append(mask)
             in_flags.append(in_flag)
 
-        if season_masks:
-            masks_arr = np.stack(season_masks, axis=0)
+        if season_mask_list:
+            masks_arr = np.stack(season_mask_list, axis=0)
         else:
             masks_arr = np.zeros((0, num_timesteps), dtype=bool)
 
@@ -1114,12 +1122,12 @@ class WorldCerealDataset(Dataset):
         return slots
 
     def _advance_composite_slot(self, current: np.datetime64) -> np.datetime64:
-        current = np.datetime64(current, "D")
+        current = current.astype("datetime64[D]")
         if self.timestep_freq == "month":
-            month_step = np.datetime64(current, "M") + np.timedelta64(1, "M")
-            return np.datetime64(month_step, "D")
+            month_step = current.astype("datetime64[M]") + np.timedelta64(1, "M")
+            return month_step.astype("datetime64[D]")
         if self.timestep_freq == "dekad":
-            month_start = np.datetime64(current, "M")
+            month_start = current.astype("datetime64[M]")
             # Offset from first day determines which dekad we are in.
             offset_days = (current - month_start).astype(int)
             if offset_days == 0:
@@ -1128,7 +1136,7 @@ class WorldCerealDataset(Dataset):
                 return current + np.timedelta64(10, "D")
             if offset_days == 20:
                 next_month = month_start + np.timedelta64(1, "M")
-                return np.datetime64(next_month, "D")
+                return next_month.astype("datetime64[D]")
             raise ValueError("Dekad slots must align to days 1, 11, or 21.")
         raise ValueError(f"Unknown timestep frequency '{self.timestep_freq}'")
 
@@ -1519,12 +1527,14 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             )
 
         # Task-level weights
-        task_weights = get_class_weights(
-            tasks,
-            method=task_weight_method,
-            clip_range=None,
-            normalize=normalize,
-            counts_override=effective_task_counts,
+        task_weights = _stringify_weight_dict(
+            get_class_weights(
+                tasks,
+                method=task_weight_method,
+                clip_range=None,
+                normalize=normalize,
+                counts_override=effective_task_counts,
+            )
         )
         logger.info(f"Task weights per task: {task_weights}")
         task_weight_vec = np.array(
@@ -1548,11 +1558,13 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
             class_values = self.dataframe.loc[mask, class_column].astype(str).to_numpy()
             class_counts = Counter(class_values.tolist())
-            class_weights = get_class_weights(
-                class_values,
-                method=class_weight_method,
-                clip_range=(0.1, 10.0),
-                normalize=normalize,
+            class_weights = _stringify_weight_dict(
+                get_class_weights(
+                    class_values,
+                    method=class_weight_method,
+                    clip_range=(0.1, 10.0),
+                    normalize=normalize,
+                )
             )
             logger.info(f"[Task={task_name}] class counts: {class_counts}")
             logger.info(f"[Task={task_name}] class weights: {class_weights}")
@@ -1595,11 +1607,13 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                     spatial_bin_size_degrees,
                 )
 
-            spatial_weights = get_class_weights(
-                spatial_groups,
-                method=spatial_weight_method,
-                clip_range=(0.1, 10.0),
-                normalize=normalize,
+            spatial_weights = _stringify_weight_dict(
+                get_class_weights(
+                    spatial_groups,
+                    method=spatial_weight_method,
+                    clip_range=(0.1, 10.0),
+                    normalize=normalize,
+                )
             )
             spatial_weight_vec = np.array(
                 [spatial_weights[str(group)] for group in spatial_groups],
@@ -1615,12 +1629,14 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             combined = np.clip(combined, 1e-6, None)
         _log_weight_stats("Combined sampling weights", combined)
 
+        weight_tensor = torch.as_tensor(combined, dtype=torch.double)
         sampler = WeightedRandomSampler(
-            weights=torch.as_tensor(combined, dtype=torch.double),
+            weights=weight_tensor.tolist(),
             num_samples=len(combined),
             replacement=True,
             generator=generator,
         )
+        sampler.weights = weight_tensor  # type: ignore[attr-defined]
         return sampler
 
 
@@ -2005,8 +2021,8 @@ def get_monthly_timestamp_components(
     end_date = align_to_composite_window(end_date, "month")
 
     # Truncate to month precision (year and month only, day is dropped)
-    start_month = np.datetime64(start_date, "M")
-    end_month = np.datetime64(end_date, "M")
+    start_month = start_date.astype("datetime64[M]")
+    end_month = end_date.astype("datetime64[M]")
     num_timesteps = (end_month - start_month).astype(int) + 1
 
     # generate date vector based on the number of timesteps

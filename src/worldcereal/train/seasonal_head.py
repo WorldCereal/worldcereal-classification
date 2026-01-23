@@ -16,9 +16,7 @@ from prometheo.models.pooling import PoolingMethods
 from prometheo.models.presto.single_file_presto import FinetuningHead
 from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
 from prometheo.predictors import Predictors
-from torch import nn
-
-Tensor = torch.Tensor
+from torch import Tensor, nn
 
 
 @dataclass

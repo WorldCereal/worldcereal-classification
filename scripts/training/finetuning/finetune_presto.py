@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -510,6 +510,13 @@ def main(args):
             seasonal_croptype_classes=croptype_classes,
             cropland_class_names=cropland_class_names,
         )
+
+        if not isinstance(seasonal_results, dict):
+            raise TypeError(
+                "Seasonal evaluation is expected to return a dictionary of task artifacts"
+            )
+
+        seasonal_results = cast(Dict[str, Dict[str, Any]], seasonal_results)
 
         for task_name, artifacts in seasonal_results.items():
             suffix = "_".join(part for part in (suffix_prefix, task_name) if part)

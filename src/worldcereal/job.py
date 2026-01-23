@@ -653,7 +653,7 @@ def generate_map(
 
     # Get the products
     assets = job_result.get_assets()
-    products = {}
+    products: Dict[str, WorldCerealProduct] = {}
     for asset in assets:
         asset_name = asset.name.split(".")[0].split("_")[0]
         asset_type = asset_name.split("-")[0]

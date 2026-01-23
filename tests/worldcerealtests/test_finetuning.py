@@ -441,7 +441,7 @@ class _DummySeasonalBackbone(nn.Module):
         self.timesteps = timesteps
         self.proj = nn.Linear(1, embedding_dim)
         self.encoder = nn.Identity()
-        self.encoder.embedding_size = embedding_dim
+        setattr(self.encoder, "embedding_size", embedding_dim)
 
     def forward(self, predictors: Predictors, eval_pooling=None):
         if predictors.label is None:
