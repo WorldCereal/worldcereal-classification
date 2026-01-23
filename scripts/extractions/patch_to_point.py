@@ -111,7 +111,9 @@ def main(
     restart_failed: bool = False,
     only_flagged_samples: bool = False,
     parallel_jobs: int = 1,
-    optical_mask_method: Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"] = "mask_scl_dilation",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "satio", "mask_raw_scl_values"
+    ] = "mask_scl_dilation",
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -142,7 +144,7 @@ def main(
         This method is the fastest.
         'satio' allows to configure custom erode/dilation radius but can make the whole process a lot slower as the mask is computed on-the-fly.
         A proxy between speed and quality is 'mask_raw_scl_values' which uses the raw SCL values for masking without erosion/dilation.
-        This option is available for patch-to-point only. 
+        This option is available for patch-to-point only.
 
     Returns
     -------
@@ -287,7 +289,10 @@ if __name__ == "__main__":
         "--max_executors", type=int, default=None, help="Max executors."
     )
     parser.add_argument(
-        "--image_name", type=str, default="python38", help="openEO image name."  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+        "--image_name",
+        type=str,
+        default="python38",
+        help="openEO image name.",  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
     )
     parser.add_argument(
         "--organization_id", type=int, default=None, help="Organization id."
