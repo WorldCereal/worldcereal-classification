@@ -426,7 +426,7 @@ def create_job_patch_to_point_worldcereal(
     connection_provider,
     job_options: dict,
     period="month",
-    optical_mask_method: Literal["mask_scl_dilation", "satio"] = "mask_scl_dilation",
+    optical_mask_method: Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"] = "mask_scl_dilation",
     erode_r: int = 3,
     dilate_r: int = 21,
 ):
