@@ -1,6 +1,8 @@
 import calendar
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass
+from importlib import resources
 from math import floor
 from pathlib import Path
 from typing import (
@@ -53,6 +55,7 @@ SEASONALITY_LOOKUP_PATH = (
     / "cropcalendars"
     / SEASONALITY_LOOKUP_FILENAME
 )
+SEASONALITY_LOOKUP_PACKAGE = "worldcereal.data.cropcalendars"
 SEASONALITY_LOOKUP_COLUMNS: Tuple[str, ...] = (
     "s1_sos_doy",
     "s1_eos_doy",
@@ -66,6 +69,14 @@ SEASONALITY_COLUMN_MAP: Dict[str, Tuple[str, str]] = {
 SEASONALITY_LAT_RANGE = (-89.999, 89.999)
 SEASONALITY_LON_RANGE = (-179.999, 179.999)
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
+
+
+def _seasonality_lookup_context():
+    """Return a context manager pointing to the seasonality lookup parquet."""
+
+    if SEASONALITY_LOOKUP_PATH.exists():
+        return nullcontext(SEASONALITY_LOOKUP_PATH)
+    return resources.path(SEASONALITY_LOOKUP_PACKAGE, SEASONALITY_LOOKUP_FILENAME)
 
 
 @dataclass(frozen=True)
@@ -260,12 +271,15 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
     if _SEASONALITY_LOOKUP_TABLE is not None:
         return _SEASONALITY_LOOKUP_TABLE
 
-    if not SEASONALITY_LOOKUP_PATH.exists():
+    try:
+        with _seasonality_lookup_context() as lookup_path:
+            table = pd.read_parquet(lookup_path)
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
         raise FileNotFoundError(
-            f"Seasonality lookup parquet not found at {SEASONALITY_LOOKUP_PATH}"
-        )
-
-    table = pd.read_parquet(SEASONALITY_LOOKUP_PATH)
+            "Seasonality lookup parquet not found at "
+            f"{SEASONALITY_LOOKUP_PATH} or within package "
+            f"'{SEASONALITY_LOOKUP_PACKAGE}'."
+        ) from exc
     required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
     missing = required.difference(table.columns)
     if missing:

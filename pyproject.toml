@@ -11,6 +11,12 @@ exclude = [
   "/tests",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/worldcereal"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/worldcereal"]
+
 [tool.hatch.version]
 path = "src/worldcereal/_version.py"
 pattern = "^__version__ = ['\"](?P<version>[^'\"]+)['\"]$"
