@@ -431,10 +431,10 @@ class SeasonalMultiTaskLoss(nn.Module):
         if attrs is None:
             raise ValueError("SeasonalMultiTaskLoss requires attrs from the DataLoader")
 
-        landcover_labels = _ensure_list(
+        landcover_labels: List[Optional[Any]] = _ensure_list(
             attrs.get("landcover_label"), batch_size, fill=None
         )
-        croptype_labels = _ensure_list(
+        croptype_labels: List[Optional[Any]] = _ensure_list(
             attrs.get("croptype_label"), batch_size, fill=None
         )
         label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
@@ -1192,14 +1192,15 @@ def summarize_seasonal_predictions(
     cropland_class_names: Optional[Sequence[str]] = None,
     landcover_task_name: str = "landcover",
     croptype_task_name: str = "croptype",
+    enforce_cropland_gate: bool = False,
 ) -> dict:
     """Convert seasonal logits into per-branch classification records.
 
     Returns dictionaries for landcover and crop-type predictions so that
     evaluation and inference code can independently consume whichever branch
-    they need. Crop-type predictions are automatically gated by the landcover
-    head: if the predicted landcover class is not part of ``cropland_class_names``
-    (when provided), the crop-type prediction is marked invalid and excluded.
+    they need. When ``enforce_cropland_gate`` is True, crop-type predictions are
+    only emitted if either the predicted or labelled landcover class belongs to
+    ``cropland_class_names``.
     """
 
     batch_size = output.global_embedding.shape[0]
@@ -1267,6 +1268,7 @@ def summarize_seasonal_predictions(
     cropland_set = {
         str(name) for name in source_cropland_names if not _is_missing_value(name)
     }
+    gating_enabled = enforce_cropland_gate and bool(cropland_set)
     croptype_indices = [
         idx for idx, task in enumerate(tasks) if task == croptype_task_name
     ]
@@ -1285,14 +1287,21 @@ def summarize_seasonal_predictions(
             if str(target_name) not in croptype_classes:
                 continue
 
-            landcover_target = landcover_labels[sample_idx]
-            has_landcover_label = not _is_missing_value(landcover_target)
-            is_cropland = not cropland_set or (
-                has_landcover_label and str(landcover_target) in cropland_set
-            )
-            if not is_cropland:
-                croptype_gate_rejections += 1
-                continue
+            if gating_enabled:
+                landcover_target = landcover_labels[sample_idx]
+                pred_landcover = landcover_pred_names[sample_idx]
+                has_landcover_label = not _is_missing_value(landcover_target)
+
+                pred_is_cropland = (
+                    pred_landcover is not None and pred_landcover in cropland_set
+                )
+                label_is_cropland = (
+                    has_landcover_label and str(landcover_target) in cropland_set
+                )
+
+                if not (pred_is_cropland or label_is_cropland):
+                    croptype_gate_rejections += 1
+                    continue
 
             seasons = season_selection[local_idx]
             if not seasons:
