@@ -34,6 +34,8 @@ def test_worldcerealtraindataset(WorldCerealExtractionsDF):
         assert predictors.dem.shape == (2, 1, 1, 2)
         assert predictors.timestamps.shape == (2, 12, 3)
         assert isinstance(attrs, dict)
+        assert "season_masks" in attrs
+        assert attrs["season_masks"].shape[-1] == 12
         break
 
 

@@ -136,7 +136,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     assert training_df.shape[0] > 0
 
     # We keep original ewoc_code for this test
-    training_df["downstream_class"] = training_df["ewoc_code"]
+    training_df["finetune_class"] = training_df["ewoc_code"]
 
     # Compute presto embeddings
     presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
@@ -151,7 +151,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         training_df,
         test_size=0.2,
         random_state=42,
-        stratify=training_df["downstream_class"],
+        stratify=training_df["finetune_class"],
     )
 
     # Initialize datasets
@@ -217,20 +217,19 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     class_weights = np.round(
         compute_class_weight(
             class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
+            classes=np.unique(samples_train["finetune_class"]),
+            y=samples_train["finetune_class"],
         ),
         3,
     )
     class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
+        k: v for k, v in zip(np.unique(samples_train["finetune_class"]), class_weights)
     }
     logger.info(f"Class weights: {class_weights}")
 
-    sample_weights = np.ones((len(df["downstream_class"]),))
+    sample_weights = np.ones((len(df["finetune_class"]),))
     for k, v in class_weights.items():
-        sample_weights[df["downstream_class"] == k] = v
+        sample_weights[df["finetune_class"] == k] = v
     df["weight"] = sample_weights
 
     # Define classifier
@@ -242,19 +241,19 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         eval_metric=eval_metric,
         random_state=3,
         verbose=25,
-        class_names=np.unique(samples_train["downstream_class"]),
+        class_names=np.unique(samples_train["finetune_class"]),
     )
 
     # Setup dataset Pool
     bands = [f"presto_ft_{i}" for i in range(128)]
     calibration_data = Pool(
         data=df[df["split"] == "train"][bands],
-        label=df[df["split"] == "train"]["downstream_class"],
+        label=df[df["split"] == "train"]["finetune_class"],
         weight=df[df["split"] == "train"]["weight"],
     )
     eval_data = Pool(
         data=df[df["split"] == "test"][bands],
-        label=df[df["split"] == "test"]["downstream_class"],
+        label=df[df["split"] == "test"]["finetune_class"],
         weight=df[df["split"] == "test"]["weight"],
     )
 

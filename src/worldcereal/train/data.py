@@ -1,10 +1,11 @@
 import gc
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import duckdb
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from loguru import logger
 from prometheo.models import Presto
@@ -19,12 +20,67 @@ from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
 
+_ATTR_KEYS_ALLOW_PARTIAL_NONE = {
+    "landcover_label",
+    "croptype_label",
+    "label_task",
+}
+
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
-    # we assume that the same values are consistently None
-    collated_dict = default_collate([i.as_dict(ignore_nones=True) for i, _ in batch])
-    collated_attrs = default_collate([attrs for _, attrs in batch])
-    return Predictors(**collated_dict), collated_attrs
+    predictor_dicts = [item.as_dict(ignore_nones=True) for item, _ in batch]
+    collated_dict = default_collate(predictor_dicts)
+    predictors = Predictors(**collated_dict)
+
+    attrs_list = [attrs for _, attrs in batch]
+    collated_attrs = _collate_attrs(attrs_list)
+
+    return predictors, collated_attrs
+
+
+def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
+    if not attrs_list:
+        return {}
+
+    collated: Dict[str, Any] = {}
+    all_keys = set().union(*(attrs.keys() for attrs in attrs_list))
+    for key in all_keys:
+        values = [attrs.get(key) for attrs in attrs_list]
+
+        if key in {"season_masks", "in_seasons"}:
+            if all(v is None for v in values):
+                collated[key] = None
+                continue
+
+            first = next(v for v in values if v is not None)
+            filler = (
+                np.ones_like(first, dtype=bool)
+                if key == "season_masks"
+                else np.zeros_like(first, dtype=bool)
+            )
+            stacked = [
+                np.asarray(v, dtype=bool) if v is not None else filler for v in values
+            ]
+            collated[key] = np.stack(stacked, axis=0)
+            continue
+
+        if all(v is None for v in values):
+            collated[key] = None
+            continue
+
+        if any(v is None for v in values):
+            if key in _ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                # Keep per-sample values so downstream helpers can handle missing labels.
+                collated[key] = values
+                continue
+            missing_indices = [i for i, v in enumerate(values) if v is None]
+            raise ValueError(
+                f"_collate_attrs received None values for key '{key}' at indices {missing_indices}"
+            )
+
+        collated[key] = default_collate(values)
+
+    return collated
 
 
 def get_training_df(
@@ -96,11 +152,14 @@ def get_training_df(
                 ]
 
         # Convert to dataframe
-        attrs = pd.DataFrame.from_dict(attrs)
+        attrs_frame = {
+            k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
+        }
+        attrs_df = pd.DataFrame.from_dict(attrs_frame)
         encodings = pd.DataFrame(
             encodings, columns=[f"presto_ft_{i}" for i in range(encodings.shape[1])]
         )
-        result = pd.concat([encodings, attrs], axis=1)
+        result = pd.concat([encodings, attrs_df], axis=1)
 
         # Append to final dataframe
         final_df = result if final_df is None else pd.concat([final_df, result])
@@ -298,7 +357,7 @@ def get_training_dfs_from_parquet(
 
     if debug:
         # select first 3 files in debug mode
-        parquet_files = parquet_files[:10]
+        parquet_files = parquet_files[:3]
         logger.warning("Debug mode is enabled.")
 
     db = duckdb.connect()
@@ -403,6 +462,12 @@ def get_training_dfs_from_parquet(
             del _data_pivot, _data
             gc.collect()
 
+        if not initialized:
+            raise RuntimeError(
+                "No parquet files were processed; the wide table was never created. "
+                "Ensure the `parquet_files` list is not empty and points to readable files."
+            )
+
         # write a single Parquet file
         con.execute(
             f"""
@@ -412,8 +477,14 @@ def get_training_dfs_from_parquet(
         """
         )
 
-    # Load the merged Parquet
-    df = pd.read_parquet(wide_parquet_output_path)
+    # Load the merged Parquet -> use pyarrow for efficient chunked reading
+    logger.info(f"Loading wide parquet file from {wide_parquet_output_path} ...")
+    pf = pq.ParquetFile(wide_parquet_output_path)
+    parts = []
+    for i in range(pf.num_row_groups):
+        table = pf.read_row_group(i)  # arrow Table (usually lower overhead than pandas)
+        parts.append(table.to_pandas())  # convert one chunk at a time
+    df = pd.concat(parts, ignore_index=True)
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 

@@ -103,7 +103,9 @@ def map_classes(
     # Compute codes that are missing in the mapping dictionary
     missing_codes = existing_codes_list - set(class_mappings[finetune_classes])
     if missing_codes:
-        missing_classes_count = {}
+        missing_classes_count = pd.DataFrame(
+            index=[int(code) for code in missing_codes], columns=["name", "count"]
+        )
         for code in list(missing_codes):
             if int(code) not in legend.index:
                 logger.warning(
@@ -112,12 +114,19 @@ def map_classes(
                 continue
             class_name = legend.loc[int(code)]["label_full"]
             class_count = (df["ewoc_code"] == int(code)).sum()
-            missing_classes_count[f"{code} - {class_name}"] = class_count
+            missing_classes_count.loc[int(code)] = [class_name, class_count]
 
         if len(missing_classes_count) > 0:
+            missing_classes_count = (
+                missing_classes_count.sort_values(by="count", ascending=False)
+                .reset_index(names=["ewoc_code"])
+                .set_index("name")
+            )
+            missing_nr = df.ewoc_code.astype(str).isin(missing_codes).sum()
+            missing_perc = round(100 * missing_nr / len(df), 2)
             logger.warning(
-                f"Some classes are missing in the mapping dictionary and thus will be removed: {missing_classes_count}. "
-                f"A total of {(df.ewoc_code.astype(str).isin(missing_codes)).sum()} samples will be removed from the dataframe."
+                f"Some classes are missing in the mapping dictionary and thus will be removed: \n\n {missing_classes_count.to_string()}\n\n"
+                f"A total of {missing_nr} samples ({missing_perc}%) will be removed from the dataframe."
             )
         df = df.loc[~df["ewoc_code"].astype(int).astype(str).isin(missing_codes)].copy()
 

@@ -1,7 +1,11 @@
 import pytest
 
 from worldcereal.openeo.inference import Postprocessor
-from worldcereal.parameters import CropLandParameters, CropTypeParameters, PostprocessParameters
+from worldcereal.parameters import (
+    CropLandParameters,
+    CropTypeParameters,
+    PostprocessParameters,
+)
 
 
 def test_cropland_postprocessing(WorldCerealCroplandClassification):
@@ -9,13 +13,15 @@ def test_cropland_postprocessing(WorldCerealCroplandClassification):
 
     print("Postprocessing cropland product ...")
 
-    parameters={
-            "method": "smooth_probabilities",
-        }
+    parameters = {
+        "method": "smooth_probabilities",
+    }
 
-    postprocessor = Postprocessor(parameters, classifier_url=CropLandParameters().classifier_parameters.classifier_url)
+    postprocessor = Postprocessor(
+        parameters,
+        classifier_url=CropLandParameters().classifier_parameters.classifier_url,
+    )
     _ = postprocessor.apply(WorldCerealCroplandClassification)
-
 
 
 def test_cropland_postprocessing_majority_vote(WorldCerealCroplandClassification):
@@ -23,12 +29,15 @@ def test_cropland_postprocessing_majority_vote(WorldCerealCroplandClassification
 
     print("Postprocessing cropland product ...")
 
-    parameters={
-            "method": "majority_vote",
-            "kernel_size": 7,
-        }
+    parameters = {
+        "method": "majority_vote",
+        "kernel_size": 7,
+    }
 
-    postprocessor = Postprocessor(parameters, classifier_url=CropLandParameters().classifier_parameters.classifier_url)
+    postprocessor = Postprocessor(
+        parameters,
+        classifier_url=CropLandParameters().classifier_parameters.classifier_url,
+    )
     _ = postprocessor.apply(WorldCerealCroplandClassification)
 
 
@@ -37,11 +46,14 @@ def test_croptype_postprocessing(WorldCerealCroptypeClassification):
 
     print("Postprocessing croptype product ...")
 
-    parameters={
-            "method": "smooth_probabilities",
-        }
+    parameters = {
+        "method": "smooth_probabilities",
+    }
 
-    postprocessor = Postprocessor(parameters, classifier_url=CropTypeParameters().classifier_parameters.classifier_url)
+    postprocessor = Postprocessor(
+        parameters,
+        classifier_url=CropTypeParameters().classifier_parameters.classifier_url,
+    )
     _ = postprocessor.apply(WorldCerealCroptypeClassification)
 
 
@@ -50,12 +62,15 @@ def test_croptype_postprocessing_majority_vote(WorldCerealCroptypeClassification
 
     print("Postprocessing croptype product ...")
 
-    parameters={
-            "method": "majority_vote",
-            "kernel_size": 7,
-        }
+    parameters = {
+        "method": "majority_vote",
+        "kernel_size": 7,
+    }
 
-    postprocessor = Postprocessor(parameters, classifier_url=CropTypeParameters().classifier_parameters.classifier_url)
+    postprocessor = Postprocessor(
+        parameters,
+        classifier_url=CropTypeParameters().classifier_parameters.classifier_url,
+    )
     _ = postprocessor.apply(WorldCerealCroptypeClassification)
 
 
