@@ -10,7 +10,7 @@ import argparse
 import json
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sized, Tuple, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -469,15 +469,18 @@ class TorchHeadTrainer:
             loss.backward()
             optimizer.step()
             total_loss += float(loss.item()) * X.size(0)
-        return total_loss / len(loader.dataset)
+        dataset_size = len(cast(Sized, loader.dataset))
+        if dataset_size == 0:
+            raise ValueError("Training loader is empty; cannot normalize loss.")
+        return total_loss / float(dataset_size)
 
     def _eval_epoch(
         self, model: nn.Module, loader: DataLoader, device_: torch.device
     ) -> Tuple[float, np.ndarray, np.ndarray]:
         model.eval()
         total_loss = 0.0
-        preds_all = []
-        labels_all = []
+        preds_list: List[np.ndarray] = []
+        labels_list: List[np.ndarray] = []
         with torch.no_grad():
             for X, y in loader:
                 X = X.to(device_)
@@ -486,11 +489,14 @@ class TorchHeadTrainer:
                 loss = self.loss_fn(logits, y)
                 total_loss += float(loss.item()) * X.size(0)
                 preds = torch.argmax(logits, dim=1)
-                preds_all.append(preds.cpu().numpy())
-                labels_all.append(y.cpu().numpy())
-        preds_all = np.concatenate(preds_all)
-        labels_all = np.concatenate(labels_all)
-        return total_loss / len(loader.dataset), preds_all, labels_all
+                preds_list.append(preds.cpu().numpy())
+                labels_list.append(y.cpu().numpy())
+        preds_all = np.concatenate(preds_list) if preds_list else np.empty((0,))
+        labels_all = np.concatenate(labels_list) if labels_list else np.empty((0,))
+        dataset_size = len(cast(Sized, loader.dataset))
+        if dataset_size == 0:
+            raise ValueError("Validation loader is empty; cannot normalize loss.")
+        return total_loss / float(dataset_size), preds_all, labels_all
 
     def train(self) -> nn.Module:
         # Save base config
@@ -748,16 +754,16 @@ class TorchHeadTrainer:
 
     def evaluate(self, model: nn.Module, test_loader: DataLoader) -> Dict[str, float]:
         model.eval()
-        preds_all = []
-        labels_all = []
+        preds_list: List[np.ndarray] = []
+        labels_list: List[np.ndarray] = []
         with torch.no_grad():
             for X, y in test_loader:
                 logits = model(X.to(device))
                 preds = torch.argmax(logits, dim=1).cpu().numpy()
-                preds_all.append(preds)
-                labels_all.append(y.numpy())
-        preds_all = np.concatenate(preds_all)
-        labels_all = np.concatenate(labels_all)
+                preds_list.append(preds)
+                labels_list.append(y.cpu().numpy())
+        preds_all = np.concatenate(preds_list) if preds_list else np.empty((0,))
+        labels_all = np.concatenate(labels_list) if labels_list else np.empty((0,))
 
         # Metrics
         # Map integer labels back to string class names for readability
