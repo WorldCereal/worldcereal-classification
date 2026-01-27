@@ -78,7 +78,7 @@ class ExtractionJobManager(MultiBackendJobManager):
                     e,
                 )
         return job_items
-
+    
     def on_job_done(self, job: openeo.BatchJob, row: pd.Series):
         """Method called when a job finishes successfully.
         Parameters
@@ -97,9 +97,9 @@ class ExtractionJobManager(MultiBackendJobManager):
         pipeline_log.debug("Finished processing STAC items for job %s.", job.job_id)
 
         pipeline_log.debug("Calling post job action for job %s...", job.job_id)
-        job_items = self._post_job_action(job_items, row)
+        job_items = self.post_job_action(job_items, row)
         pipeline_log.debug("Finished post job action for job %s.", job.job_id)
-
+       
 
     def on_job_error(self, job: openeo.BatchJob, row: pd.Series):
         """Method called when a job finishes with an error.
