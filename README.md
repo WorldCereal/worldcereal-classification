@@ -54,6 +54,8 @@ Next, install the package locally:
 - for Conda: `conda env create -f environment.yml`
 - for Pip: `pip install .[train,notebooks]`
 
+WorldCereal requires Python 3.10 or newer.
+
 ## Usage Example
 In its most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
 

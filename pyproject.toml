@@ -34,7 +34,7 @@ authors = [
 ]
 description = "WorldCereal classification module"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dynamic = ["version"]
 classifiers = [
     "Programming Language :: Python :: 3",
