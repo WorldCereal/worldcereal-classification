@@ -17,14 +17,27 @@ Possible entry points for inference in this module:
 
 """
 
+import datetime as dt
 import json
 import shutil
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Optional, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import geopandas as gpd
+import numpy as np
 import openeo
 import pandas as pd
 from loguru import logger
@@ -35,31 +48,361 @@ from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
-from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
-from worldcereal.parameters import (
-    CropLandParameters,
-    CropTypeParameters,
-    EmbeddingsParameters,
-    WorldCerealProductType,
+from worldcereal.openeo.inference import (
+    _merge_workflow_sections,
+    _select_workflow_preset,
+    load_model_artifact,
 )
-from worldcereal.utils.models import load_model_lut
+from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
+from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
+from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 
-ONNX_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/onnx_deps_python311.zip"
 FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
+WORLDCEREAL_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/worldcereal-2.5.0-py3-none-any.whl"
 INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "5g",
+    "executor-memoryOverhead": "3g",
     "executor-request-cores": "1800m",
     "max-executors": 20,
     "python-memory": "disable",
     "soft-errors": 0.1,
     "udf-dependency-archives": [
-        f"{ONNX_DEPS_URL}#onnx_deps",
         f"{FEATURE_DEPS_URL}#feature_deps",
+        f"{PROMETHEO_WHL_URL}#prometheolib",
+        f"{WORLDCEREAL_WHL_URL}#worldcereallib",
     ],
 }
+
+SeasonWindowMapping = Dict[str, Tuple[str, str]]
+ManifestDict = Mapping[str, Any]
+ClassLUT = Dict[str, int]
+
+
+def _normalize_season_id_list(value: Optional[Union[str, Sequence[Any]]]) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        tokens = [
+            piece.strip()
+            for piece in value.replace(";", ",").split(",")
+            if piece.strip()
+        ]
+        return tokens
+    if isinstance(value, Sequence):
+        collected: List[str] = []
+        for element in value:
+            if isinstance(element, str):
+                collected.extend(_normalize_season_id_list(element))
+            elif element is not None:
+                collected.append(str(element))
+        return collected
+    return [str(value)]
+
+
+def _deduplicate_preserve_order(items: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def _try_parse_jsonish(value: str) -> Optional[Any]:
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _parse_window_string(value: str) -> Optional[Mapping[str, Tuple[str, str]]]:
+    entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+    mapping: Dict[str, Tuple[str, str]] = {}
+    for entry in entries:
+        parts = [part.strip() for part in entry.split(":")]
+        if len(parts) == 3:
+            mapping[parts[0]] = (parts[1], parts[2])
+    return mapping or None
+
+
+def _as_window_mapping(value: Any) -> Optional[Mapping[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        parsed = _try_parse_jsonish(value)
+        if isinstance(parsed, Mapping):
+            return parsed
+        parsed = _parse_window_string(value)
+        if isinstance(parsed, Mapping):
+            return parsed
+    return None
+
+
+def _datetime64_to_str(value: np.datetime64) -> str:
+    return value.astype("datetime64[D]").astype(str)
+
+
+def _to_datetime64(value: Any) -> np.datetime64:
+    if isinstance(value, np.datetime64):
+        return value.astype("datetime64[D]")
+    if isinstance(value, (dt.date, dt.datetime)):
+        return np.datetime64(value.strftime("%Y-%m-%d"), "D")
+    text = str(value).strip()
+    try:
+        return np.datetime64(text, "D")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Unable to parse date '{value}'") from exc
+
+
+def _coerce_iso_date(value: Any) -> str:
+    return _datetime64_to_str(_to_datetime64(value))
+
+
+def _coerce_temporal_bounds(
+    temporal_extent: TemporalContext,
+) -> Tuple[np.datetime64, np.datetime64]:
+    start = _to_datetime64(temporal_extent.start_date)
+    end = _to_datetime64(temporal_extent.end_date)
+    if end < start:
+        raise ValueError("Temporal extent end date precedes start date.")
+    return start, end
+
+
+def _coerce_window_pair(value: Any) -> Tuple[str, str]:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        start, end = value
+    elif isinstance(value, Mapping):
+        start = value.get("start") or value.get("begin")
+        end = value.get("end") or value.get("stop")
+    elif isinstance(value, str):
+        parts = [piece.strip() for piece in value.split(":")]
+        if len(parts) != 2:
+            raise ValueError(
+                "Season window strings must follow 'START:END' format when used standalone."
+            )
+        start, end = parts
+    else:
+        raise TypeError(f"Unsupported season window specification: {value!r}")
+    if start is None or end is None:
+        raise ValueError("Season windows require both start and end dates.")
+    return _coerce_iso_date(start), _coerce_iso_date(end)
+
+
+def _normalize_season_windows(
+    raw_windows: Mapping[str, Any], *, expected_ids: Optional[Sequence[str]] = None
+) -> SeasonWindowMapping:
+    normalized: SeasonWindowMapping = {}
+    keys_to_process: Sequence[str]
+    if expected_ids:
+        keys_to_process = [str(season_id) for season_id in expected_ids]
+    else:
+        keys_to_process = [str(key) for key in raw_windows.keys()]
+
+    for season_id in keys_to_process:
+        if season_id not in raw_windows:
+            if expected_ids:
+                raise ValueError(f"Season window missing for '{season_id}'.")
+            continue
+        normalized[season_id] = _coerce_window_pair(raw_windows[season_id])
+
+    if not expected_ids:
+        for key, value in raw_windows.items():
+            key_str = str(key)
+            normalized.setdefault(key_str, _coerce_window_pair(value))
+    return normalized
+
+
+def _season_ids_from_row(row: Optional[pd.Series]) -> List[str]:
+    if row is None:
+        return []
+    for key in ("season_ids", "season_id"):
+        if key in row and pd.notna(row[key]):
+            return _normalize_season_id_list(row[key])
+    return []
+
+
+def _season_windows_from_row(
+    row: Optional[pd.Series], season_ids: Sequence[str]
+) -> Optional[SeasonWindowMapping]:
+    if row is None:
+        return None
+    for key in ("season_windows", "season_window"):
+        if key in row and pd.notna(row[key]):
+            mapping = _as_window_mapping(row[key])
+            if mapping:
+                expected = season_ids if season_ids else None
+                return _normalize_season_windows(mapping, expected_ids=expected)
+    return None
+
+
+def _workflow_sections_from_config(
+    workflow_config: Optional[WorldCerealWorkflowConfig],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    if not workflow_config:
+        return None
+    config_dict = workflow_config.to_dict()
+    if not config_dict:
+        return None
+    return deepcopy(config_dict)
+
+
+def _apply_row_overrides(
+    workflow_cfg: Dict[str, Dict[str, Any]], row: Optional[pd.Series]
+) -> None:
+    if row is None:
+        return
+    season_cfg = workflow_cfg.setdefault("season", {})
+    row_ids = _deduplicate_preserve_order(_season_ids_from_row(row))
+    if row_ids:
+        season_cfg["season_ids"] = row_ids
+    row_windows = _season_windows_from_row(row, row_ids)
+    if row_windows:
+        merged_windows = dict(season_cfg.get("season_windows") or {})
+        merged_windows.update(row_windows)
+        season_cfg["season_windows"] = merged_windows
+
+
+def _compose_workflow_sections(
+    preset: str, *override_blocks: Optional[Mapping[str, Dict[str, Any]]]
+) -> Tuple[Dict[str, Dict[str, Any]], str]:
+    workflow_cfg, preset_name = _select_workflow_preset(preset)
+    workflow_cfg.setdefault("model", {})
+    workflow_cfg.setdefault("runtime", {})
+    workflow_cfg.setdefault("season", {})
+    for overrides in override_blocks:
+        if overrides:
+            _merge_workflow_sections(workflow_cfg, overrides)
+    return workflow_cfg, preset_name
+
+
+def _finalize_season_requirements(
+    workflow_cfg: Dict[str, Dict[str, Any]],
+    *,
+    temporal_extent: TemporalContext,
+) -> None:
+    season_cfg = workflow_cfg.setdefault("season", {})
+    season_ids = [str(season_id) for season_id in season_cfg.get("season_ids", [])]
+    if not season_ids:
+        raise ValueError(
+            "Seasonal workflow configuration requires at least one season identifier."
+        )
+    season_cfg["season_ids"] = season_ids
+
+    raw_windows = season_cfg.get("season_windows")
+    normalized_windows: Optional[SeasonWindowMapping] = None
+    if raw_windows:
+        normalized_windows = _normalize_season_windows(raw_windows, expected_ids=None)
+        missing = [sid for sid in season_ids if sid not in normalized_windows]
+        if missing:
+            raise ValueError(
+                "Season workflow configuration is missing windows for: "
+                + ", ".join(missing)
+            )
+    elif len(season_ids) == 1:
+        start, end = _coerce_temporal_bounds(temporal_extent)
+        normalized_windows = {
+            season_ids[0]: (
+                _datetime64_to_str(start),
+                _datetime64_to_str(end),
+            )
+        }
+    else:
+        raise ValueError(
+            "Provide explicit season windows when configuring multiple season identifiers."
+        )
+
+    season_cfg["season_windows"] = normalized_windows
+
+
+def _build_workflow_context(
+    *,
+    preset: str,
+    temporal_extent: TemporalContext,
+    override_blocks: Sequence[Optional[Mapping[str, Dict[str, Any]]]] = (),
+    row: Optional[pd.Series] = None,
+) -> Dict[str, Any]:
+    workflow_cfg, _ = _compose_workflow_sections(preset, *override_blocks)
+    _apply_row_overrides(workflow_cfg, row)
+    _finalize_season_requirements(workflow_cfg, temporal_extent=temporal_extent)
+    return {"workflow_config": workflow_cfg}
+
+
+def _resolve_model_config(
+    preset: str, overrides: Optional[Mapping[str, Dict[str, Any]]]
+) -> Dict[str, Any]:
+    workflow_cfg, _ = _compose_workflow_sections(preset, overrides)
+    model_cfg = workflow_cfg.get("model", {})
+    if not isinstance(model_cfg, dict) or not model_cfg.get("seasonal_model_zip"):
+        raise ValueError(
+            "Seasonal workflow configuration is missing 'seasonal_model_zip'."
+        )
+    return model_cfg
+
+
+@lru_cache(maxsize=8)
+def _get_artifact_manifest(source: str) -> ManifestDict:
+    artifact = load_model_artifact(source)
+    return deepcopy(artifact.manifest)
+
+
+def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
+    heads = manifest.get("heads", [])
+    for head in heads:
+        if head.get("task") == task:
+            class_names = head.get("class_names") or []
+            if not class_names:
+                raise ValueError(
+                    f"Head '{task}' missing class_names in manifest from seasonal model"
+                )
+            return {name: idx for idx, name in enumerate(class_names)}
+    raise ValueError(f"Manifest does not define a '{task}' head")
+
+
+def _resolve_workflow_luts(
+    *,
+    preset: str,
+    overrides: Optional[Mapping[str, Dict[str, Any]]],
+    product_type: WorldCerealProductType,
+) -> Dict[str, ClassLUT]:
+    try:
+        model_cfg = _resolve_model_config(preset, overrides)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to resolve seasonal model config for LUTs: %s", exc)
+        return {}
+
+    base_manifest = _get_artifact_manifest(str(model_cfg["seasonal_model_zip"]))
+
+    def _manifest_for_source(source: Optional[Union[str, Path]]) -> ManifestDict:
+        if source:
+            return _get_artifact_manifest(str(source))
+        return base_manifest
+
+    luts: Dict[str, ClassLUT] = {}
+    try:
+        luts[WorldCerealProductType.CROPLAND.value] = _lut_from_manifest(
+            _manifest_for_source(model_cfg.get("landcover_head_zip")),
+            task="landcover",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to load cropland LUT from seasonal model: %s", exc)
+
+    if product_type == WorldCerealProductType.CROPTYPE:
+        try:
+            luts[WorldCerealProductType.CROPTYPE.value] = _lut_from_manifest(
+                _manifest_for_source(model_cfg.get("croptype_head_zip")),
+                task="croptype",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load croptype LUT from seasonal model: %s", exc)
+
+    return luts
 
 
 class WorldCerealProduct(TypedDict):
@@ -185,14 +528,15 @@ def create_inference_process_graph(
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
     connection: Optional[openeo.Connection] = None,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
+    row: Optional[pd.Series] = None,
 ) -> List[openeo.DataCube]:
     """Wrapper function that creates the inference openEO process graph.
 
@@ -204,12 +548,6 @@ def create_inference_process_graph(
         temporal range to consider
     product_type : WorldCerealProductType, optional
         product describer, by default WorldCerealProductType.CROPLAND
-    cropland_parameters: CropLandParameters
-        Parameters for the cropland product inference pipeline.
-    croptype_parameters: Optional[CropTypeParameters]
-        Parameters for the croptype product inference pipeline. Only required
-        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
-        will be ignored otherwise.
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]]
         Sentinel-1 orbit state to use for the inference. If not provided,
         the orbit state will be dynamically determined based on the spatial extent.
@@ -222,6 +560,16 @@ def create_inference_process_graph(
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
+    seasonal_preset: str
+        Name of the seasonal workflow preset to use. Defaults to
+        `DEFAULT_SEASONAL_WORKFLOW_PRESET`.
+    workflow_config: Optional[WorldCerealWorkflowConfig]
+        Typed helper that describes overrides using Python objects instead of raw
+        dictionaries. When omitted, the preset values are used as-is.
+    row: Optional[pd.Series]
+        Optional production-grid row providing additional metadata (season ids
+        or windows). Only required when invoking the helper inside
+        `create_inference_job`.
     connection: Optional[openeo.Connection] = None,
         Optional OpenEO connection to use. If not provided, a new connection
         will be created based on the backend_context.
@@ -265,27 +613,28 @@ def create_inference_process_graph(
     # Spatial filtering
     inputs = inputs.filter_bbox(dict(spatial_extent))
 
+    config_overrides = _workflow_sections_from_config(workflow_config)
+    workflow_context = _build_workflow_context(
+        preset=seasonal_preset,
+        temporal_extent=temporal_extent,
+        override_blocks=(config_overrides,),
+        row=row,
+    )
+
     # Construct the feature extraction and model inference pipeline
     if product_type == WorldCerealProductType.CROPLAND:
         results = _cropland_map(
             inputs,
             temporal_extent,
-            cropland_parameters=cropland_parameters,
+            workflow_context=workflow_context,
         )
 
     elif product_type == WorldCerealProductType.CROPTYPE:
-        if not isinstance(croptype_parameters, CropTypeParameters):
-            raise ValueError(
-                f"Please provide a valid `croptype_parameters` parameter."
-                f" Received: {croptype_parameters}"
-            )
-
         # Generate crop type map with optional cropland masking
         results = _croptype_map(
             inputs,
             temporal_extent,
-            cropland_parameters=cropland_parameters,
-            croptype_parameters=croptype_parameters,
+            workflow_context=workflow_context,
         )
 
     return results
@@ -461,11 +810,11 @@ def create_inference_job(
     provider: str,
     connection_provider: str,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPTYPE,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     target_epsg: Optional[int] = None,
     job_options: Optional[dict] = None,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
 ) -> BatchJob:
     """Create an OpenEO batch job for WorldCereal inference.
 
@@ -490,12 +839,6 @@ def create_inference_job(
         unused but required for compatibility with MultiBackendJobManager6
     product_type : WorldCerealProductType, optional
         Type of the WorldCereal product to generate, by default WorldCerealProductType.CROPTYPE
-    croptype_parameters :  Optional[CropTypeParameters], optional
-        Parameters for the croptype product inference pipeline. Only required
-        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
-        will be ignored otherwise, by default None
-    cropland_parameters : Optional[CropLandParameters], optional
-        Parameters for the cropland product inference pipeline, by default None
     s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
         Sentinel-1 orbit state to use for the inference. If not provided, the
         best orbit will be dynamically derived from the catalogue.
@@ -504,6 +847,10 @@ def create_inference_job(
         left in the original epsg as mentioned in the row.
     job_options : Optional[dict], optional
         Additional job options to pass to the OpenEO backend, by default None
+    seasonal_preset : str, optional
+        Name of the seasonal workflow preset, defaults to the global preset.
+    workflow_config : Optional[WorldCerealWorkflowConfig]
+        Structured helper describing workflow overrides using Python objects.
 
     Returns
     -------
@@ -532,11 +879,12 @@ def create_inference_job(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         product_type=product_type,
-        croptype_parameters=croptype_parameters,
-        cropland_parameters=cropland_parameters,
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
         connection=connection,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
+        row=row,
     )
 
     # Submit the job
@@ -553,13 +901,13 @@ def generate_map(
     temporal_extent: TemporalContext,
     output_dir: Optional[Union[Path, str]] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     out_format: str = "GTiff",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
     target_epsg: Optional[int] = None,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
 ) -> InferenceResults:
     """Main function to generate a WorldCereal product.
 
@@ -573,12 +921,6 @@ def generate_map(
         path to directory where products should be downloaded to
     product_type : WorldCerealProductType, optional
         product describer, by default WorldCerealProductType.CROPLAND
-    cropland_parameters: CropLandParameters
-        Parameters for the cropland product inference pipeline.
-    croptype_parameters: Optional[CropTypeParameters]
-        Parameters for the croptype product inference pipeline. Only required
-        whenever `product_type` is set to `WorldCerealProductType.CROPTYPE`,
-        will be ignored otherwise.
     out_format : str, optional
         Output format, by default "GTiff"
     backend_context : BackendContext
@@ -590,6 +932,12 @@ def generate_map(
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
+    seasonal_preset: str
+        Name of the seasonal workflow preset to use for inference.
+    workflow_config: Optional[WorldCerealWorkflowConfig]
+        Structured representation of the workflow overrides. This can be used
+        to toggle features like class probability export without dealing with
+        nested dictionaries.
 
     Returns
     -------
@@ -607,18 +955,21 @@ def generate_map(
     # Get a connection to the OpenEO backend
     connection = BACKEND_CONNECTIONS[backend_context.backend]()
 
+    combined_overrides = _workflow_sections_from_config(workflow_config)
+
     # Create the process graph
     results = create_inference_process_graph(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         product_type=product_type,
-        cropland_parameters=cropland_parameters,
-        croptype_parameters=croptype_parameters,
         out_format=out_format,
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
         connection=connection,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
+        row=None,
     )
 
     if output_dir is not None:
@@ -638,15 +989,12 @@ def generate_map(
         description="Job that performs end-to-end WorldCereal inference",
     ).start_and_wait()
 
-    # Get look-up tables
-    luts = {}
-    luts[WorldCerealProductType.CROPLAND.value] = load_model_lut(
-        cropland_parameters.classifier_parameters.classifier_url
+    # Resolve look-up tables directly from seasonal model manifests
+    luts = _resolve_workflow_luts(
+        preset=seasonal_preset,
+        overrides=combined_overrides,
+        product_type=product_type,
     )
-    if product_type == WorldCerealProductType.CROPTYPE:
-        luts[WorldCerealProductType.CROPTYPE.value] = load_model_lut(
-            croptype_parameters.classifier_parameters.classifier_url
-        )
 
     # Get job results
     job_result = job.get_results()
@@ -755,13 +1103,13 @@ def run_largescale_inference(
     production_grid: Union[Path, gpd.GeoDataFrame],
     output_dir: Union[Path, str],
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
 ):
     """
     Run large-scale inference jobs on the OpenEO backend.
@@ -779,10 +1127,6 @@ def run_largescale_inference(
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
         Type of product to generate. Defaults to WorldCerealProductType.CROPLAND.
-    cropland_parameters : CropLandParameters
-        Parameters for cropland inference.
-    croptype_parameters : CropTypeParameters
-        Parameters for crop type inference.
     backend_context : BackendContext
         Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
     target_epsg : Optional[int]
@@ -796,6 +1140,10 @@ def run_largescale_inference(
     parallel_jobs : int
         Number of parallel jobs to manage on the backend. Defaults to 2. Note that load
         balancing does not guarantee that all jobs will run in parallel.
+    seasonal_preset : str
+        Name of the seasonal workflow preset to use when building the UDF context.
+    workflow_config : Optional[WorldCerealWorkflowConfig]
+        Structured overrides for the seasonal workflow.
 
     Returns
     -------
@@ -806,13 +1154,13 @@ def run_largescale_inference(
         production_grid=production_grid,
         output_dir=output_dir,
         product_type=product_type,
-        cropland_parameters=cropland_parameters,
-        croptype_parameters=croptype_parameters,
         backend_context=backend_context,
         target_epsg=target_epsg,
         s1_orbit_state=s1_orbit_state,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
     )
 
     job_df = job_db.df
@@ -832,13 +1180,13 @@ def setup_inference_job_manager(
     production_grid: Union[Path, gpd.GeoDataFrame],
     output_dir: Union[Path, str],
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
 ) -> tuple[InferenceJobManager, CsvJobDatabase, Callable]:
     """
     Prepare large-scale inference jobs on the OpenEO backend.
@@ -855,10 +1203,6 @@ def setup_inference_job_manager(
         Directory where output files and job tracking information will be stored.
     product_type : WorldCerealProductType
         Type of product to generate. Defaults to WorldCerealProductType.CROPLAND.
-    cropland_parameters : CropLandParameters
-        Parameters for cropland inference.
-    croptype_parameters : CropTypeParameters
-        Parameters for crop type inference.
     backend_context : BackendContext
         Context for the backend to use. Defaults to BackendContext(Backend.CDSE).
     target_epsg : Optional[int]
@@ -872,6 +1216,10 @@ def setup_inference_job_manager(
     parallel_jobs : int
         Number of parallel jobs to manage on the backend. Defaults to 2. Note that load
         balancing does not guarantee that all jobs will run in parallel.
+    seasonal_preset : str
+        Name of the seasonal workflow preset to use for inference jobs.
+    workflow_config : Optional[WorldCerealWorkflowConfig]
+        Structured overrides applied to each job.
 
     Returns
     -------
@@ -916,6 +1264,7 @@ def setup_inference_job_manager(
         else:
             raise ValueError("production_grid must be a Path or a GeoDataFrame.")
 
+        # TODO: add season spec to production grid?
         REQUIRED_ATTRIBUTES = [
             "start_date",
             "end_date",
@@ -925,9 +1274,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
+            assert attr in production_gdf.columns, (
+                f"The production grid must contain a '{attr}' column."
+            )
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 
@@ -942,11 +1291,11 @@ def setup_inference_job_manager(
     start_job = partial(
         create_inference_job,
         product_type=product_type,
-        cropland_parameters=cropland_parameters,
-        croptype_parameters=croptype_parameters,
         s1_orbit_state=s1_orbit_state,
         job_options=job_options,
         target_epsg=target_epsg,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
     )
 
     # Check if there are jobs to run

@@ -21,11 +21,9 @@ from shapely import wkt
 from shapely.geometry import box
 
 from worldcereal.job import setup_inference_job_manager
-from worldcereal.parameters import (
-    CropLandParameters,
-    CropTypeParameters,
-    WorldCerealProductType,
-)
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
+from worldcereal.parameters import WorldCerealProductType
 
 # Define the color mapping for job statuses
 JOB_STATUS_COLORS = {
@@ -316,13 +314,13 @@ def run_map_production(
     tile_resolution: int = 20,
     tiling_crs: Optional[str] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     stop_event=None,
 ) -> pd.DataFrame:
     """Run a WorldCereal map production for the given spatial and temporal extent.
@@ -343,10 +341,6 @@ def run_map_production(
         If None, the best local UTM CRS will be derived.
     product_type : WorldCerealProductType, optional
         The type of product to produce, by default WorldCerealProductType.CROPLAND
-    cropland_parameters : CropLandParameters, optional
-        Parameters for the cropland product, by default CropLandParameters()
-    croptype_parameters : CropTypeParameters, optional
-        Parameters for the crop type product, by default CropTypeParameters()
     backend_context : BackendContext, optional
         The backend context to use for the production, by default BackendContext(Backend.CDSE)
     target_epsg : Optional[int], optional
@@ -360,6 +354,10 @@ def run_map_production(
         If None, default options will be used.
     parallel_jobs : int, optional
         The number of parallel jobs to run, by default 2.
+    seasonal_preset : str, optional
+        Name of the seasonal workflow preset to use when building the inference context.
+    workflow_config : Optional[WorldCerealWorkflowConfig], optional
+        Structured overrides applied on top of the preset to tweak model/runtime/season settings.
     stop_event : Optional[threading.Event], optional
         An optional threading event to stop the job manager gracefully, by default None.
 
@@ -396,13 +394,13 @@ def run_map_production(
         production_grid,
         output_dir,
         product_type=product_type,
-        cropland_parameters=cropland_parameters,
-        croptype_parameters=croptype_parameters,
         backend_context=backend_context,
         target_epsg=target_epsg,
         s1_orbit_state=s1_orbit_state,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
     )
 
     # Start a threaded job manager

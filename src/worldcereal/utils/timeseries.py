@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 
-from worldcereal.train.datasets import MIN_EDGE_BUFFER
+from worldcereal.train import MIN_EDGE_BUFFER
 
 STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES

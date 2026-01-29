@@ -8,10 +8,10 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
 from worldcereal.job import WorldCerealProductType, generate_map
-from worldcereal.parameters import (
-    CropLandParameters,
-    CropTypeParameters,
-    PostprocessParameters,
+from worldcereal.openeo.workflow_config import (
+    ModelSection,
+    SeasonSection,
+    WorldCerealWorkflowConfig,
 )
 
 if __name__ == "__main__":
@@ -45,16 +45,10 @@ if __name__ == "__main__":
         help="EPSG code of the input `minx`, `miny`, `maxx`, `maxy` parameters.",
     )
     parser.add_argument(
-        "--postprocess",
-        action="store_true",
-        help="Run postprocessing on the croptype and/or the cropland product after inference.",
-    )
-    parser.add_argument(
         "--class-probabilities",
         action="store_true",
         help="Output per-class probabilities in the resulting product",
     )
-
     args = parser.parse_args()
 
     minx = args.minx
@@ -70,24 +64,41 @@ if __name__ == "__main__":
 
     # minx, miny, maxx, maxy = (664000, 5611134, 665000, 5612134)  # Small test
     # minx, miny, maxx, maxy = (664000, 5611134, 684000, 5631134)  # Large test
+    # minx, miny, maxx, maxy = (634000, 5601134, 684000, 5651134)  # Very large test
     # epsg = 32631
     # start_date = "2020-11-01"
     # end_date = "2021-10-31"
     # product = "croptype"
+
+    keep_class_probabilities = args.class_probabilities
+    season_windows = {
+        "tc-s1": ("2020-12-01", "2021-07-31"),
+        "tc-s2": ("2021-04-01", "2021-10-31"),
+    }
+    season_ids = list(season_windows.keys())
 
     spatial_extent = BoundingBoxExtent(minx, miny, maxx, maxy, epsg)
     temporal_extent = TemporalContext(start_date, end_date)
 
     backend_context = BackendContext(Backend.CDSE)
 
-    postprocessing_params = PostprocessParameters(
-        enable=args.postprocess,
-        keep_class_probs=args.class_probabilities,
-        save_intermediate=True if args.postprocess else False,
-    )
-    cropland_params = CropLandParameters(postprocess_parameters=postprocessing_params)
-    croptype_params = CropTypeParameters(
-        postprocess_parameters=postprocessing_params, save_mask=False
+    # Replace with the URI of your custom croptype head archive when overriding the preset model.
+    croptype_head_uri = None  # e.g. "abfs://models/custom_croptype_head.zip"
+
+    workflow_cfg = WorldCerealWorkflowConfig(
+        model=(
+            ModelSection(
+                croptype_head_zip=croptype_head_uri,
+                enable_croptype_head=True,
+            )
+            if croptype_head_uri
+            else None
+        ),
+        season=SeasonSection(
+            keep_class_probabilities=keep_class_probabilities,
+            season_ids=season_ids,
+            season_windows=season_windows,
+        ),
     )
 
     job_results = generate_map(
@@ -95,9 +106,8 @@ if __name__ == "__main__":
         temporal_extent,
         args.output_path,
         product_type=WorldCerealProductType(product),
-        cropland_parameters=cropland_params,
-        croptype_parameters=croptype_params,
         out_format="GTiff",
         backend_context=backend_context,
+        workflow_config=workflow_cfg,
     )
     logger.success(f"Job finished:\n\t{job_results}")

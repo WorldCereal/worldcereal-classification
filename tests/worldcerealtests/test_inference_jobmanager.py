@@ -8,9 +8,8 @@ from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from shapely.geometry import box
 
 from worldcereal.job import (
+    DEFAULT_SEASONAL_WORKFLOW_PRESET,
     INFERENCE_JOB_OPTIONS,
-    CropLandParameters,
-    CropTypeParameters,
     WorldCerealProductType,
     create_inference_job,
     run_largescale_inference,
@@ -35,8 +34,6 @@ def test_run_largescale_inference_with_geodataframe():
 
     output_dir = Path(".")
     product_type = WorldCerealProductType.CROPLAND
-    cropland_parameters = CropLandParameters()
-
     mock_job_manager = MagicMock()
     mock_job_db = MagicMock()
     mock_job_db.df.empty = False
@@ -50,7 +47,6 @@ def test_run_largescale_inference_with_geodataframe():
             production_grid=production_gdf,
             output_dir=output_dir,
             product_type=product_type,
-            cropland_parameters=cropland_parameters,
             parallel_jobs=1,
         )
 
@@ -91,23 +87,23 @@ def test_create_inference_job_logic():
             provider="dummy_provider",
             connection_provider="dummy_connection_provider",
             product_type=WorldCerealProductType.CROPTYPE,
-            cropland_parameters=CropLandParameters(),
-            croptype_parameters=CropTypeParameters(),
             s1_orbit_state=None,
             target_epsg=None,
             job_options=None,
         )
 
-        mock_create_graph.assert_called_once_with(
-            spatial_extent=BoundingBoxExtent(*(0, 0, 1, 1), epsg=4326),
-            temporal_extent=TemporalContext("2023-01-01", "2023-12-31"),
-            product_type=WorldCerealProductType.CROPTYPE,
-            croptype_parameters=CropTypeParameters(),
-            cropland_parameters=CropLandParameters(),
-            s1_orbit_state=None,
-            target_epsg=4326,
-            connection=mock_connection,
+        mock_create_graph.assert_called_once()
+        _, kwargs = mock_create_graph.call_args
+        assert kwargs["spatial_extent"] == BoundingBoxExtent(*(0, 0, 1, 1), epsg=4326)
+        assert kwargs["temporal_extent"] == TemporalContext(
+            "2023-01-01", "2023-12-31"
         )
+        assert kwargs["product_type"] == WorldCerealProductType.CROPTYPE
+        assert kwargs["s1_orbit_state"] is None
+        assert kwargs["target_epsg"] == 4326
+        assert kwargs["connection"] is mock_connection
+        assert kwargs["seasonal_preset"] == DEFAULT_SEASONAL_WORKFLOW_PRESET
+        assert kwargs["row"].equals(row)
 
         # first positional arg is the inference result, options via 'additional'
         assert mock_connection.create_job.call_count == 1

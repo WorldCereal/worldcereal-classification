@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,6 +70,148 @@ def _unique_preserve_order(values):
     return ordered
 
 
+def _build_head_manifest(
+    *,
+    experiment_name: str,
+    timestamp: str,
+    timestep_freq: Literal["month", "dekad"],
+    time_explicit: bool,
+    landcover_key: str,
+    landcover_classes: Sequence[str],
+    croptype_key: str,
+    croptype_classes: Sequence[str],
+    cropland_class_names: Sequence[str],
+    seasonal_head_dropout: float,
+    pretrained_model_path: str,
+    config_filename: str,
+    manifest_filename: str,
+) -> Dict[str, Any]:
+    """Describe the seasonal heads so downstream tooling can replace them safely."""
+
+    landcover_labels = [str(cls) for cls in landcover_classes]
+    croptype_labels = [str(cls) for cls in croptype_classes]
+    cropland_labels = [str(cls) for cls in cropland_class_names]
+
+    checkpoint_name = f"{experiment_name}.pt"
+    encoder_checkpoint_name = f"{experiment_name}_encoder.pt"
+
+    landcover_head = {
+        "name": "landcover",
+        "task": "landcover",
+        "task_type": "multiclass",
+        "num_classes": len(landcover_labels),
+        "classes_key": landcover_key,
+        "class_names": landcover_labels,
+        "label_column": "landcover_label",
+        "logits_attr": "global_logits",
+        "state_dict_prefix": "head.landcover_head",
+        "replacement_contract": {
+            "input_tensor": "global_embedding",
+            "output_attr": "global_logits",
+            "expects_time_dimension": False,
+        },
+    }
+
+    croptype_head = {
+        "name": "croptype",
+        "task": "croptype",
+        "task_type": "multiclass",
+        "num_classes": len(croptype_labels),
+        "classes_key": croptype_key,
+        "class_names": croptype_labels,
+        "label_column": "croptype_label",
+        "logits_attr": "season_logits",
+        "state_dict_prefix": "head.crop_head",
+        "replacement_contract": {
+            "input_tensor": "season_embeddings",
+            "output_attr": "season_logits",
+            "expects_season_masks": True,
+        },
+        "gating": {
+            "enabled": bool(cropland_labels),
+            "cropland_classes": cropland_labels,
+        },
+    }
+
+    manifest: Dict[str, Any] = {
+        "schema_version": 1,
+        "generated_at": timestamp,
+        "experiment": {
+            "name": experiment_name,
+            "timestep_freq": timestep_freq,
+            "time_explicit": time_explicit,
+        },
+        "backbone": {
+            "pretrained_checkpoint": pretrained_model_path,
+            "head_dropout": seasonal_head_dropout,
+        },
+        "heads": [landcover_head, croptype_head],
+        "artifacts": {
+            "config": config_filename,
+            "head_manifest": manifest_filename,
+            "checkpoints": {
+                "full": checkpoint_name,
+                "encoder_only": encoder_checkpoint_name,
+            },
+            "packages": {
+                "full": checkpoint_name.replace(".pt", ".zip"),
+            },
+        },
+    }
+
+    return manifest
+
+
+def _zip_checkpoint_with_config(
+    checkpoint_path: Path,
+    *,
+    manifest_path: Path,
+    run_config_path: Path,
+) -> Optional[Path]:
+    """Bundle a checkpoint with its manifest/config so inference can recover metadata."""
+
+    if not checkpoint_path.exists():
+        logger.warning(f"Checkpoint {checkpoint_path} not found; skipping packaging")
+        return None
+    if not manifest_path.exists():
+        logger.warning(
+            f"Head manifest missing at {manifest_path}; cannot package {checkpoint_path.name}"
+        )
+        return None
+
+    zip_path = checkpoint_path.with_suffix(".zip")
+    try:
+        with zipfile.ZipFile(
+            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
+            zf.write(checkpoint_path, arcname=checkpoint_path.name)
+            zf.write(manifest_path, arcname="config.json")
+            if run_config_path.exists():
+                zf.write(run_config_path, arcname=run_config_path.name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to package {checkpoint_path.name}: {exc}")
+        return None
+
+    logger.info(f"Packaged {checkpoint_path.name} with manifest into {zip_path}")
+    return zip_path
+
+
+def _package_model_checkpoints(
+    checkpoint_paths: Sequence[Path],
+    *,
+    manifest_path: Path,
+    run_config_path: Path,
+) -> None:
+    """Create zip artifacts for each checkpoint using the shared manifest/config."""
+
+    for checkpoint_path in checkpoint_paths:
+        _zip_checkpoint_with_config(
+            checkpoint_path,
+            manifest_path=manifest_path,
+            run_config_path=run_config_path,
+        )
+
+
 def _annotate_dual_task_labels(
     df: pd.DataFrame,
     *,
@@ -80,7 +223,7 @@ def _annotate_dual_task_labels(
     """Attach landcover/croptype labels and task routing metadata to a split dataframe."""
 
     if df.empty:
-        logger.warning("%s split is empty before seasonal label annotation", split_name)
+        logger.warning(f"{split_name} split is empty before seasonal label annotation")
         return df
 
     updated = df.copy()
@@ -92,10 +235,7 @@ def _annotate_dual_task_labels(
     if missing_landcover.any():
         removed = int(missing_landcover.sum())
         logger.warning(
-            "Removing %d samples from %s split without '%s' landcover mapping",
-            removed,
-            split_name,
-            landcover_key,
+            f"Removing {removed} samples from {split_name} split without '{landcover_key}' landcover mapping"
         )
         updated = updated.loc[~missing_landcover].copy()
         if updated.empty:
@@ -125,8 +265,7 @@ def _validate_seasonal_task_labels(
 
     if df.empty:
         logger.warning(
-            "%s split is empty; skipping seasonal task diversity validation",
-            split_name,
+            f"{split_name} split is empty; skipping seasonal task diversity validation",
         )
         return
 
@@ -250,7 +389,7 @@ def main(args):
     if args.log_tensorboard:
         tensorboard_dir = Path(output_dir) / "tensorboard"
         tensorboard_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("TensorBoard logs will be stored at %s", tensorboard_dir)
+        logger.info(f"TensorBoard logs will be stored at {tensorboard_dir}")
 
     def _export_eval_artifacts(
         eval_results: pd.DataFrame,
@@ -673,6 +812,22 @@ def main(args):
         )
 
     config_path = Path(output_dir) / "run_config.json"
+    manifest_path = Path(output_dir) / "head_manifest.json"
+    head_manifest = _build_head_manifest(
+        experiment_name=experiment_name,
+        timestamp=timestamp_ind,
+        timestep_freq=timestep_freq,
+        time_explicit=time_explicit,
+        landcover_key=landcover_key,
+        landcover_classes=landcover_classes,
+        croptype_key=croptype_key,
+        croptype_classes=croptype_classes,
+        cropland_class_names=cropland_class_names,
+        seasonal_head_dropout=args.seasonal_head_dropout,
+        pretrained_model_path=pretrained_model_path,
+        config_filename=config_path.name,
+        manifest_filename=manifest_path.name,
+    )
     args_payload = {
         key: (str(value) if isinstance(value, Path) else value)
         for key, value in vars(args).items()
@@ -771,13 +926,22 @@ def main(args):
         },
         "balancing": balancing_payload,
     }
+    run_config["head_manifest"] = head_manifest
     try:
         with config_path.open("w", encoding="utf-8") as fp:
             json.dump(run_config, fp, indent=2, sort_keys=True)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to save run configuration: %s", exc)
+        logger.warning(f"Failed to save run configuration: {exc}")
     else:
         logger.info(f"Saved run configuration to {config_path}")
+
+    try:
+        with manifest_path.open("w", encoding="utf-8") as fp:
+            json.dump(head_manifest, fp, indent=2, sort_keys=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to save head manifest: {exc}")
+    else:
+        logger.info(f"Saved head manifest to {manifest_path}")
 
     # Run the finetuning
     logger.info("Starting finetuning...")
@@ -802,6 +966,13 @@ def main(args):
         finetuned_model,
         suffix_prefix=None,
         artifact_dir=Path(output_dir),
+    )
+
+    checkpoints_to_package = [Path(output_dir) / f"{experiment_name}.pt"]
+    _package_model_checkpoints(
+        checkpoints_to_package,
+        manifest_path=manifest_path,
+        run_config_path=config_path,
     )
 
     logger.info("Finetuning completed!")
