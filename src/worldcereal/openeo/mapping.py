@@ -196,7 +196,7 @@ def _cropland_map(
 ) -> List[DataCube]:
     """Produce cropland product bands using the configured seasonal workflow."""
 
-    cropland_context = deepcopy(workflow_context)
+    cropland_context: Dict[str, Any] = deepcopy(dict(workflow_context))
     cropland_context["disable_croptype_head"] = True
     workflow_cfg = cropland_context.setdefault("workflow_config", {})
     if isinstance(workflow_cfg, dict):

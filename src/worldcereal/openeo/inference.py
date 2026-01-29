@@ -54,17 +54,23 @@ try:
 
 except ImportError:
     # loguru not available, use standard logging
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)  # type: ignore
 
 
 from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 
-if TYPE_CHECKING:  # pragma: no cover - only needed for type checking
+if TYPE_CHECKING:  # pragma: no cover - typing only
     import torch
     from prometheo.predictors import Predictors
 
     from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
+
+    TorchTensor = torch.Tensor
+    TorchDevice = torch.device
+else:  # pragma: no cover - runtime avoids importing torch eagerly
+    TorchTensor = Any  # type: ignore[assignment]
+    TorchDevice = Any  # type: ignore[assignment]
 
 
 def _lazy_import_torch():
@@ -435,7 +441,7 @@ class SeasonalModelBundle:
         landcover_head_zip: str | Path | None = None,
         croptype_head_zip: str | Path | None = None,
         cache_root: Optional[Path] = None,
-        device: Union[str, "torch.device"] = "cpu",
+        device: Union[str, TorchDevice] = "cpu",
         enable_croptype_head: bool = True,
     ) -> None:
         torch = _lazy_import_torch()
@@ -728,7 +734,7 @@ class SeasonalInferenceEngine:
         landcover_head_zip: str | Path | None = None,
         croptype_head_zip: str | Path | None = None,
         cache_root: Optional[Path] = None,
-        device: Union[str, "torch.device"] = "cpu",
+        device: Union[str, TorchDevice] = "cpu",
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
         batch_size: int = 2048,
@@ -931,12 +937,12 @@ class SeasonalInferenceEngine:
 
     def _run_batches(
         self, predictors: "Predictors", season_masks: np.ndarray
-    ) -> Tuple[Optional["torch.Tensor"], Optional["torch.Tensor"]]:
+    ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor]]:
         torch = _lazy_import_torch()
         from prometheo.predictors import Predictors, to_torchtensor
 
-        landcover_logits: List["torch.Tensor"] = []
-        croptype_logits: List["torch.Tensor"] = []
+        landcover_logits: List[TorchTensor] = []
+        croptype_logits: List[TorchTensor] = []
 
         total_samples = getattr(predictors, "B", 0)
         estimated_batches = (
@@ -994,7 +1000,7 @@ class SeasonalInferenceEngine:
         self,
         *,
         arr: xr.DataArray,
-        outputs: Tuple[Optional["torch.Tensor"], Optional["torch.Tensor"]],
+        outputs: Tuple[Optional[TorchTensor], Optional[TorchTensor]],
         season_ids: Sequence[str],
         enforce_cropland_gate: bool,
     ) -> xr.Dataset:
@@ -1182,7 +1188,7 @@ def run_seasonal_workflow(
     croptype_head_zip: str | Path | None = None,
     enforce_cropland_gate: bool = True,
     cache_root: Optional[Path] = None,
-    device: Union[str, "torch.device"] = "cpu",
+    device: Union[str, TorchDevice] = "cpu",
     batch_size: int = 256,
     season_ids: Optional[Sequence[str]] = None,
     season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
@@ -1413,7 +1419,7 @@ def _flatten_spatial_dataset(dataset: xr.Dataset) -> xr.Dataset:
 
     for var_name, data_array in dataset.data_vars.items():
         da = data_array
-        non_spatial_dims = [dim for dim in da.dims if dim not in {"y", "x"}]
+        non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
         if not non_spatial_dims:
             flat_vars[var_name] = da
             continue
@@ -1444,7 +1450,7 @@ def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
     band_arrays: List[xr.DataArray] = []
     for var_name, data_array in dataset.data_vars.items():
         da = data_array.astype(np.uint8, copy=False)
-        non_spatial_dims = [dim for dim in da.dims if dim not in {"y", "x"}]
+        non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
         if not non_spatial_dims:
             labelled = da.expand_dims("bands").assign_coords(bands=[var_name])
             band_arrays.append(labelled)
@@ -1741,13 +1747,13 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     return udf_data
 
 
-def apply_metadata(metadata: Any, context: Dict[str, Any]) -> Any:
+def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
     """openEO metadata hook that keeps band labels in sync with the workflow outputs."""
 
     _require_openeo_runtime()
 
     try:
-        context_map = context or {}
+        context_map = dict(context or {})
         season_ids = _resolve_effective_season_ids(context_map)
         keep_probs = False
         cropland_gate_classes: Optional[Sequence[str]] = None

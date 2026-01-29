@@ -12,9 +12,10 @@ DEFAULT_SEASONAL_MODEL_URL = (
 
 DEFAULT_SEASONAL_WORKFLOW_PRESET = "phase_ii_multitask"
 
-SeasonalWorkflowPreset = Dict[str, Dict[str, Any]]
+SeasonalWorkflowPreset = Dict[str, Any]
+SeasonalWorkflowPresets = Dict[str, SeasonalWorkflowPreset]
 
-SEASONAL_WORKFLOW_PRESETS: Dict[str, SeasonalWorkflowPreset] = {
+SEASONAL_WORKFLOW_PRESETS: SeasonalWorkflowPresets = {
     DEFAULT_SEASONAL_WORKFLOW_PRESET: {
         "description": "Phase II multitask seasonal backbone with dual landcover/croptype heads",
         "model": {

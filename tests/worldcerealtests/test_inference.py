@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import pytest
@@ -44,7 +45,9 @@ def _build_probability_engine(
     )
     engine._keep_class_probabilities = keep_probs
     engine._croptype_enabled = True
-    engine.bundle = SimpleNamespace(
+    engine.bundle = cast(
+        inference.SeasonalModelBundle,
+        SimpleNamespace(
         landcover_spec=inference.HeadSpec(
             task="landcover",
             class_names=["nocrop", "crop"],
@@ -58,6 +61,7 @@ def _build_probability_engine(
             gating_enabled=False,
         ),
         cropland_gate_classes=["crop"],
+        ),
     )
     return engine
 
