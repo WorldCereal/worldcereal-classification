@@ -29,6 +29,11 @@ from typing import (
     Union,
 )
 
+try:  # Python 3.10+
+    from typing import TypeAlias
+except ImportError:  # pragma: no cover - fallback for older runtimes
+    from typing_extensions import TypeAlias  # type: ignore[misc, assignment]
+
 import numpy as np
 import xarray as xr
 from pyproj import Transformer
@@ -61,16 +66,22 @@ from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    import torch
     from prometheo.predictors import Predictors
 
     from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
 
-    TorchTensor = torch.Tensor
-    TorchDevice = torch.device
+    try:
+        from torch import Tensor as _TorchTensorType
+        from torch import device as _TorchDeviceType
+    except Exception:  # pragma: no cover - stubs not available
+        _TorchTensorType = Any  # type: ignore[assignment]
+        _TorchDeviceType = Any  # type: ignore[assignment]
 else:  # pragma: no cover - runtime avoids importing torch eagerly
-    TorchTensor = Any  # type: ignore[assignment]
-    TorchDevice = Any  # type: ignore[assignment]
+    _TorchTensorType = Any  # type: ignore[assignment]
+    _TorchDeviceType = Any  # type: ignore[assignment]
+
+TorchTensor: TypeAlias = _TorchTensorType
+TorchDevice: TypeAlias = _TorchDeviceType
 
 
 def _lazy_import_torch():
