@@ -253,13 +253,12 @@ def test_apply_udf_data_wraps_engine_output(monkeypatch):
         captured["config"] = config
         assert epsg == 32631
         lc = xr.DataArray(np.zeros((2, 2), dtype=np.uint16), dims=("y", "x"))
-        ct = xr.DataArray(
-            np.zeros((1, 2, 2), dtype=np.uint16),
-            dims=("season", "y", "x"),
-            coords={"season": ["S1"]},
-        )
+        ct = xr.DataArray(np.zeros((2, 2), dtype=np.uint16), dims=("y", "x"))
         dataset = xr.Dataset(
-            {"cropland_classification": lc, "croptype_classification": ct}
+            {
+                "cropland_classification": lc,
+                "croptype_classification:S1": ct,
+            }
         )
         return inference._dataset_to_multiband_array(dataset)
 
@@ -361,20 +360,6 @@ def test_apply_metadata_handles_cropland_disabled(monkeypatch):
     ]
 
 
-def test_flatten_spatial_dataset_creates_2d_variables():
-    da = xr.DataArray(
-        np.arange(8, dtype=np.float32).reshape(2, 2, 2),
-        dims=("season", "y", "x"),
-        coords={"season": ["tc-s1", "tc-s2"], "y": [0, 1], "x": [0, 1]},
-    )
-    ds = xr.Dataset({"croptype_confidence": da})
-    flat = inference._flatten_spatial_dataset(ds)
-
-    assert "croptype_confidence:tc-s1" in flat
-    assert "croptype_confidence:tc-s2" in flat
-    assert flat["croptype_confidence:tc-s1"].dims == ("y", "x")
-
-
 def test_probabilities_are_flattened_and_gated():
     ds = _probability_dataset()
 
@@ -408,16 +393,24 @@ def test_probabilities_are_flattened_and_gated():
     assert np.all(cropland_probs[~cropland_labels] < 50)
 
 
-def test_dataset_to_multiband_array_handles_flattened_dataset():
+def test_dataset_to_multiband_array_preserves_band_order():
     ds = _probability_dataset()
     cube = inference._dataset_to_multiband_array(ds)
     bands = cube.coords["bands"].values.tolist()
 
-    assert "probability_cropland" in bands
-    assert "croptype_classification:tc-s1" in bands
-    assert "croptype_probability:tc-s1:wheat" in bands
-    assert "croptype_probability:tc-s2:wheat" in bands
-    assert "landcover_probabilities:other" in bands
+    expected_prefix = [
+        "cropland_classification",
+        "probability_cropland",
+        "landcover_probabilities:crop",
+        "landcover_probabilities:other",
+        "croptype_classification:tc-s1",
+        "croptype_classification:tc-s2",
+        "croptype_probability:tc-s1",
+        "croptype_probability:tc-s2",
+    ]
+    assert bands[: len(expected_prefix)] == expected_prefix
+    assert bands[len(expected_prefix)] == "croptype_probability:tc-s1:wheat"
+    assert bands[len(expected_prefix) + 3] == "croptype_probability:tc-s2:wheat"
     assert cube.dtype == np.uint8
 
 

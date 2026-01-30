@@ -12,6 +12,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
+from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -1215,9 +1216,15 @@ class SeasonalInferenceEngine:
         width = arr.sizes["x"]
         landcover_logits, croptype_logits = outputs
 
-        data_vars: Dict[str, xr.DataArray] = {}
+        band_layers: List[Tuple[str, np.ndarray]] = []
         cropland_mask_bool: Optional[np.ndarray] = None
-        cropland_probability_np: Optional[np.ndarray] = None
+
+        def _register_band(name: str, values: np.ndarray) -> None:
+            if values.shape != (height, width):
+                raise ValueError(
+                    f"Band '{name}' has incompatible shape {values.shape}; expected {(height, width)}."
+                )
+            band_layers.append((name, values.astype(np.uint8, copy=False)))
 
         if landcover_logits is not None and landcover_logits.numel() > 0:
             probs = torch.softmax(landcover_logits, dim=-1)
@@ -1299,22 +1306,10 @@ class SeasonalInferenceEngine:
                 excluded_values=(),
             )
             cropland_mask_bool = cropland_labels_uint8.astype(bool)
-            cropland_probability_np = cropland_prob_cube[1]
-            cropland_probability_uint8 = _probabilities_to_uint8(
-                cropland_probability_np
-            )
+            cropland_probability_uint8 = _probabilities_to_uint8(cropland_prob_cube[1])
 
-            data_vars["cropland_classification"] = xr.DataArray(
-                cropland_labels_uint8,
-                dims=("y", "x"),
-                coords={"y": arr.y, "x": arr.x},
-                attrs={"classes": ["other", "cropland"]},
-            )
-            data_vars["probability_cropland"] = xr.DataArray(
-                cropland_probability_uint8,
-                dims=("y", "x"),
-                coords={"y": arr.y, "x": arr.x},
-            )
+            _register_band("cropland_classification", cropland_labels_uint8)
+            _register_band("probability_cropland", cropland_probability_uint8)
 
             if self._export_class_probabilities:
                 probability_blocks: List[np.ndarray] = []
@@ -1330,15 +1325,9 @@ class SeasonalInferenceEngine:
                 probability_labels.append("other")
                 combined_probabilities = np.concatenate(probability_blocks, axis=0)
                 prob_uint8 = _probabilities_to_uint8(combined_probabilities)
-                data_vars["landcover_probabilities"] = xr.DataArray(
-                    prob_uint8,
-                    dims=("landcover_class", "y", "x"),
-                    coords={
-                        "landcover_class": probability_labels,
-                        "y": arr.y,
-                        "x": arr.x,
-                    },
-                )
+                for idx, label in enumerate(probability_labels):
+                    band_name = f"landcover_probabilities:{label}"
+                    _register_band(band_name, prob_uint8[idx])
         else:
             if self._cropland_enabled:
                 logger.warning(
@@ -1422,40 +1411,27 @@ class SeasonalInferenceEngine:
                 sentinel_uint8 = np.uint8(NOCROP_VALUE)
                 conf_uint8 = np.where(gate, conf_uint8, sentinel_uint8)
 
-            data_vars["croptype_classification"] = xr.DataArray(
-                preds_uint8,
-                dims=("season", "y", "x"),
-                coords={"season": season_ids[:num_seasons], "y": arr.y, "x": arr.x},
-                attrs={"classes": self.bundle.croptype_spec.class_names},
-            )
-            data_vars["croptype_probability"] = xr.DataArray(
-                conf_uint8,
-                dims=("season", "y", "x"),
-                coords={"season": season_ids[:num_seasons], "y": arr.y, "x": arr.x},
-            )
+            season_labels = list(season_ids[:num_seasons])
+            for idx, season_id in enumerate(season_labels):
+                band_name = f"croptype_classification:{season_id}"
+                _register_band(band_name, preds_uint8[idx])
+            for idx, season_id in enumerate(season_labels):
+                band_name = f"croptype_probability:{season_id}"
+                _register_band(band_name, conf_uint8[idx])
 
             if self._export_class_probabilities:
-                # Emit gated per-class probabilities for downstream interpretation.
                 prob_stack = np.stack(processed_probability_cubes, axis=0)
                 prob_uint8 = _probabilities_to_uint8(prob_stack)
                 if gate_applicable and cropland_mask_bool is not None:
                     gate = cropland_mask_bool[None, None, :, :]
                     sentinel_uint8 = np.uint8(NOCROP_VALUE)
                     prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
-                per_class_probs = xr.DataArray(
-                    prob_uint8,
-                    dims=("season", "croptype_class", "y", "x"),
-                    coords={
-                        "season": season_ids[:num_seasons],
-                        "croptype_class": self.bundle.croptype_spec.class_names,
-                        "y": arr.y,
-                        "x": arr.x,
-                    },
-                )
-                per_class_probs.attrs[_FLATTEN_LABEL_PREFIX_ATTR] = (
-                    "croptype_probability"
-                )
-                data_vars["croptype_probability_full"] = per_class_probs
+                for season_idx, season_id in enumerate(season_labels):
+                    for class_idx, class_name in enumerate(
+                        self.bundle.croptype_spec.class_names
+                    ):
+                        layer_name = f"croptype_probability:{season_id}:{class_name}"
+                        _register_band(layer_name, prob_uint8[season_idx, class_idx])
 
         elif self._croptype_enabled:
             logger.warning("Croptype head missing; skipping seasonal crop outputs.")
@@ -1464,8 +1440,14 @@ class SeasonalInferenceEngine:
                 "Croptype outputs skipped because the croptype head is disabled."
             )
 
-        dataset = xr.Dataset(data_vars)
-        return _flatten_spatial_dataset(dataset)
+        ordered_vars: OrderedDict[str, xr.DataArray] = OrderedDict()
+        for name, values in band_layers:
+            ordered_vars[name] = xr.DataArray(
+                values,
+                dims=("y", "x"),
+                coords={"y": arr.y, "x": arr.x},
+            )
+        return xr.Dataset(ordered_vars)
 
 
 # ---------------------------------------------------------------------------
@@ -1716,20 +1698,9 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
     return arr
 
 
-def _as_coord_label(value: Any) -> str:
-    if hasattr(value, "item"):
-        value = value.item()
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    return str(value)
-
-
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
     scaled = np.rint(np.clip(array, 0.0, 1.0) * 100.0)
     return scaled.astype(np.uint8)
-
-
-_FLATTEN_LABEL_PREFIX_ATTR = "_flatten_label_prefix"
 
 
 def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
@@ -1743,76 +1714,22 @@ def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
         )
 
 
-def _flatten_spatial_dataset(dataset: xr.Dataset) -> xr.Dataset:
-    flat_vars: Dict[str, xr.DataArray] = {}
-
-    for var_name, data_array in dataset.data_vars.items():
-        da = data_array
-        non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
-        if not non_spatial_dims:
-            label_name = da.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR, var_name)
-            flat_vars[label_name] = da
-            continue
-
-        sizes = [da.sizes[dim] for dim in non_spatial_dims]
-        if any(size == 0 for size in sizes):
-            continue
-
-        label_prefix = da.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR, var_name)
-
-        for index in np.ndindex(*sizes):
-            selector = {dim: idx for dim, idx in zip(non_spatial_dims, index)}
-            slice_da = da.isel(**selector).reset_coords(drop=True)
-            label_parts = [label_prefix]
-            for dim, idx in zip(non_spatial_dims, index):
-                coord = da.coords.get(dim)
-                if coord is not None:
-                    value = coord.values[idx]
-                else:
-                    value = idx
-                label_parts.append(_as_coord_label(value))
-            label = ":".join(label_parts)
-            flat_vars[label] = slice_da
-    return xr.Dataset(flat_vars)
-
-
 def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
     if not dataset.data_vars:
         raise ValueError("Seasonal workflow produced an empty dataset")
+
     band_arrays: List[xr.DataArray] = []
-    for var_name, data_array in dataset.data_vars.items():
-        label_prefix = data_array.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR)
-        da = data_array.astype(np.uint8, copy=False)
-        non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
-        if not non_spatial_dims:
-            final_label = var_name
-            labelled = da.expand_dims("bands").assign_coords(bands=[final_label])
-            band_arrays.append(labelled)
-            continue
-
-        sizes = [da.sizes[dim] for dim in non_spatial_dims]
-        if any(size == 0 for size in sizes):
-            continue
-
-        flattened_pieces: List[xr.DataArray] = []
-        for index in np.ndindex(*sizes):
-            selector = {dim: idx for dim, idx in zip(non_spatial_dims, index)}
-            slice_da = da.isel(**selector).reset_coords(drop=True)
-            first_label = label_prefix or var_name
-            label_parts = [first_label]
-            for dim, idx in zip(non_spatial_dims, index):
-                coord = da.coords.get(dim)
-                if coord is not None:
-                    value = coord.values[idx]
-                else:
-                    value = idx
-                label_parts.append(_as_coord_label(value))
-            label = ":".join(label_parts)
-            flattened_pieces.append(
-                slice_da.expand_dims("bands").assign_coords(bands=[label])
+    for band_name, data_array in dataset.data_vars.items():
+        if data_array.dims != ("y", "x"):
+            raise ValueError(
+                f"Band '{band_name}' must expose ('y', 'x') dimensions; got {data_array.dims}."
             )
-        if flattened_pieces:
-            band_arrays.append(xr.concat(flattened_pieces, dim="bands"))
+        layer = (
+            data_array.astype(np.uint8, copy=False)
+            .expand_dims("bands")
+            .assign_coords(bands=[band_name])
+        )
+        band_arrays.append(layer)
 
     stacked = xr.concat(band_arrays, dim="bands").astype(np.uint8, copy=False)
     return stacked.transpose("bands", "y", "x")
