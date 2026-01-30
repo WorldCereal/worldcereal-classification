@@ -1368,11 +1368,17 @@ class SeasonalInferenceEngine:
                 and cropland_mask_bool is not None
             )
             if gate_applicable:
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
@@ -1436,7 +1442,7 @@ class SeasonalInferenceEngine:
                     gate = cropland_mask_bool[None, None, :, :]
                     sentinel_uint8 = np.uint8(NOCROP_VALUE)
                     prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
-                data_vars["croptype_probability"] = xr.DataArray(
+                per_class_probs = xr.DataArray(
                     prob_uint8,
                     dims=("season", "croptype_class", "y", "x"),
                     coords={
@@ -1446,6 +1452,10 @@ class SeasonalInferenceEngine:
                         "x": arr.x,
                     },
                 )
+                per_class_probs.attrs[_FLATTEN_LABEL_PREFIX_ATTR] = (
+                    "croptype_probability"
+                )
+                data_vars["croptype_probability_full"] = per_class_probs
 
         elif self._croptype_enabled:
             logger.warning("Croptype head missing; skipping seasonal crop outputs.")
@@ -1719,6 +1729,9 @@ def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
     return scaled.astype(np.uint8)
 
 
+_FLATTEN_LABEL_PREFIX_ATTR = "_flatten_label_prefix"
+
+
 def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
     if values.size == 0:
         return
@@ -1737,17 +1750,20 @@ def _flatten_spatial_dataset(dataset: xr.Dataset) -> xr.Dataset:
         da = data_array
         non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
         if not non_spatial_dims:
-            flat_vars[var_name] = da
+            label_name = da.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR, var_name)
+            flat_vars[label_name] = da
             continue
 
         sizes = [da.sizes[dim] for dim in non_spatial_dims]
         if any(size == 0 for size in sizes):
             continue
 
+        label_prefix = da.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR, var_name)
+
         for index in np.ndindex(*sizes):
             selector = {dim: idx for dim, idx in zip(non_spatial_dims, index)}
             slice_da = da.isel(**selector).reset_coords(drop=True)
-            label_parts = [var_name]
+            label_parts = [label_prefix]
             for dim, idx in zip(non_spatial_dims, index):
                 coord = da.coords.get(dim)
                 if coord is not None:
@@ -1765,10 +1781,12 @@ def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
         raise ValueError("Seasonal workflow produced an empty dataset")
     band_arrays: List[xr.DataArray] = []
     for var_name, data_array in dataset.data_vars.items():
+        label_prefix = data_array.attrs.get(_FLATTEN_LABEL_PREFIX_ATTR)
         da = data_array.astype(np.uint8, copy=False)
         non_spatial_dims = [str(dim) for dim in da.dims if dim not in {"y", "x"}]
         if not non_spatial_dims:
-            labelled = da.expand_dims("bands").assign_coords(bands=[var_name])
+            final_label = var_name
+            labelled = da.expand_dims("bands").assign_coords(bands=[final_label])
             band_arrays.append(labelled)
             continue
 
@@ -1780,7 +1798,8 @@ def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
         for index in np.ndindex(*sizes):
             selector = {dim: idx for dim, idx in zip(non_spatial_dims, index)}
             slice_da = da.isel(**selector).reset_coords(drop=True)
-            label_parts = [var_name]
+            first_label = label_prefix or var_name
+            label_parts = [first_label]
             for dim, idx in zip(non_spatial_dims, index):
                 coord = da.coords.get(dim)
                 if coord is not None:

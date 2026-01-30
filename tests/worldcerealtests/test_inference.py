@@ -378,20 +378,24 @@ def test_flatten_spatial_dataset_creates_2d_variables():
 def test_probabilities_are_flattened_and_gated():
     ds = _probability_dataset()
 
+    assert "croptype_probability:tc-s1" in ds
+    assert ds["croptype_probability:tc-s1"].dtype == np.uint8
     assert "croptype_probability:tc-s1:wheat" in ds
     assert ds["croptype_probability:tc-s1:wheat"].dims == ("y", "x")
     assert ds["croptype_probability:tc-s1:wheat"].dtype == np.uint8
-    assert (
-        ds["croptype_probability:tc-s1:wheat"].values.min() >= 0
-        and ds["croptype_probability:tc-s1:wheat"].values.max() <= 100
-    )
+    wheat_probs = ds["croptype_probability:tc-s1:wheat"].values
+    valid_mask = wheat_probs != inference.NOCROP_VALUE
+    assert wheat_probs[valid_mask].min() >= 0
+    assert wheat_probs[valid_mask].max() <= 100
     assert ds["croptype_classification:tc-s1"].values[0, 0] == inference.NOCROP_VALUE
     assert ds["landcover_probabilities:crop"].dtype == np.uint8
     assert ds["landcover_probabilities:other"].dtype == np.uint8
     season_two_wheat = ds["croptype_probability:tc-s2:wheat"]
     assert season_two_wheat.dtype == np.uint8
-    assert season_two_wheat.values.min() >= 0
-    assert season_two_wheat.values.max() <= 100
+    s2_vals = season_two_wheat.values
+    s2_valid = s2_vals != inference.NOCROP_VALUE
+    assert s2_vals[s2_valid].min() >= 0
+    assert s2_vals[s2_valid].max() <= 100
     assert ds["cropland_classification"].dtype == np.uint8
     assert set(np.unique(ds["cropland_classification"].values)) <= {0, 1}
     assert ds["probability_cropland"].dtype == np.uint8

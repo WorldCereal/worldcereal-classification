@@ -271,12 +271,14 @@ class WorldCerealWorkflowConfigBuilder:
         model = self.model if self.model.to_dict() else None
         runtime = self.runtime if self.runtime.to_dict() else None
         season = self.season if self.season.to_dict() else None
-        postprocess = {
+        postprocess_dict = {
             product: dict(opts) for product, opts in self.postprocess.items() if opts
         }
-        postprocess = postprocess or None
         return WorldCerealWorkflowConfig(
-            model=model, runtime=runtime, season=season, postprocess=postprocess
+            model=model,
+            runtime=runtime,
+            season=season,
+            postprocess=postprocess_dict if postprocess_dict else None,
         )
 
 
