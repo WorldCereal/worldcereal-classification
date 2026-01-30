@@ -373,8 +373,8 @@ def test_probabilities_are_flattened_and_gated():
     assert wheat_probs[valid_mask].min() >= 0
     assert wheat_probs[valid_mask].max() <= 100
     assert ds["croptype_classification:tc-s1"].values[0, 0] == inference.NOCROP_VALUE
-    assert ds["landcover_probabilities:crop"].dtype == np.uint8
-    assert ds["landcover_probabilities:other"].dtype == np.uint8
+    assert ds["probability_crop"].dtype == np.uint8
+    assert ds["probability_other"].dtype == np.uint8
     season_two_wheat = ds["croptype_probability:tc-s2:wheat"]
     assert season_two_wheat.dtype == np.uint8
     s2_vals = season_two_wheat.values
@@ -401,8 +401,8 @@ def test_dataset_to_multiband_array_preserves_band_order():
     expected_prefix = [
         "cropland_classification",
         "probability_cropland",
-        "landcover_probabilities:crop",
-        "landcover_probabilities:other",
+        "probability_crop",
+        "probability_other",
         "croptype_classification:tc-s1",
         "croptype_classification:tc-s2",
         "croptype_probability:tc-s1",

@@ -1270,9 +1270,10 @@ class SeasonalInferenceEngine:
                 if cropland_indices
                 else np.zeros((height, width), dtype=np.float32)
             )
-            cropland_prob_cube = np.stack(
+            raw_cropland_prob_cube = np.stack(
                 [cropland_prob_other, cropland_prob_crops], axis=0
             )
+            cropland_prob_cube = raw_cropland_prob_cube.copy()
 
             if cropland_gate_labels:
                 if cropland_indices:
@@ -1306,28 +1307,23 @@ class SeasonalInferenceEngine:
                 excluded_values=(),
             )
             cropland_mask_bool = cropland_labels_uint8.astype(bool)
-            cropland_probability_uint8 = _probabilities_to_uint8(cropland_prob_cube[1])
+            cropland_probability_uint8 = _probabilities_to_uint8(
+                raw_cropland_prob_cube[1]
+            )
+            probability_other_uint8 = _probabilities_to_uint8(raw_cropland_prob_cube[0])
 
             _register_band("cropland_classification", cropland_labels_uint8)
             _register_band("probability_cropland", cropland_probability_uint8)
 
             if self._export_class_probabilities:
-                probability_blocks: List[np.ndarray] = []
-                probability_labels: List[str] = []
                 if cropland_indices:
-                    probability_blocks.append(prob_cube[cropland_indices])
-                    probability_labels.extend(cropland_label_order)
-                if other_indices:
-                    other_block = prob_cube[other_indices].sum(axis=0, keepdims=True)
-                else:
-                    other_block = np.zeros((1, height, width), dtype=prob_cube.dtype)
-                probability_blocks.append(other_block)
-                probability_labels.append("other")
-                combined_probabilities = np.concatenate(probability_blocks, axis=0)
-                prob_uint8 = _probabilities_to_uint8(combined_probabilities)
-                for idx, label in enumerate(probability_labels):
-                    band_name = f"landcover_probabilities:{label}"
-                    _register_band(band_name, prob_uint8[idx])
+                    per_class_probs = prob_cube[cropland_indices]
+                    for idx, label in enumerate(cropland_label_order):
+                        _register_band(
+                            f"probability_{label}",
+                            _probabilities_to_uint8(per_class_probs[idx]),
+                        )
+                _register_band("probability_other", probability_other_uint8)
         else:
             if self._cropland_enabled:
                 logger.warning(
