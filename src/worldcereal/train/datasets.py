@@ -735,6 +735,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         masking_config: Optional[SensorMaskingConfig] = None,
         repeats: int = 1,
     ):
+        """WorldCereal training dataset. This dataset is typically used for
+        computing embeddings for downstream training."""
         super().__init__(
             dataframe=dataframe,
             num_timesteps=num_timesteps,

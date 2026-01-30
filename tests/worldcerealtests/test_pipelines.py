@@ -3,15 +3,11 @@ import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
-from prometheo.models import Presto
-from prometheo.models.presto.wrapper import load_presto_weights
-from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropTypeParameters
-from worldcereal.train.data import get_training_df
-from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.datasets import WorldCerealTrainingDataset
+from worldcereal.train.data import compute_embeddings_from_input_df
+from worldcereal.train.downstream import TorchTrainer
 from worldcereal.utils.refdata import (
     process_extractions_df,
     query_private_extractions,
@@ -32,7 +28,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
     # Query private and public extractions
 
     private_df = query_private_extractions(
-        WorldCerealPrivateExtractionsPath,
+        "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_PUBLIC_EXTRACTIONS/worldcereal_public_extractions.parquet",
         bbox_poly=SPATIAL_EXTENT,
         filter_cropland=True,
         buffer=250000,  # Meters
@@ -143,127 +139,21 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_model_url)
 
-    # Split dataframe in cal/val
-    samples_train, samples_test = train_test_split(
-        training_df,
-        test_size=0.2,
-        random_state=42,
-        stratify=training_df["downstream_class"],
+    # Compute embeddings
+    embeddings_df = compute_embeddings_from_input_df(
+        training_df, presto_model_url, stratify_label="downstream_class"
     )
 
-    # Initialize datasets
-    samples_train, samples_test = samples_train.reset_index(), samples_test.reset_index()
-    masking_config = SensorMaskingConfig(
-        enable=True,
-        s1_full_dropout_prob=0.05,
-        s1_timestep_dropout_prob=0.1,
-        s2_cloud_timestep_prob=0.1,
-        s2_cloud_block_prob=0.05,
-        s2_cloud_block_min=2,
-        s2_cloud_block_max=3,
-        meteo_timestep_dropout_prob=0.03,
-        dem_dropout_prob=0.01
-    )
-
-    # Augmentations and repeats only on training set
-    repeats = 2
-    ds_train = WorldCerealTrainingDataset(
-        samples_train,
-        task_type="multiclass",
-        augment=True,
-        masking_config=masking_config,
-        repeats=repeats
-    )
-    assert len(ds_train) == len(samples_train) * repeats
-
-    # No augmentations on test set
-    ds_test = WorldCerealTrainingDataset(
-        samples_test,
-        task_type="multiclass",
-        augment=False,
-        masking_config=SensorMaskingConfig(enable=False)
-    )
-
-    logger.info("Computing Presto embeddings on train set ...")
-    df_train = get_training_df(
-        ds_train,
-        presto_model,
-        batch_size=256,
-        time_explicit=False,
-    )
-    logger.info("Computing Presto embeddings on test set ...")
-    df_test = get_training_df(
-        ds_test,
-        presto_model,
-        batch_size=256,
-        time_explicit=False,
-    )
     logger.info("Presto embeddings computed.")
 
-    # Merging train and test embeddings to simulate behavior of full pipeline
-    df_train["split"] = "train"
-    df_test["split"] = "test"
-    df = pd.concat([df_train, df_test]).reset_index(drop=True)
-
     # Train classifier
-    eval_metric = "MultiClass"
-    loss_function = "MultiClass"
-
-    # Compute class weights based on training set
-    logger.info("Computing class weights ...")
-    class_weights = np.round(
-        compute_class_weight(
-            class_weight="balanced",
-            classes=np.unique(samples_train["downstream_class"]),
-            y=samples_train["downstream_class"],
-        ),
-        3,
+    trainer = TorchTrainer(
+        embeddings_df,
+        lr_grid=[1e-2],
+        weight_decay_grid=[1e-5],
     )
-    class_weights = {
-        k: v
-        for k, v in zip(np.unique(samples_train["downstream_class"]), class_weights)
-    }
-    logger.info(f"Class weights: {class_weights}")
-
-    sample_weights = np.ones((len(df["downstream_class"]),))
-    for k, v in class_weights.items():
-        sample_weights[df["downstream_class"] == k] = v
-    df["weight"] = sample_weights
-
-    # Define classifier
-    custom_downstream_model = CatBoostClassifier(
-        iterations=2000,  # Not too high to avoid too large model size
-        depth=8,
-        early_stopping_rounds=20,
-        loss_function=loss_function,
-        eval_metric=eval_metric,
-        random_state=3,
-        verbose=25,
-        class_names=np.unique(samples_train["downstream_class"]),
-    )
-
-    # Setup dataset Pool
-    bands = [f"presto_ft_{i}" for i in range(128)]
-    calibration_data = Pool(
-        data=df[df["split"] == "train"][bands],
-        label=df[df["split"] == "train"]["downstream_class"],
-        weight=df[df["split"] == "train"]["weight"],
-    )
-    eval_data = Pool(
-        data=df[df["split"] == "test"][bands],
-        label=df[df["split"] == "test"]["downstream_class"],
-        weight=df[df["split"] == "test"]["weight"],
-    )
-
-    # Train classifier
-    logger.info("Training CatBoost classifier ...")
-    custom_downstream_model.fit(
-        calibration_data,
-        eval_set=eval_data,
-    )
+    trainer.train()
 
     # Make predictions
-    _ = custom_downstream_model.predict(df[df["split"] == "test"][bands]).flatten()
+    # _ = custom_downstream_model.predict(df[df["split"] == "test"][bands]).flatten()

@@ -8,802 +8,19 @@ and benchmarks accuracy/F1 against the CatBoost approach.
 
 import argparse
 import json
-import zipfile
-from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
 from loguru import logger
-from numpy.typing import NDArray
-from prometheo.models import Presto
-from prometheo.models.presto.wrapper import load_presto_weights
+
 from prometheo.utils import device
-from seaborn import heatmap
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-)
-from torch.utils.data import DataLoader, Dataset
-from torch.utils.data.sampler import WeightedRandomSampler
-from tqdm.auto import tqdm
+from sklearn.model_selection import split_training_dataframe
 
-from worldcereal.train.data import get_training_df
-from worldcereal.train.datasets import (
-    SensorMaskingConfig,
-    WorldCerealTrainingDataset,
-    get_class_weights,
-)
+from worldcereal.train.data import dataset_to_embeddings
 
-
-class EmbeddingsDataset(Dataset):
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        feat_prefix: str = "presto_ft_",
-        label_col: str = "label",
-    ):
-        self.df = df.reset_index(drop=True)
-        self.feat_cols = [c for c in df.columns if c.startswith(feat_prefix)]
-        self.X = self.df[self.feat_cols].to_numpy(dtype=np.float32)
-        self.y = self.df[label_col].to_numpy()
-
-    def __len__(self) -> int:
-        return len(self.df)
-
-    def __getitem__(self, idx: int):
-        return torch.from_numpy(self.X[idx]), int(self.y[idx])
-
-
-class LinearHead(nn.Module):
-    def __init__(self, in_dim: int, num_classes: int):
-        super().__init__()
-        self.fc = nn.Linear(in_dim, num_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-
-class MLPHead(nn.Module):
-    def __init__(
-        self, in_dim: int, num_classes: int, hidden_dim: int = 256, dropout: float = 0.2
-    ):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-class TorchHeadTrainer:
-    def __init__(
-        self,
-        head_type: str,
-        presto_model_path: str,
-        data_dir: str,
-        output_dir: str,
-        modelversion: str = "001",
-        detector: str = "cropland",
-        downstream_classes: Optional[dict] = None,
-        classes_scheme: str = "LANDCOVER10",
-        timestep_freq: Literal["month", "dekad"] = "month",
-        batch_size: int = 1024,
-        num_workers: int = 8,
-        hidden_dim: int = 256,
-        dropout: float = 0.2,
-        lr: float = 1e-2,  # can be high for linear head
-        epochs: int = 30,
-        seed: int = 42,
-        label_smoothing: float = 0.0,
-        ref_id_to_keep_path: Optional[str] = None,
-        use_balancing: bool = False,
-        sampling_class: str = "downstream_class",
-        balancing_method: str = "log",
-        clip_range: Tuple[float, float] = (0.3, 5.0),
-        quality_col: Optional[str] = None,
-        early_stopping_patience: int = 6,
-        early_stopping_min_delta: float = 0.0,
-    ):
-        self.head_type = head_type
-        self.presto_model_path = Path(presto_model_path)
-        self.data_dir = Path(data_dir)
-        self.output_dir = Path(output_dir)
-        self.modelversion = modelversion
-        self.detector = detector
-        self.downstream_classes = downstream_classes
-        self.classes_scheme = classes_scheme
-        self.timestep_freq = timestep_freq
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.hidden_dim = hidden_dim
-        self.dropout = dropout
-        self.lr = lr
-        self.epochs = epochs
-        self.seed = seed
-        self.ref_id_to_keep_path = ref_id_to_keep_path
-        # Balancing / weighting
-        self.use_balancing = use_balancing
-        self.sampling_class = sampling_class
-        self.balancing_method = balancing_method
-        self.clip_range = clip_range
-        self.quality_col = quality_col
-        # Early stopping
-        self.early_stopping_patience = early_stopping_patience
-        self.early_stopping_min_delta = early_stopping_min_delta
-
-        # Determine if binary classification based on downstream_classes
-        if self.downstream_classes is not None:
-            unique_downstream = set(self.downstream_classes.values())
-            if len(unique_downstream) == 2:
-                self.is_binary = True
-                logger.info(
-                    f"Detected binary classification from downstream_classes: {unique_downstream}"
-                )
-            else:
-                self.is_binary = False
-                logger.info(
-                    f"Detected multiclass classification from downstream_classes: {unique_downstream}"
-                )
-        else:
-            # Default case: no downstream mapping, will be determined later based on finetune_classes
-            self.is_binary = False
-
-        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-
-        torch.manual_seed(self.seed)
-        np.random.seed(self.seed)
-
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.sink = logger.add(
-            self.output_dir / "logfile_torch_head.log", level="DEBUG"
-        )
-        self.config: Dict[str, Any] = {}
-        # Initialize base config
-        self.config.update(
-            {
-                "head_type": self.head_type,
-                "presto_model_path": str(self.presto_model_path),
-                "data_dir": str(self.data_dir),
-                "output_dir": str(self.output_dir),
-                "modelversion": self.modelversion,
-                "detector": self.detector,
-                "downstream_classes": self.downstream_classes,
-                "timestep_freq": self.timestep_freq,
-                "batch_size": self.batch_size,
-                "num_workers": self.num_workers,
-                "hidden_dim": self.hidden_dim,
-                "dropout": self.dropout,
-                "lr": self.lr,
-                "epochs": self.epochs,
-                "seed": self.seed,
-                "ref_id_to_keep_path": self.ref_id_to_keep_path,
-                "use_balancing": self.use_balancing,
-                "sampling_class": self.sampling_class,
-                "balancing_method": self.balancing_method,
-                "clip_range": self.clip_range,
-                "quality_col": self.quality_col,
-                "early_stopping_patience": self.early_stopping_patience,
-                "early_stopping_min_delta": self.early_stopping_min_delta,
-            }
-        )
-
-    def create_config(self) -> None:
-        """Create initial configuration and persist it."""
-        # Nothing extra to compute here; save current config
-        self.save_config()
-
-    def update_config_after_prepare(self, in_dim: int, num_classes: int) -> None:
-        """Update config after data preparation when input/output dims are known."""
-        self.config.update(
-            {
-                "in_dim": in_dim,
-                "num_classes": num_classes,
-                "classes_list": self.classes_list,
-            }
-        )
-        self.save_config()
-
-    def update_config_after_training(
-        self,
-        best_val_loss: float,
-        best_epoch: int,
-        epochs_trained: int,
-        stopped_early: bool,
-    ) -> None:
-        """Update config with training outcomes (e.g., best val loss)."""
-        self.config.update(
-            {
-                "best_val_loss": float(best_val_loss),
-                "best_epoch": int(best_epoch),
-                "epochs_trained": int(epochs_trained),
-                "stopped_early": bool(stopped_early),
-            }
-        )
-        self.save_config()
-
-    def save_config(self) -> None:
-        """Save configuration to JSON file, converting numpy types to native Python."""
-        config_path = self.output_dir / "config.json"
-
-        def convert_numpy_types(obj):
-            if isinstance(obj, dict):
-                return {k: convert_numpy_types(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy_types(item) for item in obj]
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            else:
-                return obj
-
-        safe_config = convert_numpy_types(self.config)
-        with open(config_path, "w") as f:
-            json.dump(safe_config, f, indent=4)
-
-    # --- Embeddings acquisition ---
-    def _check_for_embeddings(self) -> bool:
-        emb_files = [
-            "train_embeddings.parquet",
-            "val_embeddings.parquet",
-            "test_embeddings.parquet",
-        ]
-        return all((self.output_dir / f).exists() for f in emb_files)
-
-    def _dataset_to_embeddings_with_label(
-        self, model: Presto, ds: WorldCerealTrainingDataset
-    ) -> pd.DataFrame:
-        model.eval()
-        df = get_training_df(
-            ds,
-            model,
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-            time_explicit=False,
-        )
-        return df
-
-    def _compute_embeddings(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        logger.info("Loading raw data files...")
-        train_df = pd.read_parquet(self.data_dir / "train_df.parquet")
-        val_df = pd.read_parquet(self.data_dir / "val_df.parquet")
-        test_df = pd.read_parquet(self.data_dir / "test_df.parquet")
-
-        orig_classes = sorted(train_df["finetune_class"].unique())
-
-        # downstream_class = finetune_class by default
-        for df in (train_df, val_df, test_df):
-            df["downstream_class"] = df["finetune_class"]
-
-        num_timesteps = 12 if self.timestep_freq == "month" else 36
-        presto_model = Presto()
-        presto_model = load_presto_weights(presto_model, self.presto_model_path).to(
-            device
-        )
-
-        masking_config = SensorMaskingConfig(
-            enable=True,
-            s1_full_dropout_prob=0.05,
-            s1_timestep_dropout_prob=0.1,
-            s2_cloud_timestep_prob=0.1,
-            s2_cloud_block_prob=0.05,
-            s2_cloud_block_min=2,
-            s2_cloud_block_max=3,
-            meteo_timestep_dropout_prob=0.03,
-            dem_dropout_prob=0.01,
-        )
-
-        trn_ds = WorldCerealTrainingDataset(
-            train_df,
-            num_timesteps=num_timesteps,
-            timestep_freq=self.timestep_freq,
-            task_type="multiclass",
-            num_outputs=len(orig_classes),
-            augment=True,
-            masking_config=masking_config,
-            repeats=5,
-        )
-        val_ds = WorldCerealTrainingDataset(
-            val_df,
-            num_timesteps=num_timesteps,
-            timestep_freq=self.timestep_freq,
-            task_type="multiclass",
-            num_outputs=len(orig_classes),
-            augment=False,
-            masking_config=SensorMaskingConfig(enable=False),
-            repeats=1,
-        )
-        test_ds = WorldCerealTrainingDataset(
-            test_df,
-            num_timesteps=num_timesteps,
-            timestep_freq=self.timestep_freq,
-            task_type="multiclass",
-            num_outputs=len(orig_classes),
-            augment=False,
-            masking_config=SensorMaskingConfig(enable=False),
-            repeats=1,
-        )
-
-        logger.info("Computing embeddings...")
-        trn_df = self._dataset_to_embeddings_with_label(presto_model, trn_ds)
-        val_df = self._dataset_to_embeddings_with_label(presto_model, val_ds)
-        tst_df = self._dataset_to_embeddings_with_label(presto_model, test_ds)
-
-        logger.info("Saving computed embeddings...")
-        trn_df.to_parquet(self.output_dir / "train_embeddings.parquet")
-        val_df.to_parquet(self.output_dir / "val_embeddings.parquet")
-        tst_df.to_parquet(self.output_dir / "test_embeddings.parquet")
-        return trn_df, val_df, tst_df
-
-    def _load_embeddings(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        logger.info("Loading pre-computed embeddings...")
-        trn_df_emb = pd.read_parquet(self.output_dir / "train_embeddings.parquet")
-        val_df_emb = pd.read_parquet(self.output_dir / "val_embeddings.parquet")
-        tst_df_emb = pd.read_parquet(self.output_dir / "test_embeddings.parquet")
-
-        logger.info("Merging and re-splitting by ref_id...")
-        df = pd.concat([trn_df_emb, val_df_emb, tst_df_emb], ignore_index=True)
-
-        # Optional ref_id filtering to match CatBoost script behavior
-        if self.ref_id_to_keep_path is not None:
-            try:
-                with open(self.ref_id_to_keep_path, "r") as f:
-                    ref_ids_json = json.load(f)
-                ref_id_to_keep = list(ref_ids_json.keys())
-                logger.info(f"Filtering by ref_id_to_keep: {len(ref_id_to_keep)} ids")
-                df = df[df["ref_id"].isin(ref_id_to_keep)]
-                logger.info(f"Size after ref_id filtering: {len(df)}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load ref_id_to_keep at {self.ref_id_to_keep_path}: {e}"
-                )
-
-        unique_ref_ids = df["ref_id"].unique()
-        from sklearn.model_selection import train_test_split
-
-        train_ids, val_ids = train_test_split(
-            unique_ref_ids, test_size=0.3, random_state=self.seed
-        )
-        val_ids, test_ids = train_test_split(
-            val_ids, test_size=0.5, random_state=self.seed
-        )
-        trn_df = df[df["ref_id"].isin(train_ids)].reset_index(drop=True)
-        val_df = df[df["ref_id"].isin(val_ids)].reset_index(drop=True)
-        tst_df = df[df["ref_id"].isin(test_ids)].reset_index(drop=True)
-        return trn_df, val_df, tst_df
-
-    def _get_training_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        if self._check_for_embeddings():
-            logger.info("Found pre-computed embeddings, loading them...")
-            return self._load_embeddings()
-        else:
-            logger.info("No pre-computed embeddings found, computing them ...")
-            return self._compute_embeddings()
-
-    # --- Training ---
-    def _build_model(self, in_dim: int, num_classes: int) -> nn.Module:
-        if self.head_type == "linear":
-            return LinearHead(in_dim, num_classes)
-        elif self.head_type == "mlp":
-            return MLPHead(
-                in_dim, num_classes, hidden_dim=self.hidden_dim, dropout=self.dropout
-            )
-        else:
-            raise ValueError("head_type must be one of {'linear','mlp'}")
-
-    def _prepare_data(
-        self, trn_df: pd.DataFrame, val_df: pd.DataFrame, tst_df: pd.DataFrame
-    ):
-        # Normalize class labels to range [0..C-1]
-        classes = self.classes_list
-        cls_to_idx = {c: i for i, c in enumerate(classes)}
-        for df in (trn_df, val_df, tst_df):
-            df["label"] = df["downstream_class"].map(cls_to_idx)
-
-        feat_cols = [c for c in trn_df.columns if c.startswith("presto_ft_")]
-        in_dim = len(feat_cols)
-        num_classes = len(classes)
-        self.feat_cols = feat_cols
-        return in_dim, num_classes
-
-    def get_balanced_sampler(
-        self,
-        df: pd.DataFrame,
-        normalize: bool = True,
-    ) -> "WeightedRandomSampler":
-        # extract the sampling class (strings or ints)
-        bc_vals = df[self.sampling_class].values
-
-        logger.info("Computing class weights ...")
-        class_weights = get_class_weights(
-            bc_vals,
-            self.balancing_method,
-            clip_range=self.clip_range,
-            normalize=normalize,
-        )
-        logger.info(f"Class weights: {class_weights}")
-
-        # per‐sample weight
-        sample_weights = np.ones_like(bc_vals).astype(np.float32)
-        for k, v in class_weights.items():
-            sample_weights[bc_vals == k] = v
-
-        generator = torch.Generator()
-        generator.manual_seed(self.seed)
-
-        sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True,
-            generator=generator,
-        )
-        return sampler
-
-    def _train_epoch(
-        self,
-        model: nn.Module,
-        loader: DataLoader,
-        optimizer: torch.optim.Optimizer,
-        device_: torch.device,
-    ) -> float:
-        model.train()
-        total_loss = 0.0
-        for X, y in tqdm(loader, desc="Training", leave=False):
-            X = X.to(device_)
-            y = y.to(device_)
-            logits = model(X)
-            loss = self.loss_fn(logits, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += float(loss.item()) * X.size(0)
-        return total_loss / len(loader.dataset)
-
-    def _eval_epoch(
-        self, model: nn.Module, loader: DataLoader, device_: torch.device
-    ) -> Tuple[float, np.ndarray, np.ndarray]:
-        model.eval()
-        total_loss = 0.0
-        preds_all = []
-        labels_all = []
-        with torch.no_grad():
-            for X, y in loader:
-                X = X.to(device_)
-                y = y.to(device_)
-                logits = model(X)
-                loss = self.loss_fn(logits, y)
-                total_loss += float(loss.item()) * X.size(0)
-                preds = torch.argmax(logits, dim=1)
-                preds_all.append(preds.cpu().numpy())
-                labels_all.append(y.cpu().numpy())
-        preds_all = np.concatenate(preds_all)
-        labels_all = np.concatenate(labels_all)
-        return total_loss / len(loader.dataset), preds_all, labels_all
-
-    def train(self) -> nn.Module:
-        # Save base config
-        self.create_config()
-
-        trn_df, val_df, tst_df = self._get_training_data()
-
-        # Column "downstream_class" is actually "finetune_class" at this point
-        trn_df = trn_df.rename(columns={"downstream_class": "finetune_class"})
-        val_df = val_df.rename(columns={"downstream_class": "finetune_class"})
-        tst_df = tst_df.rename(columns={"downstream_class": "finetune_class"})
-
-        # Save class list
-        self.classes_list = sorted(trn_df["finetune_class"].unique())
-        logger.info(f"Classes after mapping: {self.classes_list}")
-
-        # Remove samples to be ignored
-        trn_df = trn_df[trn_df["finetune_class"] != "remove"]
-        val_df = val_df[val_df["finetune_class"] != "remove"]
-        tst_df = tst_df[tst_df["finetune_class"] != "remove"]
-
-        # Update class list after removing samples
-        self.classes_list = sorted(trn_df["finetune_class"].unique())
-        logger.info(f"Final classes: {self.classes_list}")
-
-        # Apply downstream class mapping (default to identity mapping if not specified)
-        if self.downstream_classes is not None:
-            logger.info(f"Applying downstream class mapping: {self.downstream_classes}")
-
-            # Check that all finetune classes are covered in the mapping
-            missing_classes = set(self.classes_list) - set(
-                self.downstream_classes.keys()
-            )
-            if missing_classes:
-                raise ValueError(
-                    f"Downstream mapping missing for classes: {missing_classes}"
-                )
-
-            # Apply mapping to all dataframes
-            trn_df["downstream_class"] = trn_df["finetune_class"].map(
-                self.downstream_classes
-            )
-            val_df["downstream_class"] = val_df["finetune_class"].map(
-                self.downstream_classes
-            )
-            tst_df["downstream_class"] = tst_df["finetune_class"].map(
-                self.downstream_classes
-            )
-
-            # Update classes list to downstream classes
-            self.classes_list = sorted(trn_df["downstream_class"].unique())
-            logger.info(f"Classes after downstream mapping: {self.classes_list}")
-
-            # Set the target column for training
-            self.target_column = "downstream_class"
-        else:
-            # Default case: create identity mapping for finetune_classes
-            logger.info(
-                "No downstream_classes specified, using finetune_classes directly"
-            )
-            self.downstream_classes = {cls: cls for cls in self.classes_list}
-            trn_df["downstream_class"] = trn_df["finetune_class"]
-            val_df["downstream_class"] = val_df["finetune_class"]
-            tst_df["downstream_class"] = tst_df["finetune_class"]
-            logger.info(f"Using classes: {self.classes_list}")
-
-            # Set the target column for training
-            self.target_column = "downstream_class"
-
-        # Determine if binary classification based on final classes
-        if len(self.classes_list) == 2:
-            self.is_binary = True
-            logger.info(
-                f"Binary classification detected with classes: {self.classes_list}"
-            )
-
-            # If binary classification with "other" class, ensure proper ordering
-            if "other" in self.classes_list:
-                target_class = [cls for cls in self.classes_list if cls != "other"][0]
-                # Ensure "other" is first (index 0) and target class is second (index 1)
-                self.classes_list = ["other", target_class]
-                logger.info(
-                    f"Binary classes reordered: {self.classes_list} (other=0, {target_class}=1)"
-                )
-
-                # Save target class name for reference
-                self.target_class_name = target_class
-        else:
-            self.is_binary = False
-            logger.info(
-                f"Multiclass classification with {len(self.classes_list)} classes: {self.classes_list}"
-            )
-
-        in_dim, num_classes = self._prepare_data(trn_df, val_df, tst_df)
-        # Update config with dimensions and classes
-        self.update_config_after_prepare(in_dim, num_classes)
-
-        # Build datasets and loaders
-        train_ds = EmbeddingsDataset(
-            trn_df, feat_prefix="presto_ft_", label_col="label"
-        )
-        val_ds = EmbeddingsDataset(val_df, feat_prefix="presto_ft_", label_col="label")
-        test_ds = EmbeddingsDataset(tst_df, feat_prefix="presto_ft_", label_col="label")
-        # Sampler for class balancing + quality weighting
-        if self.use_balancing:
-            sampler = self.get_balanced_sampler(trn_df, normalize=True)
-            train_loader = DataLoader(
-                train_ds, batch_size=1024, shuffle=False, sampler=sampler, num_workers=0
-            )
-        else:
-            train_loader = DataLoader(
-                train_ds, batch_size=1024, shuffle=True, num_workers=0
-            )
-        val_loader = DataLoader(val_ds, batch_size=1024, shuffle=False, num_workers=0)
-        test_loader = DataLoader(test_ds, batch_size=1024, shuffle=False, num_workers=0)
-
-        device_ = device
-        model = self._build_model(in_dim, num_classes).to(device_)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
-        best_val = float("inf")
-        best_state = None
-        best_epoch = 0
-        epochs_no_improve = 0
-        stopped_early = False
-
-        logger.info("Starting training...")
-        for epoch in (pbar := tqdm(range(1, self.epochs + 1), desc="Training")):
-            tr_loss = self._train_epoch(model, train_loader, optimizer, device_)
-            val_loss, val_preds, val_labels = self._eval_epoch(
-                model, val_loader, device_
-            )
-            scheduler.step(val_loss)
-            if val_loss < (best_val - self.early_stopping_min_delta):
-                best_val = val_loss
-                best_state = {
-                    k: v.cpu() if isinstance(v, torch.Tensor) else v
-                    for k, v in model.state_dict().items()
-                }
-                best_epoch = epoch
-                epochs_no_improve = 0
-            else:
-                epochs_no_improve += 1
-                if (
-                    self.early_stopping_patience > 0
-                    and epochs_no_improve >= self.early_stopping_patience
-                ):
-                    logger.info(
-                        f"Early stopping triggered at epoch {epoch:03d} "
-                        f"(no improvement for {epochs_no_improve} epochs)"
-                    )
-                    stopped_early = True
-                    break
-            logger.info(
-                f"Epoch {epoch:03d} | train_loss={tr_loss:.4f} val_loss={val_loss:.4f} best_val={best_val:.4f}"
-            )
-
-            description = (
-                f"Epoch {epoch + 1}/{self.epochs + 1} | "
-                f"Train Loss: {tr_loss:.4f} | "
-                f"Val Loss: {val_loss:.4f} | "
-                f"Best Loss: {best_val:.4f}"
-            )
-
-            description += (
-                " (improved)"
-                if epochs_no_improve == 0
-                else f" (no improvement for {epochs_no_improve} epochs)"
-            )
-
-            pbar.set_description(description)
-            pbar.set_postfix(lr=scheduler.get_last_lr()[0])
-
-        if best_state is not None:
-            model.load_state_dict(best_state)
-
-        # Save training outcome to config
-        self.update_config_after_training(
-            best_val_loss=best_val,
-            best_epoch=best_epoch,
-            epochs_trained=epoch,
-            stopped_early=stopped_early,
-        )
-
-        # Save model
-        self.save_model(model)
-
-        # Evaluate on test
-        self.evaluate(model, test_loader)
-        return model
-
-    def save_model(self, model: nn.Module) -> None:
-        modelname = f"PrestoDownstreamTorchHead_{self.head_type}_{self.detector}_v{self.modelversion}"
-        pt_path = self.output_dir / f"{modelname}.pt"
-        torch.save(model.state_dict(), pt_path)
-        logger.info(f"Model weights saved: {pt_path}")
-
-        # Package PT + config.json into an archive with the same base name
-        try:
-            self._zip_model_and_config(modelname, pt_path)
-        except Exception as e:
-            logger.warning(f"Packaging zip skipped: {e}")
-
-    def _zip_model_and_config(self, modelname: str, pt_path: Path) -> None:
-        """Create a zip archive containing the .pt model and the config as config.json.
-
-        The archive is created in the output directory with the same base name
-        as the model (e.g., `<modelname>.zip`).
-        """
-        zip_path = self.output_dir / f"{modelname}.zip"
-        cfg_src = self.output_dir / "config.json"
-        if not cfg_src.exists():
-            raise FileNotFoundError(
-                f"Config file not found at {cfg_src}. Ensure save_config() was called."
-            )
-        with zipfile.ZipFile(
-            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
-        ) as zf:
-            # Store model with its filename
-            zf.write(pt_path, arcname=pt_path.name)
-            # Store config under a canonical name inside the archive
-            zf.write(cfg_src, arcname="config.json")
-        logger.info(f"Packaged artifacts into: {zip_path}")
-
-    def _plot_confusion_matrices(
-        self, true_labels: np.ndarray, preds: np.ndarray
-    ) -> None:
-        # Ensure numpy integer arrays and fixed label order
-        true_labels = np.asarray(true_labels, dtype=np.int64)
-        pred_labels = np.asarray(preds, dtype=np.int64)
-
-        # Create confusion matrices
-        f_abs = create_confusion_matrix(
-            true_labels,
-            pred_labels,
-            self.classes_list,
-            normalize=False,
-            title="Confusion Matrix (Absolute)",
-        )
-
-        try:
-            plt.tight_layout()
-            plt.savefig(self.output_dir / "CM_abs.png")
-        except Exception:
-            plt.savefig(self.output_dir / "CM_abs.png", bbox_inches="tight")
-        plt.close(f_abs)
-        f_norm = create_confusion_matrix(
-            true_labels,
-            pred_labels,
-            self.classes_list,
-            normalize=True,
-            title="Confusion Matrix (Normalized)",
-        )
-        try:
-            plt.tight_layout()
-            plt.savefig(self.output_dir / "CM_norm.png")
-        except Exception:
-            plt.savefig(self.output_dir / "CM_norm.png", bbox_inches="tight")
-        plt.close(f_norm)
-
-    def evaluate(self, model: nn.Module, test_loader: DataLoader) -> Dict[str, float]:
-        model.eval()
-        preds_all = []
-        labels_all = []
-        with torch.no_grad():
-            for X, y in test_loader:
-                logits = model(X.to(device))
-                preds = torch.argmax(logits, dim=1).cpu().numpy()
-                preds_all.append(preds)
-                labels_all.append(y.numpy())
-        preds_all = np.concatenate(preds_all)
-        labels_all = np.concatenate(labels_all)
-
-        # Metrics
-        # Map integer labels back to string class names for readability
-        target_names = [str(c) for c in self.classes_list]
-        report = classification_report(
-            labels_all,
-            preds_all,
-            target_names=target_names,
-            output_dict=True,
-            zero_division=0,
-        )
-        report_df = pd.DataFrame(report).transpose().reset_index().round(2)
-        report_df.columns = pd.Index(
-            ["class", "precision", "recall", "f1-score", "support"]
-        )
-        report_df.to_csv(self.output_dir / "classification_report.csv")
-
-        logger.info("Evaluation results:")
-        logger.info("\n" + report_df.to_string(index=False))
-
-        self._plot_confusion_matrices(labels_all, preds_all)
-
-        metrics: Dict[str, float] = {}
-        metrics["OA"] = round(accuracy_score(labels_all, preds_all), 3)
-        metrics["Macro F1"] = round(f1_score(labels_all, preds_all, average="macro"), 3)
-        metrics["Macro Precision"] = round(
-            precision_score(labels_all, preds_all, average="macro"), 3
-        )
-        metrics["Macro Recall"] = round(
-            recall_score(labels_all, preds_all, average="macro"), 3
-        )
-
-        with open(self.output_dir / "metrics.txt", "w") as f:
-            f.write("Test results (Torch head):\n")
-            for k, v in metrics.items():
-                f.write(f"{k}: {v}\n")
-                logger.info(f"{k} = {v}")
-        return metrics
+from worldcereal.train.downstream import TorchTrainer
 
 
 def parse_args() -> argparse.Namespace:
@@ -825,8 +42,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data_dir",
         type=str,
-        required=True,
-        help="Directory with train_df/val_df/test_df or embeddings parquet files",
+        required=False,
+        help="Directory with train_df/val_df/test_df parquet files (required when embeddings are computed on the fly)",
+    )
+    parser.add_argument(
+        "--embeddings_path",
+        type=str,
+        required=False,
+        help="Optional single parquet file containing embeddings + metadata for splitting",
     )
     parser.add_argument(
         "--output_dir", type=str, required=True, help="Directory to store outputs"
@@ -879,61 +102,205 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional column with per-sample quality weights",
     )
+    parser.add_argument(
+        "--ref_id_to_keep_path",
+        type=str,
+        default=None,
+        help="Optional JSON file listing ref_ids to retain before training",
+    )
+    parser.add_argument(
+        "--split_by_ref_id",
+        action="store_true",
+        help="Rebuild train/val/test splits based on unique ref_id values",
+    )
+    parser.add_argument(
+        "--split_column",
+        type=str,
+        default="split",
+        help="Column name that stores split labels inside the embeddings dataframe (if available)",
+    )
+    parser.add_argument(
+        "--train_split_label",
+        type=str,
+        default="train",
+        help="Label identifying training rows inside split_column",
+    )
+    parser.add_argument(
+        "--val_split_label",
+        type=str,
+        default="val",
+        help="Label identifying validation rows inside split_column (optional)",
+    )
+    parser.add_argument(
+        "--test_split_label",
+        type=str,
+        default="test",
+        help="Label identifying test rows inside split_column",
+    )
+    parser.add_argument(
+        "--val_fraction",
+        type=float,
+        default=0.2,
+        help="Fraction of data reserved for validation when deriving splits from a single dataframe",
+    )
+    parser.add_argument(
+        "--test_fraction",
+        type=float,
+        default=0.2,
+        help="Fraction of data reserved for testing when no split column is available",
+    )
+    parser.add_argument(
+        "--stratify_column",
+        type=str,
+        default="downstream_class",
+        help="Column to stratify on when creating splits from scratch",
+    )
 
     return parser.parse_args()
 
 
-def create_confusion_matrix(
-    y_true: NDArray[np.int_],
-    y_pred: NDArray[np.int_],
-    class_names: NDArray[np.str_],
-    title: Optional[str] = None,
-    normalize: bool = True,
-) -> plt.figure:
-    """Create the confusion matrix."""
-    # Create the confusion matrix
-    cm = confusion_matrix(y_true, y_pred, normalize="true" if normalize else None)
+EMBEDDING_FILES = {
+    "train": "train_embeddings.parquet",
+    "val": "val_embeddings.parquet",
+    "test": "test_embeddings.parquet",
+}
 
-    # Create the figure
-    def _annot(x: Union[str, float]) -> str:
-        """Annotation function."""
-        x = float(x)
-        if normalize:
-            return f"{100 * x:.1f}%" if x > 0.0 else ""
-        else:
-            return f"{x}" if x > 0 else ""
 
-    # class_tags = [f"{x}\n({y})" for x, y in zip(class_ids, class_names)]
-    class_tags = class_names
-    figsize = (ceil(0.7 * len(class_tags)) + 1, ceil(0.7 * len(class_tags)))
-    figsize = (10, 9) if figsize[0] < 10 else figsize
-    fig = plt.figure(figsize=figsize)
-    plt.title(title)
-    heatmap(
-        100 * cm if normalize else cm,
-        vmin=0,
-        vmax=100 if normalize else None,
-        annot=np.asarray([_annot(x) for x in cm.flatten()]).reshape(cm.shape),
-        fmt="",
-        xticklabels=class_tags,
-        yticklabels=class_tags,
-        linewidths=0.01,
-        square=True,
+def cached_embeddings_exist(output_dir: str) -> bool:
+    out = Path(output_dir)
+    return all((out / fname).exists() for fname in EMBEDDING_FILES.values())
+
+
+def load_cached_embedding_splits(output_dir: str) -> Dict[str, pd.DataFrame]:
+    out = Path(output_dir)
+    logger.info("Loading cached embeddings from %s", out)
+    return {
+        split: pd.read_parquet(out / fname) for split, fname in EMBEDDING_FILES.items()
+    }
+
+
+def compute_embeddings_from_data_dir(
+    data_dir: str,
+    presto_model_path: str,
+    timestep_freq: str,
+    batch_size: int,
+    num_workers: int,
+    output_dir: str,
+) -> Dict[str, pd.DataFrame]:
+    if data_dir is None or presto_model_path is None:
+        raise ValueError(
+            "Both data_dir and presto_model_path are required to compute embeddings."
+        )
+
+    data_path = Path(data_dir)
+    logger.info("Loading raw parquet splits from %s", data_path)
+    train_df = pd.read_parquet(data_path / "train_df.parquet")
+    val_df = pd.read_parquet(data_path / "val_df.parquet")
+    test_df = pd.read_parquet(data_path / "test_df.parquet")
+
+    orig_classes = sorted(train_df["finetune_class"].unique())
+    for df in (train_df, val_df, test_df):
+        df["downstream_class"] = df["finetune_class"]
+
+
+
+
+
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    trn_df.to_parquet(out / EMBEDDING_FILES["train"])
+    val_df.to_parquet(out / EMBEDDING_FILES["val"])
+    tst_df.to_parquet(out / EMBEDDING_FILES["test"])
+
+    return {"train": trn_df, "val": val_df, "test": tst_df}
+
+
+def combine_with_split_labels(splits: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    frames = []
+    split_sizes = {}
+    for split_name, df in splits.items():
+        if df is None or df.empty:
+            continue
+        tmp = df.copy().reset_index(drop=True)
+        tmp["split"] = split_name
+        frames.append(tmp)
+        split_sizes[split_name] = len(tmp)
+    if not frames:
+        raise ValueError("No samples available to train on after preparing splits.")
+    combined = pd.concat(frames, ignore_index=True)
+    logger.info(
+        "Prepared dataframe with split column: train=%d val=%d test=%d",
+        split_sizes.get("train", 0),
+        split_sizes.get("val", 0),
+        split_sizes.get("test", 0),
     )
-    plt.xticks(
-        [i + 0.5 for i in range(len(class_tags))],
-        class_tags,
-        rotation=90,
+    return combined
+
+
+def filter_by_ref_ids(df: pd.DataFrame, ref_id_path: Optional[str]) -> pd.DataFrame:
+    if not ref_id_path:
+        return df
+    ref_path = Path(ref_id_path)
+    if not ref_path.exists():
+        logger.warning("ref_id file %s not found; skipping filtering.", ref_path)
+        return df
+    with open(ref_path, "r") as f:
+        ref_content = json.load(f)
+    if isinstance(ref_content, dict):
+        ref_ids = list(ref_content.keys())
+    else:
+        ref_ids = list(ref_content)
+    filtered = df[df["ref_id"].isin(ref_ids)].reset_index(drop=True)
+    logger.info(
+        "Filtered dataframe to %d rows using %d ref_ids", len(filtered), len(ref_ids)
     )
-    plt.yticks(
-        [i + 0.5 for i in range(len(class_tags))],
-        class_tags,
-        rotation=0,
+    return filtered
+
+
+def split_dataframe_by_ref_id(
+    df: pd.DataFrame,
+    seed: int,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
+) -> pd.DataFrame:
+    if "ref_id" not in df.columns:
+        logger.warning(
+            "ref_id column missing; cannot split by ref_id. Returning original dataframe."
+        )
+        return df
+    if train_fraction <= 0 or train_fraction >= 1:
+        raise ValueError("train_fraction must be in (0, 1).")
+    if val_fraction < 0 or train_fraction + val_fraction >= 1:
+        raise ValueError("val_fraction must keep train+val < 1.")
+
+    unique_ids = df["ref_id"].unique()
+    if len(unique_ids) < 3:
+        logger.warning(
+            "Not enough unique ref_ids (%d) to resplit; leaving original splits.",
+            len(unique_ids),
+        )
+        return df
+
+    train_ids, temp_ids = train_test_split(
+        unique_ids, test_size=1 - train_fraction, random_state=seed
     )
-    plt.xlabel("Predicted")
-    plt.ylabel("Target")
-    plt.tight_layout()
-    return fig
+    val_ratio = val_fraction / (1 - train_fraction)
+    val_ids, test_ids = train_test_split(
+        temp_ids, test_size=1 - val_ratio, random_state=seed
+    )
+
+    reassigned = df.copy().reset_index(drop=True)
+    reassigned["split"] = "test"
+    reassigned.loc[reassigned["ref_id"].isin(train_ids), "split"] = "train"
+    reassigned.loc[reassigned["ref_id"].isin(val_ids), "split"] = "val"
+    logger.info(
+        "Ref_id-based split sizes | train=%d val=%d test=%d",
+        (reassigned["split"] == "train").sum(),
+        (reassigned["split"] == "val").sum(),
+        (reassigned["split"] == "test").sum(),
+    )
+    return reassigned
 
 
 def main() -> None:
@@ -947,6 +314,7 @@ def main() -> None:
                 self.head_type = "linear"
                 self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt"
                 self.data_dir = "/projects/worldcereal/models/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004/"
+                self.embeddings_path = None
                 self.output_dir = (
                     "/projects/worldcereal/models/downstream/LANDCOVER10_PyTorch/"
                 )
@@ -980,6 +348,13 @@ def main() -> None:
                 self.clip_range = (0.3, 5.0)
                 self.early_stopping_patience = 6
                 self.early_stopping_min_delta = 0.0
+                self.split_column = "split"
+                self.train_split_label = "train"
+                self.val_split_label = "val"
+                self.test_split_label = "test"
+                self.val_fraction = 0.2
+                self.test_fraction = 0.2
+                self.stratify_column = "downstream_class"
 
         args = ManualArgs()
         logger.info("Using manual configuration for debug mode (Torch head)")
@@ -997,7 +372,31 @@ def main() -> None:
 
     plt.switch_backend("Agg")
 
-    trainer = TorchHeadTrainer(
+    embeddings_df = None
+    if getattr(args, "embeddings_path", None):
+        logger.info(f"Loading embeddings dataframe from {args.embeddings_path}")
+        embeddings_df = pd.read_parquet(args.embeddings_path)
+
+    if args.data_dir is None and embeddings_df is None:
+        logger.info(
+            "No data_dir or embeddings_path provided; will look for cached embeddings inside the output directory."
+        )
+
+        # Optional ref_id filtering to match CatBoost script behavior
+        if self.ref_id_to_keep_path is not None:
+            try:
+                with open(self.ref_id_to_keep_path, "r") as f:
+                    ref_ids_json = json.load(f)
+                ref_id_to_keep = list(ref_ids_json.keys())
+                logger.info(f"Filtering by ref_id_to_keep: {len(ref_id_to_keep)} ids")
+                df = df[df["ref_id"].isin(ref_id_to_keep)]
+                logger.info(f"Size after ref_id filtering: {len(df)}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load ref_id_to_keep at {self.ref_id_to_keep_path}: {e}"
+                )
+
+    trainer = TorchTrainer(
         head_type=args.head_type,
         presto_model_path=args.presto_model_path,
         data_dir=args.data_dir,
@@ -1013,13 +412,21 @@ def main() -> None:
         lr=args.lr,
         epochs=args.epochs,
         seed=args.seed,
+        embeddings_df=embeddings_df,
+        split_column=getattr(args, "split_column", None),
+        train_split_label=getattr(args, "train_split_label", "train"),
+        val_split_label=getattr(args, "val_split_label", "val"),
+        test_split_label=getattr(args, "test_split_label", "test"),
+        val_fraction=getattr(args, "val_fraction", 0.2),
+        test_fraction=getattr(args, "test_fraction", 0.2),
+        stratify_col=getattr(args, "stratify_column", "downstream_class"),
         ref_id_to_keep_path=getattr(args, "ref_id_to_keep_path", None)
         if hasattr(args, "ref_id_to_keep_path")
         else getattr(args, "ref_id_to_keep_path", None),
         use_balancing=getattr(args, "use_balancing", False),
-        sampling_class=getattr(args, "sampling_class", "downstream_class"),
+        balancing_label=getattr(args, "sampling_class", "downstream_class"),
         balancing_method=getattr(args, "balancing_method", "log"),
-        clip_range=getattr(args, "clip_range", (0.3, 5.0)),
+        weights_clip_range=getattr(args, "clip_range", (0.3, 5.0)),
         quality_col="quality_score_ct"
         if args.detector == "croptype"
         else "quality_score_lc",
@@ -1029,7 +436,3 @@ def main() -> None:
 
     trainer.train()
     logger.success("Torch head training completed successfully!")
-
-
-if __name__ == "__main__":
-    main()
