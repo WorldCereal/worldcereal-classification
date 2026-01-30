@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict
 
 DEFAULT_SEASONAL_MODEL_URL = (
@@ -11,6 +12,19 @@ DEFAULT_SEASONAL_MODEL_URL = (
 )
 
 DEFAULT_SEASONAL_WORKFLOW_PRESET = "phase_ii_multitask"
+
+DEFAULT_POSTPROCESS_SECTION: Dict[str, Dict[str, Any]] = {
+    "cropland": {
+        "enabled": False,
+        "method": "majority_vote",
+        "kernel_size": 5,
+    },
+    "croptype": {
+        "enabled": False,
+        "method": "majority_vote",
+        "kernel_size": 5,
+    },
+}
 
 SeasonalWorkflowPreset = Dict[str, Any]
 SeasonalWorkflowPresets = Dict[str, SeasonalWorkflowPreset]
@@ -36,5 +50,6 @@ SEASONAL_WORKFLOW_PRESETS: SeasonalWorkflowPresets = {
             "season_masks": None,
             "composite_frequency": "month",
         },
+        "postprocess": deepcopy(DEFAULT_POSTPROCESS_SECTION),
     }
 }

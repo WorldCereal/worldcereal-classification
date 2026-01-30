@@ -129,6 +129,23 @@ S1_INPUT_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH"]
 NODATA_VALUE = 65535
 NOCROP_VALUE = 254
 
+POSTPROCESSING_EXCLUDED_VALUES = [NOCROP_VALUE, 255, 65535]
+POSTPROCESSING_NODATA = 255
+DEFAULT_POSTPROCESS_METHOD = "majority_vote"
+
+
+@dataclass
+class PostprocessOptions:
+    enabled: bool = False
+    method: Optional[str] = None
+    kernel_size: int = 5
+
+    def resolved_method(self) -> Optional[str]:
+        if not self.enabled:
+            return None
+        return self.method or DEFAULT_POSTPROCESS_METHOD
+
+
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "worldcereal" / "models"
 
 
@@ -286,6 +303,135 @@ class DataPreprocessor:
             .astype("float32")
         )
         return xr.concat([arr.astype("float32"), slope_da], dim="bands")
+
+
+# ---------------------------------------------------------------------------
+# Postprocessing helpers
+# ---------------------------------------------------------------------------
+
+
+def _gather_probabilities_for_labels(
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+    class_value_to_index: Mapping[int, int],
+) -> np.ndarray:
+    """Pick per-pixel probabilities corresponding to the provided labels."""
+
+    result = np.zeros(labels.shape, dtype=np.float32)
+    for class_value, prob_index in class_value_to_index.items():
+        mask = labels == class_value
+        if not np.any(mask):
+            continue
+        result[mask] = probabilities[prob_index][mask]
+    return result
+
+
+def _majority_vote_labels(
+    labels: np.ndarray,
+    *,
+    kernel_size: int,
+    excluded_values: Sequence[int],
+) -> np.ndarray:
+    from scipy.signal import convolve2d
+
+    if kernel_size < 1:
+        raise ValueError("kernel_size must be >= 1 for majority vote")
+    if kernel_size == 1:
+        return labels
+    if kernel_size > 25:
+        raise ValueError("kernel_size cannot exceed 25 for majority vote")
+
+    valid_mask = ~np.isin(labels, excluded_values)
+    if not np.any(valid_mask):
+        return labels
+
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint16)
+    unique_labels = sorted(np.unique(labels[valid_mask]))
+    counts = np.zeros((len(unique_labels), *labels.shape), dtype=np.uint32)
+
+    for idx, class_value in enumerate(unique_labels):
+        class_mask = (labels == class_value).astype(np.uint8)
+        counts[idx] = convolve2d(class_mask, kernel, mode="same", boundary="symm")
+
+    winning_indices = np.argmax(counts, axis=0)
+    new_labels = labels.copy()
+    for idx, class_value in enumerate(unique_labels):
+        vote_mask = (winning_indices == idx) & valid_mask
+        if np.any(vote_mask):
+            new_labels[vote_mask] = class_value
+    return new_labels
+
+
+def _smooth_probability_cube(
+    probabilities: np.ndarray, excluded_mask: np.ndarray
+) -> np.ndarray:
+    from scipy.signal import convolve2d
+
+    kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.float32)
+    kernel_sum = float(kernel.sum())
+    smoothed = np.zeros_like(probabilities, dtype=np.float32)
+    for idx in range(probabilities.shape[0]):
+        smoothed[idx] = (
+            convolve2d(probabilities[idx], kernel, mode="same", boundary="symm")
+            / kernel_sum
+        )
+        smoothed[idx][excluded_mask] = 0.0
+    norm = smoothed.sum(axis=0, keepdims=True)
+    norm[norm == 0.0] = 1.0
+    return smoothed / norm
+
+
+def _labels_from_probability_cube(
+    probabilities: np.ndarray,
+    class_value_to_index: Mapping[int, int],
+    base_labels: np.ndarray,
+    excluded_mask: np.ndarray,
+) -> np.ndarray:
+    best_idx = np.argmax(probabilities, axis=0)
+    new_labels = base_labels.copy()
+    for class_value, prob_index in class_value_to_index.items():
+        vote_mask = (best_idx == prob_index) & ~excluded_mask
+        if np.any(vote_mask):
+            new_labels[vote_mask] = class_value
+    return new_labels
+
+
+def _run_postprocess(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    class_value_to_index: Mapping[int, int],
+    options: PostprocessOptions,
+    excluded_values: Sequence[int],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    method = options.resolved_method()
+    excluded_mask = np.isin(labels, excluded_values)
+    prob_cube = probabilities.astype(np.float32, copy=False)
+
+    if method is None:
+        updated_labels = labels
+    elif method == "majority_vote":
+        updated_labels = _majority_vote_labels(
+            labels,
+            kernel_size=options.kernel_size,
+            excluded_values=excluded_values,
+        )
+    elif method == "smooth_probabilities":
+        smoothed = _smooth_probability_cube(prob_cube, excluded_mask)
+        prob_cube = smoothed
+        updated_labels = _labels_from_probability_cube(
+            smoothed,
+            class_value_to_index,
+            base_labels=labels,
+            excluded_mask=excluded_mask,
+        )
+    else:
+        raise ValueError(f"Unknown postprocess method '{method}'")
+
+    updated_probabilities = _gather_probabilities_for_labels(
+        prob_cube, updated_labels, class_value_to_index
+    )
+    return updated_labels, updated_probabilities, prob_cube
 
 
 # ---------------------------------------------------------------------------
@@ -454,12 +600,19 @@ class SeasonalModelBundle:
         cache_root: Optional[Path] = None,
         device: Union[str, TorchDevice] = "cpu",
         enable_croptype_head: bool = True,
+        enable_cropland_head: bool = True,
     ) -> None:
         torch = _lazy_import_torch()
         self.device = torch.device(device)
         self.base_artifact = base_artifact
         self.cache_root = _ensure_cache_dir(cache_root or DEFAULT_CACHE_ROOT)
         self._croptype_head_enabled = enable_croptype_head
+        self._cropland_head_enabled = enable_cropland_head
+
+        if not (self._croptype_head_enabled or self._cropland_head_enabled):
+            raise ValueError(
+                "Seasonal model bundle requires at least one head to be enabled."
+            )
 
         heads = base_artifact.manifest.get("heads", [])
         self.landcover_spec = _select_head_spec(heads, task="landcover")
@@ -470,11 +623,16 @@ class SeasonalModelBundle:
         self.model = self._build_model(dropout)
 
         if landcover_head_zip:
-            self._apply_custom_head(
-                task="landcover",
-                source=landcover_head_zip,
-                priority=("head", "full", "model"),
-            )
+            if not self._cropland_head_enabled:
+                logger.info(
+                    "Cropland head disabled; ignoring custom landcover head override."
+                )
+            else:
+                self._apply_custom_head(
+                    task="landcover",
+                    source=landcover_head_zip,
+                    priority=("head", "full", "model"),
+                )
         if enable_croptype_head and croptype_head_zip:
             self._apply_custom_head(
                 task="croptype",
@@ -484,6 +642,10 @@ class SeasonalModelBundle:
         if croptype_head_zip and not enable_croptype_head:
             logger.info(
                 "Croptype head override provided but croptype head disabled; override ignored."
+            )
+        if not self._cropland_head_enabled:
+            logger.info(
+                "Cropland head disabled by configuration; cropland outputs will be skipped."
             )
         self._update_cropland_gate()
 
@@ -499,7 +661,9 @@ class SeasonalModelBundle:
         backbone = Presto()
         head = SeasonalFinetuningHead(
             embedding_dim=backbone.encoder.embedding_size,
-            landcover_num_outputs=self.landcover_spec.num_classes,
+            landcover_num_outputs=(
+                self.landcover_spec.num_classes if self._cropland_head_enabled else None
+            ),
             crop_num_outputs=(
                 self.croptype_spec.num_classes if self._croptype_head_enabled else None
             ),
@@ -514,6 +678,12 @@ class SeasonalModelBundle:
                 key: value
                 for key, value in state_dict.items()
                 if not key.startswith("head.crop_head")
+            }
+        if not self._cropland_head_enabled:
+            state_dict = {
+                key: value
+                for key, value in state_dict.items()
+                if not key.startswith("head.landcover_head")
             }
         model.load_state_dict(state_dict)
         return model.to(self.device).eval()
@@ -532,6 +702,11 @@ class SeasonalModelBundle:
         )
         state_dict = torch.load(checkpoint, map_location=self.device)
         if task == "landcover":
+            if not self._cropland_head_enabled:
+                logger.info(
+                    "Cropland head disabled; ignoring custom landcover head override."
+                )
+                return
             module = self.model.head.landcover_head
             if module is None:
                 raise ValueError(
@@ -564,6 +739,10 @@ class SeasonalModelBundle:
         self._update_cropland_gate()
 
     def _update_cropland_gate(self) -> None:
+        if not self._cropland_head_enabled:
+            self.cropland_gate_classes = []
+            logger.info("Cropland head disabled; cropland gating unavailable.")
+            return
         if self.landcover_spec.cropland_classes:
             self.cropland_gate_classes = list(self.landcover_spec.cropland_classes)
         elif self.croptype_spec.cropland_classes:
@@ -750,8 +929,11 @@ class SeasonalInferenceEngine:
         season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
         batch_size: int = 2048,
         season_composite_frequency: Optional[Literal["month", "dekad"]] = "month",
-        keep_class_probabilities: bool = False,
+        export_class_probabilities: bool = False,
         enable_croptype_head: bool = True,
+        enable_cropland_head: bool = True,
+        cropland_postprocess: Optional[Mapping[str, Any]] = None,
+        croptype_postprocess: Optional[Mapping[str, Any]] = None,
     ) -> None:
         base_artifact = load_model_artifact(seasonal_model_zip, cache_root=cache_root)
         self.bundle = SeasonalModelBundle(
@@ -761,18 +943,26 @@ class SeasonalInferenceEngine:
             cache_root=cache_root,
             device=device,
             enable_croptype_head=enable_croptype_head,
+            enable_cropland_head=enable_cropland_head,
         )
         torch = _lazy_import_torch()
         self.device = torch.device(device)
         self.batch_size = batch_size
         self._season_composite_frequency = season_composite_frequency
-        self._keep_class_probabilities = keep_class_probabilities
+        self._export_class_probabilities = export_class_probabilities
         self._croptype_enabled = enable_croptype_head
+        self._cropland_enabled = enable_cropland_head
+        self._cropland_postprocess = _build_postprocess_options(cropland_postprocess)
+        self._croptype_postprocess = _build_postprocess_options(croptype_postprocess)
         from worldcereal.train import GLOBAL_SEASON_IDS
 
         if not self._croptype_enabled:
             logger.info(
                 "Croptype head disabled by configuration; seasonal outputs will not be emitted."
+            )
+        if not self._cropland_enabled:
+            logger.info(
+                "Cropland head disabled by configuration; cropland outputs will not be emitted."
             )
 
         default_ids = list(GLOBAL_SEASON_IDS)
@@ -782,8 +972,10 @@ class SeasonalInferenceEngine:
         self._default_season_windows = _normalize_season_windows_input(season_windows)
         logger.info(
             f"SeasonalInferenceEngine initialized (device={self.device}, batch_size={self.batch_size}, "
-            f"default_seasons={self._default_season_ids}, keep_probs={self._keep_class_probabilities}, "
-            f"croptype_enabled={self._croptype_enabled})"
+            f"default_seasons={self._default_season_ids}, export_probs={self._export_class_probabilities}, "
+            f"croptype_enabled={self._croptype_enabled}, cropland_enabled={self._cropland_enabled}, "
+            f"cropland_postprocess={self._cropland_postprocess.enabled}, "
+            f"croptype_postprocess={self._croptype_postprocess.enabled})"
         )
 
     def infer(
@@ -828,12 +1020,15 @@ class SeasonalInferenceEngine:
         logger.info(
             f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
         )
-        return self._format_outputs(
+
+        dataset = self._format_outputs(
             arr=prepped,
             outputs=outputs,
             season_ids=active_season_ids,
             enforce_cropland_gate=enforce_cropland_gate,
         )
+
+        return _dataset_to_multiband_array(dataset)
 
     def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
         if "bands" not in arr.dims:
@@ -1027,9 +1222,14 @@ class SeasonalInferenceEngine:
         if landcover_logits is not None and landcover_logits.numel() > 0:
             probs = torch.softmax(landcover_logits, dim=-1)
             preds = torch.argmax(probs, dim=-1)
-            conf = probs.max(dim=-1).values
+            prob_cube = (
+                probs.detach()
+                .cpu()
+                .numpy()
+                .reshape(height, width, self.bundle.landcover_spec.num_classes)
+            )
+            prob_cube = np.transpose(prob_cube, (2, 0, 1))
             preds_np = preds.numpy().reshape(height, width)
-            conf_np = conf.numpy().reshape(height, width)
 
             landcover_classes = list(self.bundle.landcover_spec.class_names)
             cropland_gate_labels = list(self.bundle.cropland_gate_classes)
@@ -1053,23 +1253,79 @@ class SeasonalInferenceEngine:
                 if idx not in cropland_index_set
             ]
 
-            if self._keep_class_probabilities:
-                prob_np = (
-                    probs.detach()
-                    .cpu()
-                    .numpy()
-                    .reshape(height, width, self.bundle.landcover_spec.num_classes)
+            cropland_prob_other = (
+                prob_cube[other_indices].sum(axis=0)
+                if other_indices
+                else np.zeros((height, width), dtype=np.float32)
+            )
+            cropland_prob_crops = (
+                prob_cube[cropland_indices].sum(axis=0)
+                if cropland_indices
+                else np.zeros((height, width), dtype=np.float32)
+            )
+            cropland_prob_cube = np.stack(
+                [cropland_prob_other, cropland_prob_crops], axis=0
+            )
+
+            if cropland_gate_labels:
+                if cropland_indices:
+                    cropland_mask_bool = np.isin(preds_np, cropland_indices)
+                else:
+                    logger.warning(
+                        "Configured cropland classes do not match landcover outputs; defaulting to all pixels as cropland."
+                    )
+                    cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
+            else:
+                logger.warning(
+                    "Cropland classes unavailable; defaulting to all pixels as cropland."
                 )
-                prob_np = np.transpose(prob_np, (2, 0, 1))
+                cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
+
+            cropland_labels_uint8 = cropland_mask_bool.astype(np.uint8)
+            cropland_method = self._cropland_postprocess.resolved_method()
+            if cropland_method:
+                logger.info(
+                    f"Applying {cropland_method} postprocess to cropland mask (kernel_size={self._cropland_postprocess.kernel_size})"
+                )
+            (
+                cropland_labels_uint8,
+                _cropland_probability_np,
+                cropland_prob_cube,
+            ) = _run_postprocess(
+                cropland_labels_uint8,
+                cropland_prob_cube,
+                class_value_to_index={0: 0, 1: 1},
+                options=self._cropland_postprocess,
+                excluded_values=(),
+            )
+            cropland_mask_bool = cropland_labels_uint8.astype(bool)
+            cropland_probability_np = cropland_prob_cube[1]
+            cropland_probability_uint8 = _probabilities_to_uint8(
+                cropland_probability_np
+            )
+
+            data_vars["cropland_classification"] = xr.DataArray(
+                cropland_labels_uint8,
+                dims=("y", "x"),
+                coords={"y": arr.y, "x": arr.x},
+                attrs={"classes": ["other", "cropland"]},
+            )
+            data_vars["probability_cropland"] = xr.DataArray(
+                cropland_probability_uint8,
+                dims=("y", "x"),
+                coords={"y": arr.y, "x": arr.x},
+            )
+
+            if self._export_class_probabilities:
                 probability_blocks: List[np.ndarray] = []
                 probability_labels: List[str] = []
                 if cropland_indices:
-                    probability_blocks.append(prob_np[cropland_indices])
+                    probability_blocks.append(prob_cube[cropland_indices])
                     probability_labels.extend(cropland_label_order)
                 if other_indices:
-                    other_block = prob_np[other_indices].sum(axis=0, keepdims=True)
+                    other_block = prob_cube[other_indices].sum(axis=0, keepdims=True)
                 else:
-                    other_block = np.zeros((1, height, width), dtype=prob_np.dtype)
+                    other_block = np.zeros((1, height, width), dtype=prob_cube.dtype)
                 probability_blocks.append(other_block)
                 probability_labels.append("other")
                 combined_probabilities = np.concatenate(probability_blocks, axis=0)
@@ -1083,54 +1339,21 @@ class SeasonalInferenceEngine:
                         "x": arr.x,
                     },
                 )
-
-            if cropland_gate_labels:
-                if cropland_indices:
-                    cropland_mask_bool = np.isin(preds_np, cropland_indices)
-                    cropland_prob_tensor = probs[:, cropland_indices].sum(dim=-1)
-                    cropland_probability_np = (
-                        cropland_prob_tensor.detach()
-                        .cpu()
-                        .numpy()
-                        .reshape(height, width)
-                    )
-                else:
-                    logger.warning(
-                        "Configured cropland classes do not match landcover outputs; defaulting to all pixels as cropland."
-                    )
-                    cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
-            else:
-                logger.warning(
-                    "Cropland classes unavailable; defaulting to all pixels as cropland."
-                )
-                cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
-            mask_uint8 = cropland_mask_bool.astype(np.uint8)
-            data_vars["cropland_classification"] = xr.DataArray(
-                mask_uint8,
-                dims=("y", "x"),
-                coords={"y": arr.y, "x": arr.x},
-                attrs={"classes": ["other", "cropland"]},
-            )
-            prob_source = (
-                cropland_probability_np
-                if cropland_probability_np is not None
-                else conf_np
-            )
-            data_vars["cropland_probability"] = xr.DataArray(
-                _probabilities_to_uint8(prob_source),
-                dims=("y", "x"),
-                coords={"y": arr.y, "x": arr.x},
-            )
         else:
-            logger.warning("Landcover head missing; cropland mask cannot be derived.")
+            if self._cropland_enabled:
+                logger.warning(
+                    "Landcover head missing; cropland mask cannot be derived."
+                )
+            else:
+                logger.info(
+                    "Cropland head disabled; skipping cropland classification outputs."
+                )
 
         if croptype_logits is not None and croptype_logits.numel() > 0:
             probs = torch.softmax(croptype_logits, dim=-1)
             preds = torch.argmax(probs, dim=-1)
-            conf = probs.max(dim=-1).values
             num_seasons = preds.shape[1]
             preds_np = preds.numpy().reshape(height, width, num_seasons)
-            conf_np = conf.numpy().reshape(height, width, num_seasons)
             prob_np = (
                 probs.detach()
                 .cpu()
@@ -1139,31 +1362,80 @@ class SeasonalInferenceEngine:
                     height, width, num_seasons, self.bundle.croptype_spec.num_classes
                 )
             )
-            if enforce_cropland_gate and cropland_mask_bool is not None:
+            gate_applicable = (
+                enforce_cropland_gate
+                and self._cropland_enabled
+                and cropland_mask_bool is not None
+            )
+            if gate_applicable:
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
-                conf_np = np.where(gate, conf_np, 0.0)
-                if self._keep_class_probabilities:
-                    prob_np = np.where(
-                        cropland_mask_bool[:, :, None, None], prob_np, 0.0
-                    )
-            _ensure_uint8_range(preds_np, name="croptype_classification")
-            preds_uint8 = np.transpose(preds_np.astype(np.uint8, copy=False), (2, 0, 1))
-            conf_uint8 = np.transpose(_probabilities_to_uint8(conf_np), (2, 0, 1))
+
+            prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
+            if gate_applicable:
+                gating = cropland_mask_bool[None, None, :, :]
+                prob_cube = np.where(gating, prob_cube, 0.0)
+            class_value_to_index = {
+                idx: idx for idx in range(self.bundle.croptype_spec.num_classes)
+            }
+
+            processed_labels: List[np.ndarray] = []
+            processed_probabilities: List[np.ndarray] = []
+            processed_probability_cubes: List[np.ndarray] = []
+            croptype_method = self._croptype_postprocess.resolved_method()
+            if croptype_method:
+                logger.info(
+                    f"Applying {croptype_method} postprocess to croptype logits (kernel_size={self._croptype_postprocess.kernel_size}, seasons={num_seasons})"
+                )
+            for season_idx in range(num_seasons):
+                season_labels = preds_np[:, :, season_idx].astype(np.uint16, copy=True)
+                season_prob_cube = prob_cube[season_idx]
+                (
+                    season_labels,
+                    season_probabilities,
+                    season_prob_cube_processed,
+                ) = _run_postprocess(
+                    season_labels,
+                    season_prob_cube,
+                    class_value_to_index=class_value_to_index,
+                    options=self._croptype_postprocess,
+                    excluded_values=POSTPROCESSING_EXCLUDED_VALUES,
+                )
+                processed_labels.append(season_labels)
+                processed_probabilities.append(season_probabilities)
+                processed_probability_cubes.append(season_prob_cube_processed)
+
+            preds_stack = np.stack(processed_labels, axis=0)
+            _ensure_uint8_range(preds_stack, name="croptype_classification")
+            preds_uint8 = preds_stack.astype(np.uint8, copy=False)
+            conf_uint8 = _probabilities_to_uint8(
+                np.stack(processed_probabilities, axis=0)
+            )
+            if gate_applicable and cropland_mask_bool is not None:
+                gate = cropland_mask_bool[None, :, :]
+                sentinel_uint8 = np.uint8(NOCROP_VALUE)
+                conf_uint8 = np.where(gate, conf_uint8, sentinel_uint8)
+
             data_vars["croptype_classification"] = xr.DataArray(
                 preds_uint8,
                 dims=("season", "y", "x"),
                 coords={"season": season_ids[:num_seasons], "y": arr.y, "x": arr.x},
                 attrs={"classes": self.bundle.croptype_spec.class_names},
             )
-            data_vars["croptype_confidence"] = xr.DataArray(
+            data_vars["croptype_probability"] = xr.DataArray(
                 conf_uint8,
                 dims=("season", "y", "x"),
                 coords={"season": season_ids[:num_seasons], "y": arr.y, "x": arr.x},
             )
-            if self._keep_class_probabilities:
-                prob_np = np.transpose(prob_np, (2, 3, 0, 1))
-                prob_uint8 = _probabilities_to_uint8(prob_np)
+
+            if self._export_class_probabilities:
+                # Emit gated per-class probabilities for downstream interpretation.
+                prob_stack = np.stack(processed_probability_cubes, axis=0)
+                prob_uint8 = _probabilities_to_uint8(prob_stack)
+                if gate_applicable and cropland_mask_bool is not None:
+                    gate = cropland_mask_bool[None, None, :, :]
+                    sentinel_uint8 = np.uint8(NOCROP_VALUE)
+                    prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
                 data_vars["croptype_probability"] = xr.DataArray(
                     prob_uint8,
                     dims=("season", "croptype_class", "y", "x"),
@@ -1174,6 +1446,7 @@ class SeasonalInferenceEngine:
                         "x": arr.x,
                     },
                 )
+
         elif self._croptype_enabled:
             logger.warning("Croptype head missing; skipping seasonal crop outputs.")
         else:
@@ -1205,10 +1478,13 @@ def run_seasonal_workflow(
     season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
     season_masks: Optional[np.ndarray] = None,
     season_composite_frequency: Optional[Literal["month", "dekad"]] = "month",
-    keep_class_probabilities: bool = False,
+    export_class_probabilities: bool = False,
     enable_croptype_head: bool = True,
-) -> xr.Dataset:
-    """Run the full seasonal workflow in a single call."""
+    enable_cropland_head: bool = True,
+    cropland_postprocess: Optional[Mapping[str, Any]] = None,
+    croptype_postprocess: Optional[Mapping[str, Any]] = None,
+) -> xr.DataArray:
+    """Run the full seasonal workflow and return a multi-band array."""
 
     engine = SeasonalInferenceEngine(
         seasonal_model_zip=seasonal_model_zip,
@@ -1220,10 +1496,13 @@ def run_seasonal_workflow(
         season_ids=season_ids,
         season_windows=season_windows,
         season_composite_frequency=season_composite_frequency,
-        keep_class_probabilities=keep_class_probabilities,
+        export_class_probabilities=export_class_probabilities,
         enable_croptype_head=enable_croptype_head,
+        enable_cropland_head=enable_cropland_head,
+        cropland_postprocess=cropland_postprocess,
+        croptype_postprocess=croptype_postprocess,
     )
-    return engine.infer(
+    datacube = engine.infer(
         arr,
         epsg,
         enforce_cropland_gate=enforce_cropland_gate,
@@ -1231,6 +1510,7 @@ def run_seasonal_workflow(
         season_windows=season_windows,
         season_masks=season_masks,
     )
+    return datacube
 
 
 # ---------------------------------------------------------------------------
@@ -1275,6 +1555,31 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     raise TypeError(f"Cannot interpret boolean value from type {type(value)!r}")
+
+
+def _build_postprocess_options(
+    spec: Optional[Union[PostprocessOptions, Mapping[str, Any]]],
+) -> PostprocessOptions:
+    if spec is None:
+        return PostprocessOptions()
+    if isinstance(spec, PostprocessOptions):
+        return spec
+    if not isinstance(spec, Mapping):
+        raise TypeError(
+            "Postprocess options must be provided as a mapping or PostprocessOptions instance"
+        )
+
+    enabled = _as_bool(spec.get("enabled"), False)
+    method = spec.get("method")
+    kernel_value = spec.get("kernel_size", 5)
+    try:
+        kernel_size = int(kernel_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"kernel_size must be an integer, got {kernel_value!r}"
+        ) from exc
+
+    return PostprocessOptions(enabled=enabled, method=method, kernel_size=kernel_size)
 
 
 def _normalize_season_id_list(value: Any) -> Optional[List[str]]:
@@ -1497,25 +1802,31 @@ def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
 def _expected_udf_band_labels(
     season_ids: Sequence[str],
     *,
-    keep_class_probabilities: bool = False,
+    export_class_probabilities: bool = False,
     cropland_gate_classes: Optional[Sequence[str]] = None,
     croptype_classes: Optional[Sequence[str]] = None,
     croptype_enabled: bool = True,
+    cropland_enabled: bool = True,
 ) -> List[str]:
-    labels = [
-        "cropland_classification",
-        "cropland_probability",
-    ]
+    labels: List[str] = []
+    if cropland_enabled:
+        labels.extend(
+            [
+                "cropland_classification",
+                "probability_cropland",
+            ]
+        )
     if croptype_enabled:
         for season_id in season_ids:
             labels.append(f"croptype_classification:{season_id}")
         for season_id in season_ids:
-            labels.append(f"croptype_confidence:{season_id}")
-    if keep_class_probabilities:
-        gate_classes = list(cropland_gate_classes) if cropland_gate_classes else []
-        if gate_classes:
-            labels.extend([f"landcover_probabilities:{cls}" for cls in gate_classes])
-        labels.append("landcover_probabilities:other")
+            labels.append(f"croptype_probability:{season_id}")
+    if export_class_probabilities:
+        if cropland_enabled:
+            gate_classes = list(cropland_gate_classes) if cropland_gate_classes else []
+            if gate_classes:
+                labels.extend([f"probability_{cls}" for cls in gate_classes])
+            labels.append("probability_other")
         if croptype_enabled:
             ct_classes = list(croptype_classes) if croptype_classes else []
             if ct_classes:
@@ -1550,6 +1861,7 @@ def _select_workflow_preset(name: Any) -> Tuple[Dict[str, Dict[str, Any]], str]:
 
 def _normalize_workflow_section_names(workflow_cfg: Dict[str, Any]) -> None:
     workflow_cfg.setdefault("season", {})
+    workflow_cfg.setdefault("postprocess", {})
 
 
 def _merge_workflow_sections(
@@ -1559,7 +1871,7 @@ def _merge_workflow_sections(
         if section not in base:
             raise ValueError(
                 f"Unsupported seasonal_workflow section '{section}'. "
-                "Expected sections: model, runtime, season"
+                "Expected sections: model, runtime, season, postprocess"
             )
         if isinstance(values, Mapping):
             base_section = base[section]
@@ -1582,6 +1894,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
     model_cfg_raw = workflow_dict.get("model", {})
     runtime_cfg_raw = workflow_dict.get("runtime", {})
     season_cfg_raw = workflow_dict.get("season", {}) or {}
+    postprocess_cfg_raw = workflow_dict.get("postprocess", {}) or {}
 
     if not isinstance(model_cfg_raw, Mapping):
         raise TypeError("workflow 'model' section must be a mapping")
@@ -1589,10 +1902,13 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         raise TypeError("workflow 'runtime' section must be a mapping")
     if not isinstance(season_cfg_raw, Mapping):
         raise TypeError("workflow 'season' section must be a mapping")
+    if not isinstance(postprocess_cfg_raw, Mapping):
+        raise TypeError("workflow 'postprocess' section must be a mapping")
 
     model_cfg = dict(model_cfg_raw)
     runtime_cfg = dict(runtime_cfg_raw)
     season_cfg = dict(season_cfg_raw)
+    postprocess_cfg = dict(postprocess_cfg_raw)
 
     model_source = model_cfg.get("seasonal_model_zip")
     if not model_source:
@@ -1612,12 +1928,12 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         ) from exc
     device = runtime_cfg.get("device", "cpu")
 
-    keep_probs_value = season_cfg.get("keep_class_probabilities")
-    if keep_probs_value is None and "keep_class_probs" in season_cfg:
-        keep_probs_value = season_cfg.get("keep_class_probs")
-    keep_class_probabilities = _as_bool(keep_probs_value, False)
+    export_probs_value = season_cfg.get("export_class_probabilities")
+    export_class_probabilities = _as_bool(export_probs_value, False)
     enable_croptype_head_value = model_cfg.get("enable_croptype_head")
     enable_croptype_head = _as_bool(enable_croptype_head_value, True)
+    enable_cropland_head_value = model_cfg.get("enable_cropland_head")
+    enable_cropland_head = _as_bool(enable_cropland_head_value, True)
 
     season_ids = _normalize_season_id_list(season_cfg.get("season_ids"))
     season_windows = _parse_udf_season_windows(season_cfg.get("season_windows"))
@@ -1632,6 +1948,21 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         else None
     )
 
+    def _normalize_postprocess_entry(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise TypeError("postprocess entries must be provided as mappings")
+        return dict(value)
+
+    cropland_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("cropland"))
+    croptype_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("croptype"))
+
+    if not (enable_croptype_head or enable_cropland_head):
+        raise ValueError(
+            "Seasonal workflow configuration must enable at least one head."
+        )
+
     return {
         "seasonal_model_zip": model_source,
         "landcover_head_zip": model_cfg.get("landcover_head_zip"),
@@ -1644,8 +1975,11 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "season_windows": season_windows,
         "season_masks": season_masks,
         "season_composite_frequency": composite_frequency or "month",
-        "keep_class_probabilities": keep_class_probabilities,
+        "export_class_probabilities": export_class_probabilities,
         "enable_croptype_head": enable_croptype_head,
+        "enable_cropland_head": enable_cropland_head,
+        "cropland_postprocess": cropland_post_cfg,
+        "croptype_postprocess": croptype_post_cfg,
     }
 
 
@@ -1662,6 +1996,7 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     workflow_cfg.setdefault("model", {})
     workflow_cfg.setdefault("runtime", {})
     workflow_cfg.setdefault("season", {})
+    workflow_cfg.setdefault("postprocess", {})
 
     workflow_overrides = context.get("seasonal_workflow")
     if workflow_overrides is not None:
@@ -1692,6 +2027,20 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     if disable_ctx is not None and _as_bool(disable_ctx, False):
         workflow_cfg["model"]["enable_croptype_head"] = False
 
+    if "enable_cropland_head" in context:
+        workflow_cfg["model"]["enable_cropland_head"] = _as_bool(
+            context.get("enable_cropland_head"), True
+        )
+    disable_cropland_ctx = context.get("disable_cropland_head")
+    if disable_cropland_ctx is not None and _as_bool(disable_cropland_ctx, False):
+        workflow_cfg["model"]["enable_cropland_head"] = False
+
+    croptype_only_ctx = context.get("croptype_only")
+    if croptype_only_ctx is not None and _as_bool(croptype_only_ctx, False):
+        workflow_cfg["model"]["enable_cropland_head"] = False
+        workflow_cfg["model"]["enable_croptype_head"] = True
+        workflow_cfg["season"]["enforce_cropland_gate"] = False
+
     cache_root_override = context.get("cache_root") or context.get("cache_dir")
     if cache_root_override is not None:
         workflow_cfg["runtime"]["cache_root"] = cache_root_override
@@ -1715,6 +2064,11 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     if composite_override is not None:
         workflow_cfg["season"]["composite_frequency"] = composite_override
 
+    if "cropland_postprocess" in context:
+        workflow_cfg["postprocess"]["cropland"] = context.get("cropland_postprocess")
+    if "croptype_postprocess" in context:
+        workflow_cfg["postprocess"]["croptype"] = context.get("croptype_postprocess")
+
     if "enforce_cropland_gate" in context:
         workflow_cfg["season"]["enforce_cropland_gate"] = _as_bool(
             context.get("enforce_cropland_gate"), True
@@ -1724,11 +2078,10 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         if disable_flag:
             workflow_cfg["season"]["enforce_cropland_gate"] = False
 
-    keep_probs_override = context.get("keep_class_probabilities")
-    if keep_probs_override is None and "keep_class_probs" in context:
-        keep_probs_override = context.get("keep_class_probs")
-    if keep_probs_override is not None:
-        workflow_cfg["season"]["keep_class_probabilities"] = keep_probs_override
+    if "export_class_probabilities" in context:
+        workflow_cfg["season"]["export_class_probabilities"] = context.get(
+            "export_class_probabilities"
+        )
 
     return _finalize_workflow_config(workflow_cfg)
 
@@ -1752,8 +2105,7 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
             "Input cube must expose dimensions ('bands', 't', 'y', 'x') for seasonal inference"
         ) from exc
 
-    dataset = run_seasonal_workflow(arr=prepared, epsg=epsg, **config)
-    datacube = _dataset_to_multiband_array(dataset)
+    datacube = run_seasonal_workflow(arr=prepared, epsg=epsg, **config)
     udf_data.datacube_list = [XarrayDataCube(datacube)]
     return udf_data
 
@@ -1766,22 +2118,25 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
     try:
         context_map = dict(context or {})
         season_ids = _resolve_effective_season_ids(context_map)
-        keep_probs = False
+        export_probs = False
         cropland_gate_classes: Optional[Sequence[str]] = None
         croptype_classes: Optional[Sequence[str]] = None
         croptype_enabled = True
+        cropland_enabled = True
 
         try:
             config = _extract_udf_configuration(context_map)
-            keep_probs = config.get("keep_class_probabilities", False)
+            export_probs = config.get("export_class_probabilities", False)
             croptype_enabled = config.get("enable_croptype_head", True)
-            if keep_probs:
+            cropland_enabled = config.get("enable_cropland_head", True)
+            if export_probs:
                 artifact = load_model_artifact(
                     config["seasonal_model_zip"], cache_root=config.get("cache_root")
                 )
                 heads = artifact.manifest.get("heads", [])
-                landcover_spec = _select_head_spec(heads, "landcover")
-                cropland_gate_classes = landcover_spec.cropland_classes
+                if cropland_enabled:
+                    landcover_spec = _select_head_spec(heads, "landcover")
+                    cropland_gate_classes = landcover_spec.cropland_classes
                 if croptype_enabled:
                     croptype_classes = _select_head_spec(heads, "croptype").class_names
         except Exception as exc:
@@ -1789,10 +2144,11 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
 
         labels = _expected_udf_band_labels(
             season_ids,
-            keep_class_probabilities=keep_probs,
+            export_class_probabilities=export_probs,
             cropland_gate_classes=cropland_gate_classes,
             croptype_classes=croptype_classes,
             croptype_enabled=croptype_enabled,
+            cropland_enabled=cropland_enabled,
         )
         return metadata.rename_labels(dimension="bands", target=labels)
     except Exception as exc:  # pragma: no cover - metadata best-effort

@@ -276,6 +276,7 @@ def _compose_workflow_sections(
     workflow_cfg.setdefault("model", {})
     workflow_cfg.setdefault("runtime", {})
     workflow_cfg.setdefault("season", {})
+    workflow_cfg.setdefault("postprocess", {})
     for overrides in override_blocks:
         if overrides:
             _merge_workflow_sections(workflow_cfg, overrides)

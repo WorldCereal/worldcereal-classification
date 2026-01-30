@@ -48,11 +48,6 @@ NEIGHBORHOOD_SPEC = dict(
     ],
 )
 
-CROPLAND_BANDS: Sequence[str] = (
-    "cropland_classification",
-    "cropland_probability",
-)
-
 
 def _normalize_band_label(band: str) -> str:
     if band.startswith("croptype_"):
@@ -92,6 +87,24 @@ def _season_band_label(band: str, season_id: str) -> str:
         if part:
             cleaned.append(part)
     return "_".join(cleaned) if cleaned else trimmed.replace(":", "_")
+
+
+def _sorted_croptype_band_names(bands: Sequence[str]) -> List[str]:
+    def _priority(label: str) -> Tuple[int, str]:
+        if label.startswith("croptype_classification:"):
+            return (0, label)
+        if label.startswith("croptype_probability:"):
+            parts = label.split(":")
+            if len(parts) == 2:
+                return (1, label)  # aggregated probability per season
+            return (2, label)  # per-class probability
+        if label.startswith("croptype_raw_classification:"):
+            return (3, label)
+        if label.startswith("croptype_raw_probability:"):
+            return (4, label)
+        return (5, label)
+
+    return sorted(bands, key=_priority)
 
 
 def _sanitize_filename_fragment(value: Any) -> str:
@@ -205,11 +218,7 @@ def _cropland_map(
             model_cfg["enable_croptype_head"] = False
     cube = _workflow_inference_cube(inputs, cropland_context)
     band_names = cube.metadata.band_names
-    available_bands = [
-        band
-        for band in band_names
-        if band in CROPLAND_BANDS or band.startswith("landcover_probabilities")
-    ]
+    available_bands = [band for band in band_names if not band.startswith("croptype")]
     if not available_bands:
         raise ValueError(
             "Seasonal UDF did not emit cropland bands; expected cropland outputs."
@@ -228,7 +237,7 @@ def _croptype_map(
     temporal_extent: TemporalContext,
     workflow_context: Mapping[str, Any],
 ) -> List[DataCube]:
-    """Produce per-season crop-type products alongside a dedicated landcover product."""
+    """Produce per-season crop-type products alongside a dedicated cropland product."""
 
     cube = _workflow_inference_cube(inputs, workflow_context)
     band_names = cube.metadata.band_names
@@ -269,6 +278,7 @@ def _croptype_map(
         ]
         if not season_bands:
             continue
+        season_bands = _sorted_croptype_band_names(season_bands)
         normalized_labels = [
             _season_band_label(band, season_id) for band in season_bands
         ]
@@ -294,10 +304,8 @@ def _croptype_map(
             "Seasonal UDF did not emit croptype bands that could be assigned to a season."
         )
 
-    cropland_bands = [band for band in band_names if band.startswith("cropland_")]
-    cropland_bands.extend(
-        band for band in band_names if band.startswith("landcover_probabilities")
-    )
+    cropland_bands = [band for band in band_names if not band.startswith("croptype")]
+
     # Deduplicate while preserving order
     seen: set[str] = set()
     ordered_cropland = []

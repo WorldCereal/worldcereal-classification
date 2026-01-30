@@ -8,6 +8,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 SeasonWindow = Tuple[str, str]
 SeasonWindowMapping = Mapping[str, SeasonWindow]
+PostprocessMapping = Dict[str, Dict[str, Any]]
 
 
 @dataclass
@@ -18,6 +19,7 @@ class ModelSection:
     landcover_head_zip: Optional[str] = None
     croptype_head_zip: Optional[str] = None
     enable_croptype_head: Optional[bool] = None
+    enable_cropland_head: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -29,6 +31,8 @@ class ModelSection:
             data["croptype_head_zip"] = self.croptype_head_zip
         if self.enable_croptype_head is not None:
             data["enable_croptype_head"] = self.enable_croptype_head
+        if self.enable_cropland_head is not None:
+            data["enable_cropland_head"] = self.enable_cropland_head
         return data
 
 
@@ -60,7 +64,7 @@ class SeasonSection:
     season_masks: Optional[Sequence[Any]] = None
     composite_frequency: Optional[str] = None
     enforce_cropland_gate: Optional[bool] = None
-    keep_class_probabilities: Optional[bool] = None
+    export_class_probabilities: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -74,9 +78,23 @@ class SeasonSection:
             data["composite_frequency"] = self.composite_frequency
         if self.enforce_cropland_gate is not None:
             data["enforce_cropland_gate"] = self.enforce_cropland_gate
-        if self.keep_class_probabilities is not None:
-            data["keep_class_probabilities"] = self.keep_class_probabilities
+        if self.export_class_probabilities is not None:
+            data["export_class_probabilities"] = self.export_class_probabilities
         return data
+
+
+def _sanitize_postprocess_options(options: Mapping[str, Any]) -> Dict[str, Any]:
+    cleaned: Dict[str, Any] = {}
+    for key, value in options.items():
+        if value is None:
+            continue
+        if key == "enabled":
+            cleaned[key] = bool(value)
+        elif key == "kernel_size":
+            cleaned[key] = int(value)
+        else:
+            cleaned[key] = value
+    return cleaned
 
 
 @dataclass
@@ -89,6 +107,7 @@ class WorldCerealWorkflowConfig:
     model: Optional[ModelSection] = None
     runtime: Optional[RuntimeSection] = None
     season: Optional[SeasonSection] = None
+    postprocess: Optional[PostprocessMapping] = None
 
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         sections: Dict[str, Dict[str, Any]] = {}
@@ -104,6 +123,14 @@ class WorldCerealWorkflowConfig:
             season_dict = self.season.to_dict()
             if season_dict:
                 sections["season"] = season_dict
+        if self.postprocess:
+            postprocess_dict = {
+                product: dict(opts)
+                for product, opts in self.postprocess.items()
+                if opts
+            }
+            if postprocess_dict:
+                sections["postprocess"] = postprocess_dict
         return sections
 
     @classmethod
@@ -118,6 +145,7 @@ class WorldCerealWorkflowConfigBuilder:
     model: ModelSection = field(default_factory=ModelSection)
     runtime: RuntimeSection = field(default_factory=RuntimeSection)
     season: SeasonSection = field(default_factory=SeasonSection)
+    postprocess: PostprocessMapping = field(default_factory=dict)
 
     def _ensure_copy(self) -> None:
         # dataclass fields are already separate instances via default_factory
@@ -132,10 +160,19 @@ class WorldCerealWorkflowConfigBuilder:
     def disable_croptype_head(self) -> "WorldCerealWorkflowConfigBuilder":
         return self.enable_croptype_head(False)
 
-    def keep_class_probabilities(
+    def enable_cropland_head(
         self, enabled: bool = True
     ) -> "WorldCerealWorkflowConfigBuilder":
-        self.season.keep_class_probabilities = bool(enabled)
+        self.model.enable_cropland_head = bool(enabled)
+        return self
+
+    def disable_cropland_head(self) -> "WorldCerealWorkflowConfigBuilder":
+        return self.enable_cropland_head(False)
+
+    def export_class_probabilities(
+        self, enabled: bool = True
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        self.season.export_class_probabilities = bool(enabled)
         return self
 
     def enforce_cropland_gate(
@@ -190,11 +227,57 @@ class WorldCerealWorkflowConfigBuilder:
         self.model.seasonal_model_zip = path
         return self
 
+    def cropland_postprocess(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        method: Optional[str] = None,
+        kernel_size: Optional[int] = None,
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        return self._update_postprocess(
+            "cropland",
+            enabled=enabled,
+            method=method,
+            kernel_size=kernel_size,
+        )
+
+    def croptype_postprocess(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        method: Optional[str] = None,
+        kernel_size: Optional[int] = None,
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        return self._update_postprocess(
+            "croptype",
+            enabled=enabled,
+            method=method,
+            kernel_size=kernel_size,
+        )
+
+    def _update_postprocess(
+        self, product: str, **options: Optional[Any]
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        current = dict(self.postprocess.get(product, {}))
+        sanitized = _sanitize_postprocess_options(options)
+        current.update(sanitized)
+        if current:
+            self.postprocess[product] = current
+        elif product in self.postprocess:
+            del self.postprocess[product]
+        return self
+
     def build(self) -> WorldCerealWorkflowConfig:
         model = self.model if self.model.to_dict() else None
         runtime = self.runtime if self.runtime.to_dict() else None
         season = self.season if self.season.to_dict() else None
-        return WorldCerealWorkflowConfig(model=model, runtime=runtime, season=season)
+        postprocess = {
+            product: dict(opts) for product, opts in self.postprocess.items() if opts
+        }
+        postprocess = postprocess or None
+        return WorldCerealWorkflowConfig(
+            model=model, runtime=runtime, season=season, postprocess=postprocess
+        )
 
 
 __all__ = [

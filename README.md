@@ -99,6 +99,14 @@ workflow_cfg = WorldCerealWorkflowConfig(
             "tc-s2": ("2021-04-01", "2021-10-31"),
         },
     ),
+    postprocess={
+        "cropland": {"enabled": True, "method": "majority_vote", "kernel_size": 5},
+        "croptype": {
+            "enabled": True,
+            "method": "smooth_probabilities",
+            "export_class_probabilities": True,
+        },
+    },
 )
 
 prob_results = generate_map(

@@ -7,7 +7,7 @@ import pytest
 import torch
 import xarray as xr
 
-from worldcereal.openeo import inference
+from worldcereal.openeo import inference, mapping
 
 
 class DummyCube:
@@ -43,24 +43,27 @@ def _build_probability_engine(
     engine = inference.SeasonalInferenceEngine.__new__(
         inference.SeasonalInferenceEngine
     )
-    engine._keep_class_probabilities = keep_probs
+    engine._export_class_probabilities = keep_probs
     engine._croptype_enabled = True
+    engine._cropland_enabled = True
+    engine._cropland_postprocess = inference.PostprocessOptions()
+    engine._croptype_postprocess = inference.PostprocessOptions()
     engine.bundle = cast(
         inference.SeasonalModelBundle,
         SimpleNamespace(
-        landcover_spec=inference.HeadSpec(
-            task="landcover",
-            class_names=["nocrop", "crop"],
-            cropland_classes=["crop"],
-            gating_enabled=False,
-        ),
-        croptype_spec=inference.HeadSpec(
-            task="croptype",
-            class_names=["wheat", "maize", "other"],
-            cropland_classes=[],
-            gating_enabled=False,
-        ),
-        cropland_gate_classes=["crop"],
+            landcover_spec=inference.HeadSpec(
+                task="landcover",
+                class_names=["nocrop", "crop"],
+                cropland_classes=["crop"],
+                gating_enabled=False,
+            ),
+            croptype_spec=inference.HeadSpec(
+                task="croptype",
+                class_names=["wheat", "maize", "other"],
+                cropland_classes=[],
+                gating_enabled=False,
+            ),
+            cropland_gate_classes=["crop"],
         ),
     )
     return engine
@@ -119,6 +122,13 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
                 "composite_frequency": "dekad",
                 "enforce_cropland_gate": False,
             },
+            "postprocess": {
+                "cropland": {"enabled": True, "kernel_size": 7},
+                "croptype": {
+                    "enabled": True,
+                    "method": "smooth_probabilities",
+                },
+            },
         },
     }
 
@@ -136,6 +146,9 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
     assert config["season_composite_frequency"] == "dekad"
     assert config["cache_root"] == Path(tmp_path)
     assert config["enable_croptype_head"] is True
+    assert config["enable_cropland_head"] is True
+    assert config["cropland_postprocess"] == {"enabled": True, "kernel_size": 7}
+    assert config["croptype_postprocess"]["method"] == "smooth_probabilities"
 
 
 def test_extract_udf_configuration_requires_model_zip(monkeypatch):
@@ -164,6 +177,26 @@ def test_extract_udf_configuration_disables_croptype_head(monkeypatch):
     config = inference._extract_udf_configuration(context)
 
     assert config["enable_croptype_head"] is False
+
+
+def test_extract_udf_configuration_allows_croptype_only(monkeypatch):
+    def fake_presets():
+        return "default", {
+            "default": {
+                "model": {"seasonal_model_zip": "preset.zip"},
+                "runtime": {},
+                "season": {},
+            }
+        }
+
+    monkeypatch.setattr(inference, "_seasonal_workflow_presets", fake_presets)
+
+    context = {"seasonal_model_zip": "preset.zip", "croptype_only": True}
+    config = inference._extract_udf_configuration(context)
+
+    assert config["enable_croptype_head"] is True
+    assert config["enable_cropland_head"] is False
+    assert config["enforce_cropland_gate"] is False
 
 
 def test_build_masks_from_windows_handles_multiple_seasons():
@@ -225,9 +258,10 @@ def test_apply_udf_data_wraps_engine_output(monkeypatch):
             dims=("season", "y", "x"),
             coords={"season": ["S1"]},
         )
-        return xr.Dataset(
+        dataset = xr.Dataset(
             {"cropland_classification": lc, "croptype_classification": ct}
         )
+        return inference._dataset_to_multiband_array(dataset)
 
     monkeypatch.setattr(inference, "run_seasonal_workflow", fake_run)
 
@@ -251,7 +285,7 @@ def test_apply_metadata_omits_croptype_labels_when_disabled(monkeypatch):
         return {
             "seasonal_model_zip": "fake.zip",
             "cache_root": None,
-            "keep_class_probabilities": False,
+            "export_class_probabilities": False,
             "enable_croptype_head": False,
         }
 
@@ -276,12 +310,54 @@ def test_apply_metadata_omits_croptype_labels_when_disabled(monkeypatch):
 
     assert result == [
         "cropland_classification",
-        "cropland_probability",
+        "probability_cropland",
     ]
     assert metadata.calls[0][0] == "bands"
     assert metadata.calls[0][1] == [
         "cropland_classification",
-        "cropland_probability",
+        "probability_cropland",
+    ]
+
+
+def test_apply_metadata_handles_cropland_disabled(monkeypatch):
+    monkeypatch.setattr(inference, "_require_openeo_runtime", lambda: None)
+
+    def fake_extract(context):
+        return {
+            "seasonal_model_zip": "fake.zip",
+            "cache_root": None,
+            "export_class_probabilities": False,
+            "enable_croptype_head": True,
+            "enable_cropland_head": False,
+        }
+
+    monkeypatch.setattr(inference, "_extract_udf_configuration", fake_extract)
+
+    class DummyMetadata:
+        def __init__(self):
+            self.calls = []
+
+        def rename_labels(self, dimension, target):
+            self.calls.append((dimension, target))
+            return target
+
+    metadata = DummyMetadata()
+    context = {
+        "seasonal_model_zip": "fake.zip",
+        "season_ids": ["S1"],
+        "croptype_only": True,
+    }
+
+    result = inference.apply_metadata(metadata, context)
+
+    assert result == [
+        "croptype_classification:S1",
+        "croptype_probability:S1",
+    ]
+    assert metadata.calls[0][0] == "bands"
+    assert metadata.calls[0][1] == [
+        "croptype_classification:S1",
+        "croptype_probability:S1",
     ]
 
 
@@ -304,10 +380,10 @@ def test_probabilities_are_flattened_and_gated():
 
     assert "croptype_probability:tc-s1:wheat" in ds
     assert ds["croptype_probability:tc-s1:wheat"].dims == ("y", "x")
-    assert np.isclose(
-        ds["croptype_probability:tc-s1:wheat"].values[0, 0],
-        0.0,
-        atol=1e-5,
+    assert ds["croptype_probability:tc-s1:wheat"].dtype == np.uint8
+    assert (
+        ds["croptype_probability:tc-s1:wheat"].values.min() >= 0
+        and ds["croptype_probability:tc-s1:wheat"].values.max() <= 100
     )
     assert ds["croptype_classification:tc-s1"].values[0, 0] == inference.NOCROP_VALUE
     assert ds["landcover_probabilities:crop"].dtype == np.uint8
@@ -318,9 +394,14 @@ def test_probabilities_are_flattened_and_gated():
     assert season_two_wheat.values.max() <= 100
     assert ds["cropland_classification"].dtype == np.uint8
     assert set(np.unique(ds["cropland_classification"].values)) <= {0, 1}
-    assert ds["cropland_probability"].dtype == np.uint8
-    assert ds["croptype_confidence:tc-s1"].dtype == np.uint8
+    assert ds["probability_cropland"].dtype == np.uint8
     assert ds["croptype_classification:tc-s1"].dtype == np.uint8
+    cropland_probs = ds["probability_cropland"].values
+    cropland_labels = ds["cropland_classification"].values.astype(bool)
+    assert np.any(cropland_labels)
+    assert np.any(~cropland_labels)
+    assert np.all(cropland_probs[cropland_labels] > 50)
+    assert np.all(cropland_probs[~cropland_labels] < 50)
 
 
 def test_dataset_to_multiband_array_handles_flattened_dataset():
@@ -328,7 +409,35 @@ def test_dataset_to_multiband_array_handles_flattened_dataset():
     cube = inference._dataset_to_multiband_array(ds)
     bands = cube.coords["bands"].values.tolist()
 
+    assert "probability_cropland" in bands
+    assert "croptype_classification:tc-s1" in bands
     assert "croptype_probability:tc-s1:wheat" in bands
-    assert "croptype_confidence:tc-s2" in bands
+    assert "croptype_probability:tc-s2:wheat" in bands
     assert "landcover_probabilities:other" in bands
     assert cube.dtype == np.uint8
+
+
+def test_croptype_probabilities_use_nocrop_value_when_gated():
+    ds = _probability_dataset()
+    classification = ds["croptype_classification:tc-s1"].values
+    wheat_probs = ds["croptype_probability:tc-s1:wheat"].values
+    nocrop_mask = classification == inference.NOCROP_VALUE
+
+    assert np.any(nocrop_mask)
+    assert np.all(wheat_probs[nocrop_mask] == inference.NOCROP_VALUE)
+
+
+def test_sorted_croptype_band_names_prioritizes_classification():
+    unordered = [
+        "croptype_probability:tc-s1:wheat",
+        "croptype_probability:tc-s1",
+        "croptype_classification:tc-s1",
+        "croptype_raw_probability:tc-s1",
+        "croptype_raw_classification:tc-s1",
+    ]
+
+    ordered = mapping._sorted_croptype_band_names(unordered)
+
+    assert ordered[0] == "croptype_classification:tc-s1"
+    assert ordered[1] == "croptype_probability:tc-s1"
+    assert ordered[-1] == "croptype_raw_probability:tc-s1"
