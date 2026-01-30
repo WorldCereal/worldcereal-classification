@@ -7,10 +7,12 @@ from torch.utils.data import DataLoader
 from worldcereal.parameters import CropLandParameters
 from worldcereal.train.data import (
     collate_fn,
-    get_training_df,
+    compute_embeddings_from_input_df,
+    dataset_to_embeddings,
     get_training_dfs_from_parquet,
 )
 from worldcereal.train.datasets import WorldCerealTrainingDataset
+from worldcereal.train.downstream import TorchTrainer
 from worldcereal.utils.refdata import get_class_mappings
 
 LANDCOVER_KEY = "LANDCOVER10"
@@ -39,7 +41,7 @@ def test_worldcerealtraindataset(WorldCerealExtractionsDF):
         break
 
 
-def test_get_trainingdf(WorldCerealExtractionsDF):
+def test_dataset_to_embeddings(WorldCerealExtractionsDF):
     """Test the function that computes embeddings and targets into
     a training dataframe using a presto model
     """
@@ -51,7 +53,7 @@ def test_get_trainingdf(WorldCerealExtractionsDF):
     presto_model = Presto()
     presto_model = load_presto_weights(presto_model, presto_url)
 
-    training_df = get_training_df(ds, presto_model, batch_size=256)
+    training_df = dataset_to_embeddings(ds, presto_model, batch_size=256)
 
     for ft in range(128):
         assert f"presto_ft_{ft}" in training_df.columns
@@ -149,3 +151,21 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
         val_to_trainval_ratio = len(val_df) / (len(train_df) + len(val_df))
         np.testing.assert_almost_equal(train_to_trainval_ratio, 0.8, decimal=decimal)
         np.testing.assert_almost_equal(val_to_trainval_ratio, 0.2, decimal=decimal)
+
+
+def test_train_downstream_torch(WorldCerealExtractionsDF):
+    df = WorldCerealExtractionsDF.reset_index()
+    presto_url = CropLandParameters().feature_parameters.presto_model_url
+
+    embeddings_df = compute_embeddings_from_input_df(
+        df, presto_url, stratify_label="downstream_class"
+    )
+
+    # Train classifier
+    trainer = TorchTrainer(
+        embeddings_df,
+        lr_grid=[1e-2],
+        weight_decay_grid=[1e-5],
+    )
+
+    trainer.train()

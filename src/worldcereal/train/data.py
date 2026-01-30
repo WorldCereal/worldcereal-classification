@@ -10,13 +10,17 @@ import torch
 from loguru import logger
 from prometheo.models import Presto
 from prometheo.models.pooling import PoolingMethods
+from prometheo.models.presto.wrapper import load_presto_weights
 from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
-from worldcereal.train.datasets import WorldCerealTrainingDataset
+from worldcereal.train.datasets import (
+    SensorMaskingConfig,
+    WorldCerealTrainingDataset,
+)
 from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
 from worldcereal.utils.timeseries import process_parquet
 
@@ -83,7 +87,55 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
     return collated
 
 
-def get_training_df(
+def train_val_test_split(
+    df: pd.DataFrame,
+    split_column: str = "split",
+    val_size: float = 0.15,
+    test_size: float = 0.15,
+    seed: int = 42,
+    stratify_label: str = "finetune_class",
+    min_samples_per_class: int = 10,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split dataframe into train/val/test sets."""
+
+    if split_column in df.columns:
+        trn_df = df[df[split_column] == "train"].copy()
+        val_df = df[df[split_column] == "val"].copy()
+        tst_df = df[df[split_column] == "test"].copy()
+        logger.info(
+            f"Using predefined splits from column '{split_column}': "
+            f"train={len(trn_df)}, val={len(val_df)}, test={len(tst_df)}"
+        )
+    else:
+        logger.info(
+            f"No predefined split column '{split_column}' found. "
+            f"Performing random stratified split."
+        )
+
+        # Remove classes with too few samples for stratification
+        df = remove_small_classes(
+            df, min_samples=min_samples_per_class, class_column=stratify_label
+        )
+
+        trn_val_df, tst_df = train_test_split(
+            df,
+            test_size=test_size,
+            random_state=seed,
+            stratify=df[stratify_label],
+        )
+        trn_df, val_df = train_test_split(
+            trn_val_df,
+            test_size=val_size / (1.0 - test_size),
+            random_state=seed,
+            stratify=trn_val_df[stratify_label],
+        )
+        logger.info(
+            f"Data split: train={len(trn_df)}, val={len(val_df)}, test={len(tst_df)}"
+        )
+    return trn_df, val_df, tst_df
+
+
+def dataset_to_embeddings(
     dataset: WorldCerealTrainingDataset,
     presto_model: Presto,
     batch_size: int = 2048,
@@ -167,21 +219,99 @@ def get_training_df(
     return final_df
 
 
-def remove_small_classes(df, min_samples):
+def compute_embeddings_from_input_df(
+    input_df: pd.DataFrame,
+    presto_url: str,
+    *,
+    split_column: str = "split",
+    augment: bool = True,
+    mask_on_training: bool = True,
+    repeats: int = 3,
+    timestep_freq: Literal["month", "dekad"] = "month",
+    batch_size: int = 2048,
+    num_workers: int = 0,
+    time_explicit: bool = False,
+    stratify_label: str = "finetune_class",
+) -> pd.DataFrame:
+    # Split input dataframe into train/val/test
+    trn_df, val_df, test_df = train_val_test_split(
+        input_df, split_column=split_column, stratify_label=stratify_label
+    )
+
+    # For downstream training, we merge train and val and only
+    # keep test separate.
+    trn_df = pd.concat([trn_df, val_df]).reset_index(drop=True)
+
+    # Get number of timesteps
+    num_timesteps = 12 if timestep_freq == "month" else 36
+
+    # Load Presto model
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_url).to(device)
+
+    # Sensor masking config to augment training dataset
+    masking_config = SensorMaskingConfig(
+        enable=mask_on_training,
+        s1_full_dropout_prob=0.05,
+        s1_timestep_dropout_prob=0.1,
+        s2_cloud_timestep_prob=0.1,
+        s2_cloud_block_prob=0.05,
+        s2_cloud_block_min=2,
+        s2_cloud_block_max=3,
+        meteo_timestep_dropout_prob=0.03,
+        dem_dropout_prob=0.01,
+    )
+
+    trn_ds = WorldCerealTrainingDataset(
+        trn_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type="multiclass",
+        augment=augment,
+        masking_config=masking_config,
+        repeats=repeats,
+    )
+    test_ds = WorldCerealTrainingDataset(
+        test_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type="multiclass",
+        augment=False,
+        masking_config=SensorMaskingConfig(enable=False),
+        repeats=1,
+    )
+
+    logger.info("Computing embeddings with Presto head...")
+    trn_embeddings = dataset_to_embeddings(
+        trn_ds, presto_model, batch_size, num_workers, time_explicit
+    )
+    test_embeddings = dataset_to_embeddings(
+        test_ds, presto_model, batch_size, num_workers, time_explicit
+    )
+
+    # Merge train and test embeddings
+    trn_embeddings["split"] = "train"
+    test_embeddings["split"] = "test"
+    embeddings = pd.concat([trn_embeddings, test_embeddings]).reset_index(drop=True)
+
+    return embeddings
+
+
+def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):
     # Remove classes with too few samples for stratification
     # For stratified split, each class must have at least 2 samples for test split, and at least 2 for val split.
     # By default we'll use a minimum of 5 per class for safety.
 
-    class_counts = df["finetune_class"].value_counts()
+    class_counts = df[class_column].value_counts()
     minor_classes = class_counts[class_counts < min_samples].index.tolist()
     if minor_classes:
         logger.warning(
             f"The following classes have fewer than {min_samples} samples and will be removed for stratified splitting: {minor_classes}. "
-            f"Samples removed: {df[df['finetune_class'].isin(minor_classes)].shape[0]}"
+            f"Samples removed: {df[df[class_column].isin(minor_classes)].shape[0]}"
         )
-        df = df[~df["finetune_class"].isin(minor_classes)].copy()
+        df = df[~df[class_column].isin(minor_classes)].copy()
         # After removal, check again for any classes with too few samples
-        class_counts = df["finetune_class"].value_counts()
+        class_counts = df[class_column].value_counts()
         if (class_counts < min_samples).any():
             logger.error(
                 "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
