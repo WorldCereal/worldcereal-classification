@@ -89,9 +89,42 @@ def parse_args(arg_list=None) -> argparse.Namespace:
         help="URL for the fallback sample cube",
     )
     parser.add_argument(
-        "--keep-class-probabilities",
+        "--export-class-probabilities",
+        dest="export_class_probabilities",
         action="store_true",
         help="Also export per-class probability bands for landcover and croptype outputs",
+    )
+    parser.add_argument(
+        "--cropland-postprocess",
+        action="store_true",
+        help="Enable cropland postprocessing (majority vote or smoothing)",
+    )
+    parser.add_argument(
+        "--cropland-method",
+        type=str,
+        choices=("majority_vote", "smooth_probabilities"),
+        help="Cropland postprocess method",
+    )
+    parser.add_argument(
+        "--cropland-kernel-size",
+        type=int,
+        help="Kernel size for cropland postprocess",
+    )
+    parser.add_argument(
+        "--croptype-postprocess",
+        action="store_true",
+        help="Enable croptype postprocessing (majority vote or smoothing)",
+    )
+    parser.add_argument(
+        "--croptype-method",
+        type=str,
+        choices=("majority_vote", "smooth_probabilities"),
+        help="Croptype postprocess method",
+    )
+    parser.add_argument(
+        "--croptype-kernel-size",
+        type=int,
+        help="Kernel size for croptype postprocess",
     )
     return parser.parse_args(arg_list)
 
@@ -139,27 +172,66 @@ def load_input_cube(
     return arr, ds
 
 
-def attach_crs_metadata(result: xr.Dataset, template: xr.Dataset) -> xr.Dataset:
+def attach_crs_metadata(
+    result: xr.Dataset | xr.DataArray, template: xr.Dataset
+) -> xr.Dataset | xr.DataArray:
     crs_var = template.get("crs")
-    out = result.assign_coords(x=template.coords.get("x"), y=template.coords.get("y"))
-    if crs_var is not None:
-        crs_name = "spatial_ref"
-        out[crs_name] = xr.DataArray(0, attrs=crs_var.attrs)
+    coords = {}
+    if "x" in template.coords:
+        coords["x"] = template.coords["x"]
+    if "y" in template.coords:
+        coords["y"] = template.coords["y"]
+    out = result.assign_coords(**coords) if coords else result
+
+    if crs_var is None:
+        return out
+
+    crs_name = "spatial_ref"
+    crs_data = xr.DataArray(0, attrs=crs_var.attrs)
+
+    if isinstance(out, xr.Dataset):
+        out[crs_name] = crs_data
         for name in out.data_vars:
             out[name].attrs.setdefault("grid_mapping", crs_name)
+        return out
+
+    out = out.assign_coords({crs_name: crs_data})
+    out.attrs.setdefault("grid_mapping", crs_name)
     return out
 
 
+def build_postprocess_spec(
+    *,
+    enabled: bool,
+    method: Optional[str],
+    kernel_size: Optional[int],
+) -> Optional[Dict[str, object]]:
+    requested = enabled or method is not None or kernel_size is not None
+    if not requested:
+        return None
+
+    spec: Dict[str, object] = {
+        "enabled": enabled or method is not None or kernel_size is not None
+    }
+    if method:
+        spec["method"] = method
+    if kernel_size is not None:
+        spec["kernel_size"] = kernel_size
+    return spec
+
+
 def main() -> None:
-    args = parse_args(
-        [
-            "--season-window",
-            "tc-s1:2020-12-01:2021-07-31",
-            "--season-window",
-            "tc-s2:2021-04-01:2021-10-31",
-            "--keep-class-probabilities",
-        ]
-    )
+    default_arg_list = [
+        "--season-window",
+        "tc-s1:2020-12-01:2021-07-31",
+        "--season-window",
+        "tc-s2:2021-04-01:2021-10-31",
+        "--cropland-postprocess",
+        "--croptype-postprocess",
+        # "--export-class-probabilities",
+    ]
+    arg_list = None if len(sys.argv) > 1 else default_arg_list
+    args = parse_args(arg_list)
 
     try:
         arr, template = load_input_cube(args.input, args.sample_url)
@@ -174,6 +246,17 @@ def main() -> None:
         print(str(exc), file=sys.stderr)
         sys.exit(2)
 
+    cropland_postprocess = build_postprocess_spec(
+        enabled=args.cropland_postprocess,
+        method=args.cropland_method,
+        kernel_size=args.cropland_kernel_size,
+    )
+    croptype_postprocess = build_postprocess_spec(
+        enabled=args.croptype_postprocess,
+        method=args.croptype_method,
+        kernel_size=args.croptype_kernel_size,
+    )
+
     engine = SeasonalInferenceEngine(
         seasonal_model_zip=args.seasonal_zip,
         landcover_head_zip=args.landcover_head_zip,
@@ -181,7 +264,9 @@ def main() -> None:
         cache_root=args.cache_dir,
         batch_size=args.batch_size,
         season_ids=season_ids,
-        keep_class_probabilities=args.keep_class_probabilities,
+        export_class_probabilities=args.export_class_probabilities,
+        cropland_postprocess=cropland_postprocess,
+        croptype_postprocess=croptype_postprocess,
     )
 
     result = engine.infer(
