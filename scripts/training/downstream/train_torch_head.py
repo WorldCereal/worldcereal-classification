@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from loguru import logger
 
-from worldcereal.train import GLOBAL_SEASON_IDS
 from worldcereal.train.data import (
     compute_seasonal_embeddings_from_splits,
     dataset_to_embeddings,
@@ -260,11 +259,6 @@ def main() -> None:
         args = parse_args()
         logger.info("Using command line arguments (Torch head)")
     plt.switch_backend("Agg")
-
-    if args.season_id is not None and args.season_id not in GLOBAL_SEASON_IDS:
-        raise ValueError(
-            f"Season id {args.season_id!r} must be one of {list(GLOBAL_SEASON_IDS)}."
-        )
 
     downstream_classes = None
     if isinstance(args.downstream_classes, str):

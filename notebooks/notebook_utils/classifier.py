@@ -31,7 +31,10 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
-from worldcereal.train import GLOBAL_SEASON_IDS
+DEFAULT_PRESTO_URLS = {
+    "cropland": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt",
+    "croptype": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",
+}
 from worldcereal.train.datasets import MIN_EDGE_BUFFER, SensorMaskingConfig
 from worldcereal.utils.refdata import process_extractions_df
 
@@ -184,11 +187,11 @@ def compute_presto_embeddings(
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
     # Determine Presto model URL
-    if custom_presto_url is None:
+    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
+    if presto_model_url is None:
         raise ValueError(
-            "custom_presto_url is required now that CropTypeParameters/CropLandParameters are retired."
+            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
         )
-    presto_model_url = custom_presto_url
 
     # Load pretrained Presto model
     logger.info(f"Presto URL: {presto_model_url}")
@@ -291,22 +294,17 @@ def compute_seasonal_presto_embeddings(
 ) -> pd.DataFrame:
     """Compute Presto embeddings pooled over a single official season."""
 
-    if season_id not in GLOBAL_SEASON_IDS:
-        raise ValueError(
-            f"season_id must be one of {list(GLOBAL_SEASON_IDS)}; received {season_id!r}."
-        )
-
     from prometheo.models import Presto
     from prometheo.models.presto.wrapper import load_presto_weights
 
     from worldcereal.train.data import dataset_to_seasonal_embeddings
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
-    if custom_presto_url is None:
+    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
+    if presto_model_url is None:
         raise ValueError(
-            "custom_presto_url is required now that CropTypeParameters/CropLandParameters are retired."
+            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
         )
-    presto_model_url = custom_presto_url
 
     presto_model = Presto()
     presto_model = load_presto_weights(presto_model, presto_model_url)
@@ -381,11 +379,6 @@ def train_seasonal_torch_head(
     """Train a torch head compatible with the seasonal model bundle."""
 
     from worldcereal.train.downstream import TorchTrainer
-
-    if season_id not in GLOBAL_SEASON_IDS:
-        raise ValueError(
-            f"season_id must be one of {list(GLOBAL_SEASON_IDS)}; received {season_id!r}."
-        )
 
     trainer = TorchTrainer(
         training_dataframe,
