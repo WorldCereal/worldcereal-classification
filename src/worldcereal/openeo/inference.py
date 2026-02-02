@@ -1748,18 +1748,17 @@ def _expected_udf_band_labels(
                 "probability_cropland",
             ]
         )
+        if export_class_probabilities:
+            gate_classes = list(cropland_gate_classes) if cropland_gate_classes else []
+            if gate_classes:
+                labels.extend([f"probability_{cls}" for cls in gate_classes])
+            labels.append("probability_other")
     if croptype_enabled:
         for season_id in season_ids:
             labels.append(f"croptype_classification:{season_id}")
         for season_id in season_ids:
             labels.append(f"croptype_probability:{season_id}")
-    if export_class_probabilities:
-        if cropland_enabled:
-            gate_classes = list(cropland_gate_classes) if cropland_gate_classes else []
-            if gate_classes:
-                labels.extend([f"probability_{cls}" for cls in gate_classes])
-            labels.append("probability_other")
-        if croptype_enabled:
+        if export_class_probabilities:
             ct_classes = list(croptype_classes) if croptype_classes else []
             if ct_classes:
                 for season_id in season_ids:
