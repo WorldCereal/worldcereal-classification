@@ -6,7 +6,6 @@ copied from worldcereal-referencedata to avoid cross-repository dependencies.
 """
 
 import h3
-from loguru import logger
 import geopandas as gpd
 import numpy as np
 from sklearn.neighbors import BallTree
