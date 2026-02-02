@@ -802,6 +802,7 @@ class SeasonalModelBundle:
                     "Custom head backbone checkpoint missing for task "
                     f"'{task}', but '{other_task}' specifies '{other_checkpoint}'."
                 )
+
     def _update_cropland_gate(self) -> None:
         if not self._cropland_head_enabled:
             self.cropland_gate_classes = []
@@ -1942,6 +1943,12 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         else None
     )
 
+    if enforce_gate and not enable_cropland_head:
+        logger.info(
+            "Cropland head disabled in config but gating requested; auto-enabling cropland head."
+        )
+        enable_cropland_head = True
+
     def _normalize_postprocess_entry(value: Any) -> Optional[Dict[str, Any]]:
         if value is None:
             return None
@@ -2123,16 +2130,32 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
             export_probs = config.get("export_class_probabilities", False)
             croptype_enabled = config.get("enable_croptype_head", True)
             cropland_enabled = config.get("enable_cropland_head", True)
-            if export_probs:
-                artifact = load_model_artifact(
-                    config["seasonal_model_zip"], cache_root=config.get("cache_root")
+
+            if export_probs and (cropland_enabled or croptype_enabled):
+                cache_root = config.get("cache_root")
+                base_artifact = load_model_artifact(
+                    config["seasonal_model_zip"], cache_root=cache_root
                 )
-                heads = artifact.manifest.get("heads", [])
+                base_heads = base_artifact.manifest.get("heads", [])
+
+                def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
+                    override_source = config.get(key)
+                    if override_source:
+                        return load_model_artifact(
+                            override_source, cache_root=cache_root
+                        ).manifest.get("heads", [])
+                    return base_heads
+
                 if cropland_enabled:
-                    landcover_spec = _select_head_spec(heads, "landcover")
+                    landcover_heads = _heads_for_override("landcover_head_zip")
+                    landcover_spec = _select_head_spec(landcover_heads, "landcover")
                     cropland_gate_classes = landcover_spec.cropland_classes
+
                 if croptype_enabled:
-                    croptype_classes = _select_head_spec(heads, "croptype").class_names
+                    croptype_heads = _heads_for_override("croptype_head_zip")
+                    croptype_classes = _select_head_spec(
+                        croptype_heads, "croptype"
+                    ).class_names
         except Exception as exc:
             logger.warning(f"Metadata configuration fallback: {exc}")
 
