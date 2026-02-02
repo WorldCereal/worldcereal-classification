@@ -309,15 +309,27 @@ def _latlon_to_utm(bbox):
     return bbox_utm, epsg
 
 
-def visualize_rdm_geoparquet(src_path: str):
+def visualize_rdm_geoparquet(
+    src_path: str,
+    selected_sample_ids: Optional[list] = None,
+):
     """Visualize an RDM collection geoparquet file on a map.
+
     Parameters
     ----------
     src_path : str
         Path to the geoparquet file.
+    selected_sample_ids : Optional[list], optional
+        List of sample_ids that are selected. If provided, will display
+        selected samples (large, colored by crop type) and non-selected
+        samples (small, red) separately.
     """
 
     gdf = gpd.read_parquet(src_path)
+
+    # Ensure WGS84 for map display
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
 
     # Compute centroid, ignoring warnings
     with warnings.catch_warnings():
@@ -326,10 +338,50 @@ def visualize_rdm_geoparquet(src_path: str):
 
     # Extract unique ewoc_code values and assign colors
     unique_codes = sorted(gdf["ewoc_code"].unique())
-    cmap = plt.get_cmap("tab20")  # Use a colormap with distinct colors
-    colors = {
-        code: to_hex(cmap(i / len(unique_codes))) for i, code in enumerate(unique_codes)
-    }
+
+    # If a selection is provided, restrict legend/colors to selected crop types
+    selected_codes = None
+    if selected_sample_ids is not None and "sample_id" in gdf.columns:
+        selected_mask = gdf["sample_id"].isin(selected_sample_ids)
+        selected_codes = sorted(
+            gdf.loc[selected_mask, "ewoc_code"].dropna().unique().tolist()
+        )
+
+    codes_for_colors = (
+        selected_codes
+        if selected_codes is not None and len(selected_codes) > 0
+        else unique_codes
+    )
+
+    # Use multiple colormaps to maximize color diversity
+    if len(codes_for_colors) <= 10:
+        cmap = plt.get_cmap("tab10")
+    elif len(codes_for_colors) <= 20:
+        cmap = plt.get_cmap("tab20")
+    else:
+        # For many crop types, use a combination of colormaps
+        # Sample colors from different colormaps to maximize distinctiveness
+        cmap_names = ["tab20", "tab20b", "tab20c", "Set3", "Paired"]
+        all_colors = []
+        for cmap_name in cmap_names:
+            cm = plt.get_cmap(cmap_name)
+            n_colors = cm.N if hasattr(cm, "N") else 20
+            for i in range(n_colors):
+                all_colors.append(to_hex(cm(i)))
+
+        # Select colors by maximizing distance (every Nth color)
+        step = max(1, len(all_colors) // len(codes_for_colors))
+        selected_colors = [
+            all_colors[i * step % len(all_colors)] for i in range(len(codes_for_colors))
+        ]
+        colors = {code: selected_colors[i] for i, code in enumerate(codes_for_colors)}
+
+    if len(codes_for_colors) <= 20:
+        # For smaller sets, use equal spacing
+        colors = {
+            code: to_hex(cmap(i / max(1, len(codes_for_colors) - 1)))
+            for i, code in enumerate(codes_for_colors)
+        }
 
     # Add a new column for the color associated with each ewoc_code
     gdf["color"] = gdf["ewoc_code"].map(colors)
@@ -341,35 +393,92 @@ def visualize_rdm_geoparquet(src_path: str):
         scroll_wheel_zoom=True,
     )
 
-    # convert dataframe to geojson
-    data = gdf.__geo_interface__
+    # Handle selected vs non-selected visualization
+    if selected_sample_ids is not None and "sample_id" in gdf.columns:
+        # Mark which samples are selected
+        gdf["is_selected"] = gdf["sample_id"].isin(selected_sample_ids)
 
-    def style_callback(feature):
-        """Apply color based on the ewoc_code attribute."""
-        properties = feature["properties"]
-        return {
-            "color": "black",
-            "fillColor": properties["color"],
-            "opacity": 1,
-            "fillOpacity": 0.7,
-            "weight": 2,
-        }
+        # Split into selected and non-selected
+        selected_gdf = gdf[gdf["is_selected"]].copy()
+        non_selected_gdf = gdf[~gdf["is_selected"]].copy()
 
-    # construct layer compatible with ipyleaflet
-    layer = GeoJSON(
-        data=data,
-        style_callback=style_callback,
-        point_style={
-            "radius": 5,
-        },
-        name="Reference data",
-    )
+        # Add non-selected samples layer (smaller, red)
+        if len(non_selected_gdf) > 0:
+            non_selected_data = non_selected_gdf.__geo_interface__
 
-    # Add to the map
-    m.add_layer(layer)
+            def non_selected_style(feature):
+                return {
+                    "color": "darkred",
+                    "fillColor": "red",
+                    "opacity": 0.6,
+                    "fillOpacity": 0.4,
+                    "weight": 1,
+                }
+
+            non_selected_layer = GeoJSON(
+                data=non_selected_data,
+                style_callback=non_selected_style,
+                point_style={"radius": 3},
+                name="Non-selected samples",
+            )
+            m.add_layer(non_selected_layer)
+
+        # Add selected samples layer (larger, colored by crop type)
+        if len(selected_gdf) > 0:
+            selected_data = selected_gdf.__geo_interface__
+
+            def selected_style(feature):
+                properties = feature["properties"]
+                return {
+                    "color": "darkgreen",
+                    "fillColor": properties["color"],
+                    "opacity": 1,
+                    "fillOpacity": 0.8,
+                    "weight": 2,
+                }
+
+            selected_layer = GeoJSON(
+                data=selected_data,
+                style_callback=selected_style,
+                point_style={"radius": 6},
+                name="Selected samples",
+            )
+            m.add_layer(selected_layer)
+    else:
+        # Original behavior: display all samples uniformly
+        data = gdf.__geo_interface__
+
+        def style_callback(feature):
+            """Apply color based on the ewoc_code attribute."""
+            properties = feature["properties"]
+            return {
+                "color": "black",
+                "fillColor": properties["color"],
+                "opacity": 1,
+                "fillOpacity": 0.7,
+                "weight": 2,
+            }
+
+        # construct layer compatible with ipyleaflet
+        layer = GeoJSON(
+            data=data,
+            style_callback=style_callback,
+            point_style={
+                "radius": 5,
+            },
+            name="Reference data",
+        )
+
+        # Add to the map
+        m.add_layer(layer)
 
     # Translate ewoc_codes
-    crop_types = translate_ewoc_codes(unique_codes)
+    legend_codes = (
+        selected_codes
+        if selected_codes is not None and len(selected_codes) > 0
+        else unique_codes
+    )
+    crop_types = translate_ewoc_codes(legend_codes)
 
     # Create a legend
     legend_items = []

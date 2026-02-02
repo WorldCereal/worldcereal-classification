@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
+from tabulate import tabulate
 from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from sklearn.metrics import (
@@ -110,7 +111,15 @@ def align_extractions_to_season(
     logger.info("Distribution of samples across years:")
     # extract year from ref_id
     df["year"] = df["ref_id"].str.split("_").str[0].astype(int)
-    logger.info(f"\n{df.year.value_counts()}")
+    logger.info(
+        "\n"
+        + tabulate(
+            df["year"].value_counts().reset_index(),
+            headers=["Year", "Count"],
+            tablefmt="psql",
+            showindex=False,
+        )
+    )
 
     # Get crop statistics
     ncroptypes = df["ewoc_code"].nunique()

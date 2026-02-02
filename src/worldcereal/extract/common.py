@@ -349,7 +349,9 @@ def load_dataframe(
         {filters_query}
         """
         df = db.sql(query).df()
-        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
+        df = gpd.GeoDataFrame(
+            df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326"
+        )
     else:
         df = gpd.read_file(df_path, filters=filters)
 
@@ -878,9 +880,16 @@ def _run_extraction_jobs(
     job_df: pd.DataFrame,
     datacube_fn: Callable,
     tracking_df_path: Path,
+    test_run: bool = False,
 ) -> None:
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
+
+    # In test mode, only run the first job
+    if test_run and len(job_df) > 0:
+        pipeline_log.info("TEST MODE: Running only the first job.")
+        job_df = job_df.iloc[:1]
+
     job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
     pipeline_log.info("Extraction jobs completed.")
 
@@ -919,6 +928,7 @@ def run_extractions(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
+    test_run: bool = False,
 ) -> None:
     """Main function responsible for launching point and patch extractions.
 
@@ -958,6 +968,8 @@ def run_extractions(
     check_existing_extractions : bool, optional
         Check if the samples already exist in the STAC API and filter them out,
         by default False
+    test_run : bool, optional
+        Run only the first extraction job for testing purposes, by default False
 
     """
     pipeline_log.info("Starting the extractions workflow...")
@@ -979,7 +991,7 @@ def run_extractions(
     )
 
     # Run the extraction jobs
-    _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path)
+    _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path, test_run)
 
     # Merge the extraction jobs (for point extractions)
     if collection == ExtractionCollection.POINT_WORLDCEREAL:

@@ -5,6 +5,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
+import os
+import time
 
 import duckdb
 import geojson
@@ -340,7 +342,22 @@ def merge_output_files_point_worldcereal(
     # and if yes, delete it
     dir_name = merged_path / f"ref_id={ref_id}"
     if dir_name.exists():
-        shutil.rmtree(str(dir_name))
+
+        def _on_rm_error(func, path, exc_info):
+            # Ensure write permissions and retry once
+            try:
+                os.chmod(path, 0o755)
+                func(path)
+            except Exception:
+                raise
+
+        # Retry deletion to handle transient "directory not empty" cases
+        for _ in range(3):
+            try:
+                shutil.rmtree(str(dir_name), onerror=_on_rm_error)
+                break
+            except OSError:
+                time.sleep(0.2)
 
     # Merge the files
     con = duckdb.connect()
