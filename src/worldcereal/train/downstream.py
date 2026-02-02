@@ -2,11 +2,12 @@
 """Train a PyTorch classification head (Linear or small MLP) on embeddings."""
 
 import json
+from datetime import datetime
 import zipfile
 from itertools import product
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -94,10 +95,14 @@ class TorchTrainer:
         embeddings_df: pd.DataFrame,
         split_column: str = "split",
         head_type: str = "linear",
+        head_task: Literal["croptype", "landcover"] = "croptype",
         output_dir: Union[Path, str] = "./downstream_classifier",
         modelversion: str = "",
-        detector: str = "cropland",
+        detector: Optional[str] = None,
         downstream_classes: Optional[dict] = None,
+        cropland_class_names: Optional[Sequence[str]] = None,
+        season_id: Optional[str] = None,
+        presto_model_path: Optional[str] = None,
         batch_size: int = 1024,
         num_workers: int = 4,
         hidden_dim: int = 256,
@@ -121,10 +126,18 @@ class TorchTrainer:
         self.training_df = embeddings_df
         self.split_column = split_column
         self.head_type = head_type
+        self.head_task = head_task
         self.output_dir = Path(output_dir)
         self.modelversion = modelversion
-        self.detector = detector
+        self.detector = detector or head_task
         self.downstream_classes = downstream_classes
+        self.cropland_class_names = (
+            [str(cls) for cls in cropland_class_names]
+            if cropland_class_names is not None
+            else []
+        )
+        self.season_id = season_id
+        self.presto_model_path = presto_model_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.label_smoothing = label_smoothing
@@ -171,10 +184,14 @@ class TorchTrainer:
         self.config.update(
             {
                 "head_type": self.head_type,
+                "head_task": self.head_task,
                 "output_dir": str(self.output_dir),
                 "modelversion": self.modelversion,
                 "detector": self.detector,
                 "downstream_classes": self.downstream_classes,
+                "cropland_class_names": self.cropland_class_names,
+                "season_id": self.season_id,
+                "presto_model_path": self.presto_model_path,
                 "batch_size": self.batch_size,
                 "num_workers": self.num_workers,
                 "hidden_dim": self.hidden_dim,
@@ -261,7 +278,12 @@ class TorchTrainer:
         if "downstream_class" in df.columns:
             df["finetune_class"] = df["downstream_class"]
             return
-        raise ValueError("Dataframe must contain either 'downstream_class'.")
+        if "finetune_class" in df.columns:
+            df["downstream_class"] = df["finetune_class"]
+            return
+        raise ValueError(
+            "Dataframe must contain either 'downstream_class' or 'finetune_class'."
+        )
 
     # --- Training ---
     def _build_model(self, in_dim: int, num_classes: int) -> nn.Module:
@@ -366,7 +388,69 @@ class TorchTrainer:
     def _drop_invalid_samples(self, df: pd.DataFrame) -> pd.DataFrame:
         if "finetune_class" not in df.columns:
             return df
-        return df[df["finetune_class"] != "remove"].reset_index(drop=True)
+        filtered = df[df["finetune_class"] != "remove"].reset_index(drop=True)
+        if "in_season" in filtered.columns:
+            filtered = filtered[filtered["in_season"]].reset_index(drop=True)
+        return filtered
+
+    def _build_head_manifest(self, checkpoint_name: str) -> Dict[str, Any]:
+        task_type = "binary" if len(self.classes_list) == 2 else "multiclass"
+        if self.head_task == "croptype":
+            replacement_contract = {
+                "input_tensor": "season_embeddings",
+                "output_attr": "season_logits",
+                "expects_season_masks": True,
+            }
+            logits_attr = "season_logits"
+            state_dict_prefix = "head.crop_head"
+        else:
+            replacement_contract = {
+                "input_tensor": "global_embedding",
+                "output_attr": "global_logits",
+                "expects_time_dimension": False,
+            }
+            logits_attr = "global_logits"
+            state_dict_prefix = "head.landcover_head"
+
+        head_entry = {
+            "name": self.head_task,
+            "task": self.head_task,
+            "task_type": task_type,
+            "num_classes": len(self.classes_list),
+            "class_names": [str(cls) for cls in self.classes_list],
+            "head_type": self.head_type,
+            "hidden_dim": self.hidden_dim,
+            "dropout": self.dropout if self.head_type == "mlp" else 0.0,
+            "label_column": self.target_column,
+            "logits_attr": logits_attr,
+            "state_dict_prefix": state_dict_prefix,
+            "replacement_contract": replacement_contract,
+            "gating": {
+                "enabled": bool(self.cropland_class_names),
+                "cropland_classes": self.cropland_class_names,
+            },
+        }
+
+        manifest: Dict[str, Any] = {
+            "schema_version": 1,
+            "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "experiment": {
+                "name": checkpoint_name.replace(".pt", ""),
+                "season_id": self.season_id,
+            },
+            "backbone": {
+                "pretrained_checkpoint": self.presto_model_path,
+            }
+            if self.presto_model_path
+            else {},
+            "heads": [head_entry],
+            "artifacts": {
+                "config": "config.json",
+                "checkpoints": {"head": checkpoint_name},
+                "packages": {"head": checkpoint_name.replace(".pt", ".zip")},
+            },
+        }
+        return manifest
 
     def _apply_downstream_mapping(
         self, trainval_df: pd.DataFrame, test_df: pd.DataFrame
@@ -718,16 +802,28 @@ class TorchTrainer:
         return model
 
     def save_model(self, model: nn.Module) -> None:
-        modelname = f"PrestoDownstreamTorchHead_{self.head_type}_{self.detector}_v{self.modelversion}"
+        modelname = self._build_model_name()
         pt_path = self.output_dir / f"{modelname}.pt"
         torch.save(model.state_dict(), pt_path)
         logger.info(f"Model weights saved: {pt_path}")
+
+        manifest = self._build_head_manifest(pt_path.name)
+        self.config.update(manifest)
+        self.save_config()
 
         # Package PT + config.json into an archive with the same base name
         try:
             self._zip_model_and_config(modelname, pt_path)
         except Exception as e:
             logger.warning(f"Packaging zip skipped: {e}")
+
+    def _build_model_name(self) -> str:
+        base = f"PrestoDownstreamTorchHead_{self.head_type}_{self.head_task}"
+        if self.season_id:
+            base = f"{base}_{self.season_id}"
+        if self.modelversion:
+            base = f"{base}_v{self.modelversion}"
+        return base
 
     def _zip_model_and_config(self, modelname: str, pt_path: Path) -> None:
         """Create a zip archive containing the .pt model and the config as config.json.

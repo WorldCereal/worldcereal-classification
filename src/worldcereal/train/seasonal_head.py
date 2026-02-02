@@ -19,6 +19,24 @@ from prometheo.predictors import Predictors
 from torch import Tensor, nn
 
 
+class MLPProjectionHead(nn.Module):
+    """Simple MLP projection head used for replacement training."""
+
+    def __init__(
+        self, embedding_dim: int, num_outputs: int, hidden_dim: int, dropout: float
+    ) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_outputs),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net(x)
+
+
 @dataclass
 class SeasonalHeadOutput:
     """Container for the logits and intermediate embeddings.
@@ -57,6 +75,10 @@ class SeasonalFinetuningHead(nn.Module):
         landcover_num_outputs: Optional[int] = None,
         crop_num_outputs: Optional[int] = None,
         dropout: float = 0.0,
+        landcover_head_type: str = "linear",
+        croptype_head_type: str = "linear",
+        landcover_hidden_dim: int = 256,
+        croptype_hidden_dim: int = 256,
     ) -> None:
         """Setup the seasonal finetuning head.
 
@@ -83,24 +105,83 @@ class SeasonalFinetuningHead(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.landcover_head = (
-            FinetuningHead(
-                hidden_size=embedding_dim,
-                num_outputs=landcover_num_outputs,
-                regression=False,
+            self.build_projection_head(
+                embedding_dim,
+                landcover_num_outputs,
+                head_type=landcover_head_type,
+                hidden_dim=landcover_hidden_dim,
+                dropout=dropout,
             )
             if landcover_num_outputs is not None
             else None
         )
         self.crop_head = (
-            FinetuningHead(
-                hidden_size=embedding_dim,
-                num_outputs=crop_num_outputs,
-                regression=False,
+            self.build_projection_head(
+                embedding_dim,
+                crop_num_outputs,
+                head_type=croptype_head_type,
+                hidden_dim=croptype_hidden_dim,
+                dropout=dropout,
             )
             if crop_num_outputs is not None
             else None
         )
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    @staticmethod
+    def build_projection_head(
+        embedding_dim: int,
+        num_outputs: Optional[int],
+        *,
+        head_type: str = "linear",
+        hidden_dim: int = 256,
+        dropout: float = 0.0,
+    ) -> nn.Module:
+        if num_outputs is None:
+            raise ValueError("num_outputs must be provided to build a projection head")
+        if head_type == "linear":
+            return FinetuningHead(
+                hidden_size=embedding_dim,
+                num_outputs=num_outputs,
+                regression=False,
+            )
+        if head_type == "mlp":
+            return MLPProjectionHead(
+                embedding_dim,
+                num_outputs,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+            )
+        raise ValueError(f"Unsupported head_type: {head_type}")
+
+    def replace_head(
+        self,
+        *,
+        task: str,
+        num_outputs: int,
+        head_type: str,
+        hidden_dim: int,
+        dropout: float,
+    ) -> None:
+        new_head = self.build_projection_head(
+            self.embedding_dim,
+            num_outputs,
+            head_type=head_type,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+        )
+        try:
+            device = next(self.parameters()).device
+        except StopIteration:
+            device = None
+        if device is not None:
+            new_head = new_head.to(device)
+        if task == "landcover":
+            self.landcover_head = new_head
+        elif task == "croptype":
+            self.crop_head = new_head
+        else:
+            raise ValueError(f"Unknown head task: {task}")
 
     def forward(
         self,

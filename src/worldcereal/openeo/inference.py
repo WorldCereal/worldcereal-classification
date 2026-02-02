@@ -446,6 +446,9 @@ class HeadSpec:
     class_names: List[str]
     cropland_classes: List[str]
     gating_enabled: bool
+    head_type: str = "linear"
+    hidden_dim: int = 256
+    dropout: float = 0.0
 
     @property
     def num_classes(self) -> int:
@@ -580,6 +583,9 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
                 class_names=class_names,
                 cropland_classes=cropland_classes,
                 gating_enabled=bool(gating_cfg.get("enabled", False)),
+                head_type=str(head.get("head_type", "linear")),
+                hidden_dim=int(head.get("hidden_dim", 256)),
+                dropout=float(head.get("dropout", 0.0)),
             )
     raise ValueError(f"Manifest does not define a '{task}' head")
 
@@ -590,7 +596,11 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
 
 
 class SeasonalModelBundle:
-    """Convenience wrapper that owns the seasonal model and metadata."""
+    """Convenience wrapper that owns the seasonal model and metadata.
+
+    Custom head overrides are validated to ensure every head uses a compatible
+    Presto backbone checkpoint so embeddings stay aligned across tasks.
+    """
 
     def __init__(
         self,
@@ -619,6 +629,10 @@ class SeasonalModelBundle:
         self.landcover_spec = _select_head_spec(heads, task="landcover")
         self.croptype_spec = _select_head_spec(heads, task="croptype")
         self.cropland_gate_classes: List[str] = []
+        self._base_backbone_checkpoint = (
+            base_artifact.manifest.get("backbone", {}) or {}
+        ).get("pretrained_checkpoint")
+        self._custom_head_backbone_checkpoints: Dict[str, Optional[str]] = {}
 
         dropout = base_artifact.manifest.get("backbone", {}).get("head_dropout", 0.0)
         self.model = self._build_model(dropout)
@@ -669,6 +683,10 @@ class SeasonalModelBundle:
                 self.croptype_spec.num_classes if self._croptype_head_enabled else None
             ),
             dropout=dropout,
+            landcover_head_type=self.landcover_spec.head_type,
+            croptype_head_type=self.croptype_spec.head_type,
+            landcover_hidden_dim=self.landcover_spec.hidden_dim,
+            croptype_hidden_dim=self.croptype_spec.hidden_dim,
         )
         model = WorldCerealSeasonalModel(backbone=backbone, head=head)
         state_dict = torch.load(
@@ -698,10 +716,23 @@ class SeasonalModelBundle:
     ) -> None:
         torch = _lazy_import_torch()
         artifact = load_model_artifact(source, cache_root=self.cache_root)
+        backbone_override = (artifact.manifest.get("backbone", {}) or {}).get(
+            "pretrained_checkpoint"
+        )
+        self._validate_backbone_override(task, backbone_override)
         checkpoint = _resolve_checkpoint_path(
             artifact.manifest, artifact.extract_dir, priority
         )
         state_dict = torch.load(checkpoint, map_location=self.device)
+        head_spec = _select_head_spec(artifact.manifest.get("heads", []), task)
+        if head_spec.head_type != "linear":
+            self.model.head.replace_head(
+                task=task,
+                num_outputs=head_spec.num_classes,
+                head_type=head_spec.head_type,
+                hidden_dim=head_spec.hidden_dim,
+                dropout=head_spec.dropout,
+            )
         if task == "landcover":
             if not self._cropland_head_enabled:
                 logger.info(
@@ -718,9 +749,7 @@ class SeasonalModelBundle:
                 logger.warning(
                     f"Custom landcover head state dict mismatch. Missing={missing}, unexpected={unexpected}"
                 )
-            self.landcover_spec = _select_head_spec(
-                artifact.manifest.get("heads", []), task
-            )
+            self.landcover_spec = head_spec
         elif task == "croptype":
             module = self.model.head.crop_head
             if module is None:
@@ -732,13 +761,47 @@ class SeasonalModelBundle:
                 logger.warning(
                     f"Custom croptype head state dict mismatch. Missing={missing}, unexpected={unexpected}"
                 )
-            self.croptype_spec = _select_head_spec(
-                artifact.manifest.get("heads", []), task
-            )
+            self.croptype_spec = head_spec
         else:
             raise ValueError(f"Unknown head task '{task}'")
         self._update_cropland_gate()
 
+    def _validate_backbone_override(
+        self, task: str, override_checkpoint: Optional[str]
+    ) -> None:
+        if override_checkpoint:
+            if (
+                self._base_backbone_checkpoint
+                and override_checkpoint != self._base_backbone_checkpoint
+            ):
+                raise ValueError(
+                    "Custom head backbone checkpoint does not match seasonal model "
+                    f"backbone ({override_checkpoint} != {self._base_backbone_checkpoint})."
+                )
+            for (
+                other_task,
+                other_checkpoint,
+            ) in self._custom_head_backbone_checkpoints.items():
+                if other_checkpoint and other_checkpoint != override_checkpoint:
+                    raise ValueError(
+                        "Custom head backbone checkpoints must match across tasks "
+                        f"({task}={override_checkpoint} != {other_task}={other_checkpoint})."
+                    )
+            self._custom_head_backbone_checkpoints[task] = override_checkpoint
+            return
+
+        if self._base_backbone_checkpoint:
+            return
+
+        for (
+            other_task,
+            other_checkpoint,
+        ) in self._custom_head_backbone_checkpoints.items():
+            if other_checkpoint:
+                raise ValueError(
+                    "Custom head backbone checkpoint missing for task "
+                    f"'{task}', but '{other_task}' specifies '{other_checkpoint}'."
+                )
     def _update_cropland_gate(self) -> None:
         if not self._cropland_head_enabled:
             self.cropland_gate_classes = []

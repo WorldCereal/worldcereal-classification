@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 from prometheo.models import Presto
@@ -153,7 +154,7 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
         np.testing.assert_almost_equal(val_to_trainval_ratio, 0.2, decimal=decimal)
 
 
-def test_train_downstream_torch(WorldCerealExtractionsDF):
+def test_train_downstream_torch(WorldCerealExtractionsDF, tmp_path):
     df = WorldCerealExtractionsDF.reset_index()
     presto_url = CropLandParameters().feature_parameters.presto_model_url
 
@@ -166,6 +167,12 @@ def test_train_downstream_torch(WorldCerealExtractionsDF):
         embeddings_df,
         lr_grid=[1e-2],
         weight_decay_grid=[1e-5],
+        output_dir=tmp_path,
     )
 
     trainer.train()
+    config_path = tmp_path / "config.json"
+    with config_path.open("r", encoding="utf-8") as fh:
+        config = json.load(fh)
+    assert "heads" in config
+    assert config["heads"][0]["task"] == "croptype"

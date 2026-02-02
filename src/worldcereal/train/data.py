@@ -219,6 +219,98 @@ def dataset_to_embeddings(
     return final_df
 
 
+def _flatten_time_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
+    """Flatten Presto time embeddings to shape [N, T, D]."""
+
+    if embeddings.dim() == 5:
+        b, h, w, t, d = embeddings.shape
+        return embeddings.view(b * h * w, t, d)
+    if embeddings.dim() == 4:
+        b, t, d, _ = embeddings.shape
+        return embeddings.view(b, t, d)
+    if embeddings.dim() == 3:
+        return embeddings
+    raise ValueError(f"Unexpected Presto embedding shape: {tuple(embeddings.shape)}")
+
+
+def dataset_to_seasonal_embeddings(
+    dataset: WorldCerealTrainingDataset,
+    presto_model: Presto,
+    *,
+    season_index: int = 0,
+    batch_size: int = 2048,
+    num_workers: int = 0,
+) -> pd.DataFrame:
+    """Extract per-season pooled embeddings and attributes from a dataset."""
+
+    logger.info("Computing seasonal Presto embeddings ...")
+
+    presto_model.eval().to(device)
+
+    dl = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+    )
+
+    final_df = None
+
+    for predictors, attrs in tqdm(dl):
+        if attrs.get("season_masks") is None:
+            raise ValueError("Season masks are required to compute seasonal embeddings.")
+
+        with torch.no_grad():
+            time_embeddings = presto_model(
+                predictors, eval_pooling=PoolingMethods.TIME
+            )
+            time_embeddings = _flatten_time_embeddings(time_embeddings)
+
+            season_masks = torch.as_tensor(
+                attrs["season_masks"], dtype=torch.bool, device=time_embeddings.device
+            )
+            if season_masks.dim() == 2:
+                season_masks = season_masks.unsqueeze(1)
+            if season_index < 0 or season_index >= season_masks.shape[1]:
+                raise ValueError(
+                    f"season_index {season_index} out of range for mask shape {season_masks.shape}"
+                )
+
+            selected_mask = season_masks[:, season_index, :]
+            season_mask_float = selected_mask.to(dtype=time_embeddings.dtype)
+            weights = season_mask_float.sum(dim=-1, keepdim=True)
+            zero_weight = weights == 0
+            if torch.any(zero_weight):
+                season_mask_float = season_mask_float.clone()
+                season_mask_float[zero_weight.squeeze(-1)] = 1.0
+                weights = season_mask_float.sum(dim=-1, keepdim=True)
+
+            pooled = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
+                dim=-2
+            ) / torch.clamp(weights, min=1e-6)
+
+        attrs_frame = {
+            k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
+        }
+        if attrs.get("in_seasons") is not None:
+            in_seasons = np.asarray(attrs["in_seasons"])
+            if in_seasons.ndim == 2:
+                attrs_frame["in_season"] = in_seasons[:, season_index]
+            else:
+                attrs_frame["in_season"] = in_seasons
+
+        attrs_df = pd.DataFrame.from_dict(attrs_frame)
+        pooled_df = pd.DataFrame(
+            pooled.cpu().numpy(),
+            columns=[f"presto_ft_{i}" for i in range(pooled.shape[1])],
+        )
+        result = pd.concat([pooled_df, attrs_df], axis=1)
+        final_df = result if final_df is None else pd.concat([final_df, result])
+
+    return final_df
+
+
 def compute_embeddings_from_input_df(
     input_df: pd.DataFrame,
     presto_url: str,
@@ -295,6 +387,94 @@ def compute_embeddings_from_input_df(
     embeddings = pd.concat([trn_embeddings, test_embeddings]).reset_index(drop=True)
 
     return embeddings
+
+
+def compute_seasonal_embeddings_from_splits(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    presto_url: str,
+    *,
+    season_id: str,
+    augment: bool = True,
+    mask_on_training: bool = True,
+    repeats: int = 3,
+    timestep_freq: Literal["month", "dekad"] = "month",
+    batch_size: int = 2048,
+    num_workers: int = 0,
+    season_calendar_mode: SeasonCalendarMode = "calendar",
+) -> pd.DataFrame:
+    """Compute per-season embeddings from pre-split dataframes."""
+
+    num_timesteps = 12 if timestep_freq == "month" else 36
+
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_url).to(device)
+
+    masking_config = SensorMaskingConfig(
+        enable=mask_on_training,
+        s1_full_dropout_prob=0.05,
+        s1_timestep_dropout_prob=0.1,
+        s2_cloud_timestep_prob=0.1,
+        s2_cloud_block_prob=0.05,
+        s2_cloud_block_min=2,
+        s2_cloud_block_max=3,
+        meteo_timestep_dropout_prob=0.03,
+        dem_dropout_prob=0.01,
+    )
+
+    trn_ds = WorldCerealTrainingDataset(
+        train_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type="multiclass",
+        augment=augment,
+        masking_config=masking_config,
+        repeats=repeats,
+        season_ids=[season_id],
+        season_calendar_mode=season_calendar_mode,
+    )
+    val_ds = WorldCerealTrainingDataset(
+        val_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type="multiclass",
+        augment=False,
+        masking_config=SensorMaskingConfig(enable=False),
+        repeats=1,
+        season_ids=[season_id],
+        season_calendar_mode=season_calendar_mode,
+    )
+    test_ds = WorldCerealTrainingDataset(
+        test_df,
+        num_timesteps=num_timesteps,
+        timestep_freq=timestep_freq,
+        task_type="multiclass",
+        augment=False,
+        masking_config=SensorMaskingConfig(enable=False),
+        repeats=1,
+        season_ids=[season_id],
+        season_calendar_mode=season_calendar_mode,
+    )
+
+    trn_embeddings = dataset_to_seasonal_embeddings(
+        trn_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+    )
+    val_embeddings = dataset_to_seasonal_embeddings(
+        val_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+    )
+    test_embeddings = dataset_to_seasonal_embeddings(
+        test_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+    )
+
+    trn_embeddings["split"] = "train"
+    val_embeddings["split"] = "val"
+    test_embeddings["split"] = "test"
+    return (
+        pd.concat([trn_embeddings, val_embeddings, test_embeddings])
+        .reset_index(drop=True)
+        .copy()
+    )
 
 
 def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):
