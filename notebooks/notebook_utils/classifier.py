@@ -13,6 +13,7 @@ The embedding dimensionality is currently fixed at 128 (``presto_ft_0`` .. ``pre
 If the upstream Presto model changes dimensionality this file should be updated accordingly.
 """
 
+from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -30,7 +31,10 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
-from worldcereal.parameters import CropLandParameters, CropTypeParameters
+DEFAULT_PRESTO_URLS = {
+    "cropland": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt",
+    "croptype": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",
+}
 from worldcereal.train.datasets import MIN_EDGE_BUFFER, SensorMaskingConfig
 from worldcereal.utils.refdata import process_extractions_df
 
@@ -183,18 +187,10 @@ def compute_presto_embeddings(
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
     # Determine Presto model URL
-    if custom_presto_url is not None:
-        presto_model_url = custom_presto_url
-    elif task_type == "croptype":
-        presto_model_url = CropTypeParameters().feature_parameters.presto_model_url
-    elif task_type == "cropland":
-        presto_model_url = CropLandParameters().feature_parameters.presto_model_url
-    else:
+    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
+    if presto_model_url is None:
         raise ValueError(
-            (
-                f"Unknown task type: `{task_type}` and no `custom_presto_url`"
-                " given -> cannot infer Presto model"
-            )
+            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
         )
 
     # Load pretrained Presto model
@@ -282,6 +278,116 @@ def compute_presto_embeddings(
     logger.info("Done.")
 
     return df
+
+
+def compute_seasonal_presto_embeddings(
+    df: pd.DataFrame,
+    *,
+    season_id: str,
+    batch_size: int = 256,
+    task_type: str = "croptype",
+    augment: bool = True,
+    mask_on_training: bool = True,
+    repeats: int = 3,
+    custom_presto_url: Optional[str] = None,
+    season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
+) -> pd.DataFrame:
+    """Compute Presto embeddings pooled over a single official season."""
+
+    from prometheo.models import Presto
+    from prometheo.models.presto.wrapper import load_presto_weights
+
+    from worldcereal.train.data import dataset_to_seasonal_embeddings
+    from worldcereal.train.datasets import WorldCerealTrainingDataset
+
+    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
+    if presto_model_url is None:
+        raise ValueError(
+            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
+        )
+
+    presto_model = Presto()
+    presto_model = load_presto_weights(presto_model, presto_model_url)
+
+    try:
+        train_val, samples_test = train_test_split(
+            df,
+            test_size=0.2,
+            random_state=DEFAULT_SEED,
+            stratify=df["sampling_label"],
+        )
+    except ValueError:
+        logger.warning(
+            "Stratified split failed (not enough samples per class), using random split."
+        )
+        train_val, samples_test = train_test_split(
+            df, test_size=0.2, random_state=DEFAULT_SEED
+        )
+
+    samples_train, samples_val = train_test_split(
+        train_val, test_size=0.2, random_state=DEFAULT_SEED
+    )
+
+    if mask_on_training:
+        masking_config = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=0.05,
+            s1_timestep_dropout_prob=0.1,
+            s2_cloud_timestep_prob=0.1,
+            s2_cloud_block_prob=0.05,
+            s2_cloud_block_min=2,
+            s2_cloud_block_max=3,
+            meteo_timestep_dropout_prob=0.03,
+            dem_dropout_prob=0.01,
+        )
+    else:
+        masking_config = SensorMaskingConfig(enable=False)
+
+    def _build_dataset(frame: pd.DataFrame, augment_flag: bool) -> WorldCerealTrainingDataset:
+        return WorldCerealTrainingDataset(
+            frame.reset_index(),
+            task_type="multiclass" if task_type == "croptype" else "binary",
+            augment=augment_flag,
+            masking_config=masking_config if augment_flag else SensorMaskingConfig(enable=False),
+            repeats=repeats if augment_flag else 1,
+            season_ids=[season_id],
+            season_calendar_mode=season_calendar_mode,
+        )
+
+    train_ds = _build_dataset(samples_train, augment_flag=augment)
+    val_ds = _build_dataset(samples_val, augment_flag=False)
+    test_ds = _build_dataset(samples_test, augment_flag=False)
+
+    df_train = dataset_to_seasonal_embeddings(train_ds, presto_model, batch_size=batch_size)
+    df_val = dataset_to_seasonal_embeddings(val_ds, presto_model, batch_size=batch_size)
+    df_test = dataset_to_seasonal_embeddings(test_ds, presto_model, batch_size=batch_size)
+
+    df_train["split"] = "train"
+    df_val["split"] = "val"
+    df_test["split"] = "test"
+    return pd.concat([df_train, df_val, df_test]).reset_index(drop=True)
+
+
+def train_seasonal_torch_head(
+    training_dataframe: pd.DataFrame,
+    *,
+    season_id: str,
+    head_task: Literal["croptype", "landcover"] = "croptype",
+    output_dir: Union[str, Path] = "./downstream_classifier",
+    **trainer_kwargs: object,
+):
+    """Train a torch head compatible with the seasonal model bundle."""
+
+    from worldcereal.train.downstream import TorchTrainer
+
+    trainer = TorchTrainer(
+        training_dataframe,
+        head_task=head_task,
+        output_dir=output_dir,
+        season_id=season_id,
+        **trainer_kwargs,
+    )
+    return trainer.train()
 
 
 def train_classifier(
