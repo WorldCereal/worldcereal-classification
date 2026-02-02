@@ -1128,6 +1128,7 @@ def process_parquet(
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
         df = processor.check_vt_closeness(df, min_edge_buffer, freq)
 
+    df = df.reset_index(drop=True)
     if max_timesteps_trim is not None:
         logger.info(
             f"Trimming to max_timesteps_trim={max_timesteps_trim} per sample prior to pivot."
