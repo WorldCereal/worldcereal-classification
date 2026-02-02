@@ -596,7 +596,11 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
 
 
 class SeasonalModelBundle:
-    """Convenience wrapper that owns the seasonal model and metadata."""
+    """Convenience wrapper that owns the seasonal model and metadata.
+
+    Custom head overrides are validated to ensure every head uses a compatible
+    Presto backbone checkpoint so embeddings stay aligned across tasks.
+    """
 
     def __init__(
         self,
