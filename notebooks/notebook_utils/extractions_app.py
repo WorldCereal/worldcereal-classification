@@ -1345,10 +1345,10 @@ class WorldCerealExtractionsApp:
         background_info = self._info_callout(
             "ℹ️ <strong>Background information:</strong><br>"
             "Samples to be extracted are now automatically split into one or several OpenEO extraction jobs.<br>"
-            "The OpenEO job manager automatically handles the execution of these jobs on the CDSE platform.<br>"
+            "The OpenEO job manager automatically handles the execution of these jobs on the CDSE platform.<br><br>"
             "Execution of an OpenEO job will consume credits from your CDSE account.<br>"
             "Average credit consumption of one job amounts to 30 credits, but can vary up to 300 credits depending on local data density.<br>"
-            "You can consult the credit consumption of an individual job through the <a href='https://openeo.dataspace.copernicus.eu/?discover=0' target='_blank' rel='noopener'>OpenEO web editor</a>.<br>"
+            "You can consult the credit consumption of an individual job through the <a href='https://openeo.dataspace.copernicus.eu/?discover=0' target='_blank' rel='noopener'>OpenEO web editor</a>.<br><br>"
             "Upon finalization of all extraction jobs, the extracted data will be saved automatically to your output directory.<br>"
             "The output directory is called <code>extractions_output</code> and is created in the same folder where this notebook is located.<br>"
             "This directory contains one subfolder per collection ID, holding the extracted data, and the status of the jobs in the job tracking csv.<br>"
