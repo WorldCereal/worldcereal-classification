@@ -12,6 +12,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from loguru import logger
 
+from worldcereal.train.backbone import (
+    build_presto_backbone,
+    resolve_seasonal_backbone_checkpoint,
+)
 from worldcereal.train.data import (
     compute_seasonal_embeddings_from_splits,
     dataset_to_embeddings,
@@ -52,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--presto-model-path",
         type=str,
         required=False,
-        help="Path or URL to the Presto model checkpoint.",
+        help="Path or URL to the Presto model checkpoint. Defaults to the packaged seasonal artifact when omitted.",
     )
     parser.add_argument(
         "--data-dir",
@@ -131,7 +135,10 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Minimum decrease in val loss to qualify as improvement.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.head_task == "croptype" and not args.season_id:
+        parser.error("--season-id is required when training croptype heads.")
+    return args
 
 
 def _load_split_dataframes(data_dir: str) -> Dict[str, pd.DataFrame]:
@@ -142,14 +149,17 @@ def _load_split_dataframes(data_dir: str) -> Dict[str, pd.DataFrame]:
         "test": pd.read_parquet(data_path / "test_df.parquet"),
     }
     for split_df in splits.values():
-        if "downstream_class" not in split_df.columns and "finetune_class" in split_df.columns:
+        if (
+            "downstream_class" not in split_df.columns
+            and "finetune_class" in split_df.columns
+        ):
             split_df["downstream_class"] = split_df["finetune_class"]
     return splits
 
 
 def _compute_embeddings_from_splits(
     splits: Dict[str, pd.DataFrame],
-    presto_model_path: str,
+    presto_model_path: Optional[str],
     timestep_freq: str,
     batch_size: int,
     num_workers: int,
@@ -174,7 +184,9 @@ def _compute_embeddings_from_splits(
             timestep_freq=timestep_freq,
             task_type="multiclass",
             augment=augment,
-            masking_config=masking_config if augment else SensorMaskingConfig(enable=False),
+            masking_config=masking_config
+            if augment
+            else SensorMaskingConfig(enable=False),
             repeats=3 if augment else 1,
         )
 
@@ -182,12 +194,10 @@ def _compute_embeddings_from_splits(
     val_ds = _build_dataset(splits["val"], augment=False)
     test_ds = _build_dataset(splits["test"], augment=False)
 
-    from prometheo.models import Presto
-    from prometheo.models.presto.wrapper import load_presto_weights
     from prometheo.utils import device
 
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_model_path).to(device)
+    presto_checkpoint = presto_model_path or resolve_seasonal_backbone_checkpoint()
+    presto_model = build_presto_backbone(checkpoint_path=presto_checkpoint).to(device)
 
     train_embeddings = dataset_to_embeddings(
         train_ds, presto_model, batch_size=batch_size, num_workers=num_workers
@@ -249,7 +259,6 @@ def main() -> None:
                 self.sampling_class = "downstream_class"
                 self.balancing_method = "log"
                 self.clip_range = (0.3, 5.0)
-                self.quality_col = None
                 self.early_stopping_patience = 6
                 self.early_stopping_min_delta = 0.0
 
@@ -276,44 +285,46 @@ def main() -> None:
     else:
         cropland_class_names = args.cropland_class_names
 
+    presto_checkpoint = args.presto_model_path or resolve_seasonal_backbone_checkpoint()
+
     embeddings_df = None
     if args.embeddings_path:
         logger.info("Loading embeddings dataframe from %s", args.embeddings_path)
         embeddings_df = pd.read_parquet(args.embeddings_path)
     else:
-        if args.data_dir is None or args.presto_model_path is None:
-            raise ValueError(
-                "Either --embeddings-path or both --data-dir and --presto-model-path must be provided."
-            )
+        if args.data_dir is None:
+            raise ValueError("Either --embeddings-path or --data-dir must be provided.")
         splits = _load_split_dataframes(args.data_dir)
 
         if args.season_id:
             logger.info(
                 "Computing seasonal embeddings for season %s using %s",
                 args.season_id,
-                args.presto_model_path,
+                presto_checkpoint,
             )
             embeddings_df = compute_seasonal_embeddings_from_splits(
                 splits["train"],
                 splits["val"],
                 splits["test"],
-                args.presto_model_path,
+                presto_checkpoint,
                 season_id=args.season_id,
                 timestep_freq=args.timestep_freq,
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
                 season_calendar_mode=args.season_calendar_mode,
             )
-        else:
-            logger.info(
-                "Computing pooled embeddings using %s", args.presto_model_path
-            )
+        elif args.head_task == "landcover":
+            logger.info("Computing pooled embeddings using %s", presto_checkpoint)
             embeddings_df = _compute_embeddings_from_splits(
                 splits,
-                presto_model_path=args.presto_model_path,
+                presto_model_path=presto_checkpoint,
                 timestep_freq=args.timestep_freq,
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
+            )
+        else:
+            raise ValueError(
+                "Seasonal embeddings require --season-id; this branch should be unreachable."
             )
 
     trainer = TorchTrainer(
@@ -326,7 +337,7 @@ def main() -> None:
         downstream_classes=downstream_classes,
         cropland_class_names=cropland_class_names,
         season_id=args.season_id,
-        presto_model_path=args.presto_model_path,
+        presto_model_path=presto_checkpoint,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         hidden_dim=args.hidden_dim,
@@ -338,7 +349,9 @@ def main() -> None:
         balancing_label=args.sampling_class,
         balancing_method=args.balancing_method,
         weights_clip_range=args.clip_range,
-        quality_col=args.quality_col,
+        quality_col="quality_score_ct"
+        if args.detector == "croptype"
+        else "quality_score_lc",
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
     )

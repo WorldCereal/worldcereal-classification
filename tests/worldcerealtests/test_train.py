@@ -1,11 +1,10 @@
 import json
+
 import numpy as np
 import pandas as pd
-from prometheo.models import Presto
-from prometheo.models.presto.wrapper import load_presto_weights
 from torch.utils.data import DataLoader
 
-from worldcereal.parameters import CropLandParameters
+from worldcereal.train.backbone import build_presto_backbone
 from worldcereal.train.data import (
     collate_fn,
     compute_embeddings_from_input_df,
@@ -50,9 +49,7 @@ def test_dataset_to_embeddings(WorldCerealExtractionsDF):
     df = WorldCerealExtractionsDF.reset_index()
     ds = WorldCerealTrainingDataset(df)
 
-    presto_url = CropLandParameters().feature_parameters.presto_model_url
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_url)
+    presto_model = build_presto_backbone()
 
     training_df = dataset_to_embeddings(ds, presto_model, batch_size=256)
 
@@ -156,10 +153,9 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
 
 def test_train_downstream_torch(WorldCerealExtractionsDF, tmp_path):
     df = WorldCerealExtractionsDF.reset_index()
-    presto_url = CropLandParameters().feature_parameters.presto_model_url
 
     embeddings_df = compute_embeddings_from_input_df(
-        df, presto_url, stratify_label="downstream_class"
+        input_df=df, stratify_label="downstream_class"
     )
 
     # Train classifier

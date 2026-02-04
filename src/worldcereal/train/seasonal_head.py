@@ -13,27 +13,37 @@ from typing import Optional
 import numpy as np
 import torch
 from prometheo.models.pooling import PoolingMethods
-from prometheo.models.presto.single_file_presto import FinetuningHead
 from prometheo.models.presto.wrapper import PretrainedPrestoWrapper
 from prometheo.predictors import Predictors
 from torch import Tensor, nn
 
 
-class MLPProjectionHead(nn.Module):
-    """Simple MLP projection head used for replacement training."""
+class LinearHead(nn.Module):
+    """Simple linear projection head."""
+
+    def __init__(self, in_dim: int, num_classes: int):
+        super().__init__()
+        self.linear = nn.Linear(in_dim, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+class MLPHead(nn.Module):
+    """Multi-layer perceptron projection head with ReLU and dropout."""
 
     def __init__(
-        self, embedding_dim: int, num_outputs: int, hidden_dim: int, dropout: float
-    ) -> None:
+        self, in_dim: int, num_classes: int, hidden_dim: int = 256, dropout: float = 0.2
+    ):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(embedding_dim, hidden_dim),
+            nn.Linear(in_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_outputs),
+            nn.Linear(hidden_dim, num_classes),
         )
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
@@ -137,18 +147,15 @@ class SeasonalFinetuningHead(nn.Module):
         hidden_dim: int = 256,
         dropout: float = 0.0,
     ) -> nn.Module:
+        """Build a projection head for landcover or croptype classification."""
         if num_outputs is None:
             raise ValueError("num_outputs must be provided to build a projection head")
         if head_type == "linear":
-            return FinetuningHead(
-                hidden_size=embedding_dim,
-                num_outputs=num_outputs,
-                regression=False,
-            )
+            return LinearHead(in_dim=embedding_dim, num_classes=num_outputs)
         if head_type == "mlp":
-            return MLPProjectionHead(
-                embedding_dim,
-                num_outputs,
+            return MLPHead(
+                in_dim=embedding_dim,
+                num_classes=num_outputs,
                 hidden_dim=hidden_dim,
                 dropout=dropout,
             )

@@ -1,6 +1,6 @@
 import gc
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import duckdb
 import numpy as np
@@ -10,14 +10,18 @@ import torch
 from loguru import logger
 from prometheo.models import Presto
 from prometheo.models.pooling import PoolingMethods
-from prometheo.models.presto.wrapper import load_presto_weights
 from prometheo.predictors import NODATAVALUE, Predictors
 from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
+from worldcereal.train.backbone import (
+    build_presto_backbone,
+    resolve_seasonal_encoder,
+)
 from worldcereal.train.datasets import (
+    SeasonCalendarMode,
     SensorMaskingConfig,
     WorldCerealTrainingDataset,
 )
@@ -29,6 +33,23 @@ _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
     "croptype_label",
     "label_task",
 }
+
+
+def _ensure_label_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if "finetune_class" not in df.columns and "downstream_class" in df.columns:
+        df = df.copy()
+        df["finetune_class"] = df["downstream_class"]
+    elif "downstream_class" not in df.columns and "finetune_class" in df.columns:
+        df = df.copy()
+        df["downstream_class"] = df["finetune_class"]
+    return df
+
+
+def _ensure_label_columns_inplace(df: pd.DataFrame) -> None:
+    if "finetune_class" not in df.columns and "downstream_class" in df.columns:
+        df["finetune_class"] = df["downstream_class"]
+    elif "downstream_class" not in df.columns and "finetune_class" in df.columns:
+        df["downstream_class"] = df["finetune_class"]
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
@@ -259,12 +280,12 @@ def dataset_to_seasonal_embeddings(
 
     for predictors, attrs in tqdm(dl):
         if attrs.get("season_masks") is None:
-            raise ValueError("Season masks are required to compute seasonal embeddings.")
+            raise ValueError(
+                "Season masks are required to compute seasonal embeddings."
+            )
 
         with torch.no_grad():
-            time_embeddings = presto_model(
-                predictors, eval_pooling=PoolingMethods.TIME
-            )
+            time_embeddings = presto_model(predictors, eval_pooling=PoolingMethods.TIME)
             time_embeddings = _flatten_time_embeddings(time_embeddings)
 
             season_masks = torch.as_tensor(
@@ -313,7 +334,7 @@ def dataset_to_seasonal_embeddings(
 
 def compute_embeddings_from_input_df(
     input_df: pd.DataFrame,
-    presto_url: str,
+    presto_url: Optional[str] = None,
     *,
     split_column: str = "split",
     augment: bool = True,
@@ -325,6 +346,8 @@ def compute_embeddings_from_input_df(
     time_explicit: bool = False,
     stratify_label: str = "finetune_class",
 ) -> pd.DataFrame:
+    input_df = _ensure_label_columns(input_df)
+
     # Split input dataframe into train/val/test
     trn_df, val_df, test_df = train_val_test_split(
         input_df, split_column=split_column, stratify_label=stratify_label
@@ -338,8 +361,10 @@ def compute_embeddings_from_input_df(
     num_timesteps = 12 if timestep_freq == "month" else 36
 
     # Load Presto model
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_url).to(device)
+    presto_checkpoint = presto_url
+    if not presto_checkpoint:
+        presto_checkpoint, _ = resolve_seasonal_encoder()
+    presto_model = build_presto_backbone(checkpoint_path=presto_checkpoint).to(device)
 
     # Sensor masking config to augment training dataset
     masking_config = SensorMaskingConfig(
@@ -386,6 +411,8 @@ def compute_embeddings_from_input_df(
     test_embeddings["split"] = "test"
     embeddings = pd.concat([trn_embeddings, test_embeddings]).reset_index(drop=True)
 
+    _ensure_label_columns_inplace(embeddings)
+
     return embeddings
 
 
@@ -393,7 +420,7 @@ def compute_seasonal_embeddings_from_splits(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
-    presto_url: str,
+    presto_url: Optional[str] = None,
     *,
     season_id: str,
     augment: bool = True,
@@ -403,13 +430,20 @@ def compute_seasonal_embeddings_from_splits(
     batch_size: int = 2048,
     num_workers: int = 0,
     season_calendar_mode: SeasonCalendarMode = "calendar",
+    season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
 ) -> pd.DataFrame:
     """Compute per-season embeddings from pre-split dataframes."""
 
     num_timesteps = 12 if timestep_freq == "month" else 36
 
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_url).to(device)
+    train_df = _ensure_label_columns(train_df)
+    val_df = _ensure_label_columns(val_df)
+    test_df = _ensure_label_columns(test_df)
+
+    presto_checkpoint = presto_url
+    if not presto_checkpoint:
+        presto_checkpoint, _ = resolve_seasonal_encoder()
+    presto_model = build_presto_backbone(checkpoint_path=presto_checkpoint).to(device)
 
     masking_config = SensorMaskingConfig(
         enable=mask_on_training,
@@ -423,16 +457,31 @@ def compute_seasonal_embeddings_from_splits(
         dem_dropout_prob=0.01,
     )
 
-    trn_ds = WorldCerealTrainingDataset(
-        train_df,
+    dataset_kwargs = dict(
         num_timesteps=num_timesteps,
         timestep_freq=timestep_freq,
         task_type="multiclass",
+        season_ids=[season_id],
+    )
+    if season_windows:
+        dataset_kwargs["season_windows"] = season_windows
+        if season_calendar_mode == "calendar":
+            logger.info(
+                "Manual season windows provided; switching calendar mode from 'calendar' to 'custom'."
+            )
+            effective_mode = "custom"
+        else:
+            effective_mode = season_calendar_mode
+    else:
+        effective_mode = season_calendar_mode
+    dataset_kwargs["season_calendar_mode"] = effective_mode
+
+    trn_ds = WorldCerealTrainingDataset(
+        train_df,
         augment=augment,
         masking_config=masking_config,
         repeats=repeats,
-        season_ids=[season_id],
-        season_calendar_mode=season_calendar_mode,
+        **dataset_kwargs,
     )
     val_ds = WorldCerealTrainingDataset(
         val_df,
@@ -443,7 +492,8 @@ def compute_seasonal_embeddings_from_splits(
         masking_config=SensorMaskingConfig(enable=False),
         repeats=1,
         season_ids=[season_id],
-        season_calendar_mode=season_calendar_mode,
+        season_windows=season_windows,
+        season_calendar_mode=effective_mode,
     )
     test_ds = WorldCerealTrainingDataset(
         test_df,
@@ -454,7 +504,8 @@ def compute_seasonal_embeddings_from_splits(
         masking_config=SensorMaskingConfig(enable=False),
         repeats=1,
         season_ids=[season_id],
-        season_calendar_mode=season_calendar_mode,
+        season_windows=season_windows,
+        season_calendar_mode=effective_mode,
     )
 
     trn_embeddings = dataset_to_seasonal_embeddings(
@@ -470,11 +521,15 @@ def compute_seasonal_embeddings_from_splits(
     trn_embeddings["split"] = "train"
     val_embeddings["split"] = "val"
     test_embeddings["split"] = "test"
-    return (
+    embeddings = (
         pd.concat([trn_embeddings, val_embeddings, test_embeddings])
         .reset_index(drop=True)
         .copy()
     )
+
+    _ensure_label_columns_inplace(embeddings)
+
+    return embeddings
 
 
 def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):

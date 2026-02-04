@@ -89,24 +89,6 @@ def _season_band_label(band: str, season_id: str) -> str:
     return "_".join(cleaned) if cleaned else trimmed.replace(":", "_")
 
 
-def _sorted_croptype_band_names(bands: Sequence[str]) -> List[str]:
-    def _priority(label: str) -> Tuple[int, str]:
-        if label.startswith("croptype_classification:"):
-            return (0, label)
-        if label.startswith("croptype_probability:"):
-            parts = label.split(":")
-            if len(parts) == 2:
-                return (1, label)  # aggregated probability per season
-            return (2, label)  # per-class probability
-        if label.startswith("croptype_raw_classification:"):
-            return (3, label)
-        if label.startswith("croptype_raw_probability:"):
-            return (4, label)
-        return (5, label)
-
-    return sorted(bands, key=_priority)
-
-
 def _sanitize_filename_fragment(value: Any) -> str:
     """Best-effort cleanup so window labels are filesystem-friendly."""
 
@@ -278,7 +260,6 @@ def _croptype_map(
         ]
         if not season_bands:
             continue
-        season_bands = _sorted_croptype_band_names(season_bands)
         normalized_labels = [
             _season_band_label(band, season_id) for band in season_bands
         ]

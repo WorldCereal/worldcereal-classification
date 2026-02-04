@@ -81,6 +81,7 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "ref_id",
     "sample_id",
     "finetune_class",
+    "downstream_class",
     "landcover_label",
     "croptype_label",
     "valid_time",
@@ -250,6 +251,104 @@ def _normalize_season_windows(
         )
 
     return normalized
+
+
+def _label_datetime_series(frame: pd.DataFrame) -> pd.Series:
+    """Return the first available label datetime per row as a pandas Series."""
+
+    result = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    for column in _LABEL_DATETIME_COLUMNS:
+        if column not in frame.columns:
+            continue
+        candidate = pd.to_datetime(frame[column], errors="coerce")
+        result = result.where(result.notna(), candidate)
+        if result.notna().all():
+            break
+    return result
+
+
+def _timestamp_in_season_window(
+    timestamp: Optional[pd.Timestamp],
+    *,
+    window: SeasonWindow,
+) -> bool:
+    if timestamp is None or pd.isna(timestamp):
+        return False
+
+    ts = pd.Timestamp(timestamp)
+
+    if window.year_offset not in (0, 1):
+        raise ValueError("Season windows must span at most 12 months.")
+
+    if window.year_offset == 0:
+        start_year = ts.year
+    else:
+        ts_tuple = (ts.month, ts.day)
+        end_tuple = (window.end_month, window.end_day)
+        start_year = ts.year if ts_tuple > end_tuple else ts.year - 1
+
+    start_dt = pd.Timestamp(
+        _coerce_date_for_year(start_year, window.start_month, window.start_day)
+    )
+    end_dt = pd.Timestamp(
+        _coerce_date_for_year(
+            start_year + window.year_offset, window.end_month, window.end_day
+        )
+    )
+    return start_dt <= ts <= end_dt
+
+
+def _filter_frame_by_manual_windows(
+    dataframe: pd.DataFrame,
+    season_windows: Mapping[str, SeasonWindow],
+    *,
+    context: str,
+) -> Tuple[pd.DataFrame, int]:
+    if not season_windows:
+        return dataframe, 0
+
+    label_datetimes = _label_datetime_series(dataframe)
+    if label_datetimes.isna().all():
+        raise ValueError(
+            f"{context}: Cannot enforce manual season window(s) because all samples are missing valid_time information."
+        )
+
+    keep_mask = pd.Series(False, index=dataframe.index, dtype=bool)
+    for season_name, window in season_windows.items():
+        keep_mask |= label_datetimes.apply(
+            lambda ts: _timestamp_in_season_window(ts, window=window)
+        )
+
+    missing = label_datetimes.isna().sum()
+    if missing:
+        logger.warning(
+            "%s: Dropping %d samples missing valid_time while enforcing manual season window(s).",
+            context,
+            int(missing),
+        )
+        keep_mask &= label_datetimes.notna()
+
+    dropped = int((~keep_mask).sum())
+    if dropped:
+        ranges = ", ".join(
+            f"{season}: {window.start_month:02d}-{window.start_day:02d} -> {window.end_month:02d}-{window.end_day:02d}"
+            for season, window in season_windows.items()
+        )
+        logger.info(
+            "%s: Removed %d samples outside manual season window(s): %s",
+            context,
+            dropped,
+            ranges,
+        )
+
+    retained = int(keep_mask.sum())
+    if retained == 0:
+        raise ValueError(
+            f"{context}: No samples remain after enforcing manual season window(s)."
+        )
+
+    filtered = dataframe.loc[keep_mask].copy().reset_index(drop=True)
+    return filtered, dropped
 
 
 def _ensure_seasonality_lookup() -> pd.DataFrame:
@@ -1291,6 +1390,18 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 "`return_sample_id` is True, but 'sample_id' column not found in dataframe."
             )
 
+        if self._season_engine == "manual" and self._season_windows:
+            filtered_df, dropped = _filter_frame_by_manual_windows(
+                self.dataframe,
+                self._season_windows,
+                context=self.__class__.__name__,
+            )
+            if dropped:
+                logger.info(
+                    f"{self.__class__.__name__}: proceeding with {len(filtered_df)} samples after enforcing manual season window(s)."
+                )
+            self.dataframe = filtered_df
+
     def __getitem__(self, idx):
         row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
@@ -1681,6 +1792,18 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         else:
             resolved_seasons = GLOBAL_SEASON_IDS
         self._season_ids: Tuple[str, ...] = resolved_seasons
+
+        if self._season_engine == "manual" and self._season_windows:
+            filtered_df, dropped = _filter_frame_by_manual_windows(
+                self.dataframe,
+                self._season_windows,
+                context=self.__class__.__name__,
+            )
+            if dropped:
+                logger.info(
+                    f"{self.__class__.__name__}: proceeding with {len(filtered_df)} samples after enforcing manual season window(s)."
+                )
+            self.dataframe = filtered_df
 
         repeats = _check_augmentation_settings(augment, masking_config, repeats)
 

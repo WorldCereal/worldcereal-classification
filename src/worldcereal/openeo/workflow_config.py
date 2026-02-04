@@ -268,6 +268,10 @@ class WorldCerealWorkflowConfigBuilder:
         return self
 
     def build(self) -> WorldCerealWorkflowConfig:
+        if self.season.enforce_cropland_gate:
+            # Cropland gating relies on the cropland head outputs, so force-enable it.
+            if self.model.enable_cropland_head is not True:
+                self.model.enable_cropland_head = True
         model = self.model if self.model.to_dict() else None
         runtime = self.runtime if self.runtime.to_dict() else None
         season = self.season if self.season.to_dict() else None

@@ -77,8 +77,10 @@ def _dummy_probability_arr() -> xr.DataArray:
     )
 
 
-def _probability_dataset() -> xr.Dataset:
-    engine = _build_probability_engine()
+def _probability_dataset_with_engine(
+    keep_probs: bool = True,
+) -> tuple[inference.SeasonalInferenceEngine, xr.Dataset]:
+    engine = _build_probability_engine(keep_probs=keep_probs)
     arr = _dummy_probability_arr()
     landcover_logits = torch.tensor(
         [[6.0, 1.0], [1.0, 6.0], [1.0, 6.0], [1.0, 6.0]],
@@ -93,12 +95,19 @@ def _probability_dataset() -> xr.Dataset:
         ],
         dtype=torch.float32,
     )
-    return engine._format_outputs(
+    dataset = engine._format_outputs(
         arr=arr,
         outputs=(landcover_logits, croptype_logits),
         season_ids=["tc-s1", "tc-s2"],
         enforce_cropland_gate=True,
     )
+
+    return engine, dataset
+
+
+def _probability_dataset(keep_probs: bool = True) -> xr.Dataset:
+    _, dataset = _probability_dataset_with_engine(keep_probs=keep_probs)
+    return dataset
 
 
 def test_extract_udf_configuration_applies_context_overrides(tmp_path):
@@ -412,6 +421,36 @@ def test_dataset_to_multiband_array_preserves_band_order():
     assert bands[len(expected_prefix)] == "croptype_probability:tc-s1:wheat"
     assert bands[len(expected_prefix) + 3] == "croptype_probability:tc-s2:wheat"
     assert cube.dtype == np.uint8
+
+
+def test_expected_udf_labels_match_probability_dataset_order_with_class_probs():
+    engine, dataset = _probability_dataset_with_engine(keep_probs=True)
+
+    expected_labels = inference._expected_udf_band_labels(
+        ["tc-s1", "tc-s2"],
+        export_class_probabilities=True,
+        cropland_gate_classes=engine.bundle.cropland_gate_classes,
+        croptype_classes=engine.bundle.croptype_spec.class_names,
+        croptype_enabled=engine._croptype_enabled,
+        cropland_enabled=engine._cropland_enabled,
+    )
+
+    assert list(dataset.data_vars) == expected_labels
+
+
+def test_expected_udf_labels_match_probability_dataset_order_without_class_probs():
+    engine, dataset = _probability_dataset_with_engine(keep_probs=False)
+
+    expected_labels = inference._expected_udf_band_labels(
+        ["tc-s1", "tc-s2"],
+        export_class_probabilities=False,
+        cropland_gate_classes=engine.bundle.cropland_gate_classes,
+        croptype_classes=engine.bundle.croptype_spec.class_names,
+        croptype_enabled=engine._croptype_enabled,
+        cropland_enabled=engine._cropland_enabled,
+    )
+
+    assert list(dataset.data_vars) == expected_labels
 
 
 def test_croptype_probabilities_use_nocrop_value_when_gated():

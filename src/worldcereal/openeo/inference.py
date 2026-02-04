@@ -544,20 +544,34 @@ def _resolve_checkpoint_path(
     )
 
 
+def _backbone_fingerprint_from_artifact(artifact: ModelArtifact) -> str:
+    backbone_entry = artifact.manifest.get("backbone") or {}
+    fingerprint = backbone_entry.get("fingerprint")
+    if not fingerprint:
+        raise ValueError(
+            "Seasonal artifact is missing backbone fingerprint. Repackage the model with the encoder fingerprint embedded."
+        )
+    return fingerprint
+
+
 def load_model_artifact(
     source: str | Path, cache_root: Optional[Path] = None
 ) -> ModelArtifact:
+    """Download, extract and load a model artifact package."""
     cache_root = _ensure_cache_dir(cache_root or DEFAULT_CACHE_ROOT)
     zip_path = _download_artifact(str(source), cache_root)
     extract_dir = _extract_artifact(zip_path, cache_root)
+
     manifest = _load_json(extract_dir / "config.json")
-    run_config = None
-    run_config_path = extract_dir / "run_config.json"
-    if run_config_path.exists():
-        run_config = _load_json(run_config_path)
+    run_config = (
+        _load_json(extract_dir / "run_config.json")
+        if (extract_dir / "run_config.json").exists()
+        else None
+    )
     checkpoint = _resolve_checkpoint_path(
         manifest, extract_dir, priority=("full", "model")
     )
+
     return ModelArtifact(
         source=str(source),
         zip_path=zip_path,
@@ -614,57 +628,54 @@ class SeasonalModelBundle:
         enable_cropland_head: bool = True,
     ) -> None:
         torch = _lazy_import_torch()
+
+        if not (enable_croptype_head or enable_cropland_head):
+            raise ValueError("At least one head must be enabled")
+
         self.device = torch.device(device)
         self.base_artifact = base_artifact
         self.cache_root = _ensure_cache_dir(cache_root or DEFAULT_CACHE_ROOT)
         self._croptype_head_enabled = enable_croptype_head
         self._cropland_head_enabled = enable_cropland_head
 
-        if not (self._croptype_head_enabled or self._cropland_head_enabled):
-            raise ValueError(
-                "Seasonal model bundle requires at least one head to be enabled."
-            )
-
         heads = base_artifact.manifest.get("heads", [])
         self.landcover_spec = _select_head_spec(heads, task="landcover")
         self.croptype_spec = _select_head_spec(heads, task="croptype")
         self.cropland_gate_classes: List[str] = []
-        self._base_backbone_checkpoint = (
-            base_artifact.manifest.get("backbone", {}) or {}
-        ).get("pretrained_checkpoint")
-        self._custom_head_backbone_checkpoints: Dict[str, Optional[str]] = {}
+        self._base_backbone_fingerprint = _backbone_fingerprint_from_artifact(
+            base_artifact
+        )
+        self._custom_head_backbone_fingerprints: Dict[str, str] = {}
 
         dropout = base_artifact.manifest.get("backbone", {}).get("head_dropout", 0.0)
         self.model = self._build_model(dropout)
 
-        if landcover_head_zip:
-            if not self._cropland_head_enabled:
-                logger.info(
-                    "Cropland head disabled; ignoring custom landcover head override."
-                )
-            else:
-                self._apply_custom_head(
-                    task="landcover",
-                    source=landcover_head_zip,
-                    priority=("head", "full", "model"),
-                )
-        if enable_croptype_head and croptype_head_zip:
+        # Apply custom head overrides if provided
+        if landcover_head_zip and self._cropland_head_enabled:
+            self._apply_custom_head(
+                task="landcover",
+                source=landcover_head_zip,
+                priority=("head", "full", "model"),
+            )
+        elif landcover_head_zip:
+            logger.info("Cropland head disabled; ignoring custom landcover override.")
+
+        if croptype_head_zip and enable_croptype_head:
             self._apply_custom_head(
                 task="croptype",
                 source=croptype_head_zip,
                 priority=("head", "full", "model"),
             )
-        if croptype_head_zip and not enable_croptype_head:
-            logger.info(
-                "Croptype head override provided but croptype head disabled; override ignored."
-            )
+        elif croptype_head_zip:
+            logger.info("Croptype head disabled; ignoring custom croptype override.")
+
         if not self._cropland_head_enabled:
-            logger.info(
-                "Cropland head disabled by configuration; cropland outputs will be skipped."
-            )
+            logger.info("Cropland head disabled; cropland outputs will be skipped.")
+
         self._update_cropland_gate()
 
     def _build_model(self, dropout: float) -> "WorldCerealSeasonalModel":
+        """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
         from prometheo.models import Presto
 
@@ -689,21 +700,24 @@ class SeasonalModelBundle:
             croptype_hidden_dim=self.croptype_spec.hidden_dim,
         )
         model = WorldCerealSeasonalModel(backbone=backbone, head=head)
+
+        # Load checkpoint, filtering disabled heads
         state_dict = torch.load(
             self.base_artifact.checkpoint_path, map_location=self.device
         )
         if not self._croptype_head_enabled:
             state_dict = {
-                key: value
-                for key, value in state_dict.items()
-                if not key.startswith("head.crop_head")
+                k: v
+                for k, v in state_dict.items()
+                if not k.startswith("head.crop_head")
             }
         if not self._cropland_head_enabled:
             state_dict = {
-                key: value
-                for key, value in state_dict.items()
-                if not key.startswith("head.landcover_head")
+                k: v
+                for k, v in state_dict.items()
+                if not k.startswith("head.landcover_head")
             }
+
         model.load_state_dict(state_dict)
         return model.to(self.device).eval()
 
@@ -714,18 +728,43 @@ class SeasonalModelBundle:
         source: str | Path,
         priority: Sequence[str],
     ) -> None:
+        """Load and apply a custom head from an artifact package.
+
+        Validates backbone compatibility, replaces head architecture if needed,
+        and loads the custom weights.
+        """
         torch = _lazy_import_torch()
         artifact = load_model_artifact(source, cache_root=self.cache_root)
-        backbone_override = (artifact.manifest.get("backbone", {}) or {}).get(
-            "pretrained_checkpoint"
-        )
-        self._validate_backbone_override(task, backbone_override)
+        backbone_fingerprint = _backbone_fingerprint_from_artifact(artifact)
+        self._validate_backbone_override(task, backbone_fingerprint)
+
         checkpoint = _resolve_checkpoint_path(
             artifact.manifest, artifact.extract_dir, priority
         )
         state_dict = torch.load(checkpoint, map_location=self.device)
         head_spec = _select_head_spec(artifact.manifest.get("heads", []), task)
-        if head_spec.head_type != "linear":
+
+        # Get current head spec and module
+        is_landcover = task == "landcover"
+        current_spec = self.landcover_spec if is_landcover else self.croptype_spec
+        module = (
+            self.model.head.landcover_head
+            if is_landcover
+            else self.model.head.crop_head
+        )
+
+        if module is None:
+            raise ValueError(f"Base model missing {task} head; cannot apply override")
+
+        # Replace head architecture if type or number of classes changed
+        if (
+            head_spec.head_type != current_spec.head_type
+            or head_spec.num_classes != current_spec.num_classes
+        ):
+            logger.info(
+                f"Replacing {task} head: {current_spec.head_type}/{current_spec.num_classes} -> "
+                f"{head_spec.head_type}/{head_spec.num_classes}"
+            )
             self.model.head.replace_head(
                 task=task,
                 num_outputs=head_spec.num_classes,
@@ -733,87 +772,74 @@ class SeasonalModelBundle:
                 hidden_dim=head_spec.hidden_dim,
                 dropout=head_spec.dropout,
             )
-        if task == "landcover":
-            if not self._cropland_head_enabled:
-                logger.info(
-                    "Cropland head disabled; ignoring custom landcover head override."
-                )
-                return
-            module = self.model.head.landcover_head
-            if module is None:
-                raise ValueError(
-                    "Base model missing landcover head; cannot apply override"
-                )
-            missing, unexpected = module.load_state_dict(state_dict, strict=False)
-            if missing or unexpected:
-                logger.warning(
-                    f"Custom landcover head state dict mismatch. Missing={missing}, unexpected={unexpected}"
-                )
+            # Get the new module after replacement
+            module = (
+                self.model.head.landcover_head
+                if is_landcover
+                else self.model.head.crop_head
+            )
+
+        # Load custom weights
+        missing, unexpected = module.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            logger.warning(
+                f"Custom {task} head state dict mismatch. Missing={missing}, unexpected={unexpected}"
+            )
+
+        # Update spec
+        if is_landcover:
             self.landcover_spec = head_spec
-        elif task == "croptype":
-            module = self.model.head.crop_head
-            if module is None:
-                raise ValueError(
-                    "Base model missing croptype head; cannot apply override"
-                )
-            missing, unexpected = module.load_state_dict(state_dict, strict=False)
-            if missing or unexpected:
-                logger.warning(
-                    f"Custom croptype head state dict mismatch. Missing={missing}, unexpected={unexpected}"
-                )
-            self.croptype_spec = head_spec
         else:
-            raise ValueError(f"Unknown head task '{task}'")
+            # Preserve base model's gating if custom head doesn't specify it
+            if not head_spec.cropland_classes and current_spec:
+                head_spec.cropland_classes = current_spec.cropland_classes
+            self.croptype_spec = head_spec
+
         self._update_cropland_gate()
 
     def _validate_backbone_override(
-        self, task: str, override_checkpoint: Optional[str]
+        self, task: str, override_fingerprint: Optional[str]
     ) -> None:
-        if override_checkpoint:
-            if (
-                self._base_backbone_checkpoint
-                and override_checkpoint != self._base_backbone_checkpoint
-            ):
-                raise ValueError(
-                    "Custom head backbone checkpoint does not match seasonal model "
-                    f"backbone ({override_checkpoint} != {self._base_backbone_checkpoint})."
-                )
-            for (
-                other_task,
-                other_checkpoint,
-            ) in self._custom_head_backbone_checkpoints.items():
-                if other_checkpoint and other_checkpoint != override_checkpoint:
-                    raise ValueError(
-                        "Custom head backbone checkpoints must match across tasks "
-                        f"({task}={override_checkpoint} != {other_task}={other_checkpoint})."
-                    )
-            self._custom_head_backbone_checkpoints[task] = override_checkpoint
-            return
+        """Ensure custom head uses a compatible Presto encoder checkpoint."""
+        if not override_fingerprint:
+            raise ValueError(
+                f"Custom {task} head missing backbone fingerprint. "
+                "Repackage with encoder metadata."
+            )
 
-        if self._base_backbone_checkpoint:
-            return
+        if not self._base_backbone_fingerprint:
+            raise ValueError(
+                "Base seasonal model missing backbone fingerprint. "
+                "Redeploy the seasonal bundle with encoder metadata."
+            )
 
-        for (
-            other_task,
-            other_checkpoint,
-        ) in self._custom_head_backbone_checkpoints.items():
-            if other_checkpoint:
+        if override_fingerprint != self._base_backbone_fingerprint:
+            raise ValueError(
+                f"Custom {task} head backbone fingerprint mismatch: "
+                f"{override_fingerprint} != {self._base_backbone_fingerprint}"
+            )
+
+        for other_task, other_fp in self._custom_head_backbone_fingerprints.items():
+            if other_fp != override_fingerprint:
                 raise ValueError(
-                    "Custom head backbone checkpoint missing for task "
-                    f"'{task}', but '{other_task}' specifies '{other_checkpoint}'."
+                    f"Backbone fingerprint mismatch across heads: "
+                    f"{task}={override_fingerprint} != {other_task}={other_fp}"
                 )
+
+        self._custom_head_backbone_fingerprints[task] = override_fingerprint
 
     def _update_cropland_gate(self) -> None:
+        """Update cropland gating classes from head specs."""
         if not self._cropland_head_enabled:
             self.cropland_gate_classes = []
             logger.info("Cropland head disabled; cropland gating unavailable.")
             return
-        if self.landcover_spec.cropland_classes:
-            self.cropland_gate_classes = list(self.landcover_spec.cropland_classes)
-        elif self.croptype_spec.cropland_classes:
-            self.cropland_gate_classes = list(self.croptype_spec.cropland_classes)
-        else:
-            self.cropland_gate_classes = []
+
+        self.cropland_gate_classes = list(
+            self.landcover_spec.cropland_classes
+            or self.croptype_spec.cropland_classes
+            or []
+        )
         logger.info(
             f"Cropland gating enabled for classes: {self.cropland_gate_classes}"
         )
@@ -1378,16 +1404,7 @@ class SeasonalInferenceEngine:
 
             _register_band("cropland_classification", cropland_labels_uint8)
             _register_band("probability_cropland", cropland_probability_uint8)
-
-            if self._export_class_probabilities:
-                if cropland_indices:
-                    per_class_probs = prob_cube[cropland_indices]
-                    for idx, label in enumerate(cropland_label_order):
-                        _register_band(
-                            f"probability_{label}",
-                            _probabilities_to_uint8(per_class_probs[idx]),
-                        )
-                _register_band("probability_other", probability_other_uint8)
+            _register_band("probability_other", probability_other_uint8)
         else:
             if self._cropland_enabled:
                 logger.warning(
@@ -1437,6 +1454,7 @@ class SeasonalInferenceEngine:
             processed_labels: List[np.ndarray] = []
             processed_probabilities: List[np.ndarray] = []
             processed_probability_cubes: List[np.ndarray] = []
+            raw_probability_cubes: List[np.ndarray] = []
             croptype_method = self._croptype_postprocess.resolved_method()
             if croptype_method:
                 logger.info(
@@ -1445,6 +1463,7 @@ class SeasonalInferenceEngine:
             for season_idx in range(num_seasons):
                 season_labels = preds_np[:, :, season_idx].astype(np.uint16, copy=True)
                 season_prob_cube = prob_cube[season_idx]
+                raw_probability_cubes.append(season_prob_cube.copy())
                 (
                     season_labels,
                     season_probabilities,
@@ -1480,8 +1499,9 @@ class SeasonalInferenceEngine:
                 _register_band(band_name, conf_uint8[idx])
 
             if self._export_class_probabilities:
-                prob_stack = np.stack(processed_probability_cubes, axis=0)
-                prob_uint8 = _probabilities_to_uint8(prob_stack)
+                # Use raw probabilities (before postprocessing) for per-class outputs
+                raw_prob_stack = np.stack(raw_probability_cubes, axis=0)
+                prob_uint8 = _probabilities_to_uint8(raw_prob_stack)
                 if gate_applicable and cropland_mask_bool is not None:
                     gate = cropland_mask_bool[None, None, :, :]
                     sentinel_uint8 = np.uint8(NOCROP_VALUE)
@@ -1799,7 +1819,6 @@ def _expected_udf_band_labels(
     season_ids: Sequence[str],
     *,
     export_class_probabilities: bool = False,
-    cropland_gate_classes: Optional[Sequence[str]] = None,
     croptype_classes: Optional[Sequence[str]] = None,
     croptype_enabled: bool = True,
     cropland_enabled: bool = True,
@@ -1810,13 +1829,9 @@ def _expected_udf_band_labels(
             [
                 "cropland_classification",
                 "probability_cropland",
+                "probability_other",
             ]
         )
-        if export_class_probabilities:
-            gate_classes = list(cropland_gate_classes) if cropland_gate_classes else []
-            if gate_classes:
-                labels.extend([f"probability_{cls}" for cls in gate_classes])
-            labels.append("probability_other")
     if croptype_enabled:
         for season_id in season_ids:
             labels.append(f"croptype_classification:{season_id}")
@@ -2120,7 +2135,6 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
         context_map = dict(context or {})
         season_ids = _resolve_effective_season_ids(context_map)
         export_probs = False
-        cropland_gate_classes: Optional[Sequence[str]] = None
         croptype_classes: Optional[Sequence[str]] = None
         croptype_enabled = True
         cropland_enabled = True
@@ -2131,7 +2145,7 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
             croptype_enabled = config.get("enable_croptype_head", True)
             cropland_enabled = config.get("enable_cropland_head", True)
 
-            if export_probs and (cropland_enabled or croptype_enabled):
+            if cropland_enabled or croptype_enabled:
                 cache_root = config.get("cache_root")
                 base_artifact = load_model_artifact(
                     config["seasonal_model_zip"], cache_root=cache_root
@@ -2146,11 +2160,6 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
                         ).manifest.get("heads", [])
                     return base_heads
 
-                if cropland_enabled:
-                    landcover_heads = _heads_for_override("landcover_head_zip")
-                    landcover_spec = _select_head_spec(landcover_heads, "landcover")
-                    cropland_gate_classes = landcover_spec.cropland_classes
-
                 if croptype_enabled:
                     croptype_heads = _heads_for_override("croptype_head_zip")
                     croptype_classes = _select_head_spec(
@@ -2162,7 +2171,6 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
         labels = _expected_udf_band_labels(
             season_ids,
             export_class_probabilities=export_probs,
-            cropland_gate_classes=cropland_gate_classes,
             croptype_classes=croptype_classes,
             croptype_enabled=croptype_enabled,
             cropland_enabled=cropland_enabled,

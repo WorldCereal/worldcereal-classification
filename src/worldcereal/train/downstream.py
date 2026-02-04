@@ -2,8 +2,8 @@
 """Train a PyTorch classification head (Linear or small MLP) on embeddings."""
 
 import json
-from datetime import datetime
 import zipfile
+from datetime import datetime
 from itertools import product
 from math import ceil
 from pathlib import Path
@@ -31,8 +31,13 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.sampler import WeightedRandomSampler
 from tqdm.auto import tqdm
 
+from worldcereal.train.backbone import (
+    checkpoint_fingerprint,
+    resolve_seasonal_encoder,
+)
 from worldcereal.train.data import train_val_test_split
 from worldcereal.train.datasets import get_class_weights
+from worldcereal.train.seasonal_head import LinearHead, MLPHead
 
 
 class EmbeddingsDataset(Dataset):
@@ -64,31 +69,6 @@ class EmbeddingsDataset(Dataset):
         return torch.from_numpy(self.X[idx]), int(self.y[idx])
 
 
-class LinearHead(nn.Module):
-    def __init__(self, in_dim: int, num_classes: int):
-        super().__init__()
-        self.fc = nn.Linear(in_dim, num_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc(x)
-
-
-class MLPHead(nn.Module):
-    def __init__(
-        self, in_dim: int, num_classes: int, hidden_dim: int = 256, dropout: float = 0.2
-    ):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
 class TorchTrainer:
     def __init__(
         self,
@@ -103,12 +83,15 @@ class TorchTrainer:
         cropland_class_names: Optional[Sequence[str]] = None,
         season_id: Optional[str] = None,
         presto_model_path: Optional[str] = None,
+        presto_model_fingerprint: Optional[str] = None,
         batch_size: int = 1024,
         num_workers: int = 4,
         hidden_dim: int = 256,
         dropout: float = 0.2,
         lr: float = 1e-2,  # can be high for lightweight head
         epochs: int = 30,
+        log_interval: int = 10,
+        log_display_delta: float = 0.01,
         seed: int = 42,
         label_smoothing: float = 0.0,
         use_balancing: bool = True,
@@ -122,11 +105,16 @@ class TorchTrainer:
         lr_grid: Optional[Sequence[float]] = None,
         cv_folds: int = 5,
         group_column: str = "sample_id",
+        disable_progressbar: bool = False,
     ):
         self.training_df = embeddings_df
         self.split_column = split_column
         self.head_type = head_type
         self.head_task = head_task
+        if self.head_task == "croptype" and not season_id:
+            raise ValueError(
+                "TorchTrainer requires 'season_id' when training croptype heads."
+            )
         self.output_dir = Path(output_dir)
         self.modelversion = modelversion
         self.detector = detector or head_task
@@ -137,7 +125,26 @@ class TorchTrainer:
             else []
         )
         self.season_id = season_id
-        self.presto_model_path = presto_model_path
+        if presto_model_path:
+            # presto_model_path is expected to be the encoder checkpoint
+            self.presto_model_path = presto_model_path
+            if presto_model_fingerprint:
+                self.presto_model_fingerprint = presto_model_fingerprint
+            else:
+                if str(self.presto_model_path).startswith(("http://", "https://")):
+                    raise ValueError(
+                        "presto_model_fingerprint must be provided when using a remote Presto URL."
+                    )
+                # Compute fingerprint directly from the encoder checkpoint path
+                self.presto_model_fingerprint = checkpoint_fingerprint(
+                    self.presto_model_path
+                )
+        else:
+            # resolve_seasonal_encoder returns encoder checkpoint path + fingerprint
+            (
+                self.presto_model_path,
+                self.presto_model_fingerprint,
+            ) = resolve_seasonal_encoder()
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.label_smoothing = label_smoothing
@@ -145,7 +152,11 @@ class TorchTrainer:
         self.dropout = dropout
         self.lr = lr
         self.epochs = epochs
+        self.log_interval = max(1, int(log_interval))
+        self.log_display_delta = log_display_delta
+        self.last_logged_val: Optional[float] = None
         self.seed = seed
+        self.disable_progressbar = disable_progressbar
         self.cv_folds = cv_folds
         self.group_column = group_column
         self.weight_decay_grid = (
@@ -175,9 +186,6 @@ class TorchTrainer:
         np.random.seed(self.seed)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.sink = logger.add(
-            self.output_dir / "logfile_torch_classifier.log", level="DEBUG"
-        )
 
         # Initialize base config
         self.config: Dict[str, Any] = {}
@@ -192,12 +200,14 @@ class TorchTrainer:
                 "cropland_class_names": self.cropland_class_names,
                 "season_id": self.season_id,
                 "presto_model_path": self.presto_model_path,
+                "presto_model_fingerprint": self.presto_model_fingerprint,
                 "batch_size": self.batch_size,
                 "num_workers": self.num_workers,
                 "hidden_dim": self.hidden_dim,
                 "dropout": self.dropout,
                 "lr": self.lr,
                 "epochs": self.epochs,
+                "log_interval": self.log_interval,
                 "seed": self.seed,
                 "use_balancing": self.use_balancing,
                 "balancing_label": self.balancing_label,
@@ -353,7 +363,9 @@ class TorchTrainer:
     ) -> float:
         model.train()
         total_loss = 0.0
-        for X, y in tqdm(loader, desc="Training", leave=False):
+        for X, y in tqdm(
+            loader, desc="Training", leave=False, disable=self.disable_progressbar
+        ):
             X = X.to(device_)
             y = y.to(device_)
             logits = model(X)
@@ -390,7 +402,12 @@ class TorchTrainer:
             return df
         filtered = df[df["finetune_class"] != "remove"].reset_index(drop=True)
         if "in_season" in filtered.columns:
-            filtered = filtered[filtered["in_season"]].reset_index(drop=True)
+            if filtered["in_season"].any():
+                filtered = filtered[filtered["in_season"]].reset_index(drop=True)
+            else:
+                logger.warning(
+                    "No samples marked in-season; skipping in_season filtering."
+                )
         return filtered
 
     def _build_head_manifest(self, checkpoint_name: str) -> Dict[str, Any]:
@@ -439,9 +456,9 @@ class TorchTrainer:
                 "season_id": self.season_id,
             },
             "backbone": {
-                "pretrained_checkpoint": self.presto_model_path,
+                "fingerprint": self.presto_model_fingerprint,
             }
-            if self.presto_model_path
+            if self.presto_model_fingerprint
             else {},
             "heads": [head_entry],
             "artifacts": {
@@ -548,9 +565,10 @@ class TorchTrainer:
             epochs_completed = epoch
 
             if val_loader is None:
-                logger.info(
-                    f"Epoch {epoch:03d} | train_loss={tr_loss:.4f} (no validation set)"
-                )
+                if self._should_emit(epoch):
+                    logger.info(
+                        f"Epoch {epoch:03d} | train_loss={tr_loss:.4f} (no validation set)"
+                    )
                 continue
 
             val_loss, val_preds, val_labels = self._eval_epoch(
@@ -560,6 +578,7 @@ class TorchTrainer:
             if scheduler is not None:
                 scheduler.step(val_loss)
 
+            improved = False
             if val_loss < (best_val - self.early_stopping_min_delta):
                 best_val = val_loss
                 best_macro_f1 = macro_f1
@@ -569,6 +588,7 @@ class TorchTrainer:
                 }
                 best_epoch = epoch
                 epochs_no_improve = 0
+                improved = True
             else:
                 epochs_no_improve += 1
                 if (
@@ -578,10 +598,11 @@ class TorchTrainer:
                     stopped_early = True
                     break
 
-            logger.info(
-                f"Epoch {epoch:03d} | train_loss={tr_loss:.4f} val_loss={val_loss:.4f} "
-                f"macro_f1={macro_f1:.4f}"
-            )
+            if self._should_emit(epoch, improved):
+                logger.info(
+                    f"Epoch {epoch:03d} | train_loss={tr_loss:.4f} val_loss={val_loss:.4f} "
+                    f"macro_f1={macro_f1:.4f}"
+                )
 
         if best_state is not None:
             model.load_state_dict(best_state)
@@ -594,6 +615,13 @@ class TorchTrainer:
             "stopped_early": stopped_early,
             "val_macro_f1": best_macro_f1 if val_loader is not None else None,
         }
+
+    def _should_emit(self, epoch: int, improved: bool = False) -> bool:
+        if epoch == 1 or epoch == self.epochs or epoch % self.log_interval == 0:
+            return True
+        if improved:
+            return True
+        return False
 
     def _iter_cv_splits(self, df: pd.DataFrame):
         if (
@@ -764,11 +792,11 @@ class TorchTrainer:
         self.save_config()
 
         logger.info(
-            "Selected hyperparameters -> lr=%.2e, weight_decay=%.2e, final_epochs=%d (macro-F1=%.4f)",
-            best_params["lr"],
-            best_params["weight_decay"],
-            best_params["final_epochs"],
-            best_params["mean_macro_f1"],
+            "Selected hyperparameters -> "
+            f"lr={best_params['lr']:.2e}, "
+            f"weight_decay={best_params['weight_decay']:.2e}, "
+            f"final_epochs={best_params['final_epochs']} "
+            f"(macro-F1={best_params['mean_macro_f1']:.4f})"
         )
 
         final_loader = self._build_dataloader(trainval_df, is_train=True)

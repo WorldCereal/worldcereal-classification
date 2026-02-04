@@ -1,3 +1,4 @@
+import calendar
 import glob
 import importlib.resources
 import json
@@ -182,7 +183,7 @@ def query_public_extractions(
         Whether to include collateral samples in the query.
         Collateral samples are those samples that were not specifically marked for extraction,
         but fell into the vicinity of such samples during the extraction process. While using
-        collateral samples will result in significant increase in amount of samples available for training,
+        collateral samples will result in significant increase in the amount of samples available for training,
         it will also shift the distribution of the classes.
     ref_ids : Optional[List[str]], default=None
         List of specific reference dataset IDs to filter on. Can be used alone for dataset-specific
@@ -542,16 +543,21 @@ def is_within_period(proposed_date, start_date, end_date, buffer):
 def check_shift(proposed_date, valid_time, start_date, end_date, buffer, num_timesteps):
     proposed_start_date = proposed_date - pd.DateOffset(months=(num_timesteps // 2 - 1))
     proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
-    return (
-        # checks that the middle of the proposed period is within the available extractions
-        is_within_period(proposed_date, start_date, end_date, MIN_EDGE_BUFFER)
-        # checks that the proposed period does not fall too far outside the available extractions
-        & (proposed_start_date + pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date)
-        & (proposed_end_date - pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date)
-        # checks that true valid_time is not too close to the edges of the proposed period
-        & ((valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date)
-        & ((valid_time + pd.DateOffset(months=buffer)) <= proposed_end_date)
-    )
+
+    cond1 = is_within_period(proposed_date, start_date, end_date, MIN_EDGE_BUFFER)
+    cond2 = proposed_start_date + pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date
+    cond3 = proposed_end_date - pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
+    cond4 = (valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date
+    # Use < with +1 day to make the check inclusive of the last day of the month
+    # This ensures samples with valid_time on the last day of the processing period are not excluded
+    # E.g., when proposed_end_date = Dec 30, we want to include Dec 31
+    cond5 = (
+        valid_time + pd.DateOffset(months=buffer)
+    ) < proposed_end_date + pd.DateOffset(days=2)
+
+    result = cond1 & cond2 & cond3 & cond4 & cond5
+
+    return result
 
 
 def get_best_valid_time(
@@ -646,11 +652,49 @@ def get_best_valid_time(
     return np.nan
 
 
+def _season_window_membership(
+    timestamp: Optional[pd.Timestamp],
+    *,
+    start_month: int,
+    start_day: int,
+    end_month: int,
+    end_day: int,
+    year_offset: int,
+) -> bool:
+    if timestamp is None or pd.isna(timestamp):
+        return False
+
+    ts = pd.Timestamp(timestamp)
+
+    def _coerce(year: int, month: int, day: int) -> pd.Timestamp:
+        safe_day = min(day, calendar.monthrange(year, month)[1])
+        return pd.Timestamp(year=year, month=month, day=safe_day)
+
+    if year_offset not in (0, 1):
+        raise ValueError(
+            "season_window only supports spans up to 12 months (year_offset must be 0 or 1)."
+        )
+
+    if year_offset == 0:
+        start_year = ts.year
+    else:
+        ts_tuple = (ts.month, ts.day)
+        end_tuple = (end_month, end_day)
+        start_year = ts.year if ts_tuple > end_tuple else ts.year - 1
+
+    start_dt = _coerce(start_year, start_month, start_day)
+    end_dt = _coerce(start_year + year_offset, end_month, end_day)
+    # Inclusive on both boundaries: samples on start_date and end_date are kept
+    return start_dt <= ts <= end_dt
+
+
 def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
     freq: Literal["month", "dekad"] = "month",
-    valid_time_buffer: int = MIN_EDGE_BUFFER,
+    valid_time_buffer: int = 0,
+    *,
+    season_window: Optional[TemporalContext] = None,
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Process a dataframe of extracted samples to align with a specified temporal context and frequency.
@@ -669,9 +713,13 @@ def process_extractions_df(
         within this temporal extent will be removed. Default is None (no temporal filtering).
     freq : Literal["month", "dekad"], default "month"
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
-    valid_time_buffer : int, default MIN_EDGE_BUFFER (2)
+    valid_time_buffer : int, default 0
         Buffer in months to apply when aligning available extractions with user-defined temporal extent.
         Determines how close we allow the true valid_time of the sample to be to the edge of the processing period
+    season_window : TemporalContext, optional
+        Optional campaign window. When provided, samples whose ``valid_time`` falls
+        outside the selected window (ignoring the absolute year) are discarded. This
+        ensures multi-year datasets only supervise within the slider-defined window.
 
     Returns
     -------
@@ -793,17 +841,62 @@ def process_extractions_df(
             sample_dates.set_index("sample_id")["proposed_valid_time"]
         )
 
+    # When processing_period is specified, trim to exact length (12 months or 36 dekads)
+    # This ensures all samples have consistent available_timesteps for downstream processing
+    max_trim = "auto" if processing_period is not None else None
+
     df_processed = process_parquet(
         df_raw,
         freq=freq,
         use_valid_time=True,
-        max_timesteps_trim="auto",
+        max_timesteps_trim=max_trim,
     )
 
     if processing_period is not None:
         # put back the true valid_time
         df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
         df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
+
+    if season_window is not None:
+        season_start, season_end = season_window.to_datetime()
+        if season_end < season_start:
+            raise ValueError(
+                "season_window end date must be greater than or equal to the start date."
+            )
+        year_offset = season_end.year - season_start.year
+        if year_offset < 0 or year_offset > 1:
+            raise ValueError("season_window may span at most 12 consecutive months.")
+
+        valid_times = pd.to_datetime(df_processed["valid_time"], errors="coerce")
+        missing_valid = valid_times.isna()
+        if missing_valid.any():
+            logger.warning(
+                f"Dropping {int(missing_valid.sum())} samples without a valid_time while enforcing the manual season window."
+            )
+
+        in_window = valid_times.apply(
+            lambda ts: _season_window_membership(
+                ts,
+                start_month=season_start.month,
+                start_day=season_start.day,
+                end_month=season_end.month,
+                end_day=season_end.day,
+                year_offset=year_offset,
+            )
+        )
+        in_window &= ~missing_valid
+
+        dropped = int((~in_window).sum())
+        if dropped:
+            logger.warning(
+                f"Discarded {dropped} samples outside the season window "
+                f"{season_start.strftime('%b %d')} -> {season_end.strftime('%b %d')}.",
+            )
+        df_processed = df_processed.loc[in_window].copy()
+        if df_processed.empty:
+            raise ValueError(
+                "No samples remain inside the selected growing-season window. Try widening the window or revisiting your reference data selection."
+            )
 
     # Enrich resulting dataframe with full and sampling string labels
     df_processed["label_full"] = ewoc_code_to_label(

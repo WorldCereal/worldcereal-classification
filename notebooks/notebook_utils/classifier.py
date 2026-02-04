@@ -31,10 +31,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 
-DEFAULT_PRESTO_URLS = {
-    "cropland": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-MulticlassWithCroplandAuxBCELoss-labelsmoothing=0.05-month-LANDCOVER10-augment=True-balance=True-timeexplicit=False-masking=enabled-run=202510301004_encoder.pt",
-    "croptype": "https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-croptype-with-nocrop-FocalLoss-labelsmoothing%3D0.05-month-CROPTYPE27-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-masking%3Denabled-run%3D202510301004_encoder.pt",
-}
+from worldcereal.train.backbone import (
+    build_presto_backbone,
+    checkpoint_fingerprint,
+    resolve_seasonal_encoder,
+)
 from worldcereal.train.datasets import MIN_EDGE_BUFFER, SensorMaskingConfig
 from worldcereal.utils.refdata import process_extractions_df
 
@@ -59,16 +60,46 @@ def get_input(label):
         print("Invalid input. Please enter a name without spaces.")
 
 
+def _load_presto_encoder(custom_presto_url: Optional[str] = None):
+    """Load the Presto encoder using the same helper as the training scripts."""
+
+    if custom_presto_url:
+        weights_path = custom_presto_url
+        if str(weights_path).startswith(("http://", "https://")):
+            fingerprint = "custom-url"
+        else:
+            try:
+                fingerprint = checkpoint_fingerprint(weights_path)
+            except (FileNotFoundError, OSError):
+                logger.warning(
+                    f"Could not compute fingerprint for {weights_path}; falling back to 'custom'"
+                )
+                fingerprint = "custom"
+    else:
+        weights_path, fingerprint = resolve_seasonal_encoder()
+
+    logger.info(f"Loading Presto encoder (fingerprint={fingerprint})")
+    presto_model = build_presto_backbone(checkpoint_path=weights_path)
+    return presto_model, fingerprint
+
+
 def align_extractions_to_season(
     df: pd.DataFrame,
     season: TemporalContext,
     freq: Literal["month", "dekad"] = "month",
     valid_time_buffer: int = MIN_EDGE_BUFFER,
+    season_window: Optional[TemporalContext] = None,
 ) -> pd.DataFrame:
     """Align raw extraction rows to a target season and enrich with labels.
 
-    This function performs the temporal / metadata alignment step. After alignment
-    it reports basic dataset diagnostics and adds helper label columns.
+    This function trims all satellite extractions to exactly match the processing period
+    (12 consecutive months ending at the season window end date) and filters samples
+    to ensure valid_time falls within the season window with sufficient edge buffer.
+
+    Samples are removed if:
+    - They lack satellite coverage for the full processing period
+    - Their valid_time falls outside the season window
+    - Their valid_time is too close to processing period edges (< MIN_EDGE_BUFFER)
 
     Output additions
     ----------------
@@ -77,34 +108,48 @@ def align_extractions_to_season(
     * ``year``: integer year parsed from ``ref_id`` (first token before underscore).
     * ``label_full``: human readable crop / land cover label.
     * ``sampling_label``: label variant used for stratified splitting.
+    * All samples have exactly 12 monthly (or 36 dekadal) timesteps
+    TODO: the above does not seem to be enforced if buffer > 0
 
     Parameters
     ----------
     df : pandas.DataFrame
-        Raw extraction rows containing at minimum ``ref_id`` and ``ewoc_code``.
+        Raw extraction rows containing at minimum ``ref_id``, ``ewoc_code``, ``timestamp``,
+        and ``valid_time``.
     season : TemporalContext
-        Target temporal context defining the modelling season.
+        Processing period (12 consecutive months). Typically derived from season_window.
     freq : {'month', 'dekad'}, default='month'
         Resampling / alignment frequency controlling internal temporal aggregation.
     valid_time_buffer : int, default=MIN_EDGE_BUFFER
-        Safety buffer in frequency units between original valid time and season edges.
+        Minimum buffer (in timesteps) between valid_time and processing period edges.
+        Ensures downstream augmentation has sufficient temporal context.
+    season_window : TemporalContext, optional
+        Campaign window for valid_time filtering (typically the slider selection).
+        When provided, only samples with valid_time inside this window are retained.
 
     Returns
     -------
     pandas.DataFrame
         Aligned samples with additional ``year``, ``label_full`` and ``sampling_label``
-        columns. A warning is logged if fewer than two unique ``ewoc_code`` values
+        columns. All samples have exactly ``num_timesteps`` observations (12 for monthly,
+        36 for dekadal). A warning is logged if fewer than two unique ``ewoc_code`` values
         remain (training feasibility issue).
 
     Notes
     -----
-    Call :func:`compute_presto_embeddings` next to generate embedding features, then
-    :func:`train_classifier` to train a model on them.
+    Call :func:`compute_seasonal_presto_embeddings` next to generate embedding features,
+    then :func:`train_seasonal_torch_head` to train a model on them.
     """
     from worldcereal.utils.legend import ewoc_code_to_label
 
     # Align the samples with the season of interest
-    df = process_extractions_df(df, season, freq, valid_time_buffer)
+    df = process_extractions_df(
+        df,
+        season,
+        freq,
+        valid_time_buffer,
+        season_window=season_window,
+    )
 
     # Report on contents of the resulting dataframe here
     logger.info(
@@ -180,23 +225,15 @@ def compute_presto_embeddings(
     column named ``downstream_class`` must be present in ``df``. This function does not
     rename it; later training uses that column directly.
     """
-    from prometheo.models import Presto
-    from prometheo.models.presto.wrapper import load_presto_weights
-
     from worldcereal.train.data import get_training_df
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
-    # Determine Presto model URL
-    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
-    if presto_model_url is None:
+    if task_type not in {"croptype", "cropland"}:
         raise ValueError(
-            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
+            f"Unknown task type: `{task_type}`. Only 'croptype' and 'cropland' are supported."
         )
 
-    # Load pretrained Presto model
-    logger.info(f"Presto URL: {presto_model_url}")
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_model_url)
+    presto_model, _ = _load_presto_encoder(custom_presto_url)
 
     # Split dataframe in cal/val
     try:
@@ -291,23 +328,25 @@ def compute_seasonal_presto_embeddings(
     repeats: int = 3,
     custom_presto_url: Optional[str] = None,
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
+    season_window: Optional[TemporalContext] = None,
 ) -> pd.DataFrame:
-    """Compute Presto embeddings pooled over a single official season."""
+    """Compute Presto embeddings pooled over a single season selection.
 
-    from prometheo.models import Presto
-    from prometheo.models.presto.wrapper import load_presto_weights
+    When ``season_window`` is provided, the supplied ``TemporalContext`` defines the
+    pooling window so custom campaign identifiers can be used without relying on the
+    global seasonality lookup.
+    """
 
     from worldcereal.train.data import dataset_to_seasonal_embeddings
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
-    presto_model_url = custom_presto_url or DEFAULT_PRESTO_URLS.get(task_type)
-    if presto_model_url is None:
+    if task_type not in {"croptype", "cropland"}:
         raise ValueError(
-            f"Unknown task type: `{task_type}` and no `custom_presto_url` provided."
+            f"Unknown task type: `{task_type}`. Only 'croptype' and 'cropland' are supported."
         )
 
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_model_url)
+    presto_model, presto_fingerprint = _load_presto_encoder(custom_presto_url)
+    logger.info(f"Presto encoder fingerprint: {presto_fingerprint}")
 
     try:
         train_val, samples_test = train_test_split(
@@ -343,24 +382,44 @@ def compute_seasonal_presto_embeddings(
     else:
         masking_config = SensorMaskingConfig(enable=False)
 
-    def _build_dataset(frame: pd.DataFrame, augment_flag: bool) -> WorldCerealTrainingDataset:
+    season_windows = None
+    if season_window is not None:
+        start_ts = pd.Timestamp(season_window.start_date).to_pydatetime()
+        end_ts = pd.Timestamp(season_window.end_date).to_pydatetime()
+        season_windows = {season_id: (start_ts, end_ts)}
+    effective_mode = (
+        "custom"
+        if season_windows and season_calendar_mode == "calendar"
+        else season_calendar_mode
+    )
+
+    def _build_dataset(
+        frame: pd.DataFrame, augment_flag: bool
+    ) -> WorldCerealTrainingDataset:
         return WorldCerealTrainingDataset(
             frame.reset_index(),
             task_type="multiclass" if task_type == "croptype" else "binary",
             augment=augment_flag,
-            masking_config=masking_config if augment_flag else SensorMaskingConfig(enable=False),
+            masking_config=masking_config
+            if augment_flag
+            else SensorMaskingConfig(enable=False),
             repeats=repeats if augment_flag else 1,
             season_ids=[season_id],
-            season_calendar_mode=season_calendar_mode,
+            season_calendar_mode=effective_mode,
+            season_windows=season_windows,
         )
 
     train_ds = _build_dataset(samples_train, augment_flag=augment)
     val_ds = _build_dataset(samples_val, augment_flag=False)
     test_ds = _build_dataset(samples_test, augment_flag=False)
 
-    df_train = dataset_to_seasonal_embeddings(train_ds, presto_model, batch_size=batch_size)
+    df_train = dataset_to_seasonal_embeddings(
+        train_ds, presto_model, batch_size=batch_size
+    )
     df_val = dataset_to_seasonal_embeddings(val_ds, presto_model, batch_size=batch_size)
-    df_test = dataset_to_seasonal_embeddings(test_ds, presto_model, batch_size=batch_size)
+    df_test = dataset_to_seasonal_embeddings(
+        test_ds, presto_model, batch_size=batch_size
+    )
 
     df_train["split"] = "train"
     df_val["split"] = "val"

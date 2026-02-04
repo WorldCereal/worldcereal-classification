@@ -21,6 +21,7 @@ from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 
+from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (
@@ -82,7 +83,6 @@ def _build_head_manifest(
     croptype_classes: Sequence[str],
     cropland_class_names: Sequence[str],
     seasonal_head_dropout: float,
-    pretrained_model_path: str,
     config_filename: str,
     manifest_filename: str,
 ) -> Dict[str, Any]:
@@ -142,7 +142,6 @@ def _build_head_manifest(
             "time_explicit": time_explicit,
         },
         "backbone": {
-            "pretrained_checkpoint": pretrained_model_path,
             "head_dropout": seasonal_head_dropout,
         },
         "heads": [landcover_head, croptype_head],
@@ -824,7 +823,6 @@ def main(args):
         croptype_classes=croptype_classes,
         cropland_class_names=cropland_class_names,
         seasonal_head_dropout=args.seasonal_head_dropout,
-        pretrained_model_path=pretrained_model_path,
         config_filename=config_path.name,
         manifest_filename=manifest_path.name,
     )
@@ -926,23 +924,6 @@ def main(args):
         },
         "balancing": balancing_payload,
     }
-    run_config["head_manifest"] = head_manifest
-    try:
-        with config_path.open("w", encoding="utf-8") as fp:
-            json.dump(run_config, fp, indent=2, sort_keys=True)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Failed to save run configuration: {exc}")
-    else:
-        logger.info(f"Saved run configuration to {config_path}")
-
-    try:
-        with manifest_path.open("w", encoding="utf-8") as fp:
-            json.dump(head_manifest, fp, indent=2, sort_keys=True)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Failed to save head manifest: {exc}")
-    else:
-        logger.info(f"Saved head manifest to {manifest_path}")
-
     # Run the finetuning
     logger.info("Starting finetuning...")
     finetuned_model = run_finetuning(
@@ -962,13 +943,40 @@ def main(args):
         tensorboard_logdir=tensorboard_dir,
     )
 
+    seasonal_checkpoint_path = Path(output_dir) / f"{experiment_name}.pt"
+    if not seasonal_checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"Expected seasonal checkpoint not found at {seasonal_checkpoint_path}."
+        )
+
+    # Compute fingerprint from encoder-only checkpoint (saved by run_finetuning)
+    encoder_checkpoint_path = Path(output_dir) / f"{experiment_name}_encoder.pt"
+    backbone_fingerprint = checkpoint_fingerprint(encoder_checkpoint_path)
+    head_manifest["backbone"]["fingerprint"] = backbone_fingerprint
+    run_config["head_manifest"] = head_manifest
+
+    def _write_json(payload: Dict[str, Any], path: Path, label: str) -> None:
+        try:
+            with path.open("w", encoding="utf-8") as fp:
+                json.dump(payload, fp, indent=2, sort_keys=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to save {label}: {exc}")
+        else:
+            logger.info(f"Saved {label} to {path}")
+
+    _write_json(run_config, config_path, "run configuration")
+    _write_json(head_manifest, manifest_path, "head manifest")
+
     _evaluate_and_export(
         finetuned_model,
         suffix_prefix=None,
         artifact_dir=Path(output_dir),
     )
 
-    checkpoints_to_package = [Path(output_dir) / f"{experiment_name}.pt"]
+    checkpoints_to_package = [
+        Path(output_dir) / f"{experiment_name}.pt",
+        Path(output_dir) / f"{experiment_name}_encoder.pt",
+    ]
     _package_model_checkpoints(
         checkpoints_to_package,
         manifest_path=manifest_path,

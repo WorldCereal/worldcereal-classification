@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Tuple
 
-MIN_EDGE_BUFFER = 1
+MIN_EDGE_BUFFER = 0
 
 GLOBAL_SEASON_IDS: Tuple[str, ...] = ("tc-s1", "tc-s2")
 

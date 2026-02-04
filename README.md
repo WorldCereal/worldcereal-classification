@@ -92,7 +92,7 @@ workflow_cfg = WorldCerealWorkflowConfig(
         enable_croptype_head=True,
     ),
     season=SeasonSection(
-        keep_class_probabilities=True,
+        export_class_probabilities=True,
         season_ids=["tc-s1", "tc-s2"],
         season_windows={
             "tc-s1": ("2020-12-01", "2021-07-31"),
@@ -104,7 +104,6 @@ workflow_cfg = WorldCerealWorkflowConfig(
         "croptype": {
             "enabled": True,
             "method": "smooth_probabilities",
-            "export_class_probabilities": True,
         },
     },
 )
