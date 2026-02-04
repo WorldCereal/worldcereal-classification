@@ -5,6 +5,8 @@ This module contains functions for distance and class-balanced sampling of refer
 copied from worldcereal-referencedata to avoid cross-repository dependencies.
 """
 
+from typing import Optional, List
+
 import h3
 import geopandas as gpd
 import numpy as np
@@ -33,8 +35,10 @@ LC_CODES = [
 
 
 def distance_and_class_balanced_sampling(
-    df, distance_threshold_meters, sampling_count_per_class
-):
+    df: gpd.GeoDataFrame,
+    distance_threshold_meters: Optional[int],
+    sampling_count_per_class: dict,
+) -> list:
     """
     Samples points ensuring minimum distance between all samples and max samples per crop class,
     prioritizing rarest classes first, selecting samples across H3 L5 cells,
@@ -106,9 +110,8 @@ def distance_and_class_balanced_sampling(
 
                 # Remove neighbors
                 selected_pos = sample_id_to_pos[selected_sample_id]
-                neighbors = tree.query_radius(
-                    coords[[selected_pos]], r=distance_threshold_meters
-                )[0]
+                radius = float(distance_threshold_meters or 0)
+                neighbors = tree.query_radius(coords[[selected_pos]], r=radius)[0]
                 neighbor_sample_ids = set(sample_ids[neighbors])
 
                 available_sample_ids.difference_update(neighbor_sample_ids)
@@ -123,7 +126,9 @@ def distance_and_class_balanced_sampling(
 
 
 def collect_samples_for_extraction(
-    gdf, sampling_count_per_class: dict, distance_threshold_meters: int = None
+    gdf: gpd.GeoDataFrame,
+    sampling_count_per_class: dict,
+    distance_threshold_meters: Optional[int] = None,
 ) -> list:
     """
     Collects sample IDs that should be extracted from a GeoDataFrame based on crop class balancing
@@ -197,7 +202,7 @@ def run_sampling(
     max_samples_lc: int = 30,
     max_samples_ct: int = 30,
     sampling_distance: int = 1500,
-    custom_lc_codes: list = None,
+    custom_lc_codes: Optional[List[str]] = None,
 ) -> gpd.GeoDataFrame:
     """
     Run stratified sampling on the input GeoDataFrame based on the sampling ewoc codes.
