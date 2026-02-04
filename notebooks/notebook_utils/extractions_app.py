@@ -312,6 +312,7 @@ class WorldCerealExtractionsApp:
                 print(
                     f"✓ Found {len(collections)} {collection_type_radio.value.lower()} collection(s)"
                 )
+                print("Please select a collection to download in the dropdown above.")
 
             # Build collection selection UI
             self._build_collection_selection_ui(collections)
@@ -329,7 +330,7 @@ class WorldCerealExtractionsApp:
         # Collection dropdown
         options = [
             (f"{col.id} - {col.title if col.title else 'No title'}", col.id)
-            for col in collections
+            for col in sorted(collections, key=lambda col: col.id)
         ]
         collection_dropdown = widgets.Dropdown(
             description="Collection:",
