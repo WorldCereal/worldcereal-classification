@@ -222,16 +222,18 @@ class WorldCerealExtractionsApp:
         background_info = self._info_callout(
             "ℹ️  <strong>About RDM interaction:</strong><br>"
             "To learn more about how to interact with the WorldCereal RDM,<br>"
-            " consult our [dedicated notebook on RDM interaction](https://github.com/WorldCereal/worldcereal-classification/blob/main/notebooks/worldcereal_RDM_demo.ipynb)."
+            ' consult our <a href="https://github.com/WorldCereal/worldcereal-classification/blob/main/notebooks/worldcereal_RDM_demo.ipynb" target="_blank">dedicated notebook on RDM interaction</a>.<br><br>'
+            "🔐 <strong>Authentication:</strong><br>"
+            "You will be asked to login with your CDSE credentials when accessing private collections."
         )
 
         # Build collection type selection UI
         collection_type_radio = widgets.RadioButtons(
             options=[
-                "Private (you will be asked to login with your CDSE credentials)",
+                "Private",
                 "Public",
             ],
-            value="Private (you will be asked to login with your CDSE credentials)",
+            value="Private",
             description="Collection Type:",
         )
 
@@ -326,7 +328,7 @@ class WorldCerealExtractionsApp:
 
         # Collection dropdown
         options = [
-            (f"{col.id} - {col.metadata.get('title', 'No title')}", col.id)
+            (f"{col.id} - {col.title if col.title else 'No title'}", col.id)
             for col in collections
         ]
         collection_dropdown = widgets.Dropdown(
