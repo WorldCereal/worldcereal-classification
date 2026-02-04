@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
-"""Train a PyTorch classification head on Presto embeddings for seasonal inference."""
+"""Train a PyTorch classification head on Presto embeddings for seasonal inference.
+
+# Option 1: Use single dataframe with automatic splitting
+python train_torch_head.py \
+  --single-dataframe /path/to/all_data.parquet \
+  --val-split 0.2 --test-split 0.15 \
+  --head-task croptype --season-id tc-s1 \
+  --output-dir ./output
+
+# Option 2: Use single dataframe with predefined split column
+python train_torch_head.py \
+  --single-dataframe /path/to/data_with_splits.parquet \
+  --split-column my_split_col \
+  --head-task croptype --season-id tc-s1 \
+  --output-dir ./output
+
+# Option 3: Existing behavior with separate files
+python train_torch_head.py \
+  --data-dir /path/to/splits/ \
+  --head-task croptype --season-id tc-s1 \
+  --output-dir ./output
+
+
+
+"""
 
 from __future__ import annotations
 
@@ -14,11 +38,12 @@ from loguru import logger
 
 from worldcereal.train.backbone import (
     build_presto_backbone,
-    resolve_seasonal_backbone_checkpoint,
+    resolve_seasonal_encoder,
 )
 from worldcereal.train.data import (
     compute_seasonal_embeddings_from_splits,
     dataset_to_embeddings,
+    train_val_test_split,
 )
 from worldcereal.train.datasets import SensorMaskingConfig, WorldCerealTrainingDataset
 from worldcereal.train.downstream import TorchTrainer
@@ -69,6 +94,36 @@ def parse_args() -> argparse.Namespace:
         type=str,
         required=False,
         help="Parquet file containing precomputed embeddings with split column.",
+    )
+    parser.add_argument(
+        "--single-dataframe",
+        type=str,
+        required=False,
+        help="Parquet file containing all training data (will be split into train/val/test).",
+    )
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.15,
+        help="Validation set fraction when using --single-dataframe.",
+    )
+    parser.add_argument(
+        "--test-split",
+        type=float,
+        default=0.15,
+        help="Test set fraction when using --single-dataframe.",
+    )
+    parser.add_argument(
+        "--split-stratify-col",
+        type=str,
+        default="downstream_class",
+        help="Column to stratify by when splitting --single-dataframe.",
+    )
+    parser.add_argument(
+        "--split-column",
+        type=str,
+        default="split",
+        help="Column name for predefined splits in --single-dataframe.",
     )
     parser.add_argument(
         "--output-dir", type=str, required=True, help="Directory to store outputs."
@@ -196,7 +251,7 @@ def _compute_embeddings_from_splits(
 
     from prometheo.utils import device
 
-    presto_checkpoint = presto_model_path or resolve_seasonal_backbone_checkpoint()
+    presto_checkpoint = presto_model_path or resolve_seasonal_encoder()[0]
     presto_model = build_presto_backbone(checkpoint_path=presto_checkpoint).to(device)
 
     train_embeddings = dataset_to_embeddings(
@@ -242,6 +297,11 @@ def main() -> None:
                 self.presto_model_path = "/path/to/presto_encoder.pt"
                 self.data_dir = "/path/to/parquet_splits"
                 self.embeddings_path = None
+                self.single_dataframe = None
+                self.val_split = 0.15
+                self.test_split = 0.15
+                self.split_stratify_col = "downstream_class"
+                self.split_column = "split"
                 self.output_dir = "./downstream_classifier"
                 self.timestep_freq = "month"
                 self.batch_size = 1024
@@ -285,17 +345,44 @@ def main() -> None:
     else:
         cropland_class_names = args.cropland_class_names
 
-    presto_checkpoint = args.presto_model_path or resolve_seasonal_backbone_checkpoint()
+    presto_checkpoint = args.presto_model_path or resolve_seasonal_encoder()[0]
 
     embeddings_df = None
     if args.embeddings_path:
         logger.info("Loading embeddings dataframe from %s", args.embeddings_path)
         embeddings_df = pd.read_parquet(args.embeddings_path)
     else:
-        if args.data_dir is None:
-            raise ValueError("Either --embeddings-path or --data-dir must be provided.")
-        splits = _load_split_dataframes(args.data_dir)
+        # Get splits from either single_dataframe or data_dir
+        if args.single_dataframe:
+            logger.info("Loading single dataframe from %s", args.single_dataframe)
+            full_df = pd.read_parquet(args.single_dataframe)
 
+            # Ensure downstream_class column exists
+            if (
+                "downstream_class" not in full_df.columns
+                and "finetune_class" in full_df.columns
+            ):
+                full_df["downstream_class"] = full_df["finetune_class"]
+
+            # Use existing train_val_test_split function
+            train_df, val_df, test_df = train_val_test_split(
+                full_df,
+                split_column=args.split_column,
+                val_size=args.val_split,
+                test_size=args.test_split,
+                seed=args.seed,
+                stratify_label=args.split_stratify_col,
+                min_samples_per_class=10,
+            )
+            splits = {"train": train_df, "val": val_df, "test": test_df}
+        elif args.data_dir:
+            splits = _load_split_dataframes(args.data_dir)
+        else:
+            raise ValueError(
+                "Either --embeddings-path, --single-dataframe, or --data-dir must be provided."
+            )
+
+        # Compute embeddings from splits (shared code path)
         if args.season_id:
             logger.info(
                 "Computing seasonal embeddings for season %s using %s",
