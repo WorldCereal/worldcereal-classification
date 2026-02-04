@@ -117,6 +117,19 @@ class WorldCerealExtractionsApp:
 
     def _build_ui(self):
         """Build the complete tabbed interface."""
+        display(
+            HTML(
+                """
+                <style>
+                    .jp-OutputArea-output pre {
+                        white-space: pre-wrap !important;
+                        word-wrap: break-word !important;
+                        overflow-wrap: break-word !important;
+                    }
+                </style>
+                """
+            )
+        )
         # Create tabs
         tab1 = self._build_tab1_retrieve_data()
         tab2 = self._build_tab2_select_samples()
@@ -364,20 +377,6 @@ class WorldCerealExtractionsApp:
 
         with status_output:
             clear_output(wait=True)
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
 
             if not collection_dropdown.value:
                 print("❌ Please select a collection")
@@ -497,20 +496,6 @@ class WorldCerealExtractionsApp:
 
         with status_output:
             clear_output(wait=True)
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
 
             file = Path(file_path_text.value)
 
@@ -778,20 +763,6 @@ class WorldCerealExtractionsApp:
 
         with results_output:
             clear_output(wait=True)
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
             print("🔄 Running custom sampling...")
             print(f"   Selected crop types: {len(selected_crop_types)}")
             print(f"   Max samples per class: {max_samples_per_cell}")
@@ -960,20 +931,6 @@ class WorldCerealExtractionsApp:
 
         with results_output:
             clear_output(wait=True)
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
             print("🔄 Preparing samples for extraction...")
 
             try:
@@ -1529,20 +1486,6 @@ class WorldCerealExtractionsApp:
 
         with progress_output:
             clear_output(wait=True)
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
             print("🔄 Starting EO data extractions...")
             print("=" * 60)
 
@@ -1890,20 +1833,6 @@ class WorldCerealExtractionsApp:
 
         with output:
             clear_output()
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
             try:
                 if self.collection_id is None:
                     print("⚠ No collection ID set. Please complete previous steps.")
@@ -1962,20 +1891,6 @@ class WorldCerealExtractionsApp:
 
         with output:
             clear_output()
-            # Apply CSS styling to ensure long lines wrap properly
-            display(
-                HTML(
-                    """
-            <style>
-                .jp-OutputArea-output pre {
-                    white-space: pre-wrap !important;
-                    word-wrap: break-word !important;
-                    overflow-wrap: break-word !important;
-                }
-            </style>
-            """
-                )
-            )
             try:
                 if self.extractions_gdf is None:
                     print(
