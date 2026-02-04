@@ -349,12 +349,12 @@ def main() -> None:
 
     embeddings_df = None
     if args.embeddings_path:
-        logger.info("Loading embeddings dataframe from %s", args.embeddings_path)
+        logger.info(f"Loading embeddings dataframe from {args.embeddings_path}")
         embeddings_df = pd.read_parquet(args.embeddings_path)
     else:
         # Get splits from either single_dataframe or data_dir
         if args.single_dataframe:
-            logger.info("Loading single dataframe from %s", args.single_dataframe)
+            logger.info(f"Loading single dataframe from {args.single_dataframe}")
             full_df = pd.read_parquet(args.single_dataframe)
 
             # Ensure downstream_class column exists
@@ -385,9 +385,7 @@ def main() -> None:
         # Compute embeddings from splits (shared code path)
         if args.season_id:
             logger.info(
-                "Computing seasonal embeddings for season %s using %s",
-                args.season_id,
-                presto_checkpoint,
+                f"Computing seasonal embeddings for season {args.season_id} using {presto_checkpoint}"
             )
             embeddings_df = compute_seasonal_embeddings_from_splits(
                 splits["train"],
@@ -401,7 +399,7 @@ def main() -> None:
                 season_calendar_mode=args.season_calendar_mode,
             )
         elif args.head_task == "landcover":
-            logger.info("Computing pooled embeddings using %s", presto_checkpoint)
+            logger.info(f"Computing pooled embeddings using {presto_checkpoint}")
             embeddings_df = _compute_embeddings_from_splits(
                 splits,
                 presto_model_path=presto_checkpoint,
