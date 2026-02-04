@@ -1,4 +1,5 @@
 import json
+import datetime
 import tempfile
 import warnings
 import zipfile
@@ -7,6 +8,7 @@ from typing import Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import pandas as pd
 from ipyleaflet import (
     DrawControl,
     GeoJSON,
@@ -326,6 +328,21 @@ def visualize_rdm_geoparquet(
     """
 
     gdf = gpd.read_parquet(src_path)
+
+    # Preprocess datetime columns to ISO format strings
+    gdf = gdf.copy()
+    geometry_col = gdf.geometry.name if hasattr(gdf, "geometry") else None
+    for col in gdf.columns:
+        if col == geometry_col:
+            continue
+        if pd.api.types.is_datetime64_any_dtype(gdf[col]) or gdf[col].dtype == "object":
+            gdf[col] = gdf[col].apply(
+                lambda v: (
+                    v.isoformat()
+                    if isinstance(v, (datetime.date, datetime.datetime))
+                    else v
+                )
+            )
 
     # Ensure WGS84 for map display
     if gdf.crs and gdf.crs.to_epsg() != 4326:
