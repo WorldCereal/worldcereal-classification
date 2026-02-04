@@ -75,7 +75,7 @@ def distance_and_class_balanced_sampling(
     sorted_classes = crop_counts.sort_values(ascending=True).index.tolist()
 
     for crop_class in sorted_classes:
-        selected_in_crop = []
+        selected_in_crop: List[str] = []
 
         max_samples_per_class = sampling_count_per_class.get(crop_class, 0)
         if max_samples_per_class <= 0:
