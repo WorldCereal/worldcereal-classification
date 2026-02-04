@@ -54,7 +54,7 @@ def validate_area(bbox, area_limit: int, output: widgets.Output) -> bool:
 
 
 class ui_map:
-    def __init__(self, area_limit: Optional[int] = None):
+    def __init__(self, area_limit: Optional[int] = None, display_ui: bool = True):
         """
         Initializes an ipyleaflet map with a draw control and file upload functionality
         to select an extent.
@@ -64,6 +64,8 @@ class ui_map:
         area_limit : int, optional
             The maximum area in km² that can be selected on the map.
             By default no restrictions are imposed.
+        display_ui : bool, optional
+            Whether to display the map UI immediately upon initialization.
         """
 
         self.area_limit = area_limit
@@ -82,7 +84,8 @@ class ui_map:
         self._add_controls()
         self._wire_events()
 
-        display(widgets.VBox([self.map, self.output]))
+        if display_ui:
+            display(widgets.VBox([self.map, self.output]))
 
     def _build_map(self):
 
