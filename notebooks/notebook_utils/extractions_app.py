@@ -10,7 +10,7 @@ This module provides an interactive widget-based interface for:
 
 from pathlib import Path
 import platform
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import tempfile
 import shutil
 import threading
@@ -93,6 +93,7 @@ class WorldCerealExtractionsApp:
 
         # UI components (initialized in build methods)
         self.tabs: Optional[widgets.Tab] = None
+        self._nav_buttons: List[Dict[str, widgets.Button]] = []
 
         # Tab-specific widgets (will be populated by build methods)
         self.tab1_widgets: Dict[str, Any] = {}
@@ -145,6 +146,62 @@ class WorldCerealExtractionsApp:
 
         # Observe tab changes to update UI state
         self.tabs.observe(self._on_tab_change, names="selected_index")
+        self._update_nav_buttons()
+
+    def _build_tab_navigation(self) -> widgets.VBox:
+        """Create navigation controls for switching tabs."""
+        note = widgets.HTML(
+            value="<i>Use the buttons below to go to the previous or next step.</i>"
+        )
+        prev_button = widgets.Button(
+            description="Go back to previous step",
+            button_style="",
+            icon="arrow-left",
+            layout=widgets.Layout(width="220px"),
+        )
+        next_button = widgets.Button(
+            description="Proceed to next step",
+            button_style="primary",
+            icon="arrow-right",
+            layout=widgets.Layout(width="200px"),
+        )
+
+        prev_button.on_click(self._on_prev_tab)
+        next_button.on_click(self._on_next_tab)
+
+        self._nav_buttons.append({"prev": prev_button, "next": next_button})
+
+        return widgets.VBox(
+            [note, widgets.HBox([prev_button, next_button])],
+            layout=widgets.Layout(margin="16px 0 0 0"),
+        )
+
+    def _on_prev_tab(self, _=None):
+        if self.tabs is None:
+            return
+        if self.tabs.selected_index is None:
+            return
+        if self.tabs.selected_index > 0:
+            self.tabs.selected_index -= 1
+        self._update_nav_buttons()
+
+    def _on_next_tab(self, _=None):
+        if self.tabs is None:
+            return
+        if self.tabs.selected_index is None:
+            return
+        if self.tabs.selected_index < len(self.tabs.children) - 1:
+            self.tabs.selected_index += 1
+        self._update_nav_buttons()
+
+    def _update_nav_buttons(self):
+        if self.tabs is None or self.tabs.selected_index is None:
+            return
+        current = self.tabs.selected_index
+        total = len(self.tabs.children)
+        for nav in self._nav_buttons:
+            nav["prev"].disabled = current <= 0
+            nav["next"].disabled = current >= total - 1
 
     # =========================================================================
     # Tab 1: Retrieve Data
@@ -217,6 +274,7 @@ class WorldCerealExtractionsApp:
                 dynamic_content,
                 widgets.HTML("<b>Status:</b>"),
                 status_output,
+                self._build_tab_navigation(),
             ]
         )
 
@@ -645,6 +703,7 @@ class WorldCerealExtractionsApp:
                 ),
                 widgets.HTML("<b>Preparation Results:</b>"),
                 results_output,
+                self._build_tab_navigation(),
             ]
         )
 
@@ -1366,6 +1425,7 @@ class WorldCerealExtractionsApp:
                 background_info,
                 widgets.HTML("<b>Progress:</b>"),
                 progress_output,
+                self._build_tab_navigation(),
             ]
         )
 
@@ -1824,6 +1884,7 @@ class WorldCerealExtractionsApp:
                     [visualize_button], layout=widgets.Layout(margin="10px 0")
                 ),
                 results_output,
+                self._build_tab_navigation(),
             ]
         )
 
@@ -1967,6 +2028,8 @@ class WorldCerealExtractionsApp:
         """Handle tab change events to update UI state."""
         tab_index = change["new"]
         logger.info(f"Switched to tab {tab_index}")
+
+        self._update_nav_buttons()
 
         # Update UI based on current state when switching tabs
         if tab_index == 1:  # Select Samples tab
