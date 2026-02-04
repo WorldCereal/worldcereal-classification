@@ -40,7 +40,7 @@ from notebook_utils.extractions import (
     get_band_statistics,
     visualize_timeseries,
 )
-from notebook_utils.sampling import run_sampling
+from worldcereal.utils.sampling import run_sampling
 
 
 class WorldCerealExtractionsApp:
