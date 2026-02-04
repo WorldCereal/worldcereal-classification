@@ -455,12 +455,12 @@ def main(args):
     # setup path for processed wide parquet file so that it can be reused across experiments
     if not debug:
         wide_parquet_output_path = Path(
-            "/projects/worldcereal/data/cached_wide_merged305/merged_305_wide.parquet"
+            "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
         )
     else:
         wide_parquet_output_path = None
         # wide_parquet_output_path = Path(
-        # "/projects/worldcereal/data/cached_wide_merged305/merged_305_wide.parquet"
+        # "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
         # )
 
     # Training parameters
