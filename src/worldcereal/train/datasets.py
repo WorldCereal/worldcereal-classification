@@ -87,6 +87,8 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "valid_time",
     "quality_score_lc",
     "quality_score_ct",
+    "confidence_nonoutlier",
+    "anomaly_flag",
 )
 
 _LABEL_DATETIME_COLUMNS: Tuple[str, ...] = (
