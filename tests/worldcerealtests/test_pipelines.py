@@ -10,8 +10,7 @@ from sklearn.utils.class_weight import compute_class_weight
 
 from worldcereal.parameters import CropTypeParameters
 from worldcereal.train.data import get_training_df
-from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.datasets import WorldCerealTrainingDataset
+from worldcereal.train.datasets import SensorMaskingConfig, WorldCerealTrainingDataset
 from worldcereal.utils.refdata import (
     process_extractions_df,
     query_private_extractions,
@@ -107,6 +106,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         "valid_time",
         "label_full",
         "sampling_label",
+        "sample_id",
     ]
     static_columns = ["DEM-alt-20m", "DEM-slo-20m"]
     feature_columns = [
