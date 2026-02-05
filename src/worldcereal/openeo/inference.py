@@ -756,28 +756,24 @@ class SeasonalModelBundle:
         if module is None:
             raise ValueError(f"Base model missing {task} head; cannot apply override")
 
-        # Replace head architecture if type or number of classes changed
-        if (
-            head_spec.head_type != current_spec.head_type
-            or head_spec.num_classes != current_spec.num_classes
-        ):
-            logger.info(
-                f"Replacing {task} head: {current_spec.head_type}/{current_spec.num_classes} -> "
-                f"{head_spec.head_type}/{head_spec.num_classes}"
-            )
-            self.model.head.replace_head(
-                task=task,
-                num_outputs=head_spec.num_classes,
-                head_type=head_spec.head_type,
-                hidden_dim=head_spec.hidden_dim,
-                dropout=head_spec.dropout,
-            )
-            # Get the new module after replacement
-            module = (
-                self.model.head.landcover_head
-                if is_landcover
-                else self.model.head.crop_head
-            )
+        # Replace head architecture with custom head specification
+        logger.info(
+            f"Replacing {task} head: {current_spec.head_type}/{current_spec.num_classes} -> "
+            f"{head_spec.head_type}/{head_spec.num_classes}"
+        )
+        self.model.head.replace_head(
+            task=task,
+            num_outputs=head_spec.num_classes,
+            head_type=head_spec.head_type,
+            hidden_dim=head_spec.hidden_dim,
+            dropout=head_spec.dropout,
+        )
+        # Get the new module after replacement
+        module = (
+            self.model.head.landcover_head
+            if is_landcover
+            else self.model.head.crop_head
+        )
 
         # Load custom weights
         missing, unexpected = module.load_state_dict(state_dict, strict=False)
@@ -1091,6 +1087,10 @@ class SeasonalInferenceEngine:
         logger.debug(
             f"Prepared inference cube (dims={prepped_summary}, dtype={prepped.dtype})"
         )
+
+        # Log input cube statistics for debugging
+        self._log_input_statistics(prepped)
+
         predictors = generate_predictor(prepped.transpose("bands", "t", "x", "y"), epsg)
         num_samples = getattr(predictors, "B", None)
         num_timesteps = getattr(predictors, "T", None)
@@ -1231,6 +1231,44 @@ class SeasonalInferenceEngine:
                 "Seasonal inference requires at least one season identifier"
             )
         return list(self._default_season_ids)
+
+    def _log_input_statistics(self, arr: xr.DataArray) -> None:
+        """Log statistics of the input cube for debugging purposes."""
+        try:
+            bands_to_check = arr.bands.values
+
+            # Overall statistics
+            total_values = arr.size
+            nan_count = np.isnan(arr.values).sum()
+            nan_pct = (nan_count / total_values * 100) if total_values > 0 else 0.0
+
+            logger.info(
+                f"Input cube statistics: shape={arr.shape}, total_values={total_values}, "
+                f"NaN_count={nan_count} ({nan_pct:.2f}%)"
+            )
+
+            for i, band in enumerate(bands_to_check):
+                band_data = arr.sel(bands=band).values
+                valid_mask = ~np.isnan(band_data)
+                n_valid = valid_mask.sum()
+                n_total = band_data.size
+
+                if n_valid > 0:
+                    valid_data = band_data[valid_mask]
+                    min_val = float(np.nanmin(valid_data))
+                    max_val = float(np.nanmax(valid_data))
+                    mean_val = float(np.nanmean(valid_data))
+                    logger.debug(
+                        f"  Band '{band}': valid={n_valid}/{n_total} ({n_valid / n_total * 100:.1f}%), "
+                        f"min={min_val:.4f}, max={max_val:.4f}, mean={mean_val:.4f}"
+                    )
+                else:
+                    logger.warning(
+                        f"  Band '{band}': all values are NaN ({n_total} values)"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Failed to compute input statistics: {e}")
 
     def _run_batches(
         self, predictors: "Predictors", season_masks: np.ndarray
