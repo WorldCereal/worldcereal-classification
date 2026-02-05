@@ -5,12 +5,12 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
-import duckdb
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, List, Optional, Union
 
+import duckdb
 import geopandas as gpd
 import pandas as pd
 import pystac
@@ -23,7 +23,6 @@ from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from tabulate import tabulate
 
 from worldcereal.extract.job_manager import ExtractionJobManager
-
 from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
     create_job_patch_meteo,
