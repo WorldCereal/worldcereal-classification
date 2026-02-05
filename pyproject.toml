@@ -67,10 +67,10 @@ dependencies = [
 dev = [
   "pytest>=7.4.0",
   "pytest-depends",  
-  "matplotlib>=3.3.0"
 ]
 train = [
   "catboost~=1.2.8",
+  "matplotlib>=3.3.0",
   "scikit-learn",
   "torch>=2.3.0",
   "pystac==1.10.1",
