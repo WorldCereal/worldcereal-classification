@@ -1,18 +1,26 @@
+import json
+from pathlib import Path
+from typing import Callable, Union
+
 import openeo
 import pandas as pd
-from openeo.extra.job_management import MultiBackendJobManager
 import pystac
-from typing import Callable, Union
+from openeo.extra.job_management import MultiBackendJobManager
+
 from worldcereal.extract.utils import pipeline_log
-from pathlib import Path
-import json
+
 
 class ExtractionJobManager(MultiBackendJobManager):
-    def __init__(self, poll_sleep: int, root_dir: Union[Path, str], output_path_generator: Callable, post_job_action: Callable):
+    def __init__(
+        self,
+        poll_sleep: int,
+        root_dir: Union[Path, str],
+        output_path_generator: Callable,
+        post_job_action: Callable,
+    ):
         super().__init__(poll_sleep=poll_sleep, root_dir=root_dir)
         self.output_path_generator = output_path_generator
         self.post_job_action = post_job_action
-
 
     def _download_job_products(self, job: openeo.BatchJob, row: pd.Series) -> dict:
         job_products = {}
@@ -59,9 +67,9 @@ class ExtractionJobManager(MultiBackendJobManager):
                 asset_name = list(item.assets.values())[0].title
                 asset_path = job_products[f"{job.job_id}_{asset_name}"][0]
 
-                assert (
-                    len(item.assets.values()) == 1
-                ), "Each item should only contain one asset"
+                assert len(item.assets.values()) == 1, (
+                    "Each item should only contain one asset"
+                )
                 for asset in item.assets.values():
                     asset.href = str(
                         asset_path
@@ -78,7 +86,7 @@ class ExtractionJobManager(MultiBackendJobManager):
                     e,
                 )
         return job_items
-    
+
     def on_job_done(self, job: openeo.BatchJob, row: pd.Series):
         """Method called when a job finishes successfully.
         Parameters
@@ -99,7 +107,6 @@ class ExtractionJobManager(MultiBackendJobManager):
         pipeline_log.debug("Calling post job action for job %s...", job.job_id)
         job_items = self.post_job_action(job_items, row)
         pipeline_log.debug("Finished post job action for job %s.", job.job_id)
-       
 
     def on_job_error(self, job: openeo.BatchJob, row: pd.Series):
         """Method called when a job finishes with an error.
@@ -125,9 +132,7 @@ class ExtractionJobManager(MultiBackendJobManager):
         title = job_metadata["title"]
         job_id = job_metadata["id"]
 
-        output_log_path = (
-            Path(self._root_dir) / "failed_jobs" / f"{title}_{job_id}.log"
-        )
+        output_log_path = Path(self._root_dir) / "failed_jobs" / f"{title}_{job_id}.log"
         output_log_path.parent.mkdir(parents=True, exist_ok=True)
 
         if len(error_logs) > 0:
