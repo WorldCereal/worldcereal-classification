@@ -1,11 +1,14 @@
+import json
+from pathlib import Path
+from typing import Callable, Union
+
 import openeo
 import pandas as pd
-from openeo.extra.job_management import MultiBackendJobManager
 import pystac
-from typing import Callable, Union
+from openeo.extra.job_management import MultiBackendJobManager
+
 from worldcereal.extract.utils import pipeline_log
-from pathlib import Path
-import json
+
 
 class ExtractionJobManager(MultiBackendJobManager):
     def __init__(self, poll_sleep: int, root_dir: Union[Path, str], output_path_generator: Callable, post_job_action: Callable):

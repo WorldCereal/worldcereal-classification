@@ -1,7 +1,11 @@
 import pytest
 
 from worldcereal.openeo.inference import Postprocessor
-from worldcereal.parameters import CropLandParameters, CropTypeParameters, PostprocessParameters
+from worldcereal.parameters import (
+    CropLandParameters,
+    CropTypeParameters,
+    PostprocessParameters,
+)
 
 
 def test_cropland_postprocessing(WorldCerealCroplandClassification):
