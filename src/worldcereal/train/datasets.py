@@ -704,11 +704,15 @@ class WorldCerealDataset(Dataset):
         else:
             if self.is_ssl:
                 # Take a random center point enabling horizontal jittering
-                center_candidates = range(
-                    self.num_timesteps // 2,
-                    (available_timesteps - self.num_timesteps // 2),
+                center_point = int(
+                    np.random.choice(
+                        range(
+                            self.num_timesteps // 2,
+                            (available_timesteps - self.num_timesteps // 2),
+                        ),
+                        1,
+                    )[0]
                 )
-                center_point = int(np.random.choice(list(center_candidates)))
             else:
                 # Randomly shift the center point but make sure the resulting range
                 # well includes the valid position

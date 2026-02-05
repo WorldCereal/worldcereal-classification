@@ -18,18 +18,9 @@ jobs:
       with:
         python-version: 3.11
         cache: 'pip'
-    # - name: Install openEO-GFMAP from source
-    #   run: |
-    #     git clone https://github.com/Open-EO/openeo-gfmap.git
-    #     cd openeo-gfmap
-    #     pip install .
-    #     cd ..
     - name: Install Prometheo from source
       run: |
-        git clone https://github.com/WorldCereal/prometheo.git
-        cd prometheo
-        pip install .
-        cd ..
+        pip install git+https://github.com/WorldCereal/prometheo.git@v0.0.4
     - name: Install WorldCereal dependencies
       run: pip install ".[dev,train,notebooks]"
     - name: Run WorldCereal tests

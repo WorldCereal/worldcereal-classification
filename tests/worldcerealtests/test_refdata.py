@@ -19,7 +19,7 @@ def test_query_public_extractions():
     """Unittest for querying public extractions."""
 
     # Define small polygon
-    poly = Polygon.from_bounds(*(4.535, 51.050719, 4.600936, 51.098176))
+    poly = Polygon.from_bounds(*(-55.549955, -22.101107, -53.488703, -20.504832))
 
     # Query extractions
     df = query_public_extractions(poly, buffer=100)

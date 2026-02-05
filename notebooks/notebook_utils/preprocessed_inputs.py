@@ -1,31 +1,33 @@
 import json
 import random
 import shutil
-import time
 import sys
+import time
 from functools import partial
 from pathlib import Path
 from typing import Literal, Optional
-from tabulate import tabulate
-import numpy as np
-import matplotlib.pyplot as plt
-import xarray as xr
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
 import openeo
 import pandas as pd
 import shapely
+import xarray as xr
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import MultiBackendJobManager
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from openeo_gfmap.manager.job_splitters import load_s2_grid
+from tabulate import tabulate
+
 from worldcereal.job import create_inputs_process_graph
+
 from .extractions import (
-    _apply_band_scaling,
-    WORLDCEREAL_BANDS,
     NODATAVALUE,
+    WORLDCEREAL_BANDS,
+    _apply_band_scaling,
 )
 
 MAX_RETRIES = 50

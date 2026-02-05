@@ -1,20 +1,20 @@
 import logging
+import textwrap
 import urllib.request
 from pathlib import Path
 from typing import List, Optional, Union
 
 import geopandas as gpd
-import textwrap
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
-from shapely.geometry import Polygon, box
-from tqdm import tqdm
-from tabulate import tabulate
-
 from prometheo.utils import DEFAULT_SEED
+from shapely.geometry import Polygon, box
+from tabulate import tabulate
+from tqdm import tqdm
+
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.legend import ewoc_code_to_label
