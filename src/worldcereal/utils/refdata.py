@@ -371,6 +371,7 @@ FROM read_parquet('{url}')
     if public_df_raw.empty:
         logger.warning("No samples found matching your search criteria.")
         return gpd.GeoDataFrame()
+
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
     public_df_raw["filename"] = public_df_raw["ref_id"]
 
@@ -534,41 +535,79 @@ def month_diff(month1: int, month2: int) -> int:
     return (month2 - month1) % 12
 
 
-def is_within_period(proposed_date, start_date, end_date, buffer):
-    return (proposed_date - pd.DateOffset(months=buffer) >= start_date) & (
-        proposed_date + pd.DateOffset(months=buffer) <= end_date
+STEPS_PER_YEAR = {"month": 12, "dekad": 36}
+
+
+def _step_in_year(ts: pd.Timestamp, freq: str) -> int:
+    ts = pd.Timestamp(ts)
+    if freq == "month":
+        return ts.month - 1
+    if freq == "dekad":
+        dekad = 0 if ts.day <= 10 else 1 if ts.day <= 20 else 2
+        return (ts.month - 1) * 3 + dekad
+    raise ValueError(f"Unsupported freq: {freq}")
+
+
+def _freq_step_index(ts: pd.Timestamp, freq: str) -> int:
+    ts = pd.Timestamp(ts)
+    if freq == "month":
+        return ts.year * 12 + (ts.month - 1)
+    if freq == "dekad":
+        dekad = 0 if ts.day <= 10 else 1 if ts.day <= 20 else 2
+        return ts.year * 36 + (ts.month - 1) * 3 + dekad
+    raise ValueError(f"Unsupported freq: {freq}")
+
+
+def _index_to_ts(idx: int, freq: str) -> pd.Timestamp:
+    if freq == "month":
+        year, month0 = divmod(idx, 12)
+        return pd.Timestamp(year, month0 + 1, 1)
+    if freq == "dekad":
+        year, rem = divmod(idx, 36)
+        month0, dekad = divmod(rem, 3)
+        day = 1 if dekad == 0 else 11 if dekad == 1 else 21
+        return pd.Timestamp(year, month0 + 1, day)
+    raise ValueError(f"Unsupported freq: {freq}")
+
+
+def is_within_period(proposed_step, start_step, end_step, buffer_steps):
+    return (proposed_step - buffer_steps >= start_step) & (
+        proposed_step + buffer_steps <= end_step
     )
 
 
-def check_shift(proposed_date, valid_time, start_date, end_date, buffer, num_timesteps):
-    proposed_start_date = proposed_date - pd.DateOffset(months=(num_timesteps // 2 - 1))
-    proposed_end_date = proposed_date + pd.DateOffset(months=(num_timesteps // 2))
-
-    cond1 = is_within_period(proposed_date, start_date, end_date, MIN_EDGE_BUFFER)
-    cond2 = proposed_start_date + pd.DateOffset(months=MIN_EDGE_BUFFER) >= start_date
-    cond3 = proposed_end_date - pd.DateOffset(months=MIN_EDGE_BUFFER) <= end_date
-    cond4 = (valid_time - pd.DateOffset(months=buffer)) >= proposed_start_date
-    # Use < with +1 day to make the check inclusive of the last day of the month
-    # This ensures samples with valid_time on the last day of the processing period are not excluded
-    # E.g., when proposed_end_date = Dec 30, we want to include Dec 31
-    cond5 = (
-        valid_time + pd.DateOffset(months=buffer)
-    ) < proposed_end_date + pd.DateOffset(days=2)
-
-    result = cond1 & cond2 & cond3 & cond4 & cond5
-
-    return result
+def check_shift(
+    proposed_step: int,
+    valid_step: int,
+    start_step: int,
+    end_step: int,
+    buffer_steps: int,
+    num_timesteps: int,
+    edge_steps: int,
+) -> bool:
+    proposed_start_step = proposed_step - (num_timesteps // 2 - 1)
+    proposed_end_step = proposed_step + (num_timesteps // 2)
+    return (
+        # checks that the middle of the proposed period is within the available extractions
+        is_within_period(proposed_step, start_step, end_step, edge_steps)
+        # checks that the proposed period does not fall too far outside the available extractions
+        & (proposed_start_step + edge_steps >= start_step)
+        & (proposed_end_step - edge_steps <= end_step)
+        # checks that true valid_time is not too close to the edges of the proposed period
+        & ((valid_step - buffer_steps) >= proposed_start_step)
+        & ((valid_step + buffer_steps) <= proposed_end_step)
+    )
 
 
 def get_best_valid_time(
-    row: pd.Series, valid_time_buffer: int, num_timesteps: int
+    row: pd.Series, valid_time_buffer: int, num_timesteps: int, freq: str
 ) -> Union[pd.Timestamp, float]:
     """
     Determines the best valid time for a given row of data based on specified shift constraints.
 
     This function evaluates potential valid times by shifting the original valid time
-    forward or backward according to the values in 'valid_month_shift_forward' and
-    'valid_month_shift_backward' fields. It ensures the shifted time remains within
+    forward or backward according to the values in 'valid_step_shift_forward' and
+    'valid_step_shift_backward' fields. It ensures the shifted time remains within
     the period defined by 'start_date' and 'end_date' with sufficient buffer.
 
     Parameters
@@ -578,14 +617,20 @@ def get_best_valid_time(
         - valid_time: The original valid time
         - start_date: The start date of the allowed period
         - end_date: The end date of the allowed period
-        - valid_month_shift_forward: Number of months to shift forward
-        - valid_month_shift_backward: Number of months to shift backward
+        - valid_step_shift_forward: Number of timesteps to shift forward
+        - valid_step_shift_backward: Number of timesteps to shift backward
     valid_time_buffer : int
-        Temporal buffer in months, determining how close we allow the true valid_time of the sample to be to the edge of the proposed processing period.
+        Temporal buffer in months, determining how close we allow the true valid_time of the
+        sample to be to the edge of the proposed processing period. For dekads, this is
+        converted to timesteps (months * 3).
 
     num_timesteps : int
         The number of timesteps accepted by the model.
         This is used to define the middle of the user-defined period.
+
+    freq : str
+        Frequency alias for time series processing. Currently only "month" and "dekad"
+        are supported.
 
     Returns
     -------
@@ -596,58 +641,62 @@ def get_best_valid_time(
     """
 
     # Run a check on provided valid_time_buffer
-    if valid_time_buffer > num_timesteps // 2:
-        logger.warning(
-            f"The provided valid_time_buffer ({valid_time_buffer} months) is larger than half the number of timesteps in the processing period. "
-            f"Reducing valid_time_buffer to half the number of timesteps: {num_timesteps // 2} months"
-        )
-        valid_time_buffer = num_timesteps // 2
     if valid_time_buffer < 0:
         raise ValueError(
             f"The provided valid_time_buffer ({valid_time_buffer} months) must be a non-negative integer."
         )
+    buffer_multiplier = 1 if freq == "month" else 3
+    buffer_steps = valid_time_buffer * buffer_multiplier
+    edge_steps = MIN_EDGE_BUFFER * buffer_multiplier
+    if buffer_steps > num_timesteps // 2:
+        logger.warning(
+            f"The provided valid_time_buffer ({valid_time_buffer} months) is larger than half the number of timesteps in the processing period. "
+            f"Reducing valid_time_buffer to half the number of timesteps: {num_timesteps // 2} timesteps"
+        )
+        buffer_steps = num_timesteps // 2
 
     # Extract necessary fields from the row
     valid_time = row["valid_time"]
     start_date = row["start_date"]
     end_date = row["end_date"]
 
-    proposed_valid_time_fwd = valid_time + pd.DateOffset(
-        months=row["valid_month_shift_forward"]
-    )
-    proposed_valid_time_bwd = valid_time - pd.DateOffset(
-        months=row["valid_month_shift_backward"]
-    )
+    valid_step = _freq_step_index(valid_time, freq)
+    start_step = _freq_step_index(start_date, freq)
+    end_step = _freq_step_index(end_date, freq)
+    proposed_step_fwd = valid_step + int(row["valid_step_shift_forward"])
+    proposed_step_bwd = valid_step - int(row["valid_step_shift_backward"])
 
     shift_forward_ok = check_shift(
-        proposed_valid_time_fwd,
-        valid_time,
-        start_date,
-        end_date,
-        valid_time_buffer,
+        proposed_step_fwd,
+        valid_step,
+        start_step,
+        end_step,
+        buffer_steps,
         num_timesteps,
+        edge_steps,
     )
     shift_backward_ok = check_shift(
-        proposed_valid_time_bwd,
-        valid_time,
-        start_date,
-        end_date,
-        valid_time_buffer,
+        proposed_step_bwd,
+        valid_step,
+        start_step,
+        end_step,
+        buffer_steps,
         num_timesteps,
+        edge_steps,
     )
 
     if not shift_forward_ok and not shift_backward_ok:
         return np.nan
     if shift_forward_ok and not shift_backward_ok:
-        return proposed_valid_time_fwd
+        return _index_to_ts(proposed_step_fwd, freq)
     if not shift_forward_ok and shift_backward_ok:
-        return proposed_valid_time_bwd
+        return _index_to_ts(proposed_step_bwd, freq)
     if shift_forward_ok and shift_backward_ok:
         return (
-            proposed_valid_time_bwd
-            if (row["valid_month_shift_backward"] - row["valid_month_shift_forward"])
-            <= MIN_EDGE_BUFFER
-            else proposed_valid_time_fwd
+            _index_to_ts(proposed_step_bwd, freq)
+            if (row["valid_step_shift_backward"] - row["valid_step_shift_forward"])
+            <= edge_steps
+            else _index_to_ts(proposed_step_fwd, freq)
         )
     return np.nan
 
@@ -715,11 +764,8 @@ def process_extractions_df(
         Frequency alias for time series processing. Currently only "month" and "dekad" are supported.
     valid_time_buffer : int, default 0
         Buffer in months to apply when aligning available extractions with user-defined temporal extent.
-        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period
-    season_window : TemporalContext, optional
-        Optional campaign window. When provided, samples whose ``valid_time`` falls
-        outside the selected window (ignoring the absolute year) are discarded. This
-        ensures multi-year datasets only supervise within the slider-defined window.
+        Determines how close we allow the true valid_time of the sample to be to the edge of the processing period.
+        For dekads, this is converted to timesteps (months * 3).
 
     Returns
     -------
@@ -782,7 +828,7 @@ def process_extractions_df(
 
         middle_index = len(date_range) // 2 - 1
         processing_period_middle_ts = date_range[middle_index]
-        processing_period_middle_month = processing_period_middle_ts.month
+        processing_period_middle_step = _step_in_year(processing_period_middle_ts, freq)
 
         # # calculate the start and end dates of available extractions per sample
         df_raw["start_date"] = df_raw.groupby("sample_id")["timestamp"].transform("min")
@@ -799,25 +845,22 @@ def process_extractions_df(
         true_valid_time_map = sample_dates.set_index("sample_id")["valid_time"]
 
         # calculate the shifts and assign new valid date
-        sample_dates["true_valid_time_month"] = sample_dates["valid_time"].dt.month
-        sample_dates["proposed_valid_time_month"] = processing_period_middle_month
-        sample_dates["valid_month_shift_backward"] = sample_dates.apply(
-            lambda xx: month_diff(
-                xx["proposed_valid_time_month"], xx["true_valid_time_month"]
-            ),
-            axis=1,
+        steps_per_year = STEPS_PER_YEAR[freq]
+        sample_dates["valid_step_in_year"] = sample_dates["valid_time"].apply(
+            lambda ts: _step_in_year(ts, freq)
         )
-        sample_dates["valid_month_shift_forward"] = sample_dates.apply(
-            lambda xx: month_diff(
-                xx["true_valid_time_month"], xx["proposed_valid_time_month"]
-            ),
-            axis=1,
-        )
+        sample_dates["valid_step_shift_backward"] = (
+            sample_dates["valid_step_in_year"] - processing_period_middle_step
+        ) % steps_per_year
+        sample_dates["valid_step_shift_forward"] = (
+            processing_period_middle_step - sample_dates["valid_step_in_year"]
+        ) % steps_per_year
         sample_dates["proposed_valid_time"] = sample_dates.apply(
             get_best_valid_time,
             axis=1,
             valid_time_buffer=valid_time_buffer,
             num_timesteps=num_timesteps,
+            freq=freq,
         )
 
         # remove invalid samples
@@ -962,9 +1005,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(country).any(), (
-                f"Tried removing {country} but it is not in the dataframe"
-            )
+            assert df.iso3.str.contains(
+                country
+            ).any(), f"Tried removing {country} but it is not in the dataframe"
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples

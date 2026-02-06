@@ -57,12 +57,62 @@ def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
         test_df,
         presto_checkpoint,
         season_id="tc-s1",
-        augment=False,
-        mask_on_training=False,
-        repeats=1,
-        batch_size=32,
-        num_workers=0,
     )
+
+    # Direct shape assert: if process_extractions_df changes, this may have to be updated
+    aux_columns = [
+        "ewoc_code",
+        "lat",
+        "quality_score_lc",
+        "available_timesteps",
+        "tile",
+        "valid_position",
+        "filename",
+        "quality_score_ct",
+        "year",
+        "geometry",
+        "extract",
+        "h3_l3_cell",
+        "geom_text",
+        "lon",
+        "ref_id",
+        "start_date",
+        "end_date",
+        "irrigation_status",
+        "valid_time",
+        "label_full",
+        "sampling_label",
+        "sample_id",
+    ]
+    static_columns = ["DEM-alt-20m", "DEM-slo-20m"]
+    feature_columns = [
+        "OPTICAL-B02",
+        "OPTICAL-B03",
+        "OPTICAL-B04",
+        "OPTICAL-B08",
+        "OPTICAL-B05",
+        "OPTICAL-B06",
+        "OPTICAL-B07",
+        "OPTICAL-B8A",
+        "OPTICAL-B11",
+        "OPTICAL-B12",
+        "SAR-VV",
+        "SAR-VH",
+        "METEO-temperature_mean",
+        "METEO-precipitation_flux",
+    ]
+    num_timesteps_expected = 16
+    total_cols_expected = (
+        len(aux_columns)
+        + len(static_columns)
+        + len(feature_columns) * num_timesteps_expected
+    )
+    # Make sure we have the expected columns and non-empty sample size
+    assert train_df.shape[1] == total_cols_expected
+    assert train_df.shape[0] > 0
+
+    # We keep original ewoc_code for this test
+    train_df["downstream_class"] = train_df["ewoc_code"]
 
     assert not embeddings_df.empty, "Expected seasonal embeddings to be generated"
     required_columns = {"split", "finetune_class", "downstream_class", "in_season"}
