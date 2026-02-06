@@ -106,6 +106,7 @@ def test_custom_croptype_demo(WorldCerealPrivateExtractionsPath):
         "valid_time",
         "label_full",
         "sampling_label",
+        "sample_id",
     ]
     static_columns = ["DEM-alt-20m", "DEM-slo-20m"]
     feature_columns = [
