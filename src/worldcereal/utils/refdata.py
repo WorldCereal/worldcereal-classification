@@ -867,6 +867,20 @@ def process_extractions_df(
         invalid_samples = sample_dates.loc[
             sample_dates["proposed_valid_time"].isna(), "sample_id"
         ].values
+
+        if invalid_samples.shape[0] > 0:
+            # Get counts per ref_id before removing
+            invalid_df = df_raw.loc[df_raw["sample_id"].isin(invalid_samples)]
+            counts_per_ref_id = (
+                invalid_df.groupby("ref_id")["sample_id"].nunique().to_dict()
+            )
+            counts_table = "\n".join(
+                [
+                    f"  {ref_id}: {count}"
+                    for ref_id, count in sorted(counts_per_ref_id.items())
+                ]
+            )
+
         df_raw = df_raw.loc[~df_raw["sample_id"].isin(invalid_samples)].copy()
 
         if df_raw.empty:
@@ -876,7 +890,7 @@ def process_extractions_df(
         else:
             if invalid_samples.shape[0] > 0:
                 logger.warning(
-                    f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent."
+                    f"Removed {invalid_samples.shape[0]} samples that do not fit into selected temporal extent:\n{counts_table}"
                 )
 
         # put the proposed valid_time back into the main dataframe
@@ -897,7 +911,7 @@ def process_extractions_df(
 
     if processing_period is not None:
         # put back the true valid_time
-        df_processed["valid_time"] = df_processed.index.map(true_valid_time_map)
+        df_processed["valid_time"] = df_processed["sample_id"].map(true_valid_time_map)
         df_processed["valid_time"] = df_processed["valid_time"].dt.strftime("%Y-%m-%d")
 
     if season_window is not None:
@@ -913,8 +927,16 @@ def process_extractions_df(
         valid_times = pd.to_datetime(df_processed["valid_time"], errors="coerce")
         missing_valid = valid_times.isna()
         if missing_valid.any():
+            missing_df = df_processed.loc[missing_valid]
+            counts_per_ref_id = missing_df.groupby("ref_id").size().to_dict()
+            counts_table = "\n".join(
+                [
+                    f"  {ref_id}: {count}"
+                    for ref_id, count in sorted(counts_per_ref_id.items())
+                ]
+            )
             logger.warning(
-                f"Dropping {int(missing_valid.sum())} samples without a valid_time while enforcing the manual season window."
+                f"Dropping {int(missing_valid.sum())} samples without a valid_time while enforcing the manual season window:\n{counts_table}"
             )
 
         in_window = valid_times.apply(
@@ -931,9 +953,17 @@ def process_extractions_df(
 
         dropped = int((~in_window).sum())
         if dropped:
+            dropped_df = df_processed.loc[~in_window]
+            counts_per_ref_id = dropped_df.groupby("ref_id").size().to_dict()
+            counts_table = "\n".join(
+                [
+                    f"  {ref_id}: {count}"
+                    for ref_id, count in sorted(counts_per_ref_id.items())
+                ]
+            )
             logger.warning(
                 f"Discarded {dropped} samples outside the season window "
-                f"{season_start.strftime('%b %d')} -> {season_end.strftime('%b %d')}.",
+                f"{season_start.strftime('%b %d')} -> {season_end.strftime('%b %d')}:\n{counts_table}",
             )
         df_processed = df_processed.loc[in_window].copy()
         if df_processed.empty:
@@ -1005,9 +1035,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(
-                country
-            ).any(), f"Tried removing {country} but it is not in the dataframe"
+            assert df.iso3.str.contains(country).any(), (
+                f"Tried removing {country} but it is not in the dataframe"
+            )
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples

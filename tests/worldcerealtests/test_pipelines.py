@@ -1,7 +1,4 @@
 import json
-from typing import List, Tuple
-
-import pandas as pd
 
 from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.train.data import (
@@ -11,52 +8,25 @@ from worldcereal.train.data import (
 from worldcereal.train.downstream import TorchTrainer
 
 
-def _prepare_balanced_subset(df: pd.DataFrame, max_samples: int = 80) -> pd.DataFrame:
-    subset = df.reset_index(drop=True).copy()
-    subset.loc[15:, ["croptype_name", "downstream_class"]] = (
-        "other"  # Override for the test
-    )
-    if "finetune_class" not in subset.columns:
-        if "downstream_class" not in subset.columns:
-            raise AssertionError(
-                "Fixture must provide 'finetune_class' or 'downstream_class' columns."
-            )
-        subset["finetune_class"] = subset["downstream_class"]
-    counts = subset["finetune_class"].value_counts()
-    viable = counts[counts >= 3].index.tolist()
-    filtered = subset[subset["finetune_class"].isin(viable)].copy()
-    assert filtered["finetune_class"].nunique() >= 2, (
-        "Seasonal head training needs at least two classes"
-    )
-    if len(filtered) > max_samples:
-        filtered = filtered.sample(n=max_samples, random_state=7).reset_index(drop=True)
-    return filtered
-
-
-def _prepare_splits(
-    df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    splits = train_val_test_split(df, stratify_label="finetune_class")
-    prepared: List[pd.DataFrame] = []
-    for part in splits:
-        copy = part.reset_index(drop=True).copy()
-        if "downstream_class" not in copy.columns:
-            copy["downstream_class"] = copy["finetune_class"]
-        prepared.append(copy)
-    return tuple(prepared)
-
-
 def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
-    base_df = _prepare_balanced_subset(WorldCerealExtractionsDF)
-    train_df, val_df, test_df = _prepare_splits(base_df)
+
+    train_df, val_df, test_df = train_val_test_split(
+        WorldCerealExtractionsDF,
+        val_size=0.2,
+        test_size=0.2,
+        seed=42,
+        min_samples_per_class=10,
+    )
+    splits = {"train": train_df, "val": val_df, "test": test_df}
 
     presto_checkpoint, _ = resolve_seasonal_encoder()
     embeddings_df = compute_embeddings_from_splits(
-        train_df,
-        val_df,
-        test_df,
+        splits["train"],
+        splits["val"],
+        splits["test"],
         presto_checkpoint,
-        season_id="tc-s1",
+        season_id="custom-s1",
+        season_windows={"custom-s1": ["2025-03-01", "2025-08-31"]},
     )
 
     # Direct shape assert: if process_extractions_df changes, this may have to be updated
@@ -101,7 +71,7 @@ def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
         "METEO-temperature_mean",
         "METEO-precipitation_flux",
     ]
-    num_timesteps_expected = 16
+    num_timesteps_expected = 12
     total_cols_expected = (
         len(aux_columns)
         + len(static_columns)
