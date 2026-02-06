@@ -1,6 +1,7 @@
 import unittest
 
 import pandas as pd
+import geopandas as gpd
 from shapely.geometry import Polygon
 
 from worldcereal.utils.refdata import (
@@ -23,10 +24,12 @@ def test_query_public_extractions():
     poly = Polygon.from_bounds(*(4.535, 51.050719, 4.600936, 51.098176))
 
     # Query extractions
-    df = query_public_extractions(poly, buffer=100)
+    gdf = query_public_extractions(poly, buffer=100)
 
     # Check if dataframe has samples
-    assert not df.empty
+    assert not gdf.empty
+    assert isinstance(gdf, gpd.GeoDataFrame)
+    assert gdf.crs.to_string() == "EPSG:4326"
 
 
 def test_get_best_valid_time():
