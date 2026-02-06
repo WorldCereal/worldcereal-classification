@@ -36,16 +36,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from loguru import logger
 
-from worldcereal.train.backbone import (
-    build_presto_backbone,
-    resolve_seasonal_encoder,
-)
+from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.train.data import (
-    compute_seasonal_embeddings_from_splits,
-    dataset_to_embeddings,
+    compute_embeddings_from_splits,
+    spatial_train_val_test_split,
     train_val_test_split,
 )
-from worldcereal.train.datasets import SensorMaskingConfig, WorldCerealTrainingDataset
 from worldcereal.train.downstream import TorchTrainer
 
 
@@ -76,6 +72,13 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "calendar", "custom", "off"],
         default="calendar",
         help="Season calendar strategy for deriving masks.",
+    )
+    parser.add_argument(
+        "--season-windows",
+        type=str,
+        default=None,
+        help='JSON mapping of season_id to [start_date, end_date], e.g. \'{"tc-s1": ["2021-01-01", "2021-06-30"]}\'. '
+        "Dates should be in YYYY-MM-DD format.",
     )
     parser.add_argument(
         "--presto-model-path",
@@ -133,8 +136,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--modelversion", type=str, default="")
     parser.add_argument("--detector", type=str, default=None)
@@ -212,68 +215,6 @@ def _load_split_dataframes(data_dir: str) -> Dict[str, pd.DataFrame]:
     return splits
 
 
-def _compute_embeddings_from_splits(
-    splits: Dict[str, pd.DataFrame],
-    presto_model_path: Optional[str],
-    timestep_freq: str,
-    batch_size: int,
-    num_workers: int,
-) -> pd.DataFrame:
-    num_timesteps = 12 if timestep_freq == "month" else 36
-    masking_config = SensorMaskingConfig(
-        enable=True,
-        s1_full_dropout_prob=0.05,
-        s1_timestep_dropout_prob=0.1,
-        s2_cloud_timestep_prob=0.1,
-        s2_cloud_block_prob=0.05,
-        s2_cloud_block_min=2,
-        s2_cloud_block_max=3,
-        meteo_timestep_dropout_prob=0.03,
-        dem_dropout_prob=0.01,
-    )
-
-    def _build_dataset(df: pd.DataFrame, augment: bool) -> WorldCerealTrainingDataset:
-        return WorldCerealTrainingDataset(
-            df,
-            num_timesteps=num_timesteps,
-            timestep_freq=timestep_freq,
-            task_type="multiclass",
-            augment=augment,
-            masking_config=masking_config
-            if augment
-            else SensorMaskingConfig(enable=False),
-            repeats=3 if augment else 1,
-        )
-
-    train_ds = _build_dataset(splits["train"], augment=True)
-    val_ds = _build_dataset(splits["val"], augment=False)
-    test_ds = _build_dataset(splits["test"], augment=False)
-
-    from prometheo.utils import device
-
-    presto_checkpoint = presto_model_path or resolve_seasonal_encoder()[0]
-    presto_model = build_presto_backbone(checkpoint_path=presto_checkpoint).to(device)
-
-    train_embeddings = dataset_to_embeddings(
-        train_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
-    val_embeddings = dataset_to_embeddings(
-        val_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
-    test_embeddings = dataset_to_embeddings(
-        test_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
-
-    train_embeddings["split"] = "train"
-    val_embeddings["split"] = "val"
-    test_embeddings["split"] = "test"
-    return (
-        pd.concat([train_embeddings, val_embeddings, test_embeddings])
-        .reset_index(drop=True)
-        .copy()
-    )
-
-
 def _parse_optional_json(value: Optional[str], expected: str) -> Optional[Any]:
     if value is None:
         return None
@@ -290,35 +231,47 @@ def main() -> None:
 
         class ManualArgs:
             def __init__(self):
-                self.head_task = "croptype"
+                self.head_task = "landcover"
                 self.head_type = "linear"
-                self.season_id = "tc-s1"
-                self.season_calendar_mode = "calendar"
-                self.presto_model_path = "/path/to/presto_encoder.pt"
-                self.data_dir = "/path/to/parquet_splits"
+                self.season_id = None
+                self.season_calendar_mode = None
+                self.season_windows = None
+                self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520_encoder.pt"
+                self.data_dir = None
                 self.embeddings_path = None
                 self.single_dataframe = None
                 self.val_split = 0.15
-                self.test_split = 0.15
+                self.test_split = 0.20
                 self.split_stratify_col = "downstream_class"
                 self.split_column = "split"
-                self.output_dir = "./downstream_classifier"
+                self.output_dir = "."
                 self.timestep_freq = "month"
                 self.batch_size = 1024
                 self.num_workers = 8
                 self.hidden_dim = 256
                 self.dropout = 0.2
-                self.lr = 1e-3
-                self.epochs = 10
+                self.lr = 1e-2
+                self.epochs = 50
                 self.seed = 42
                 self.modelversion = ""
-                self.detector = None
-                self.downstream_classes = None
-                self.cropland_class_names = None
+                self.detector = "cropland"
+                self.downstream_classes = {
+                    "temporary_crops": "cropland",
+                    "temporary_grasses": "other",
+                    "permanent_crops": "cropland",
+                    "grasslands": "other",
+                    "wetlands": "other",
+                    "bare_sparsely_vegetated": "other",
+                    "shrubland": "other",
+                    "trees": "other",
+                    "built_up": "other",
+                    "water": "other",
+                }
+                self.cropland_class_names = ["cropland"]
                 self.use_balancing = True
                 self.sampling_class = "downstream_class"
                 self.balancing_method = "log"
-                self.clip_range = (0.3, 5.0)
+                self.clip_range = None
                 self.early_stopping_patience = 6
                 self.early_stopping_min_delta = 0.0
 
@@ -347,6 +300,13 @@ def main() -> None:
 
     presto_checkpoint = args.presto_model_path or resolve_seasonal_encoder()[0]
 
+    # Parse season_windows if provided
+    season_windows = None
+    if args.season_windows:
+        season_windows = _parse_optional_json(args.season_windows, "season-windows")
+        if season_windows and not isinstance(season_windows, dict):
+            raise ValueError("season_windows must be a JSON object/dict")
+
     embeddings_df = None
     if args.embeddings_path:
         logger.info(f"Loading embeddings dataframe from {args.embeddings_path}")
@@ -356,6 +316,9 @@ def main() -> None:
         if args.single_dataframe:
             logger.info(f"Loading single dataframe from {args.single_dataframe}")
             full_df = pd.read_parquet(args.single_dataframe)
+            if "anomaly_flag" in full_df.columns:
+                logger.info("Dropping samples with anomaly_flag==candidate")
+                full_df = full_df[~(full_df["anomaly_flag"] == "candidate")].copy()
 
             # Ensure downstream_class column exists
             if (
@@ -365,7 +328,7 @@ def main() -> None:
                 full_df["downstream_class"] = full_df["finetune_class"]
 
             # Use existing train_val_test_split function
-            train_df, val_df, test_df = train_val_test_split(
+            train_df, val_df, test_df = spatial_train_val_test_split(
                 full_df,
                 split_column=args.split_column,
                 val_size=args.val_split,
@@ -373,6 +336,7 @@ def main() -> None:
                 seed=args.seed,
                 stratify_label=args.split_stratify_col,
                 min_samples_per_class=10,
+                bin_size_degrees=1.0,
             )
             splits = {"train": train_df, "val": val_df, "test": test_df}
         elif args.data_dir:
@@ -382,35 +346,29 @@ def main() -> None:
                 "Either --embeddings-path, --single-dataframe, or --data-dir must be provided."
             )
 
-        # Compute embeddings from splits (shared code path)
+        # Compute embeddings from splits using unified function
+        # season_id=None triggers global pooling for landcover
         if args.season_id:
             logger.info(
                 f"Computing seasonal embeddings for season {args.season_id} using {presto_checkpoint}"
             )
-            embeddings_df = compute_seasonal_embeddings_from_splits(
-                splits["train"],
-                splits["val"],
-                splits["test"],
-                presto_checkpoint,
-                season_id=args.season_id,
-                timestep_freq=args.timestep_freq,
-                batch_size=args.batch_size,
-                num_workers=args.num_workers,
-                season_calendar_mode=args.season_calendar_mode,
-            )
-        elif args.head_task == "landcover":
-            logger.info(f"Computing pooled embeddings using {presto_checkpoint}")
-            embeddings_df = _compute_embeddings_from_splits(
-                splits,
-                presto_model_path=presto_checkpoint,
-                timestep_freq=args.timestep_freq,
-                batch_size=args.batch_size,
-                num_workers=args.num_workers,
-            )
         else:
-            raise ValueError(
-                "Seasonal embeddings require --season-id; this branch should be unreachable."
+            logger.info(
+                f"Computing globally pooled embeddings for landcover using {presto_checkpoint}"
             )
+
+        embeddings_df = compute_embeddings_from_splits(
+            splits["train"],
+            splits["val"],
+            splits["test"],
+            presto_checkpoint,
+            season_id=args.season_id,
+            timestep_freq=args.timestep_freq,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            season_calendar_mode=args.season_calendar_mode,
+            season_windows=season_windows,
+        )
 
     trainer = TorchTrainer(
         embeddings_df,
