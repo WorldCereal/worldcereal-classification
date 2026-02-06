@@ -1485,29 +1485,14 @@ def run_finetuning(
     def _save_best(epoch_idx: int, model: torch.nn.Module, best_val: float):
         """Persist best full-model checkpoint and encoder-only variant (head=None)."""
         # Save full model
-        try:
-            torch.save(model.state_dict(), best_ckpt_path)
-            logger.debug(
-                f"Saved best checkpoint (val_loss={best_val:.4f}) to {best_ckpt_path}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed saving best full-model checkpoint: {e}")
+        torch.save(model.state_dict(), best_ckpt_path)
+        logger.debug(
+            f"Saved best checkpoint (val_loss={best_val:.4f}) to {best_ckpt_path}"
+        )
 
-        # Save encoder-only by deepcopy + removing head
-        if hasattr(model, "head"):
-            try:
-                encoder_only = deepcopy(model)
-                encoder_only.head = None  # type: ignore[assignment]
-                torch.save(encoder_only.state_dict(), best_encoder_ckpt_path)
-                logger.debug(
-                    f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed saving encoder-only checkpoint: {e}")
-        else:
-            logger.debug(
-                "Model has no 'head' attribute; skipping encoder-only checkpoint."
-            )
+        # Save encoder-only
+        torch.save(model.backbone.state_dict(), best_encoder_ckpt_path)
+        logger.debug(f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}")
 
     # Freeze specified layers initially
     if freeze_layers:
