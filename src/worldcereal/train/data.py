@@ -32,6 +32,8 @@ _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
     "landcover_label",
     "croptype_label",
     "label_task",
+    "anomaly_flag",
+    "confidence_nonoutlier",
 }
 
 
@@ -156,93 +158,192 @@ def train_val_test_split(
     return trn_df, val_df, tst_df
 
 
-def dataset_to_embeddings(
-    dataset: WorldCerealTrainingDataset,
-    presto_model: Presto,
-    batch_size: int = 2048,
-    num_workers: int = 0,
-    time_explicit: bool = False,
-) -> pd.DataFrame:
-    """Function to extract Presto embeddings, targets and relevant
-    auxiliary attributes from a dataset.
+def spatial_train_val_test_split(
+    df: pd.DataFrame,
+    split_column: str = "split",
+    val_size: float = 0.15,
+    test_size: float = 0.15,
+    seed: int = 42,
+    bin_size_degrees: float = 2.0,
+    stratify_label: Optional[str] = "finetune_class",
+    min_samples_per_class: int = 10,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split dataframe into train/val/test sets using spatial binning.
+
+    This method creates spatial bins based on lat/lon coordinates and assigns
+    entire bins to train/val/test sets to avoid spatial leakage between splits.
+    Inspired by the spatial weighting approach used during finetuning.
 
     Parameters
     ----------
-    dataset : WorldCerealTrainingDataset
-        dataset to extract embeddings from
-    presto_model : Presto
-        presto model to use for extracting embeddings
-    batch_size : int, optional
-        by default 2048
-    num_workers : int, optional
-        number of workers to use in DataLoader, by default 0
-    time_explicit : bool, optional
-        Switch from globally pooled sequence embeddings to
-        valid timestep embeddings, by default False
+    df : pd.DataFrame
+        Input dataframe with 'lat' and 'lon' columns
+    split_column : str
+        If this column exists, use predefined splits instead
+    val_size : float
+        Fraction of bins to use for validation (0-1)
+    test_size : float
+        Fraction of bins to use for testing (0-1)
+    seed : int
+        Random seed for reproducibility
+    bin_size_degrees : float
+        Size of spatial bins in degrees (latitude/longitude)
+    stratify_label : Optional[str]
+        If provided, log class distribution across splits
+    min_samples_per_class : int
+        Minimum samples per class required for inclusion
 
     Returns
     -------
-    pd.DataFrame
-        training dataframe that can be used for training downstream classifier
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        Train, validation, and test dataframes
     """
+    if split_column in df.columns:
+        trn_df = df[df[split_column] == "train"].copy()
+        val_df = df[df[split_column] == "val"].copy()
+        tst_df = df[df[split_column] == "test"].copy()
+        logger.info(
+            f"Using predefined splits from column '{split_column}': "
+            f"train={len(trn_df)}, val={len(val_df)}, test={len(tst_df)}"
+        )
+        return trn_df, val_df, tst_df
 
-    if time_explicit:
-        logger.info("Computing time-explicit Presto embeddings ...")
-    else:
-        logger.info("Computing time-agnostic Presto embeddings ...")
+    if "lat" not in df.columns or "lon" not in df.columns:
+        raise ValueError(
+            "Spatial splitting requires 'lat' and 'lon' columns in the dataframe"
+        )
 
-    # Make sure model is in eval mode and moved to the correct device
-    presto_model.eval().to(device)
-
-    # Create dataloader
-    dl = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        collate_fn=collate_fn,
+    logger.info(
+        f"Performing spatial split with bin_size={bin_size_degrees}° "
+        f"(test={test_size:.0%}, val={val_size:.0%})"
     )
 
-    # Initialize final dataframe
-    final_df = None
-
-    # Iterate through dataloader to consume all samples
-    for predictors, attrs in tqdm(dl):
-        # Compute Presto embeddings
-        with torch.no_grad():
-            if not time_explicit:
-                encodings = presto_model(predictors).cpu().numpy().reshape((-1, 128))
-            else:
-                encodings = (
-                    presto_model(predictors, eval_pooling=PoolingMethods.TIME)
-                    .cpu()
-                    .numpy()
-                    .reshape((-1, dataset.num_timesteps, 128))
-                )
-                # Cut out the correct position in the time series
-                encodings = encodings[
-                    np.arange(encodings.shape[0]), attrs["valid_position"], :
-                ]
-
-        # Convert to dataframe
-        attrs_frame = {
-            k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
-        }
-        attrs_df = pd.DataFrame.from_dict(attrs_frame)
-        encodings = pd.DataFrame(
-            encodings, columns=[f"presto_ft_{i}" for i in range(encodings.shape[1])]
+    # Remove classes with too few samples
+    if stratify_label and stratify_label in df.columns:
+        df = remove_small_classes(
+            df, min_samples=min_samples_per_class, class_column=stratify_label
         )
-        result = pd.concat([encodings, attrs_df], axis=1)
 
-        # Append to final dataframe
-        final_df = result if final_df is None else pd.concat([final_df, result])
+    # Create spatial bins
+    lat_array = df["lat"].to_numpy(dtype=np.float64)
+    lon_array = df["lon"].to_numpy(dtype=np.float64)
 
-    return final_df
+    if np.isnan(lat_array).any() or np.isnan(lon_array).any():
+        raise ValueError(
+            "Latitude/longitude contain missing values; cannot perform spatial split"
+        )
+
+    lat_bins = np.floor((lat_array + 90.0) / bin_size_degrees).astype(np.int64)
+    lon_bins = np.floor((lon_array + 180.0) / bin_size_degrees).astype(np.int64)
+
+    # Create bin identifiers
+    spatial_bins = np.char.add(
+        np.char.add(lat_bins.astype(str), "_"), lon_bins.astype(str)
+    )
+
+    # Get unique bins and their sample counts
+    unique_bins, bin_counts = np.unique(spatial_bins, return_counts=True)
+    logger.info(
+        f"Created {len(unique_bins)} spatial bins with "
+        f"{bin_counts.min()}-{bin_counts.max()} samples per bin "
+        f"(median={int(np.median(bin_counts))})"
+    )
+
+    # For stratified bin assignment, compute class distribution per bin
+    if stratify_label and stratify_label in df.columns:
+        # Create a mapping of bin -> majority class
+        bin_classes = {}
+        for bin_id in unique_bins:
+            bin_samples = df[spatial_bins == bin_id]
+            # Use majority class in the bin as the bin's "class"
+            majority_class = bin_samples[stratify_label].mode()[0]
+            bin_classes[bin_id] = majority_class
+
+        # Group bins by their majority class
+        from collections import defaultdict
+
+        class_bins = defaultdict(list)
+        for bin_id, cls in bin_classes.items():
+            class_bins[cls].append(bin_id)
+
+        logger.info(f"Bins grouped by {len(class_bins)} majority classes")
+
+        # Assign bins to splits in a class-balanced way
+        rng = np.random.RandomState(seed)
+        train_bins_list = []
+        val_bins_list = []
+        test_bins_list = []
+
+        for cls, cls_bins in class_bins.items():
+            cls_bins = np.array(cls_bins)
+            rng.shuffle(cls_bins)
+
+            n_cls_bins = len(cls_bins)
+            n_cls_test = max(1, int(n_cls_bins * test_size))
+            n_cls_val = max(1, int(n_cls_bins * val_size))
+
+            test_bins_list.extend(cls_bins[:n_cls_test])
+            val_bins_list.extend(cls_bins[n_cls_test : n_cls_test + n_cls_val])
+            train_bins_list.extend(cls_bins[n_cls_test + n_cls_val :])
+
+        test_bins = set(test_bins_list)
+        val_bins = set(val_bins_list)
+        train_bins = set(train_bins_list)
+
+        logger.info(
+            f"Stratified spatial split: {len(train_bins)} train bins, "
+            f"{len(val_bins)} val bins, {len(test_bins)} test bins"
+        )
+    else:
+        # Random bin assignment (original approach)
+        rng = np.random.RandomState(seed)
+        shuffled_bins = unique_bins.copy()
+        rng.shuffle(shuffled_bins)
+
+        # Split bins into train/val/test
+        n_bins = len(shuffled_bins)
+        n_test = max(1, int(n_bins * test_size))
+        n_val = max(1, int(n_bins * val_size))
+
+        test_bins = set(shuffled_bins[:n_test])
+        val_bins = set(shuffled_bins[n_test : n_test + n_val])
+        train_bins = set(shuffled_bins[n_test + n_val :])
+
+    # Assign samples to splits based on their bin
+    train_mask = np.isin(spatial_bins, list(train_bins))
+    val_mask = np.isin(spatial_bins, list(val_bins))
+    test_mask = np.isin(spatial_bins, list(test_bins))
+
+    trn_df = df[train_mask].copy()
+    val_df = df[val_mask].copy()
+    tst_df = df[test_mask].copy()
+
+    logger.info(
+        f"Spatial split complete: train={len(trn_df)} ({len(train_bins)} bins), "
+        f"val={len(val_df)} ({len(val_bins)} bins), test={len(tst_df)} ({len(test_bins)} bins)"
+    )
+
+    # Log class distribution if stratify_label is provided
+    if stratify_label and stratify_label in df.columns:
+        all_classes = set(df[stratify_label].unique())
+        for split_name, split_df in [
+            ("train", trn_df),
+            ("val", val_df),
+            ("test", tst_df),
+        ]:
+            class_dist = split_df[stratify_label].value_counts()
+            logger.info(f"{split_name} class distribution: {dict(class_dist)}")
+            missing_classes = all_classes - set(split_df[stratify_label].unique())
+            if missing_classes:
+                logger.warning(
+                    f"{split_name} split is missing classes: {missing_classes}"
+                )
+
+    return trn_df, val_df, tst_df
 
 
 def _flatten_time_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
     """Flatten Presto time embeddings to shape [N, T, D]."""
-
     if embeddings.dim() == 5:
         b, h, w, t, d = embeddings.shape
         return embeddings.view(b * h * w, t, d)
@@ -254,17 +355,48 @@ def _flatten_time_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"Unexpected Presto embedding shape: {tuple(embeddings.shape)}")
 
 
-def dataset_to_seasonal_embeddings(
+def dataset_to_embeddings(
     dataset: WorldCerealTrainingDataset,
     presto_model: Presto,
-    *,
-    season_index: int = 0,
     batch_size: int = 2048,
     num_workers: int = 0,
+    season_index: Optional[int] = None,
 ) -> pd.DataFrame:
-    """Extract per-season pooled embeddings and attributes from a dataset."""
+    """Extract Presto embeddings from a dataset with flexible pooling strategies.
 
-    logger.info("Computing seasonal Presto embeddings ...")
+    This unified function handles two embedding extraction modes:
+    1. Global pooling (season_index=None): TIME pooling + mean over all timesteps
+    2. Seasonal pooling (season_index=int): TIME pooling + weighted mean by season mask
+
+    All modes use TIME pooling from Presto to ensure consistency with inference.
+
+    Parameters
+    ----------
+    dataset : WorldCerealTrainingDataset
+        Dataset to extract embeddings from
+    presto_model : Presto
+        Presto model to use for extracting embeddings
+    batch_size : int, optional
+        Batch size for DataLoader, by default 2048
+    num_workers : int, optional
+        Number of workers for DataLoader, by default 0
+    season_index : int, optional
+        If provided, extract season-specific embeddings using weighted pooling
+        based on season masks. Requires dataset with season_masks attribute.
+
+    Returns
+    -------
+    pd.DataFrame
+        Embeddings dataframe with presto_ft_* columns and sample attributes
+    """
+
+    # Determine pooling mode for logging
+    if season_index is not None:
+        mode_desc = f"seasonal (season {season_index})"
+    else:
+        mode_desc = "global (full year)"
+
+    logger.info(f"Computing Presto embeddings with {mode_desc} pooling...")
 
     presto_model.eval().to(device)
 
@@ -279,42 +411,56 @@ def dataset_to_seasonal_embeddings(
     final_df = None
 
     for predictors, attrs in tqdm(dl):
-        if attrs.get("season_masks") is None:
-            raise ValueError(
-                "Season masks are required to compute seasonal embeddings."
-            )
-
         with torch.no_grad():
+            # Always use TIME pooling to get per-timestep embeddings
             time_embeddings = presto_model(predictors, eval_pooling=PoolingMethods.TIME)
             time_embeddings = _flatten_time_embeddings(time_embeddings)
 
-            season_masks = torch.as_tensor(
-                attrs["season_masks"], dtype=torch.bool, device=time_embeddings.device
-            )
-            if season_masks.dim() == 2:
-                season_masks = season_masks.unsqueeze(1)
-            if season_index < 0 or season_index >= season_masks.shape[1]:
-                raise ValueError(
-                    f"season_index {season_index} out of range for mask shape {season_masks.shape}"
+            # Apply pooling strategy based on mode
+            if season_index is not None:
+                # Seasonal pooling: weighted mean using season masks
+                if attrs.get("season_masks") is None:
+                    raise ValueError(
+                        "Seasonal embeddings require 'season_masks' in dataset attributes."
+                    )
+
+                season_masks = torch.as_tensor(
+                    attrs["season_masks"],
+                    dtype=torch.bool,
+                    device=time_embeddings.device,
                 )
+                if season_masks.dim() == 2:
+                    season_masks = season_masks.unsqueeze(1)
+                if season_index < 0 or season_index >= season_masks.shape[1]:
+                    raise ValueError(
+                        f"season_index {season_index} out of range for mask shape {season_masks.shape}"
+                    )
 
-            selected_mask = season_masks[:, season_index, :]
-            season_mask_float = selected_mask.to(dtype=time_embeddings.dtype)
-            weights = season_mask_float.sum(dim=-1, keepdim=True)
-            zero_weight = weights == 0
-            if torch.any(zero_weight):
-                season_mask_float = season_mask_float.clone()
-                season_mask_float[zero_weight.squeeze(-1)] = 1.0
+                selected_mask = season_masks[:, season_index, :]
+                season_mask_float = selected_mask.to(dtype=time_embeddings.dtype)
                 weights = season_mask_float.sum(dim=-1, keepdim=True)
+                zero_weight = weights == 0
+                if torch.any(zero_weight):
+                    # Handle zero weights by setting mask to all 1s for those samples
+                    season_mask_float = season_mask_float.clone()
+                    season_mask_float[zero_weight.squeeze(-1)] = 1.0
+                    weights = season_mask_float.sum(dim=-1, keepdim=True)
 
-            pooled = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
-                dim=-2
-            ) / torch.clamp(weights, min=1e-6)
+                encodings = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
+                    dim=-2
+                ) / torch.clamp(weights, min=1e-6)
+                encodings = encodings.cpu().numpy()
+            else:
+                # Global pooling: simple mean over time dimension
+                encodings = time_embeddings.mean(dim=-2).cpu().numpy()
 
+        # Build attributes dataframe
         attrs_frame = {
             k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
         }
-        if attrs.get("in_seasons") is not None:
+
+        # Add in_season flag if seasonal mode and available
+        if season_index is not None and attrs.get("in_seasons") is not None:
             in_seasons = np.asarray(attrs["in_seasons"])
             if in_seasons.ndim == 2:
                 attrs_frame["in_season"] = in_seasons[:, season_index]
@@ -322,11 +468,11 @@ def dataset_to_seasonal_embeddings(
                 attrs_frame["in_season"] = in_seasons
 
         attrs_df = pd.DataFrame.from_dict(attrs_frame)
-        pooled_df = pd.DataFrame(
-            pooled.cpu().numpy(),
-            columns=[f"presto_ft_{i}" for i in range(pooled.shape[1])],
+        encodings_df = pd.DataFrame(
+            encodings, columns=[f"presto_ft_{i}" for i in range(encodings.shape[1])]
         )
-        result = pd.concat([pooled_df, attrs_df], axis=1)
+        result = pd.concat([encodings_df, attrs_df], axis=1)
+
         final_df = result if final_df is None else pd.concat([final_df, result])
 
     return final_df
@@ -343,7 +489,6 @@ def compute_embeddings_from_input_df(
     timestep_freq: Literal["month", "dekad"] = "month",
     batch_size: int = 2048,
     num_workers: int = 0,
-    time_explicit: bool = False,
     stratify_label: str = "finetune_class",
 ) -> pd.DataFrame:
     input_df = _ensure_label_columns(input_df)
@@ -400,10 +545,10 @@ def compute_embeddings_from_input_df(
 
     logger.info("Computing embeddings with Presto head...")
     trn_embeddings = dataset_to_embeddings(
-        trn_ds, presto_model, batch_size, num_workers, time_explicit
+        trn_ds, presto_model, batch_size, num_workers
     )
     test_embeddings = dataset_to_embeddings(
-        test_ds, presto_model, batch_size, num_workers, time_explicit
+        test_ds, presto_model, batch_size, num_workers
     )
 
     # Merge train and test embeddings
@@ -416,13 +561,13 @@ def compute_embeddings_from_input_df(
     return embeddings
 
 
-def compute_seasonal_embeddings_from_splits(
+def compute_embeddings_from_splits(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
     presto_url: Optional[str] = None,
     *,
-    season_id: str,
+    season_id: Optional[str] = None,
     augment: bool = True,
     mask_on_training: bool = True,
     repeats: int = 3,
@@ -432,7 +577,11 @@ def compute_seasonal_embeddings_from_splits(
     season_calendar_mode: SeasonCalendarMode = "calendar",
     season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
 ) -> pd.DataFrame:
-    """Compute per-season embeddings from pre-split dataframes."""
+    """Compute embeddings from pre-split dataframes.
+
+    If season_id is provided, extracts per-season pooled embeddings.
+    If season_id is None, extracts globally pooled embeddings (for landcover).
+    """
 
     num_timesteps = 12 if timestep_freq == "month" else 36
 
@@ -457,66 +606,121 @@ def compute_seasonal_embeddings_from_splits(
         dem_dropout_prob=0.01,
     )
 
-    dataset_kwargs = dict(
-        num_timesteps=num_timesteps,
-        timestep_freq=timestep_freq,
-        task_type="multiclass",
-        season_ids=[season_id],
-    )
-    if season_windows:
-        dataset_kwargs["season_windows"] = season_windows
-        if season_calendar_mode == "calendar":
-            logger.info(
-                "Manual season windows provided; switching calendar mode from 'calendar' to 'custom'."
-            )
-            effective_mode = "custom"
+    # Build datasets based on whether seasonal or global pooling is needed
+    if season_id is not None:
+        # Seasonal pooling mode
+        dataset_kwargs = dict(
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            season_ids=[season_id],
+        )
+        if season_windows:
+            dataset_kwargs["season_windows"] = season_windows
+            if season_calendar_mode == "calendar":
+                logger.info(
+                    "Manual season windows provided; switching calendar mode from 'calendar' to 'custom'."
+                )
+                effective_mode = "custom"
+            else:
+                effective_mode = season_calendar_mode
         else:
             effective_mode = season_calendar_mode
+        dataset_kwargs["season_calendar_mode"] = effective_mode
+
+        trn_ds = WorldCerealTrainingDataset(
+            train_df,
+            augment=augment,
+            masking_config=masking_config,
+            repeats=repeats,
+            **dataset_kwargs,
+        )
+        val_ds = WorldCerealTrainingDataset(
+            val_df,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
+            season_ids=[season_id],
+            season_windows=season_windows,
+            season_calendar_mode=effective_mode,
+        )
+        test_ds = WorldCerealTrainingDataset(
+            test_df,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
+            season_ids=[season_id],
+            season_windows=season_windows,
+            season_calendar_mode=effective_mode,
+        )
+
+        trn_embeddings = dataset_to_embeddings(
+            trn_ds,
+            presto_model,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            season_index=0,
+        )
+        val_embeddings = dataset_to_embeddings(
+            val_ds,
+            presto_model,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            season_index=0,
+        )
+        test_embeddings = dataset_to_embeddings(
+            test_ds,
+            presto_model,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            season_index=0,
+        )
     else:
-        effective_mode = season_calendar_mode
-    dataset_kwargs["season_calendar_mode"] = effective_mode
+        # Global pooling mode (for landcover)
+        logger.info("Using global pooling mode for landcover embeddings")
+        trn_ds = WorldCerealTrainingDataset(
+            train_df,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            augment=augment,
+            masking_config=masking_config,
+            repeats=repeats,
+        )
+        val_ds = WorldCerealTrainingDataset(
+            val_df,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
+        )
+        test_ds = WorldCerealTrainingDataset(
+            test_df,
+            num_timesteps=num_timesteps,
+            timestep_freq=timestep_freq,
+            task_type="multiclass",
+            augment=False,
+            masking_config=SensorMaskingConfig(enable=False),
+            repeats=1,
+        )
 
-    trn_ds = WorldCerealTrainingDataset(
-        train_df,
-        augment=augment,
-        masking_config=masking_config,
-        repeats=repeats,
-        **dataset_kwargs,
-    )
-    val_ds = WorldCerealTrainingDataset(
-        val_df,
-        num_timesteps=num_timesteps,
-        timestep_freq=timestep_freq,
-        task_type="multiclass",
-        augment=False,
-        masking_config=SensorMaskingConfig(enable=False),
-        repeats=1,
-        season_ids=[season_id],
-        season_windows=season_windows,
-        season_calendar_mode=effective_mode,
-    )
-    test_ds = WorldCerealTrainingDataset(
-        test_df,
-        num_timesteps=num_timesteps,
-        timestep_freq=timestep_freq,
-        task_type="multiclass",
-        augment=False,
-        masking_config=SensorMaskingConfig(enable=False),
-        repeats=1,
-        season_ids=[season_id],
-        season_windows=season_windows,
-        season_calendar_mode=effective_mode,
-    )
-
-    trn_embeddings = dataset_to_seasonal_embeddings(
-        trn_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
-    val_embeddings = dataset_to_seasonal_embeddings(
-        val_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
-    test_embeddings = dataset_to_seasonal_embeddings(
-        test_ds, presto_model, batch_size=batch_size, num_workers=num_workers
-    )
+        trn_embeddings = dataset_to_embeddings(
+            trn_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+        )
+        val_embeddings = dataset_to_embeddings(
+            val_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+        )
+        test_embeddings = dataset_to_embeddings(
+            test_ds, presto_model, batch_size=batch_size, num_workers=num_workers
+        )
 
     trn_embeddings["split"] = "train"
     val_embeddings["split"] = "val"
