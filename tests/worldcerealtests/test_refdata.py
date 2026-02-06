@@ -1,7 +1,7 @@
 import unittest
 
-import pandas as pd
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Polygon
 
 from worldcereal.utils.refdata import (
@@ -304,6 +304,7 @@ def test_get_best_valid_time_dekad_should_drop():
         num_timesteps=num_timesteps,
     )
     assert pd.isna(result)
+
 
 def test_map_classes(WorldCerealExtractionsDF):
     # Tests the automatic download of latest legend and default
