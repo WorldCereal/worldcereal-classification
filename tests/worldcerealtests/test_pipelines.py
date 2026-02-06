@@ -5,7 +5,7 @@ import pandas as pd
 
 from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.train.data import (
-    compute_seasonal_embeddings_from_splits,
+    compute_embeddings_from_splits,
     train_val_test_split,
 )
 from worldcereal.train.downstream import TorchTrainer
@@ -51,7 +51,7 @@ def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
     train_df, val_df, test_df = _prepare_splits(base_df)
 
     presto_checkpoint, _ = resolve_seasonal_encoder()
-    embeddings_df = compute_seasonal_embeddings_from_splits(
+    embeddings_df = compute_embeddings_from_splits(
         train_df,
         val_df,
         test_df,
@@ -128,8 +128,8 @@ def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
         head_task="croptype",
         head_type="linear",
         output_dir=tmp_path,
-        lr_grid=[1e-2],
-        weight_decay_grid=[1e-4],
+        lr=1e-2,
+        weight_decay=1e-4,
         batch_size=64,
         num_workers=0,
         epochs=1,
