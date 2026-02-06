@@ -42,18 +42,6 @@ def resolve_seasonal_encoder(
 
     checkpoint_path = _resolve_checkpoint_path(checkpoint_rel, artifact.extract_dir)
 
-    if not checkpoint_path:
-        # Fallback: The artifact might contain the file with a different name.
-        # This happens if the user uploaded a zip file with the model, but kept
-        # the original manifest which points to the original filename.
-        candidates = list(Path(artifact.extract_dir).glob("*.pt"))
-        if len(candidates) == 1:
-            checkpoint_path = candidates[0]
-            logger.warning(
-                f"Backbone checkpoint '{checkpoint_rel}' not found. "
-                f"Using fallback '{checkpoint_path.name}' found in artifact."
-            )
-
     if checkpoint_path:
         fingerprint = manifest_backbone.get("fingerprint") or checkpoint_fingerprint(
             checkpoint_path
@@ -80,14 +68,11 @@ def build_presto_backbone(
     else:
         ckpt, _ = resolve_seasonal_encoder(seasonal_model_url)
 
-    # We construct the model without loading weights first, so that the
-    # Positional Embedding is resized to 72
-    model = Presto(pretrained_model_path=None)
+    # Construct the model
+    model = Presto()
 
-    # Now we load the weights.
-    # Note: we use strict=False because the checkpoint might contain keys
-    # that are not in the wrapper (e.g. decoder) or keys might be missing.
-    load_presto_weights(model, ckpt, strict=False)
+    # Load the weights and be strict to avoid silent issues
+    model = load_presto_weights(model, ckpt, strict=True)
 
     return model
 
