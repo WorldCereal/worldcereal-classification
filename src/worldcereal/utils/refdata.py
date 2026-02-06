@@ -138,7 +138,7 @@ def query_public_extractions(
     crop_types: Optional[list[int]] = None,
     query_collateral_samples: bool = True,
     ref_ids: Optional[list[str]] = None,
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     """
     Query the WorldCereal public extractions database for reference data within a specified area and/or for specific datasets.
 
@@ -182,10 +182,10 @@ def query_public_extractions(
 
     Returns
     -------
-    pd.DataFrame
+    gpd.GeoDataFrame
         A GeoDataFrame containing reference data points that intersect with the area of interest
         or from the specified datasets. Each row represents a single sample with its geometry
-        and associated attributes.
+        and associated attributes. CRS of the geometry column is EPSG:4326 (WGS84).
 
     Raises
     ------
@@ -244,7 +244,7 @@ def query_public_extractions(
             logger.warning(
                 "No datasets found in the WorldCereal public extractions database that intersect with the selected area."
             )
-            return pd.DataFrame()
+            return gpd.GeoDataFrame()
 
         logger.info(
             f"Found {len(ref_ids_lst)} datasets in WorldCereal public extractions database that intersect with the selected area."
@@ -274,7 +274,7 @@ def query_public_extractions(
             logger.warning(
                 f"None of the specified datasets ({ref_ids}) intersect with the selected area."
             )
-            return pd.DataFrame()
+            return gpd.GeoDataFrame()
 
     logger.info("Querying extractions...")
 
@@ -354,11 +354,13 @@ FROM read_parquet('{url}')
         lambda x: wkt.loads(x) if isinstance(x, str) else None
     )
     # Convert to a GeoDataFrame
-    public_df_raw = gpd.GeoDataFrame(public_df_raw, geometry="geometry")
+    public_df_raw = gpd.GeoDataFrame(
+        public_df_raw, geometry="geometry", crs="EPSG:4326"
+    )
 
     if public_df_raw.empty:
         logger.warning("No samples found matching your search criteria.")
-        return pd.DataFrame()
+        return gpd.GeoDataFrame()
 
     # add filename column for compatibility with private extractions; make it copy of ref_id for now
     public_df_raw["filename"] = public_df_raw["ref_id"]
@@ -373,7 +375,7 @@ def query_private_extractions(
     buffer: int = 250000,
     crop_types: Optional[list[int]] = None,
     ref_ids: Optional[list[str]] = None,
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     """
     Query and filter private extraction data stored in parquet files.
 
@@ -401,8 +403,9 @@ def query_private_extractions(
 
     Returns
     -------
-    pd.DataFrame
+    gpd.GeoDataFrame
         A GeoPandas DataFrame containing the filtered private extraction data with valid geometry objects.
+        The CRS of the geometry column is EPSG:4326 (WGS84).
 
     Notes
     -----
@@ -422,7 +425,7 @@ def query_private_extractions(
         ]
     if len(private_collection_paths) == 0:
         logger.warning("No private collections found.")
-        return pd.DataFrame()
+        return gpd.GeoDataFrame()
 
     logger.info(f"Checking {len(private_collection_paths)} datasets...")
 
@@ -489,7 +492,9 @@ FROM read_parquet('{tpath}')
         lambda x: wkt.loads(x) if isinstance(x, str) else None
     )
     # Convert to a GeoDataFrame
-    private_df_raw = gpd.GeoDataFrame(private_df_raw, geometry="geometry")
+    private_df_raw = gpd.GeoDataFrame(
+        private_df_raw, geometry="geometry", crs="EPSG:4326"
+    )
 
     if private_df_raw.empty:
         logger.warning(
