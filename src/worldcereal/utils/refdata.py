@@ -423,6 +423,13 @@ def query_private_extractions(
       except fallow classes (11-15-...).
     """
 
+    if not Path(merged_private_parquet_path).exists():
+        logger.warning(
+            f"The provided path to private extractions is not a valid file: {merged_private_parquet_path}. "
+            f"Please check the path and try again."
+        )
+        return gpd.GeoDataFrame()
+
     private_collection_paths = glob.glob(
         f"{merged_private_parquet_path}/**/*.parquet",
         recursive=True,
@@ -962,9 +969,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(country).any(), (
-                f"Tried removing {country} but it is not in the dataframe"
-            )
+            assert df.iso3.str.contains(
+                country
+            ).any(), f"Tried removing {country} but it is not in the dataframe"
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples
