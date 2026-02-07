@@ -274,7 +274,7 @@ def main() -> None:
                 self.early_stopping_patience = 6
                 self.early_stopping_min_delta = 0.0
 
-        args = ManualArgs()
+        args: Any = ManualArgs()
         logger.info("Using manual configuration for debug mode (Torch head)")
     else:
         args = parse_args()

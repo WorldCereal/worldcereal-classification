@@ -135,6 +135,10 @@ class TorchTrainer:
             else []
         )
         self.season_id = season_id
+        # Initialize attributes that will be set during prepare_data
+        self.classes_list: list[str] = []
+        self.in_dim: int = 0
+        self.num_classes: int = 0
         if presto_model_path:
             # presto_model_path is expected to be the encoder checkpoint
             self.presto_model_path = presto_model_path

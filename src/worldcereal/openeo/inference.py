@@ -776,6 +776,7 @@ class SeasonalModelBundle:
         )
 
         # Load custom weights
+        assert module is not None, f"Module for {task} head is None after replacement"
         missing, unexpected = module.load_state_dict(state_dict, strict=False)
         if missing or unexpected:
             logger.warning(
