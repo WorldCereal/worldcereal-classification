@@ -262,7 +262,9 @@ def _label_datetime_series(frame: pd.DataFrame) -> pd.Series:
     for column in _LABEL_DATETIME_COLUMNS:
         if column not in frame.columns:
             continue
-        candidate = pd.to_datetime(frame[column], errors="coerce")
+        # Replace NODATAVALUE with NaN before converting to datetime
+        column_data = frame[column].replace(NODATAVALUE, np.nan)
+        candidate = pd.to_datetime(column_data, errors="coerce")
         result = result.where(result.notna(), candidate)
         if result.notna().all():
             break
@@ -311,9 +313,11 @@ def _filter_frame_by_manual_windows(
 
     label_datetimes = _label_datetime_series(dataframe)
     if label_datetimes.isna().all():
-        raise ValueError(
-            f"{context}: Cannot enforce manual season window(s) because all samples are missing valid_time information."
+        logger.warning(
+            f"{context}: All samples are missing valid_time information. "
+            "Season windows will be used to create season masks but not for sample filtering."
         )
+        return dataframe, 0
 
     keep_mask = pd.Series(False, index=dataframe.index, dtype=bool)
     for season_name, window in season_windows.items():
