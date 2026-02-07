@@ -121,7 +121,7 @@ class TorchTrainer:
         self.split_column = split_column
         self.head_type = head_type
         self.head_task = head_task
-        if self.head_task == "croptype" and not season_id:
+        if self.head_task == "croptype" and season_id is None:
             raise ValueError(
                 "TorchTrainer requires 'season_id' when training croptype heads."
             )
