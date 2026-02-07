@@ -235,7 +235,7 @@ def main() -> None:
                 self.season_id = None
                 self.season_calendar_mode = None
                 self.season_windows = None
-                self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520_encoder.pt"
+                self.presto_model_path = None
                 self.data_dir = None
                 self.embeddings_path = None
                 self.single_dataframe = None
