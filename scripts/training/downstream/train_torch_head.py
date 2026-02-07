@@ -40,7 +40,6 @@ from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.train.data import (
     compute_embeddings_from_splits,
     spatial_train_val_test_split,
-    train_val_test_split,
 )
 from worldcereal.train.downstream import TorchTrainer
 
