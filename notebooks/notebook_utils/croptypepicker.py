@@ -218,6 +218,15 @@ class CropTypePicker:
 
         return nested_hierarchy
 
+    def _auto_expand_single_root(self) -> None:
+        """Expand the only root node when a single top-level item is available."""
+        if len(self._root_paths) != 1:
+            return
+        root_meta = self._node_meta.get(self._root_paths[0])
+        if root_meta is None or root_meta.get("toggle") is None:
+            return
+        root_meta["toggle"].value = True
+
     def _filter_low_counts(self, hierarchy) -> dict:
         """Filter out low counts from the hierarchy"""
 
@@ -488,6 +497,8 @@ class CropTypePicker:
             items, layout=widgets.Layout(width="100%", align_items="flex-start")
         )
 
+        self._auto_expand_single_root()
+
         submit_button = widgets.Button(description="Apply", button_style="success")
         submit_button.on_click(self.apply_selection)
 
@@ -550,6 +561,7 @@ class CropTypePicker:
                     meta["toggle"].value = False
                 if meta.get("children_vbox") is not None:
                     meta["children_vbox"].layout.display = "none"
+            self._auto_expand_single_root()
 
         def on_mode_change(change):
             previous_mode = self._current_mode
