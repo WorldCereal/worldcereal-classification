@@ -1491,8 +1491,20 @@ def run_finetuning(
         )
 
         # Save encoder-only
-        torch.save(model.backbone.state_dict(), best_encoder_ckpt_path)
-        logger.debug(f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}")
+        if hasattr(model, "backbone") and isinstance(model.backbone, torch.nn.Module):
+            torch.save(model.backbone.state_dict(), best_encoder_ckpt_path)
+            logger.debug(
+                f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
+            )
+        elif hasattr(model, "encoder") and isinstance(model.encoder, torch.nn.Module):
+            torch.save(model.encoder.state_dict(), best_encoder_ckpt_path)
+            logger.debug(
+                f"Saved best encoder-only checkpoint to {best_encoder_ckpt_path}"
+            )
+        else:
+            logger.warning(
+                "Model does not have a recognized encoder or backbone. Skipping encoder-only checkpoint."
+            )
 
     # Freeze specified layers initially
     if freeze_layers:
