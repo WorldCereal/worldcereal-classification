@@ -161,54 +161,50 @@ def _build_head_manifest(
     return manifest
 
 
-def _zip_checkpoint_with_config(
-    checkpoint_path: Path,
-    *,
-    manifest_path: Path,
-    run_config_path: Path,
-) -> Optional[Path]:
-    """Bundle a checkpoint with its manifest/config so inference can recover metadata."""
-
-    if not checkpoint_path.exists():
-        logger.warning(f"Checkpoint {checkpoint_path} not found; skipping packaging")
-        return None
-    if not manifest_path.exists():
-        logger.warning(
-            f"Head manifest missing at {manifest_path}; cannot package {checkpoint_path.name}"
-        )
-        return None
-
-    zip_path = checkpoint_path.with_suffix(".zip")
-    try:
-        with zipfile.ZipFile(
-            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
-        ) as zf:
-            zf.write(checkpoint_path, arcname=checkpoint_path.name)
-            zf.write(manifest_path, arcname="config.json")
-            if run_config_path.exists():
-                zf.write(run_config_path, arcname=run_config_path.name)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Failed to package {checkpoint_path.name}: {exc}")
-        return None
-
-    logger.info(f"Packaged {checkpoint_path.name} with manifest into {zip_path}")
-    return zip_path
-
-
 def _package_model_checkpoints(
-    checkpoint_paths: Sequence[Path],
+    full_checkpoint_path: Path,
+    encoder_checkpoint_path: Path,
     *,
     manifest_path: Path,
     run_config_path: Path,
 ) -> None:
-    """Create zip artifacts for each checkpoint using the shared manifest/config."""
+    """Bundle full and encoder-only checkpoints with manifest/config into a single zip."""
 
-    for checkpoint_path in checkpoint_paths:
-        _zip_checkpoint_with_config(
-            checkpoint_path,
-            manifest_path=manifest_path,
-            run_config_path=run_config_path,
+    # Verify both checkpoints exist
+    if not full_checkpoint_path.exists():
+        logger.warning(
+            f"Full checkpoint {full_checkpoint_path} not found; skipping packaging"
         )
+        return
+    if not encoder_checkpoint_path.exists():
+        logger.warning(
+            f"Encoder checkpoint {encoder_checkpoint_path} not found; skipping packaging"
+        )
+        return
+    if not manifest_path.exists():
+        logger.warning(
+            f"Head manifest missing at {manifest_path}; cannot package checkpoints"
+        )
+        return
+
+    zip_path = full_checkpoint_path.with_suffix(".zip")
+
+    try:
+        with zipfile.ZipFile(
+            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
+            zf.write(full_checkpoint_path, arcname=full_checkpoint_path.name)
+            zf.write(encoder_checkpoint_path, arcname=encoder_checkpoint_path.name)
+            zf.write(manifest_path, arcname="config.json")
+            if run_config_path.exists():
+                zf.write(run_config_path, arcname=run_config_path.name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to package checkpoints: {exc}")
+        return
+
+    logger.info(
+        f"Packaged {full_checkpoint_path.name} and {encoder_checkpoint_path.name} into {zip_path}"
+    )
 
 
 def _annotate_dual_task_labels(
@@ -455,12 +451,12 @@ def main(args):
     # setup path for processed wide parquet file so that it can be reused across experiments
     if not debug:
         wide_parquet_output_path = Path(
-            "/projects/worldcereal/data/cached_wide_merged305/merged_305_wide.parquet"
+            "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
         )
     else:
         wide_parquet_output_path = None
         # wide_parquet_output_path = Path(
-        # "/projects/worldcereal/data/cached_wide_merged305/merged_305_wide.parquet"
+        # "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
         # )
 
     # Training parameters
@@ -973,12 +969,9 @@ def main(args):
         artifact_dir=Path(output_dir),
     )
 
-    checkpoints_to_package = [
+    _package_model_checkpoints(
         Path(output_dir) / f"{experiment_name}.pt",
         Path(output_dir) / f"{experiment_name}_encoder.pt",
-    ]
-    _package_model_checkpoints(
-        checkpoints_to_package,
         manifest_path=manifest_path,
         run_config_path=config_path,
     )

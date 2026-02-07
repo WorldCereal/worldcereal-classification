@@ -4,7 +4,6 @@
 import json
 import zipfile
 from datetime import datetime
-from itertools import product
 from math import ceil
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
@@ -35,7 +34,7 @@ from worldcereal.train.backbone import (
     checkpoint_fingerprint,
     resolve_seasonal_encoder,
 )
-from worldcereal.train.data import train_val_test_split
+from worldcereal.train.data import spatial_train_val_test_split, train_val_test_split
 from worldcereal.train.datasets import get_class_weights
 from worldcereal.train.seasonal_head import LinearHead, MLPHead
 
@@ -46,15 +45,25 @@ class EmbeddingsDataset(Dataset):
         df: pd.DataFrame,
         feat_prefix: str = "presto_ft_",
         label_col: str = "downstream_class",
+        weight_col: Optional[str] = None,
     ):
         self.df = df.reset_index(drop=True)
         self.label_col = label_col
-        self.feat_cols = sorted([c for c in df.columns if c.startswith(feat_prefix)])
+        # Sort columns numerically, not lexicographically to preserve embedding dimension order
+        feat_cols_unsorted = [c for c in df.columns if c.startswith(feat_prefix)]
+        self.feat_cols = sorted(
+            feat_cols_unsorted, key=lambda x: int(x.replace(feat_prefix, ""))
+        )
         logger.info(
             f"EmbeddingsDataset: {len(self.df)} samples, {len(self.feat_cols)} features"
         )
         self.X = self.df[self.feat_cols].to_numpy(dtype=np.float32)
         self.y = self.df[label_col].to_numpy()
+        # Store per-sample weights if provided
+        if weight_col and weight_col in df.columns:
+            self.weights = self.df[weight_col].to_numpy(dtype=np.float32)
+        else:
+            self.weights = np.ones(len(self.df), dtype=np.float32)
 
     def __repr__(self) -> str:
         return (
@@ -66,7 +75,7 @@ class EmbeddingsDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx: int):
-        return torch.from_numpy(self.X[idx]), int(self.y[idx])
+        return torch.from_numpy(self.X[idx]), int(self.y[idx]), float(self.weights[idx])
 
 
 class TorchTrainer:
@@ -87,7 +96,7 @@ class TorchTrainer:
         batch_size: int = 1024,
         num_workers: int = 4,
         hidden_dim: int = 256,
-        dropout: float = 0.2,
+        dropout: float = 0.0,
         lr: float = 1e-2,  # can be high for lightweight head
         epochs: int = 30,
         log_interval: int = 10,
@@ -97,15 +106,16 @@ class TorchTrainer:
         use_balancing: bool = True,
         balancing_label: str = "downstream_class",
         balancing_method: str = "log",
-        weights_clip_range: Tuple[float, float] = (0.3, 5.0),
+        weights_clip_range: Tuple[float, float] = (0.1, 10),
         quality_col: Optional[str] = None,
         early_stopping_patience: int = 6,
         early_stopping_min_delta: float = 0.0,
-        weight_decay_grid: Optional[Sequence[float]] = None,
-        lr_grid: Optional[Sequence[float]] = None,
-        cv_folds: int = 5,
+        weight_decay: float = 0.0,
+        cv_folds: int = 3,
         group_column: str = "sample_id",
         disable_progressbar: bool = False,
+        use_spatial_split: bool = True,
+        spatial_bin_size_degrees: float = 1.0,
     ):
         self.training_df = embeddings_df
         self.split_column = split_column
@@ -159,16 +169,7 @@ class TorchTrainer:
         self.disable_progressbar = disable_progressbar
         self.cv_folds = cv_folds
         self.group_column = group_column
-        self.weight_decay_grid = (
-            tuple(sorted({float(v) for v in weight_decay_grid}))
-            if weight_decay_grid is not None
-            else (0.0,)
-        )
-        self.lr_grid = (
-            tuple(sorted({float(v) for v in lr_grid}))
-            if lr_grid is not None
-            else (self.lr,)
-        )
+        self.weight_decay = weight_decay
 
         # Balancing / weighting
         self.use_balancing = use_balancing
@@ -176,6 +177,10 @@ class TorchTrainer:
         self.balancing_method = balancing_method
         self.weights_clip_range = weights_clip_range
         self.quality_col = quality_col
+
+        # Spatial splitting
+        self.use_spatial_split = use_spatial_split
+        self.spatial_bin_size_degrees = spatial_bin_size_degrees
 
         # Early stopping
         self.early_stopping_patience = early_stopping_patience
@@ -214,10 +219,11 @@ class TorchTrainer:
                 "balancing_method": self.balancing_method,
                 "weights_clip_range": self.weights_clip_range,
                 "quality_col": self.quality_col,
+                "use_spatial_split": self.use_spatial_split,
+                "spatial_bin_size_degrees": self.spatial_bin_size_degrees,
                 "early_stopping_patience": self.early_stopping_patience,
                 "early_stopping_min_delta": self.early_stopping_min_delta,
-                "weight_decay_grid": list(self.weight_decay_grid),
-                "lr_grid": list(self.lr_grid),
+                "weight_decay": self.weight_decay,
                 "cv_folds": self.cv_folds,
                 "group_column": self.group_column,
             }
@@ -306,21 +312,6 @@ class TorchTrainer:
         else:
             raise ValueError("head_type must be one of {'linear','mlp'}")
 
-    def _prepare_data(
-        self, trn_df: pd.DataFrame, val_df: pd.DataFrame, tst_df: pd.DataFrame
-    ):
-        # Normalize class labels to range [0..C-1]
-        classes = self.classes_list
-        cls_to_idx = {c: i for i, c in enumerate(classes)}
-        for df in (trn_df, val_df, tst_df):
-            df["label"] = df["downstream_class"].map(cls_to_idx)
-
-        feat_cols = [c for c in trn_df.columns if c.startswith("presto_ft_")]
-        in_dim = len(feat_cols)
-        num_classes = len(classes)
-        self.feat_cols = feat_cols
-        return in_dim, num_classes
-
     def _get_balanced_sampler(
         self,
         df: pd.DataFrame,
@@ -329,7 +320,7 @@ class TorchTrainer:
         # extract the sampling class (strings or ints)
         bc_vals = df[self.balancing_label].values
 
-        logger.info("Computing class weights ...")
+        logger.info("Computing class weights for balanced sampling ...")
         class_weights = get_class_weights(
             bc_vals,
             self.balancing_method,
@@ -338,7 +329,7 @@ class TorchTrainer:
         )
         logger.info(f"Class weights: {class_weights}")
 
-        # per‐sample weight
+        # per‐sample weight for sampling (class balance only)
         sample_weights = np.ones_like(bc_vals).astype(np.float32)
         for k, v in class_weights.items():
             sample_weights[bc_vals == k] = v
@@ -363,39 +354,55 @@ class TorchTrainer:
     ) -> float:
         model.train()
         total_loss = 0.0
-        for X, y in tqdm(
+        total_samples = 0
+        for X, y, weights in tqdm(
             loader, desc="Training", leave=False, disable=self.disable_progressbar
         ):
             X = X.to(device_)
             y = y.to(device_)
+            weights = weights.to(device_)
             logits = model(X)
-            loss = self.loss_fn(logits, y)
+            # Compute per-sample loss
+            loss_unreduced = nn.functional.cross_entropy(
+                logits, y, reduction="none", label_smoothing=self.label_smoothing
+            )
+            # Apply per-sample weights
+            loss = (loss_unreduced * weights).mean()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             total_loss += float(loss.item()) * X.size(0)
-        return total_loss / len(loader.dataset)
+            total_samples += X.size(0)
+        return total_loss / total_samples
 
     def _eval_epoch(
         self, model: nn.Module, loader: DataLoader, device_: torch.device
     ) -> Tuple[float, np.ndarray, np.ndarray]:
         model.eval()
         total_loss = 0.0
+        total_samples = 0
         preds_all = []
         labels_all = []
         with torch.no_grad():
-            for X, y in loader:
+            for X, y, weights in loader:
                 X = X.to(device_)
                 y = y.to(device_)
+                weights = weights.to(device_)
                 logits = model(X)
-                loss = self.loss_fn(logits, y)
+                # Compute per-sample loss
+                loss_unreduced = nn.functional.cross_entropy(
+                    logits, y, reduction="none", label_smoothing=self.label_smoothing
+                )
+                # Apply per-sample weights
+                loss = (loss_unreduced * weights).mean()
                 total_loss += float(loss.item()) * X.size(0)
+                total_samples += X.size(0)
                 preds = torch.argmax(logits, dim=1)
                 preds_all.append(preds.cpu().numpy())
                 labels_all.append(y.cpu().numpy())
         preds_all = np.concatenate(preds_all)
         labels_all = np.concatenate(labels_all)
-        return total_loss / len(loader.dataset), preds_all, labels_all
+        return total_loss / total_samples, preds_all, labels_all
 
     def _drop_invalid_samples(self, df: pd.DataFrame) -> pd.DataFrame:
         if "finetune_class" not in df.columns:
@@ -516,7 +523,9 @@ class TorchTrainer:
             df["label"] = df[self.target_column].map(cls_to_idx)
 
     def _build_dataloader(self, df: pd.DataFrame, is_train: bool) -> DataLoader:
-        dataset = EmbeddingsDataset(df, feat_prefix="presto_ft_", label_col="label")
+        dataset = EmbeddingsDataset(
+            df, feat_prefix="presto_ft_", label_col="label", weight_col="_sample_weight"
+        )
         if is_train and self.use_balancing:
             sampler = self._get_balanced_sampler(df, normalize=True)
             return DataLoader(
@@ -596,6 +605,9 @@ class TorchTrainer:
                     and epochs_no_improve >= self.early_stopping_patience
                 ):
                     stopped_early = True
+                    logger.info(
+                        f"Early stopping triggered after {epoch} epochs (best epoch: {best_epoch}, best val_loss: {best_val:.4f})"
+                    )
                     break
 
             if self._should_emit(epoch, improved):
@@ -634,9 +646,15 @@ class TorchTrainer:
                 .drop_duplicates(subset=self.group_column)
                 .reset_index(drop=True)
             )
+            num_unique_groups = len(group_df)
+            logger.info(
+                f"K-fold CV using group column '{self.group_column}': "
+                f"{num_unique_groups} unique groups from {len(df)} total samples"
+            )
             if len(group_df) < self.cv_folds:
                 logger.warning(
-                    "Not enough unique groups for CV; falling back to sample-level splits."
+                    f"Not enough unique groups ({num_unique_groups}) for {self.cv_folds}-fold CV; "
+                    "falling back to sample-level splits."
                 )
             else:
                 sgkf = StratifiedKFold(
@@ -653,7 +671,8 @@ class TorchTrainer:
                 return
 
         logger.warning(
-            "Using row-level StratifiedKFold (group column missing or unusable)."
+            f"Using row-level StratifiedKFold (group column '{self.group_column}' missing or unusable). "
+            f"WARNING: This may cause data leakage if samples are repeated!"
         )
         skf = StratifiedKFold(
             n_splits=self.cv_folds, shuffle=True, random_state=self.seed
@@ -661,103 +680,92 @@ class TorchTrainer:
         for train_idx, val_idx in skf.split(df, df[self.target_column]):
             yield train_idx, val_idx
 
-    def _grid_search(
+    def _determine_epochs_cv(
         self, trainval_df: pd.DataFrame
-    ) -> Tuple[Dict[str, float], List[Dict[str, Any]]]:
-        results: List[Dict[str, Any]] = []
-        best_combo: Optional[Dict[str, float]] = None
-        best_score = -np.inf
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Use k-fold CV to determine optimal number of epochs.
 
-        for lr_val, wd_val in product(self.lr_grid, self.weight_decay_grid):
-            fold_scores: List[float] = []
-            fold_losses: List[float] = []
-            fold_epochs: List[int] = []
+        Returns:
+            final_epochs: The number of epochs to use for final training
+            cv_summary: Dictionary with CV fold statistics
+        """
+        fold_scores: List[float] = []
+        fold_losses: List[float] = []
+        fold_epochs: List[int] = []
 
-            logger.info(f"Grid search combo lr={lr_val:.2e}, weight_decay={wd_val:.2e}")
+        logger.info(
+            f"Running {self.cv_folds}-fold CV to determine optimal epochs "
+            f"(lr={self.lr:.2e}, weight_decay={self.weight_decay:.2e})"
+        )
 
-            for fold_idx, (train_idx, val_idx) in enumerate(
-                self._iter_cv_splits(trainval_df), start=1
-            ):
-                tr_df = trainval_df.iloc[train_idx].reset_index(drop=True)
-                val_df = trainval_df.iloc[val_idx].reset_index(drop=True)
+        for fold_idx, (train_idx, val_idx) in enumerate(
+            self._iter_cv_splits(trainval_df), start=1
+        ):
+            tr_df = trainval_df.iloc[train_idx].reset_index(drop=True)
+            val_df = trainval_df.iloc[val_idx].reset_index(drop=True)
 
-                train_loader = self._build_dataloader(tr_df, is_train=True)
-                val_loader = self._build_dataloader(val_df, is_train=False)
+            train_loader = self._build_dataloader(tr_df, is_train=True)
+            val_loader = self._build_dataloader(val_df, is_train=False)
 
-                result = self._run_training_loop(
-                    train_loader,
-                    val_loader,
-                    lr=lr_val,
-                    weight_decay=wd_val,
-                    max_epochs=self.epochs,
-                )
-
-                if result["val_macro_f1"] is None or result["best_val_loss"] is None:
-                    raise RuntimeError(
-                        "Validation metrics missing during grid search run."
-                    )
-
-                fold_scores.append(float(result["val_macro_f1"]))
-                fold_losses.append(float(result["best_val_loss"]))
-                fold_epochs.append(int(result["best_epoch"]))
-
-                logger.info(
-                    f"Fold {fold_idx}/{self.cv_folds} -> macro_f1={result['val_macro_f1']:.4f}, "
-                    f"val_loss={result['best_val_loss']:.4f}"
-                )
-
-            summary = {
-                "lr": float(lr_val),
-                "weight_decay": float(wd_val),
-                "max_epochs": int(self.epochs),
-                "fold_macro_f1": fold_scores,
-                "fold_val_loss": fold_losses,
-                "fold_best_epoch": fold_epochs,
-                "mean_macro_f1": float(np.mean(fold_scores))
-                if fold_scores
-                else float("nan"),
-                "mean_val_loss": float(np.mean(fold_losses))
-                if fold_losses
-                else float("nan"),
-                "mean_best_epoch": float(np.mean(fold_epochs))
-                if fold_epochs
-                else float("nan"),
-            }
-            results.append(summary)
-
-            if summary["mean_macro_f1"] > best_score:
-                best_score = summary["mean_macro_f1"]
-                mean_best_epoch = summary["mean_best_epoch"]
-                final_epochs = (
-                    max(1, int(round(mean_best_epoch)))
-                    if not np.isnan(mean_best_epoch)
-                    else self.epochs
-                )
-                best_combo = {
-                    "lr": summary["lr"],
-                    "weight_decay": summary["weight_decay"],
-                    "final_epochs": min(self.epochs, final_epochs),
-                    "mean_macro_f1": summary["mean_macro_f1"],
-                    "mean_val_loss": summary["mean_val_loss"],
-                    "mean_best_epoch": None
-                    if np.isnan(summary["mean_best_epoch"])
-                    else summary["mean_best_epoch"],
-                }
-
-        if best_combo is None:
-            raise RuntimeError(
-                "Grid search did not evaluate any hyperparameter combinations."
+            result = self._run_training_loop(
+                train_loader,
+                val_loader,
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                max_epochs=self.epochs,
             )
 
-        return best_combo, results
+            if result["val_macro_f1"] is None or result["best_val_loss"] is None:
+                raise RuntimeError("Validation metrics missing during CV run.")
+
+            fold_scores.append(float(result["val_macro_f1"]))
+            fold_losses.append(float(result["best_val_loss"]))
+            fold_epochs.append(int(result["best_epoch"]))
+
+            logger.info(
+                f"Fold {fold_idx}/{self.cv_folds} -> macro_f1={result['val_macro_f1']:.4f}, "
+                f"val_loss={result['best_val_loss']:.4f}, best_epoch={result['best_epoch']}"
+            )
+
+        mean_best_epoch = float(np.mean(fold_epochs))
+        final_epochs = (
+            max(1, int(round(mean_best_epoch)))
+            if not np.isnan(mean_best_epoch)
+            else self.epochs
+        )
+        final_epochs = min(self.epochs, final_epochs)
+
+        cv_summary = {
+            "fold_macro_f1": fold_scores,
+            "fold_val_loss": fold_losses,
+            "fold_best_epoch": fold_epochs,
+            "mean_macro_f1": float(np.mean(fold_scores))
+            if fold_scores
+            else float("nan"),
+            "mean_val_loss": float(np.mean(fold_losses))
+            if fold_losses
+            else float("nan"),
+            "mean_best_epoch": mean_best_epoch
+            if not np.isnan(mean_best_epoch)
+            else None,
+        }
+
+        return final_epochs, cv_summary
 
     def train(self) -> nn.Module:
         self.create_config()
         self._ensure_label_columns(self.training_df)
 
-        trn_df, val_df, tst_df = train_val_test_split(
-            self.training_df, self.split_column
-        )
+        if self.use_spatial_split:
+            trn_df, val_df, tst_df = spatial_train_val_test_split(
+                self.training_df,
+                split_column=self.split_column,
+                bin_size_degrees=self.spatial_bin_size_degrees,
+            )
+        else:
+            trn_df, val_df, tst_df = train_val_test_split(
+                self.training_df, self.split_column
+            )
         trainval_df = pd.concat([trn_df, val_df]).reset_index(drop=True)
         test_df = tst_df.reset_index(drop=True)
 
@@ -777,50 +785,72 @@ class TorchTrainer:
 
         self._assign_label_indices([trainval_df, test_df])
 
+        # Compute quality-based sample weights if quality_col is provided
+        if self.quality_col is not None:
+            for df in (trainval_df, test_df):
+                if self.quality_col in df.columns:
+                    quality_values = df[self.quality_col].values
+                    # Normalize quality values to [0, 1] range
+                    quality_min = quality_values.min()
+                    quality_max = quality_values.max()
+                    if quality_max > quality_min:
+                        quality_normalized = (quality_values - quality_min) / (
+                            quality_max - quality_min
+                        )
+                    else:
+                        quality_normalized = np.ones_like(quality_values)
+                    df["_sample_weight"] = quality_normalized
+                else:
+                    df["_sample_weight"] = 1.0
+            logger.info(
+                f"Applied quality-based sample weights from column '{self.quality_col}'"
+            )
+        else:
+            for df in (trainval_df, test_df):
+                df["_sample_weight"] = 1.0
+
+        if "confidence_nonoutlier" in trainval_df.columns:
+            logger.info(
+                "Incorporating 'confidence_nonoutlier' into sample weights for train/val set."
+            )
+            trainval_df["_sample_weight"] *= trainval_df[
+                "confidence_nonoutlier"
+            ].fillna(1.0)
+
         self.feat_cols = [c for c in trainval_df.columns if c.startswith("presto_ft_")]
         self.in_dim = len(self.feat_cols)
         self.num_classes = len(self.classes_list)
         self.update_config_after_prepare(self.in_dim, self.num_classes)
 
-        best_params, grid_results = self._grid_search(trainval_df)
+        final_epochs, cv_summary = self._determine_epochs_cv(trainval_df)
         self.config.update(
             {
-                "grid_search_results": grid_results,
-                "selected_hyperparams": best_params,
+                "cv_results": cv_summary,
+                "final_epochs": final_epochs,
             }
         )
         self.save_config()
 
         logger.info(
-            "Selected hyperparameters -> "
-            f"lr={best_params['lr']:.2e}, "
-            f"weight_decay={best_params['weight_decay']:.2e}, "
-            f"final_epochs={best_params['final_epochs']} "
-            f"(macro-F1={best_params['mean_macro_f1']:.4f})"
+            f"CV determined final_epochs={final_epochs} "
+            f"(mean CV macro-F1={cv_summary['mean_macro_f1']:.4f})"
         )
 
         final_loader = self._build_dataloader(trainval_df, is_train=True)
         final_result = self._run_training_loop(
             final_loader,
             None,
-            lr=best_params["lr"],
-            weight_decay=best_params["weight_decay"],
-            max_epochs=best_params["final_epochs"],
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+            max_epochs=final_epochs,
         )
         model = final_result["model"]
 
         test_loader = self._build_dataloader(test_df, is_train=False)
 
-        mean_best_epoch = best_params.get("mean_best_epoch")
-        best_epoch_stat = (
-            int(round(mean_best_epoch))
-            if mean_best_epoch is not None
-            else best_params["final_epochs"]
-        )
-
         self.update_config_after_training(
-            best_val_loss=best_params.get("mean_val_loss", 0.0),
-            best_epoch=best_epoch_stat,
+            best_val_loss=cv_summary.get("mean_val_loss", 0.0),
+            best_epoch=final_epochs,
             epochs_trained=final_result["epochs_ran"],
             stopped_early=final_result["stopped_early"],
         )
@@ -915,7 +945,7 @@ class TorchTrainer:
         preds_all = []
         labels_all = []
         with torch.no_grad():
-            for X, y in test_loader:
+            for X, y, weights in test_loader:
                 logits = model(X.to(device))
                 preds = torch.argmax(logits, dim=1).cpu().numpy()
                 preds_all.append(preds)
@@ -924,12 +954,17 @@ class TorchTrainer:
         labels_all = np.concatenate(labels_all)
 
         # Metrics
-        # Map integer labels back to string class names for readability
-        target_names = [str(c) for c in self.classes_list]
+        # Determine which classes are actually present in the test set
+        unique_labels = np.unique(np.concatenate([labels_all, preds_all]))
+        labels_in_test = [
+            self.classes_list[i] for i in unique_labels if i < len(self.classes_list)
+        ]
+
         report = classification_report(
             labels_all,
             preds_all,
-            target_names=target_names,
+            labels=unique_labels,
+            target_names=[str(c) for c in labels_in_test],
             output_dict=True,
             zero_division=0,
         )

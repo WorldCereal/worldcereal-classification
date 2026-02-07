@@ -2,16 +2,15 @@ import copy
 import logging
 import random
 from pathlib import Path
-from typing import Optional
-from typing import Literal
+from typing import Literal, Optional
 
+import geopandas as gpd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-from rasterio.mask import mask
-import geopandas as gpd
 from loguru import logger
+from rasterio.mask import mask
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -191,6 +190,7 @@ def visualize_product(
         # We plot using leafmap in interactive mode
         # to allow for zooming and panning
         import os
+
         import leafmap
 
         if os.environ.get("JUPYTERHUB_SERVICE_PREFIX") is not None:

@@ -161,8 +161,8 @@ def test_train_downstream_torch(WorldCerealExtractionsDF, tmp_path):
     # Train classifier
     trainer = TorchTrainer(
         embeddings_df,
-        lr_grid=[1e-2],
-        weight_decay_grid=[1e-5],
+        lr=1e-2,
+        weight_decay=1e-5,
         output_dir=tmp_path,
     )
 

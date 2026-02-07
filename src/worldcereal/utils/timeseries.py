@@ -1175,6 +1175,4 @@ def process_parquet(
     df_pivot["start_date"] = df_pivot["start_date"].dt.strftime("%Y-%m-%d")
     df_pivot["end_date"] = df_pivot["end_date"].dt.strftime("%Y-%m-%d")
 
-    df_pivot = df_pivot.set_index("sample_id")
-
     return df_pivot
