@@ -337,7 +337,7 @@ def compute_seasonal_presto_embeddings(
     global seasonality lookup.
     """
 
-    from worldcereal.train.data import dataset_to_seasonal_embeddings
+    from worldcereal.train.data import dataset_to_embeddings
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
     if task_type not in {"croptype", "cropland"}:
@@ -413,12 +413,14 @@ def compute_seasonal_presto_embeddings(
     val_ds = _build_dataset(samples_val, augment_flag=False)
     test_ds = _build_dataset(samples_test, augment_flag=False)
 
-    df_train = dataset_to_seasonal_embeddings(
-        train_ds, presto_model, batch_size=batch_size
+    df_train = dataset_to_embeddings(
+        train_ds, presto_model, batch_size=batch_size, season_index=0
     )
-    df_val = dataset_to_seasonal_embeddings(val_ds, presto_model, batch_size=batch_size)
-    df_test = dataset_to_seasonal_embeddings(
-        test_ds, presto_model, batch_size=batch_size
+    df_val = dataset_to_embeddings(
+        val_ds, presto_model, batch_size=batch_size, season_index=0
+    )
+    df_test = dataset_to_embeddings(
+        test_ds, presto_model, batch_size=batch_size, season_index=0
     )
 
     df_train["split"] = "train"
