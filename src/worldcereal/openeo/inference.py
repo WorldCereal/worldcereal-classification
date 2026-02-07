@@ -1195,14 +1195,12 @@ class SeasonalInferenceEngine:
 
         if len(active_ids) > 1 and not self._croptype_enabled:
             logger.info(
-                "Croptype head disabled; evaluating %d seasons with uniform full-coverage masks.",
-                len(active_ids),
+                f"Croptype head disabled; evaluating {len(active_ids)} seasons with uniform full-coverage masks."
             )
         else:
             log_fn = logger.warning if self._croptype_enabled else logger.info
             log_fn(
-                "No season windows or masks provided; treating season '%s' as full-year coverage",
-                active_ids[0],
+                f"No season windows or masks provided; treating season '{active_ids[0]}' as full-year coverage"
             )
         mask_array = _build_uniform_masks(batch_size, num_timesteps, len(active_ids))
         return mask_array, active_ids
@@ -1378,8 +1376,7 @@ class SeasonalInferenceEngine:
             ]
             if missing_cropland:
                 logger.warning(
-                    "Cropland classes %s missing from landcover outputs; treating them as non-cropland.",
-                    missing_cropland,
+                    f"Cropland classes {missing_cropland} missing from landcover outputs; treating them as non-cropland."
                 )
             cropland_indices = [class_index[name] for name in cropland_label_order]
             cropland_index_set = set(cropland_indices)
@@ -1745,7 +1742,7 @@ def _resolve_effective_season_ids(context: Mapping[str, Any]) -> List[str]:
             return list(override)
     except ValueError:
         logger.warning(
-            "Unknown seasonal workflow preset '%s' in metadata context", preset_name
+            f"Unknown seasonal workflow preset '{preset_name}' in metadata context"
         )
 
     from worldcereal.train import GLOBAL_SEASON_IDS
