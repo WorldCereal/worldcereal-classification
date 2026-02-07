@@ -33,12 +33,12 @@ def test_doy_to_date_after():
     doy_data = int(np.asarray(doy_data).squeeze())
 
     after_date = datetime.datetime(2019, 1, 1)
-    doy_date = doy_to_date_after(int(doy_data.item()), after_date)
+    doy_date = doy_to_date_after(int(doy_data), after_date)
 
     assert pd.to_datetime(doy_date) >= after_date
 
     after_date = datetime.datetime(2019, 8, 1)
-    doy_date = doy_to_date_after(int(doy_data.item()), after_date)
+    doy_date = doy_to_date_after(int(doy_data), after_date)
 
     assert pd.to_datetime(doy_date) >= after_date
 

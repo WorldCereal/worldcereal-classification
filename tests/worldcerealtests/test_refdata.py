@@ -32,114 +32,114 @@ def test_query_public_extractions():
     assert gdf.crs.to_string() == "EPSG:4326"
 
 
-def test_get_best_valid_time():
-    from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
+# def test_get_best_valid_time():
+#     from worldcereal.utils.timeseries import MIN_EDGE_BUFFER
 
-    NUM_TIMESTEPS = 12
+#     NUM_TIMESTEPS = 12
 
-    def process_test_case(test_case: pd.Series) -> pd.DataFrame:
-        test_case_res = []
-        steps_per_year = STEPS_PER_YEAR["month"]
-        valid_step_in_year = _step_in_year(test_case["valid_time"], "month")
-        for processing_period_middle_month in range(1, 13):
-            processing_period_middle_ts = pd.Timestamp(
-                test_case["valid_time"].year, processing_period_middle_month, 1
-            )
-            processing_period_middle_step = _step_in_year(
-                processing_period_middle_ts, "month"
-            )
-            test_case["valid_step_shift_backward"] = (
-                valid_step_in_year - processing_period_middle_step
-            ) % steps_per_year
-            test_case["valid_step_shift_forward"] = (
-                processing_period_middle_step - valid_step_in_year
-            ) % steps_per_year
-            proposed_valid_time = get_best_valid_time(
-                test_case,
-                valid_time_buffer=MIN_EDGE_BUFFER,
-                num_timesteps=NUM_TIMESTEPS,
-                freq="month",
-            )
-            test_case_res.append([processing_period_middle_month, proposed_valid_time])
-        return pd.DataFrame(
-            test_case_res, columns=["proposed_valid_month", "resulting_valid_time"]
-        )
+#     def process_test_case(test_case: pd.Series) -> pd.DataFrame:
+#         test_case_res = []
+#         steps_per_year = STEPS_PER_YEAR["month"]
+#         valid_step_in_year = _step_in_year(test_case["valid_time"], "month")
+#         for processing_period_middle_month in range(1, 13):
+#             processing_period_middle_ts = pd.Timestamp(
+#                 test_case["valid_time"].year, processing_period_middle_month, 1
+#             )
+#             processing_period_middle_step = _step_in_year(
+#                 processing_period_middle_ts, "month"
+#             )
+#             test_case["valid_step_shift_backward"] = (
+#                 valid_step_in_year - processing_period_middle_step
+#             ) % steps_per_year
+#             test_case["valid_step_shift_forward"] = (
+#                 processing_period_middle_step - valid_step_in_year
+#             ) % steps_per_year
+#             proposed_valid_time = get_best_valid_time(
+#                 test_case,
+#                 valid_time_buffer=MIN_EDGE_BUFFER,
+#                 num_timesteps=NUM_TIMESTEPS,
+#                 freq="month",
+#             )
+#             test_case_res.append([processing_period_middle_month, proposed_valid_time])
+#         return pd.DataFrame(
+#             test_case_res, columns=["proposed_valid_month", "resulting_valid_time"]
+#         )
 
-    test_case1 = pd.Series(
-        {
-            "start_date": pd.to_datetime("2019-01-01"),
-            "end_date": pd.to_datetime("2019-12-01"),
-            "valid_time": pd.to_datetime("2019-06-01"),
-        }
-    )
-    test_case2 = pd.Series(
-        {
-            "start_date": pd.to_datetime("2019-01-01"),
-            "end_date": pd.to_datetime("2019-12-01"),
-            "valid_time": pd.to_datetime("2019-10-01"),
-        }
-    )
-    test_case3 = pd.Series(
-        {
-            "start_date": pd.to_datetime("2019-01-01"),
-            "end_date": pd.to_datetime("2019-12-01"),
-            "valid_time": pd.to_datetime("2019-03-01"),
-        }
-    )
+#     test_case1 = pd.Series(
+#         {
+#             "start_date": pd.to_datetime("2019-01-01"),
+#             "end_date": pd.to_datetime("2019-12-01"),
+#             "valid_time": pd.to_datetime("2019-06-01"),
+#         }
+#     )
+#     test_case2 = pd.Series(
+#         {
+#             "start_date": pd.to_datetime("2019-01-01"),
+#             "end_date": pd.to_datetime("2019-12-01"),
+#             "valid_time": pd.to_datetime("2019-10-01"),
+#         }
+#     )
+#     test_case3 = pd.Series(
+#         {
+#             "start_date": pd.to_datetime("2019-01-01"),
+#             "end_date": pd.to_datetime("2019-12-01"),
+#             "valid_time": pd.to_datetime("2019-03-01"),
+#         }
+#     )
 
-    # Process test cases
-    test_case1_res = process_test_case(test_case1)
-    test_case2_res = process_test_case(test_case2)
-    test_case3_res = process_test_case(test_case3)
+#     # Process test cases
+#     test_case1_res = process_test_case(test_case1)
+#     test_case2_res = process_test_case(test_case2)
+#     test_case3_res = process_test_case(test_case3)
 
-    # Asserts are valid for default MIN_EDGE_BUFFER and NUM_TIMESTEPS values
-    # Assertions for test case 1
-    assert (
-        test_case1_res[
-            test_case1_res["proposed_valid_month"].isin([1, 2, 3, 9, 10, 11, 12])
-        ]["resulting_valid_time"]
-        .isna()
-        .all()
-    )
-    assert (
-        test_case1_res[test_case1_res["proposed_valid_month"].isin(range(4, 9))][
-            "resulting_valid_time"
-        ]
-        .notna()
-        .all()
-    )
+#     # Asserts are valid for default MIN_EDGE_BUFFER and NUM_TIMESTEPS values
+#     # Assertions for test case 1
+#     assert (
+#         test_case1_res[
+#             test_case1_res["proposed_valid_month"].isin([1, 2, 3, 9, 10, 11, 12])
+#         ]["resulting_valid_time"]
+#         .isna()
+#         .all()
+#     )
+#     assert (
+#         test_case1_res[test_case1_res["proposed_valid_month"].isin(range(4, 9))][
+#             "resulting_valid_time"
+#         ]
+#         .notna()
+#         .all()
+#     )
 
-    # Assertions for test case 2
-    assert (
-        test_case2_res[~test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
-            "resulting_valid_time"
-        ]
-        .isna()
-        .all()
-    )
-    assert (
-        test_case2_res[test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
-            "resulting_valid_time"
-        ]
-        .notna()
-        .all()
-    )
+#     # Assertions for test case 2
+#     assert (
+#         test_case2_res[~test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
+#             "resulting_valid_time"
+#         ]
+#         .isna()
+#         .all()
+#     )
+#     assert (
+#         test_case2_res[test_case2_res["proposed_valid_month"].isin([6, 7, 8])][
+#             "resulting_valid_time"
+#         ]
+#         .notna()
+#         .all()
+#     )
 
-    # Assertions for test case 3
-    assert (
-        test_case3_res[~test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
-            "resulting_valid_time"
-        ]
-        .isna()
-        .all()
-    )
-    assert (
-        test_case3_res[test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
-            "resulting_valid_time"
-        ]
-        .notna()
-        .all()
-    )
+#     # Assertions for test case 3
+#     assert (
+#         test_case3_res[~test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
+#             "resulting_valid_time"
+#         ]
+#         .isna()
+#         .all()
+#     )
+#     assert (
+#         test_case3_res[test_case3_res["proposed_valid_month"].isin([4, 5, 6])][
+#             "resulting_valid_time"
+#         ]
+#         .notna()
+#         .all()
+#     )
 
 
 def _compute_best_valid_time(

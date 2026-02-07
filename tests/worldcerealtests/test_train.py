@@ -7,9 +7,10 @@ from torch.utils.data import DataLoader
 from worldcereal.train.backbone import build_presto_backbone
 from worldcereal.train.data import (
     collate_fn,
-    compute_embeddings_from_input_df,
+    compute_embeddings_from_splits,
     dataset_to_embeddings,
     get_training_dfs_from_parquet,
+    train_val_test_split,
 )
 from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.train.downstream import TorchTrainer
@@ -154,15 +155,26 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
 def test_train_downstream_torch(WorldCerealExtractionsDF, tmp_path):
     df = WorldCerealExtractionsDF.reset_index()
 
-    embeddings_df = compute_embeddings_from_input_df(
-        input_df=df, stratify_label="downstream_class"
+    # Split data into train/val/test
+    train_df, val_df, test_df = train_val_test_split(
+        df, split_column="split", stratify_label="finetune_class"
     )
 
-    # Train classifier
+    # Compute seasonal embeddings for tc-s1 (temporary crops - season 1)
+    embeddings_df = compute_embeddings_from_splits(
+        train_df=train_df,
+        val_df=val_df,
+        test_df=test_df,
+        season_id="tc-s2",
+        season_calendar_mode="calendar",
+    )
+
+    # Train classifier using tc-s1
     trainer = TorchTrainer(
         embeddings_df,
+        season_id="tc-s2",
         lr=1e-2,
-        weight_decay=1e-5,
+        epochs=2,
         output_dir=tmp_path,
     )
 

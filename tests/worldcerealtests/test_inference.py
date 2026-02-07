@@ -319,11 +319,13 @@ def test_apply_metadata_omits_croptype_labels_when_disabled(monkeypatch):
     assert result == [
         "cropland_classification",
         "probability_cropland",
+        "probability_other",
     ]
     assert metadata.calls[0][0] == "bands"
     assert metadata.calls[0][1] == [
         "cropland_classification",
         "probability_cropland",
+        "probability_other",
     ]
 
 
@@ -382,7 +384,7 @@ def test_probabilities_are_flattened_and_gated():
     assert wheat_probs[valid_mask].min() >= 0
     assert wheat_probs[valid_mask].max() <= 100
     assert ds["croptype_classification:tc-s1"].values[0, 0] == inference.NOCROP_VALUE
-    assert ds["probability_crop"].dtype == np.uint8
+    assert ds["probability_cropland"].dtype == np.uint8
     assert ds["probability_other"].dtype == np.uint8
     season_two_wheat = ds["croptype_probability:tc-s2:wheat"]
     assert season_two_wheat.dtype == np.uint8
@@ -410,7 +412,6 @@ def test_dataset_to_multiband_array_preserves_band_order():
     expected_prefix = [
         "cropland_classification",
         "probability_cropland",
-        "probability_crop",
         "probability_other",
         "croptype_classification:tc-s1",
         "croptype_classification:tc-s2",
@@ -429,7 +430,6 @@ def test_expected_udf_labels_match_probability_dataset_order_with_class_probs():
     expected_labels = inference._expected_udf_band_labels(
         ["tc-s1", "tc-s2"],
         export_class_probabilities=True,
-        cropland_gate_classes=engine.bundle.cropland_gate_classes,
         croptype_classes=engine.bundle.croptype_spec.class_names,
         croptype_enabled=engine._croptype_enabled,
         cropland_enabled=engine._cropland_enabled,
@@ -444,7 +444,6 @@ def test_expected_udf_labels_match_probability_dataset_order_without_class_probs
     expected_labels = inference._expected_udf_band_labels(
         ["tc-s1", "tc-s2"],
         export_class_probabilities=False,
-        cropland_gate_classes=engine.bundle.cropland_gate_classes,
         croptype_classes=engine.bundle.croptype_spec.class_names,
         croptype_enabled=engine._croptype_enabled,
         cropland_enabled=engine._cropland_enabled,
@@ -461,19 +460,3 @@ def test_croptype_probabilities_use_nocrop_value_when_gated():
 
     assert np.any(nocrop_mask)
     assert np.all(wheat_probs[nocrop_mask] == inference.NOCROP_VALUE)
-
-
-def test_sorted_croptype_band_names_prioritizes_classification():
-    unordered = [
-        "croptype_probability:tc-s1:wheat",
-        "croptype_probability:tc-s1",
-        "croptype_classification:tc-s1",
-        "croptype_raw_probability:tc-s1",
-        "croptype_raw_classification:tc-s1",
-    ]
-
-    ordered = mapping._sorted_croptype_band_names(unordered)
-
-    assert ordered[0] == "croptype_classification:tc-s1"
-    assert ordered[1] == "croptype_probability:tc-s1"
-    assert ordered[-1] == "croptype_raw_probability:tc-s1"

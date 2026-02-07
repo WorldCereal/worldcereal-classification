@@ -369,7 +369,7 @@ class TestWorldCerealDataset(unittest.TestCase):
     def test_labelled_dataset_season_auto_prefers_custom_windows(self):
         mock_masks = np.ones((1, self.num_timesteps), dtype=bool)
         season_windows = {
-            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+            "custom": (np.datetime64("2021-05-15"), np.datetime64("2021-08-15"))
         }
         with mock.patch.object(
             WorldCerealLabelledDataset,
@@ -633,7 +633,7 @@ class TestWorldCerealDataset(unittest.TestCase):
 
     def test_manual_mode_rejects_missing_calendar_support(self):
         season_windows = {
-            "custom": (np.datetime64("2021-03-15"), np.datetime64("2021-06-15"))
+            "custom": (np.datetime64("2021-05-15"), np.datetime64("2021-08-15"))
         }
 
         ds = WorldCerealLabelledDataset(
