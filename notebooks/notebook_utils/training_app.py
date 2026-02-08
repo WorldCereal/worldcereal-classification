@@ -26,11 +26,6 @@ from urllib.parse import urlparse
 import ipywidgets as widgets
 import pandas as pd
 from IPython.display import HTML, display
-from tabulate import tabulate
-
-from openeo_gfmap import TemporalContext
-from openeo_gfmap.backend import cdse_connection
-
 from notebook_utils.classifier import (
     align_extractions_to_season,
     compute_seasonal_presto_embeddings,
@@ -44,23 +39,23 @@ from notebook_utils.extractions import (
     retrieve_extractions_extent,
     visualize_timeseries,
 )
-from notebook_utils.production import (
-    bbox_extent_to_gdf,
-    merge_maps,
-    run_map_production,
-)
+from notebook_utils.production import bbox_extent_to_gdf, merge_maps, run_map_production
+from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
+from notebook_utils.visualization import visualize_products
+from openeo_gfmap import TemporalContext
+from openeo_gfmap.backend import cdse_connection
+from tabulate import tabulate
+
+from worldcereal.openeo.inference import load_model_artifact
+from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
+from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
     get_legend,
     translate_ewoc_codes,
 )
-from worldcereal.openeo.inference import load_model_artifact
-from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
-from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
-from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils.map import ui_map
-from notebook_utils.visualization import visualize_products
-from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
 
