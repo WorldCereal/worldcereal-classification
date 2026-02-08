@@ -85,21 +85,21 @@ def _load_presto_encoder(custom_presto_url: Optional[str] = None):
 
 def align_extractions_to_season(
     df: pd.DataFrame,
-    season: TemporalContext,
+    season: Optional[TemporalContext] = None,
     freq: Literal["month", "dekad"] = "month",
     valid_time_buffer: int = MIN_EDGE_BUFFER,
     season_window: Optional[TemporalContext] = None,
 ) -> pd.DataFrame:
     """Align raw extraction rows to a target season and enrich with labels.
 
-    This function trims all satellite extractions to exactly match the processing period
-    (12 consecutive months ending at the season window end date) and filters samples
-    to ensure valid_time falls within the season window with sufficient edge buffer.
+    When processing_period (season) is provided, samples must have complete satellite
+    coverage for that 12-month window. When omitted (None), only season_window filtering
+    is applied, allowing samples with partial temporal coverage.
 
     Samples are removed if:
-    - They lack satellite coverage for the full processing period
+    - (If season provided) They lack satellite coverage for the full processing period
     - Their valid_time falls outside the season window
-    - Their valid_time is too close to processing period edges (< MIN_EDGE_BUFFER)
+    - (If season provided) Their valid_time is too close to processing period edges (< MIN_EDGE_BUFFER)
 
     Output additions
     ----------------
@@ -116,13 +116,15 @@ def align_extractions_to_season(
     df : pandas.DataFrame
         Raw extraction rows containing at minimum ``ref_id``, ``ewoc_code``, ``timestamp``,
         and ``valid_time``.
-    season : TemporalContext
-        Processing period (12 consecutive months). Typically derived from season_window.
+    season : TemporalContext, optional
+        Processing period (12 consecutive months). Required for trimming samples to exactly
+        12 timesteps (needed for embedding computation). When None, no trimming occurs.
     freq : {'month', 'dekad'}, default='month'
         Resampling / alignment frequency controlling internal temporal aggregation.
     valid_time_buffer : int, default=MIN_EDGE_BUFFER
-        Minimum buffer (in timesteps) between valid_time and processing period edges.
-        Ensures downstream augmentation has sufficient temporal context.
+        Buffer (in months for monthly freq) allowing valid_time closer to processing period edges.
+        Increase (e.g., to 6) to accommodate datasets with partial temporal coverage.
+        Set to 0 for strict requirements (full Jan-Dec satellite coverage).
     season_window : TemporalContext, optional
         Campaign window for valid_time filtering (typically the slider selection).
         When provided, only samples with valid_time inside this window are retained.
@@ -329,15 +331,61 @@ def compute_seasonal_presto_embeddings(
     custom_presto_url: Optional[str] = None,
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
     season_window: Optional[TemporalContext] = None,
+    use_spatial_split: bool = True,
+    bin_size_degrees: float = 0.25,
+    val_size: float = 0.15,
+    test_size: float = 0.15,
 ) -> pd.DataFrame:
     """Compute Presto embeddings pooled over a single season selection.
 
     When ``season_window`` is provided, the supplied ``TemporalContext`` defines the
     pooling window so custom campaign identifiers can be used without relying on the
     global seasonality lookup.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input dataframe with temporally aligned samples.
+    season_id : str
+        Identifier for the season to use for pooling.
+    batch_size : int, default=256
+        Inference batch size.
+    task_type : {'croptype', 'cropland'}, default='croptype'
+        Selects pretrained weights and multiclass vs binary configuration.
+    augment : bool, default=True
+        Whether to apply temporal jitter augmentation.
+    mask_on_training : bool, default=True
+        Whether to apply sensor masking augmentations on the training set.
+    repeats : int, default=3
+        Number of times to repeat each sample in the training set.
+    custom_presto_url : str, optional
+        URL to custom Presto model weights.
+    season_calendar_mode : {'auto', 'calendar', 'custom', 'off'}, default='calendar'
+        Season calendar resolution mode.
+    season_window : TemporalContext, optional
+        Custom temporal window for pooling.
+    use_spatial_split : bool, default=False
+        If True, uses spatial binning to split data and avoid spatial leakage.
+        Requires 'lat' and 'lon' columns in the dataframe.
+    bin_size_degrees : float, default=0.25
+        Size of spatial bins in degrees (used when use_spatial_split=True).
+    val_size : float, default=0.15
+        Fraction of data (or spatial bins) to use for validation.
+    test_size : float, default=0.15
+        Fraction of data (or spatial bins) to use for testing.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Dataframe with Presto embeddings and a 'split' column indicating
+        train/val/test assignment.
     """
 
-    from worldcereal.train.data import dataset_to_embeddings
+    from worldcereal.train.data import (
+        dataset_to_embeddings,
+        spatial_train_val_test_split,
+        train_val_test_split,
+    )
     from worldcereal.train.datasets import WorldCerealTrainingDataset
 
     if task_type not in {"croptype", "cropland"}:
@@ -348,24 +396,24 @@ def compute_seasonal_presto_embeddings(
     presto_model, presto_fingerprint = _load_presto_encoder(custom_presto_url)
     logger.info(f"Presto encoder fingerprint: {presto_fingerprint}")
 
-    try:
-        train_val, samples_test = train_test_split(
+    # Use existing splitting utilities from worldcereal.train.data
+    if use_spatial_split:
+        samples_train, samples_val, samples_test = spatial_train_val_test_split(
             df,
-            test_size=0.2,
-            random_state=DEFAULT_SEED,
-            stratify=df["sampling_label"],
+            val_size=val_size,
+            test_size=test_size,
+            seed=DEFAULT_SEED,
+            bin_size_degrees=bin_size_degrees,
+            stratify_label="downstream_class",
         )
-    except ValueError:
-        logger.warning(
-            "Stratified split failed (not enough samples per class), using random split."
+    else:
+        samples_train, samples_val, samples_test = train_val_test_split(
+            df,
+            val_size=val_size,
+            test_size=test_size,
+            seed=DEFAULT_SEED,
+            stratify_label="downstream_class",
         )
-        train_val, samples_test = train_test_split(
-            df, test_size=0.2, random_state=DEFAULT_SEED
-        )
-
-    samples_train, samples_val = train_test_split(
-        train_val, test_size=0.2, random_state=DEFAULT_SEED
-    )
 
     if mask_on_training:
         masking_config = SensorMaskingConfig(
@@ -435,6 +483,8 @@ def train_seasonal_torch_head(
     season_id: str,
     head_task: Literal["croptype", "landcover"] = "croptype",
     output_dir: Union[str, Path] = "./downstream_classifier",
+    num_workers: int = 0,
+    disable_progressbar: bool = True,
     **trainer_kwargs: object,
 ):
     """Train a torch head compatible with the seasonal model bundle."""
@@ -446,6 +496,8 @@ def train_seasonal_torch_head(
         head_task=head_task,
         output_dir=output_dir,
         season_id=season_id,
+        num_workers=num_workers,
+        disable_progressbar=disable_progressbar,
         **trainer_kwargs,
     )
     return trainer.train()
