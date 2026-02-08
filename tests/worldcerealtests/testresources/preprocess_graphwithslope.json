@@ -580,6 +580,7 @@
                 "DEM"
             ],
             "id": "COPERNICUS_30",
+            "properties": {},
             "spatial_extent": null,
             "temporal_extent": null
         }
