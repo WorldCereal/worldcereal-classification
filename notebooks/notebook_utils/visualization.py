@@ -205,18 +205,20 @@ def visualize_product(
             )
 
         # Create the map
-        m = leafmap.Map(draw_control=False)
+        m = leafmap.Map(draw_control=False, toolbar_control=False)
         m.add_basemap("Esri.WorldImagery")
-        # Add classification product
-        m.add_raster(
-            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=port
-        )
+
         # Add probability product
         m.add_raster(
             str(outpath_prob),
             indexes=[1],
             layer_name=f"{product}-probability",
             port=port,
+        )
+
+        # Add classification product
+        m.add_raster(
+            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=port
         )
 
         # Plot legend separately
@@ -228,7 +230,7 @@ def visualize_product(
             bg_color="rgba(255, 255, 255, 0.5)",
             position="bottomright",
         )
-
+        m.add_layer_control(position="topright")
         # Return the map
         return m
 
