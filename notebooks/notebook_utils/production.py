@@ -322,6 +322,9 @@ def run_map_production(
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     stop_event=None,
+    plot_out: Optional[Output] = None,
+    log_out: Optional[Output] = None,
+    display_outputs: bool = True,
 ) -> pd.DataFrame:
     """Run a WorldCereal map production for the given spatial and temporal extent.
     Parameters
@@ -410,11 +413,14 @@ def run_map_production(
     minx, miny, maxx, maxy = production_grid.total_bounds
     center = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
 
-    # Create output widgets
-    plot_out = Output()
-    log_out = Output()
-    display(plot_out)
-    display(log_out)
+    # Create output widgets (if not provided)
+    if plot_out is None:
+        plot_out = Output()
+    if log_out is None:
+        log_out = Output()
+    if display_outputs:
+        display(plot_out)
+        display(log_out)
 
     # Now run an update every 60 seconds
     poll_sleep = 60
