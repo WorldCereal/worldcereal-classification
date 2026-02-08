@@ -332,7 +332,7 @@ def spatial_train_val_test_split(
             ("test", tst_df),
         ]:
             class_dist = split_df[stratify_label].value_counts()
-            logger.info(f"{split_name} class distribution: {dict(class_dist)}")
+            logger.info(f"{split_name} class distribution: {class_dist.to_dict()}")
             missing_classes = all_classes - set(split_df[stratify_label].unique())
             if missing_classes:
                 logger.warning(
