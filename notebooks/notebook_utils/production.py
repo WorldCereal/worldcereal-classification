@@ -322,6 +322,9 @@ def run_map_production(
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     stop_event=None,
+    plot_out: Optional[Output] = None,
+    log_out: Optional[Output] = None,
+    display_outputs: bool = True,
 ) -> pd.DataFrame:
     """Run a WorldCereal map production for the given spatial and temporal extent.
     Parameters
@@ -410,11 +413,14 @@ def run_map_production(
     minx, miny, maxx, maxy = production_grid.total_bounds
     center = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
 
-    # Create output widgets
-    plot_out = Output()
-    log_out = Output()
-    display(plot_out)
-    display(log_out)
+    # Create output widgets (if not provided)
+    if plot_out is None:
+        plot_out = Output()
+    if log_out is None:
+        log_out = Output()
+    if display_outputs:
+        display(plot_out)
+        display(log_out)
 
     # Now run an update every 60 seconds
     poll_sleep = 60
@@ -509,80 +515,95 @@ def monitor_production_process(proc, queue, stop_event):
         print("⚠️ No result returned. The process may have been killed or crashed.")
 
 
-def merge_maps(outdir: Path, product="croptype") -> Path:
-    """Merge all maps in the output directory into a single .tif file."""
+def merge_maps(outdir: Path) -> dict[str, Path]:
+    """Merge all product maps in the output directory into .tif files.
+
+    Returns a mapping of product name -> merged output path.
+    """
 
     if not outdir.exists():
         raise FileNotFoundError(f"Output directory {outdir} does not exist.")
 
     # Find all .tif files in the output directory
-    tifs = glob.glob(str(outdir / "*" / f"{product}_*.tif"))
+    tifs = glob.glob(str(outdir / "*" / "*.tif"))
     if len(tifs) == 0:
         raise FileNotFoundError(
-            "No tif files found in the output directory matching your product."
+            "No tif files found in the output directory to merge."
         )
 
-    reprojected_tifs = []
+    product_groups: dict[str, list[str]] = {}
+    for tif in tifs:
+        product = Path(tif).name.split("_")[0]
+        product_groups.setdefault(product, []).append(tif)
 
-    with rasterio.Env(CPL_LOG="ERROR"):
-        for tif in tifs:
-            # reproject to EPSG:3857 if not already in that CRS
-            with rasterio.open(tif) as src:
-                dst_crs = "EPSG:3857"
-                transform, width, height = calculate_default_transform(
-                    src.crs, dst_crs, src.width, src.height, *src.bounds
-                )
+    merged_outputs: dict[str, Path] = {}
 
-                kwargs = src.meta.copy()
-                kwargs.update(
-                    {
-                        "crs": dst_crs,
-                        "transform": transform,
-                        "width": width,
-                        "height": height,
-                    }
-                )
+    def _merge_tifs(product_name: str, product_tifs: list[str]) -> Path:
+        reprojected_tifs = []
+        with rasterio.Env(CPL_LOG="ERROR"):
+            for tif in product_tifs:
+                # reproject to EPSG:3857 if not already in that CRS
+                with rasterio.open(tif) as src:
+                    dst_crs = "EPSG:3857"
+                    transform, width, height = calculate_default_transform(
+                        src.crs, dst_crs, src.width, src.height, *src.bounds
+                    )
 
-                memfile = MemoryFile()
-                with memfile.open(**kwargs) as dst:
-                    for i in range(1, src.count + 1):
-                        reproject(
-                            source=rasterio.band(src, i),
-                            destination=rasterio.band(dst, i),
-                            src_transform=src.transform,
-                            src_crs=src.crs,
-                            dst_transform=transform,
-                            dst_crs=dst_crs,
-                            resampling=Resampling.nearest,
-                        )
-                    dst.descriptions = src.descriptions
-                reprojected_tifs.append(memfile.open())
+                    kwargs = src.meta.copy()
+                    kwargs.update(
+                        {
+                            "crs": dst_crs,
+                            "transform": transform,
+                            "width": width,
+                            "height": height,
+                        }
+                    )
 
-        # Merge all reprojected rasters
-        mosaic, out_trans = merge(reprojected_tifs)
+                    memfile = MemoryFile()
+                    with memfile.open(**kwargs) as dst:
+                        for i in range(1, src.count + 1):
+                            reproject(
+                                source=rasterio.band(src, i),
+                                destination=rasterio.band(dst, i),
+                                src_transform=src.transform,
+                                src_crs=src.crs,
+                                dst_transform=transform,
+                                dst_crs=dst_crs,
+                                resampling=Resampling.nearest,
+                            )
+                        dst.descriptions = src.descriptions
+                    reprojected_tifs.append(memfile.open())
 
-        # Use metadata from one of the input files and update
-        out_meta = reprojected_tifs[0].meta.copy()
-        out_meta.update(
-            {
-                "driver": "GTiff",
-                "height": mosaic.shape[1],
-                "width": mosaic.shape[2],
-                "transform": out_trans,
-                "compress": "lzw",
-            }
-        )
+            # Merge all reprojected rasters
+            mosaic, out_trans = merge(reprojected_tifs)
 
-        # Write to output
-        outfile = outdir / f"{product}_merged.tif"
-        with rasterio.open(outfile, "w", **out_meta) as dest:
-            dest.write(mosaic)
-            # Preserve band descriptions (if any)
-            for idx, desc in enumerate(reprojected_tifs[0].descriptions, start=1):
-                if desc:
-                    dest.set_band_description(idx, desc)
+            # Use metadata from one of the input files and update
+            out_meta = reprojected_tifs[0].meta.copy()
+            out_meta.update(
+                {
+                    "driver": "GTiff",
+                    "height": mosaic.shape[1],
+                    "width": mosaic.shape[2],
+                    "transform": out_trans,
+                    "compress": "lzw",
+                }
+            )
 
-    return outfile
+            # Write to output
+            outfile = outdir / f"{product_name}_merged.tif"
+            with rasterio.open(outfile, "w", **out_meta) as dest:
+                dest.write(mosaic)
+                # Preserve band descriptions (if any)
+                for idx, desc in enumerate(reprojected_tifs[0].descriptions, start=1):
+                    if desc:
+                        dest.set_band_description(idx, desc)
+
+        return outfile
+
+    for product_name, product_tifs in product_groups.items():
+        merged_outputs[product_name] = _merge_tifs(product_name, product_tifs)
+
+    return merged_outputs
 
 
 def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataFrame:
