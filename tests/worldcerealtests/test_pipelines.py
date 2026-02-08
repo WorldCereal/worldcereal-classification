@@ -103,7 +103,6 @@ def test_seasonal_head_training_pipeline(WorldCerealExtractionsDF, tmp_path):
         batch_size=64,
         num_workers=0,
         epochs=1,
-        cv_folds=2,
         use_balancing=False,
         early_stopping_patience=1,
         season_id="tc-s1",
