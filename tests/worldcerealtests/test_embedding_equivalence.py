@@ -222,17 +222,14 @@ def test_embedding_equivalence(
     # Compare Method 1 vs Method 2
     diff_1_2 = (embeddings_method1 - embeddings_method2).abs()
     max_diff_1_2 = diff_1_2.max().item()
-    mean_diff_1_2 = diff_1_2.mean().item()
 
     # Compare Method 1 vs Method 3
     diff_1_3 = (embeddings_method1 - embeddings_method3).abs()
     max_diff_1_3 = diff_1_3.max().item()
-    mean_diff_1_3 = diff_1_3.mean().item()
 
     # Compare Method 2 vs Method 3
     diff_2_3 = (embeddings_method2 - embeddings_method3).abs()
     max_diff_2_3 = diff_2_3.max().item()
-    mean_diff_2_3 = diff_2_3.mean().item()
 
     # Assert all methods produce identical embeddings
     max_diff = max(max_diff_1_2, max_diff_1_3, max_diff_2_3)

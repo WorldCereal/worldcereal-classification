@@ -5,17 +5,17 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import geopandas as gpd
+import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from ipyleaflet import GeoJSON, Map, WidgetControl, basemaps
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from prometheo.utils import DEFAULT_SEED
 from shapely.geometry import Polygon, box
 from tabulate import tabulate
 from tqdm import tqdm
-import ipywidgets as widgets
-from ipyleaflet import Map, GeoJSON, WidgetControl, basemaps
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS

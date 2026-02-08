@@ -7,7 +7,7 @@ import pytest
 import torch
 import xarray as xr
 
-from worldcereal.openeo import inference, mapping
+from worldcereal.openeo import inference
 
 
 class DummyCube:

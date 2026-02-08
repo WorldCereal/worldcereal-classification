@@ -40,7 +40,6 @@ from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.train.data import (
     compute_embeddings_from_splits,
     spatial_train_val_test_split,
-    train_val_test_split,
 )
 from worldcereal.train.downstream import TorchTrainer
 
@@ -236,7 +235,7 @@ def main() -> None:
                 self.season_id = None
                 self.season_calendar_mode = None
                 self.season_windows = None
-                self.presto_model_path = "/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520/presto-prometheo-dualtask-SeasonalMultiTaskLoss-KENYA-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202602061520_encoder.pt"
+                self.presto_model_path = None
                 self.data_dir = None
                 self.embeddings_path = None
                 self.single_dataframe = None
@@ -275,7 +274,7 @@ def main() -> None:
                 self.early_stopping_patience = 6
                 self.early_stopping_min_delta = 0.0
 
-        args = ManualArgs()
+        args: Any = ManualArgs()
         logger.info("Using manual configuration for debug mode (Torch head)")
     else:
         args = parse_args()

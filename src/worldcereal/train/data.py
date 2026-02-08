@@ -526,7 +526,7 @@ def compute_embeddings_from_splits(
     # Build datasets based on whether seasonal or global pooling is needed
     if season_id is not None:
         # Seasonal pooling mode
-        dataset_kwargs = dict(
+        dataset_kwargs: Dict[str, Any] = dict(
             num_timesteps=num_timesteps,
             timestep_freq=timestep_freq,
             task_type="multiclass",
@@ -538,7 +538,7 @@ def compute_embeddings_from_splits(
                 logger.info(
                     "Manual season windows provided; switching calendar mode from 'calendar' to 'custom'."
                 )
-                effective_mode = "custom"
+                effective_mode: str = "custom"
             else:
                 effective_mode = season_calendar_mode
         else:
@@ -552,6 +552,8 @@ def compute_embeddings_from_splits(
             repeats=repeats,
             **dataset_kwargs,
         )
+        from worldcereal.train.datasets import SeasonCalendarMode
+        effective_mode_typed: SeasonCalendarMode = effective_mode  # type: ignore[assignment]
         val_ds = WorldCerealTrainingDataset(
             val_df,
             num_timesteps=num_timesteps,
@@ -562,7 +564,7 @@ def compute_embeddings_from_splits(
             repeats=1,
             season_ids=[season_id],
             season_windows=season_windows,
-            season_calendar_mode=effective_mode,
+            season_calendar_mode=effective_mode_typed,
         )
         test_ds = WorldCerealTrainingDataset(
             test_df,
@@ -574,7 +576,7 @@ def compute_embeddings_from_splits(
             repeats=1,
             season_ids=[season_id],
             season_windows=season_windows,
-            season_calendar_mode=effective_mode,
+            season_calendar_mode=effective_mode_typed,
         )
 
         trn_embeddings = dataset_to_embeddings(
