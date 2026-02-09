@@ -164,7 +164,7 @@ def spatial_train_val_test_split(
     val_size: float = 0.15,
     test_size: float = 0.15,
     seed: int = 42,
-    bin_size_degrees: float = 2.0,
+    bin_size_degrees: float = 0.25,
     stratify_label: Optional[str] = "finetune_class",
     min_samples_per_class: int = 10,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -332,7 +332,7 @@ def spatial_train_val_test_split(
             ("test", tst_df),
         ]:
             class_dist = split_df[stratify_label].value_counts()
-            logger.info(f"{split_name} class distribution: {dict(class_dist)}")
+            logger.info(f"{split_name} class distribution: {class_dist.to_dict()}")
             missing_classes = all_classes - set(split_df[stratify_label].unique())
             if missing_classes:
                 logger.warning(
@@ -553,6 +553,7 @@ def compute_embeddings_from_splits(
             **dataset_kwargs,
         )
         from worldcereal.train.datasets import SeasonCalendarMode
+
         effective_mode_typed: SeasonCalendarMode = effective_mode  # type: ignore[assignment]
         val_ds = WorldCerealTrainingDataset(
             val_df,

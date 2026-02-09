@@ -335,7 +335,7 @@ def main() -> None:
                 seed=args.seed,
                 stratify_label=args.split_stratify_col,
                 min_samples_per_class=10,
-                bin_size_degrees=1.0,
+                bin_size_degrees=0.25,
             )
             splits = {"train": train_df, "val": val_df, "test": test_df}
         elif args.data_dir:

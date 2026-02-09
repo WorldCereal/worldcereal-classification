@@ -723,11 +723,11 @@ class WorldCerealDataset(Dataset):
 
                 min_center_point = max(
                     self.num_timesteps // 2,
-                    valid_position + min_edge_buffer - self.num_timesteps // 2,
+                    valid_position + max(1, min_edge_buffer) - self.num_timesteps // 2,
                 )
                 max_center_point = min(
                     available_timesteps - self.num_timesteps // 2,
-                    valid_position - min_edge_buffer + self.num_timesteps // 2,
+                    valid_position - max(1, min_edge_buffer) + self.num_timesteps // 2,
                 )
 
                 center_point = np.random.randint(

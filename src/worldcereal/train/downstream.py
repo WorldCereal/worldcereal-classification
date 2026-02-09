@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +25,6 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.sampler import WeightedRandomSampler
 from tqdm.auto import tqdm
@@ -111,11 +110,9 @@ class TorchTrainer:
         early_stopping_patience: int = 6,
         early_stopping_min_delta: float = 0.0,
         weight_decay: float = 0.0,
-        cv_folds: int = 3,
-        group_column: str = "sample_id",
         disable_progressbar: bool = False,
         use_spatial_split: bool = True,
-        spatial_bin_size_degrees: float = 1.0,
+        spatial_bin_size_degrees: float = 0.25,
     ):
         self.training_df = embeddings_df
         self.split_column = split_column
@@ -171,8 +168,6 @@ class TorchTrainer:
         self.last_logged_val: Optional[float] = None
         self.seed = seed
         self.disable_progressbar = disable_progressbar
-        self.cv_folds = cv_folds
-        self.group_column = group_column
         self.weight_decay = weight_decay
 
         # Balancing / weighting
@@ -228,8 +223,6 @@ class TorchTrainer:
                 "early_stopping_patience": self.early_stopping_patience,
                 "early_stopping_min_delta": self.early_stopping_min_delta,
                 "weight_decay": self.weight_decay,
-                "cv_folds": self.cv_folds,
-                "group_column": self.group_column,
             }
         )
 
@@ -639,159 +632,45 @@ class TorchTrainer:
             return True
         return False
 
-    def _iter_cv_splits(self, df: pd.DataFrame):
-        if (
-            self.group_column
-            and self.group_column in df.columns
-            and not df[self.group_column].isna().all()
-        ):
-            group_df = (
-                df[[self.group_column, self.target_column]]
-                .drop_duplicates(subset=self.group_column)
-                .reset_index(drop=True)
-            )
-            num_unique_groups = len(group_df)
-            logger.info(
-                f"K-fold CV using group column '{self.group_column}': "
-                f"{num_unique_groups} unique groups from {len(df)} total samples"
-            )
-            if len(group_df) < self.cv_folds:
-                logger.warning(
-                    f"Not enough unique groups ({num_unique_groups}) for {self.cv_folds}-fold CV; "
-                    "falling back to sample-level splits."
-                )
-            else:
-                sgkf = StratifiedKFold(
-                    n_splits=self.cv_folds, shuffle=True, random_state=self.seed
-                )
-                group_labels = group_df[self.target_column].to_numpy()
-                dummy = np.zeros(len(group_df))
-                for train_idx, val_idx in sgkf.split(dummy, group_labels):
-                    train_groups = set(group_df.loc[train_idx, self.group_column])
-                    val_groups = set(group_df.loc[val_idx, self.group_column])
-                    train_mask = df[self.group_column].isin(train_groups)
-                    val_mask = df[self.group_column].isin(val_groups)
-                    yield np.where(train_mask)[0], np.where(val_mask)[0]
-                return
-
-        logger.warning(
-            f"Using row-level StratifiedKFold (group column '{self.group_column}' missing or unusable). "
-            f"WARNING: This may cause data leakage if samples are repeated!"
-        )
-        skf = StratifiedKFold(
-            n_splits=self.cv_folds, shuffle=True, random_state=self.seed
-        )
-        for train_idx, val_idx in skf.split(df, df[self.target_column]):
-            yield train_idx, val_idx
-
-    def _determine_epochs_cv(
-        self, trainval_df: pd.DataFrame
-    ) -> Tuple[int, Dict[str, Any]]:
-        """Use k-fold CV to determine optimal number of epochs.
-
-        Returns:
-            final_epochs: The number of epochs to use for final training
-            cv_summary: Dictionary with CV fold statistics
-        """
-        fold_scores: List[float] = []
-        fold_losses: List[float] = []
-        fold_epochs: List[int] = []
-
-        logger.info(
-            f"Running {self.cv_folds}-fold CV to determine optimal epochs "
-            f"(lr={self.lr:.2e}, weight_decay={self.weight_decay:.2e})"
-        )
-
-        for fold_idx, (train_idx, val_idx) in enumerate(
-            self._iter_cv_splits(trainval_df), start=1
-        ):
-            tr_df = trainval_df.iloc[train_idx].reset_index(drop=True)
-            val_df = trainval_df.iloc[val_idx].reset_index(drop=True)
-
-            train_loader = self._build_dataloader(tr_df, is_train=True)
-            val_loader = self._build_dataloader(val_df, is_train=False)
-
-            result = self._run_training_loop(
-                train_loader,
-                val_loader,
-                lr=self.lr,
-                weight_decay=self.weight_decay,
-                max_epochs=self.epochs,
-            )
-
-            if result["val_macro_f1"] is None or result["best_val_loss"] is None:
-                raise RuntimeError("Validation metrics missing during CV run.")
-
-            fold_scores.append(float(result["val_macro_f1"]))
-            fold_losses.append(float(result["best_val_loss"]))
-            fold_epochs.append(int(result["best_epoch"]))
-
-            logger.info(
-                f"Fold {fold_idx}/{self.cv_folds} -> macro_f1={result['val_macro_f1']:.4f}, "
-                f"val_loss={result['best_val_loss']:.4f}, best_epoch={result['best_epoch']}"
-            )
-
-        mean_best_epoch = float(np.mean(fold_epochs))
-        final_epochs = (
-            max(1, int(round(mean_best_epoch)))
-            if not np.isnan(mean_best_epoch)
-            else self.epochs
-        )
-        final_epochs = min(self.epochs, final_epochs)
-
-        cv_summary = {
-            "fold_macro_f1": fold_scores,
-            "fold_val_loss": fold_losses,
-            "fold_best_epoch": fold_epochs,
-            "mean_macro_f1": float(np.mean(fold_scores))
-            if fold_scores
-            else float("nan"),
-            "mean_val_loss": float(np.mean(fold_losses))
-            if fold_losses
-            else float("nan"),
-            "mean_best_epoch": mean_best_epoch
-            if not np.isnan(mean_best_epoch)
-            else None,
-        }
-
-        return final_epochs, cv_summary
-
     def train(self) -> nn.Module:
         self.create_config()
         self._ensure_label_columns(self.training_df)
 
         if self.use_spatial_split:
-            trn_df, val_df, tst_df = spatial_train_val_test_split(
+            train_df, val_df, test_df = spatial_train_val_test_split(
                 self.training_df,
                 split_column=self.split_column,
                 bin_size_degrees=self.spatial_bin_size_degrees,
             )
         else:
-            trn_df, val_df, tst_df = train_val_test_split(
+            train_df, val_df, test_df = train_val_test_split(
                 self.training_df, self.split_column
             )
-        trainval_df = pd.concat([trn_df, val_df]).reset_index(drop=True)
-        test_df = tst_df.reset_index(drop=True)
 
-        trainval_df = self._drop_invalid_samples(trainval_df)
+        train_df = self._drop_invalid_samples(train_df)
+        val_df = self._drop_invalid_samples(val_df)
         test_df = self._drop_invalid_samples(test_df)
 
-        if trainval_df.empty:
-            raise ValueError(
-                "No training samples available after filtering train/val splits."
-            )
+        if train_df.empty:
+            raise ValueError("No training samples available after filtering.")
+        if val_df.empty:
+            raise ValueError("No validation samples available after filtering.")
         if test_df.empty:
             raise ValueError("No test samples available for evaluation.")
 
-        trainval_df, test_df = self._apply_downstream_mapping(trainval_df, test_df)
-        self.classes_list = sorted(trainval_df[self.target_column].unique())
+        # Apply downstream class mapping to all splits
+        train_df, _ = self._apply_downstream_mapping(train_df, train_df.copy())
+        val_df, _ = self._apply_downstream_mapping(val_df, val_df.copy())
+        test_df, _ = self._apply_downstream_mapping(test_df, test_df.copy())
+
+        self.classes_list = sorted(train_df[self.target_column].unique())
         self._set_loss_function()
 
-        self._assign_label_indices([trainval_df, test_df])
+        self._assign_label_indices([train_df, val_df, test_df])
 
         # Compute quality-based sample weights if quality_col is provided
         if self.quality_col is not None:
-            for df in (trainval_df, test_df):
+            for df in (train_df, val_df, test_df):
                 if self.quality_col in df.columns:
                     quality_values = df[self.quality_col].values
                     # Normalize quality values to [0, 1] range
@@ -810,53 +689,46 @@ class TorchTrainer:
                 f"Applied quality-based sample weights from column '{self.quality_col}'"
             )
         else:
-            for df in (trainval_df, test_df):
+            for df in (train_df, val_df, test_df):
                 df["_sample_weight"] = 1.0
 
-        if "confidence_nonoutlier" in trainval_df.columns:
+        if "confidence_nonoutlier" in train_df.columns:
             logger.info(
-                "Incorporating 'confidence_nonoutlier' into sample weights for train/val set."
+                "Incorporating 'confidence_nonoutlier' into sample weights for train/val sets."
             )
-            trainval_df["_sample_weight"] *= trainval_df[
-                "confidence_nonoutlier"
-            ].fillna(1.0)
+            train_df["_sample_weight"] *= train_df["confidence_nonoutlier"].fillna(1.0)
+            val_df["_sample_weight"] *= val_df["confidence_nonoutlier"].fillna(1.0)
 
-        self.feat_cols = [c for c in trainval_df.columns if c.startswith("presto_ft_")]
+        self.feat_cols = [c for c in train_df.columns if c.startswith("presto_ft_")]
         self.in_dim = len(self.feat_cols)
         self.num_classes = len(self.classes_list)
         self.update_config_after_prepare(self.in_dim, self.num_classes)
 
-        final_epochs, cv_summary = self._determine_epochs_cv(trainval_df)
-        self.config.update(
-            {
-                "cv_results": cv_summary,
-                "final_epochs": final_epochs,
-            }
-        )
-        self.save_config()
+        # Train with validation monitoring
+        train_loader = self._build_dataloader(train_df, is_train=True)
+        val_loader = self._build_dataloader(val_df, is_train=False)
 
         logger.info(
-            f"CV determined final_epochs={final_epochs} "
-            f"(mean CV macro-F1={cv_summary['mean_macro_f1']:.4f})"
+            f"Training with validation monitoring for up to {self.epochs} epochs "
+            f"(lr={self.lr:.2e}, weight_decay={self.weight_decay:.2e})"
         )
 
-        final_loader = self._build_dataloader(trainval_df, is_train=True)
-        final_result = self._run_training_loop(
-            final_loader,
-            None,
+        result = self._run_training_loop(
+            train_loader,
+            val_loader,
             lr=self.lr,
             weight_decay=self.weight_decay,
-            max_epochs=final_epochs,
+            max_epochs=self.epochs,
         )
-        model = final_result["model"]
+        model = result["model"]
 
         test_loader = self._build_dataloader(test_df, is_train=False)
 
         self.update_config_after_training(
-            best_val_loss=cv_summary.get("mean_val_loss", 0.0),
-            best_epoch=final_epochs,
-            epochs_trained=final_result["epochs_ran"],
-            stopped_early=final_result["stopped_early"],
+            best_val_loss=result["best_val_loss"] if result["best_val_loss"] else 0.0,
+            best_epoch=result["best_epoch"],
+            epochs_trained=result["epochs_ran"],
+            stopped_early=result["stopped_early"],
         )
 
         self.save_model(model)
@@ -884,7 +756,7 @@ class TorchTrainer:
         if self.season_id:
             base = f"{base}_{self.season_id}"
         if self.modelversion:
-            base = f"{base}_v{self.modelversion}"
+            base = f"{base}_version-{self.modelversion}"
         return base
 
     def _zip_model_and_config(self, modelname: str, pt_path: Path) -> None:
