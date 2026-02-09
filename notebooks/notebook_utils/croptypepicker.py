@@ -1,3 +1,4 @@
+import threading
 from typing import List, Optional
 
 import ipywidgets as widgets
@@ -290,17 +291,57 @@ class CropTypePicker:
         self.hierarchy = hierarchy
 
     def _disable_descendants(self, widget):
-        widget.disabled = True
-        widget.value = False
-        if isinstance(widget, widgets.VBox):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = True
+            widget.value = True
+        if hasattr(widget, "children"):
             for child in widget.children:
                 self._disable_descendants(child)
 
     def _enable_descendants(self, widget):
-        widget.disabled = False
-        if isinstance(widget, widgets.VBox):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = False
+        if hasattr(widget, "children"):
             for child in widget.children:
                 self._enable_descendants(child)
+
+    def _clear_descendants(self, widget):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = False
+            widget.value = False
+        if hasattr(widget, "children"):
+            for child in widget.children:
+                self._clear_descendants(child)
+
+    def _set_toggle_state(self, toggle_button, enabled: bool) -> None:
+        toggle_button.disabled = not enabled
+        toggle_button.style.button_color = "#16a34a" if enabled else "#A9A9A9"
+
+    def _lock_descendants_async(
+        self, children_vbox, load_children=None, toggle_button=None
+    ):
+        if toggle_button is not None:
+            self._set_toggle_state(toggle_button, False)
+
+        def _worker():
+            if load_children is not None:
+                load_children()
+            self._disable_descendants(children_vbox)
+            if toggle_button is not None:
+                self._set_toggle_state(toggle_button, True)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _clear_descendants_async(self, children_vbox, toggle_button=None):
+        if toggle_button is not None:
+            self._set_toggle_state(toggle_button, False)
+
+        def _worker():
+            self._clear_descendants(children_vbox)
+            if toggle_button is not None:
+                self._set_toggle_state(toggle_button, True)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _is_blocked_by_parent(self, path):
         if len(path) <= 1:
@@ -428,10 +469,13 @@ class CropTypePicker:
                 layout=widgets.Layout(width="150px", margin="0 5px 0 0"),
                 style={"button_color": "#A9A9A9"},
             )
+            self._set_toggle_state(toggle_button, True)
 
             def toggle_visibility(change):
                 if change["new"]:
                     load_children()
+                    if parent_selected["value"]:
+                        self._disable_descendants(children_vbox)
                     children_vbox.layout.display = "flex"
                     toggle_button.description = "Collapse"
                     toggle_button.icon = "chevron-up"
@@ -446,18 +490,26 @@ class CropTypePicker:
                 parent_selected["value"] = change["new"]
                 if loaded["value"]:
                     if change["new"]:
-                        self._disable_descendants(children_vbox)
                         children_vbox.layout.display = "none"
                         toggle_button.value = False
+                        self._lock_descendants_async(
+                            children_vbox, toggle_button=toggle_button
+                        )
                     else:
-                        self._enable_descendants(children_vbox)
-                        children_vbox.layout.display = (
-                            "flex" if toggle_button.value else "none"
+                        children_vbox.layout.display = "none"
+                        toggle_button.value = False
+                        self._clear_descendants_async(
+                            children_vbox, toggle_button=toggle_button
                         )
                 else:
                     if change["new"]:
                         children_vbox.layout.display = "none"
                         toggle_button.value = False
+                        self._lock_descendants_async(
+                            children_vbox,
+                            load_children,
+                            toggle_button=toggle_button,
+                        )
 
             checkbox.observe(on_parent_change, names="value")
 
