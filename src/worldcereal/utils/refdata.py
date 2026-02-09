@@ -598,6 +598,7 @@ def check_shift(
         # checks that the middle of the proposed period is within the available extractions
         is_within_period(proposed_step, start_step, end_step, edge_steps)
         # checks that the proposed period does not fall too far outside the available extractions
+        # TODO: to be discussed whether edge_steps in the previous check should be de-coupled from edge_steps in the next one.
         & (proposed_start_step + edge_steps >= start_step)
         & (proposed_end_step - edge_steps <= end_step)
         # checks that true valid_time is not too close to the edges of the proposed period
