@@ -2286,6 +2286,9 @@ class WorldCerealExtractionsApp:
         return widgets.HTML(
             value=(
                 "<div style='"
+                "box-sizing:border-box;"
+                "width:100%;"
+                "max-width:100%;"
                 "background:#f6f7f9;"
                 "border:1px solid #e3e6ea;"
                 "border-left:4px solid #c7cdd4;"
@@ -2294,7 +2297,9 @@ class WorldCerealExtractionsApp:
                 "color:#4b5563;"
                 "font-size:13px;"
                 "line-height:1.4;"
-                "margin:0 0 8px 0;"
+                "word-wrap:break-word;"
+                "overflow-wrap:anywhere;"
+                "margin:6px 0 8px 0;"
                 "'>"
                 f"{message}"
                 "</div>"
