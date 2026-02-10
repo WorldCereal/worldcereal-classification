@@ -15,12 +15,11 @@ import pandas as pd
 import xarray as xr
 from dateutil.parser import parse
 from loguru import logger
+from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
+
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
-from worldcereal.parameters import CropLandParameters, CropTypeParameters
-
-from prometheo.predictors import NODATAVALUE
 
 
 def subset_ds_temporally(
@@ -235,7 +234,9 @@ def run_seasonal_inference(
     ds = ds.fillna(fillna_value)
     if epsg is None:
         if "crs" not in ds:
-            raise ValueError("EPSG not provided and dataset is missing a 'crs' variable.")
+            raise ValueError(
+                "EPSG not provided and dataset is missing a 'crs' variable."
+            )
         epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
 
     arr = ds.drop_vars("crs", errors="ignore").astype("uint16").to_array(dim="bands")
@@ -265,7 +266,10 @@ def run_seasonal_inference(
 
     if as_dataset and isinstance(result, xr.DataArray):
         result = xr.Dataset(
-            {str(b): result.sel(bands=b).drop_vars("bands") for b in result.bands.values}
+            {
+                str(b): result.sel(bands=b).drop_vars("bands")
+                for b in result.bands.values
+            }
         )
 
     return attach_crs_metadata(result, ds)
