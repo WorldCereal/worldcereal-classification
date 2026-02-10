@@ -448,10 +448,8 @@ def compute_seasonal_presto_embeddings(
             frame.reset_index(),
             task_type="multiclass" if task_type == "croptype" else "binary",
             augment=augment_flag,
-            masking_config=masking_config
-            if augment_flag
-            else SensorMaskingConfig(enable=False),
-            repeats=repeats if augment_flag else 1,
+            masking_config=masking_config,
+            repeats=repeats if (augment_flag or mask_on_training) else 1,
             season_ids=[season_id],
             season_calendar_mode=effective_mode,
             season_windows=season_windows,
