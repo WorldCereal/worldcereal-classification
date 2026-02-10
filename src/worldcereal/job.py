@@ -1164,14 +1164,16 @@ def run_largescale_inference(
         workflow_config=workflow_config,
     )
 
-    job_df = job_db.df
-    job_tracking_csv = job_db.path
+    # job_df = job_db.df
+    job_df = job_db.read()
+    # job_tracking_csv = job_db.path
 
     # Run the jobs
     job_manager.run_jobs(
         df=job_df,
         start_job=start_job,
-        job_db=job_tracking_csv,
+        # job_db=job_tracking_csv,
+        job_db=job_db,
     )
 
     logger.info("Job manager finished.")
@@ -1275,9 +1277,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert attr in production_gdf.columns, (
-                f"The production grid must contain a '{attr}' column."
-            )
+            assert (
+                attr in production_gdf.columns
+            ), f"The production grid must contain a '{attr}' column."
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 
