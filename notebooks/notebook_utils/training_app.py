@@ -120,6 +120,8 @@ class WorldCerealTrainingApp:
         self.tab8_widgets: Dict[str, Any] = {}
         self.tab9_widgets: Dict[str, Any] = {}
 
+        self._run_proj_fix()
+
         display(
             HTML(
                 """
@@ -182,6 +184,16 @@ class WorldCerealTrainingApp:
         )
         self.tabs.observe(self._on_tab_change, names="selected_index")
         self._update_nav_buttons()
+
+    def _run_proj_fix(self):
+        import os
+        import sys
+
+        # Set PROJ environment variables to avoid PROJ database version conflicts
+        # This ensures PROJ uses the database from the current conda environment
+        proj_path = os.path.join(sys.prefix, "share", "proj")
+        os.environ["PROJ_LIB"] = proj_path
+        os.environ["PROJ_DATA"] = proj_path
 
     def _apply_workflow_tabs(self):
         """Update visible tabs based on the selected workflow."""
