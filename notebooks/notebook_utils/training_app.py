@@ -100,9 +100,6 @@ class WorldCerealTrainingApp:
         self.tab8_processing_period: Optional[TemporalContext] = None
         self.tab8_season_window: Optional[TemporalContext] = None
         self.tab8_results: Optional[Path] = None
-        self.tab8_process = None
-        self.tab8_stop_event = None
-        self.tab8_thread: Optional[threading.Thread] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
         self.tab9_model_url: Optional[str] = None
 
@@ -2966,6 +2963,7 @@ class WorldCerealTrainingApp:
         croptype_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on crop type results",
+            description_width="300px",
         )
         croptype_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
@@ -2981,6 +2979,7 @@ class WorldCerealTrainingApp:
         cropland_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on cropland results",
+            description_width="300px",
         )
         cropland_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
@@ -2998,14 +2997,6 @@ class WorldCerealTrainingApp:
             description="Generate Map",
             button_style="success",
             icon="map",
-            layout=widgets.Layout(width="200px", height="40px"),
-            disabled=True,
-        )
-
-        stop_button = widgets.Button(
-            description="Stop Processing",
-            button_style="danger",
-            icon="stop",
             layout=widgets.Layout(width="200px", height="40px"),
             disabled=True,
         )
@@ -3040,13 +3031,11 @@ class WorldCerealTrainingApp:
             "cropland_postprocess_kernel": cropland_postprocess_kernel,
             "tile_resolution_input": tile_resolution_input,
             "generate_button": generate_button,
-            "stop_button": stop_button,
             "output": output,
         }
 
         bbox_save_button.on_click(self._on_tab8_save_bbox)
         generate_button.on_click(self._on_generate_map_click)
-        stop_button.on_click(self._on_tab8_stop_processing)
 
         return widgets.VBox(
             [
@@ -3086,7 +3075,7 @@ class WorldCerealTrainingApp:
                 ),
                 widgets.HTML("<h3>4) Generate your map!</h3>"),
                 widgets.HBox(
-                    [generate_button, stop_button],
+                    [generate_button],
                     layout=widgets.Layout(justify_content="center", margin="20px 0"),
                 ),
                 widgets.HTML("<b>Map Generation Status:</b>"),
@@ -3124,11 +3113,9 @@ class WorldCerealTrainingApp:
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
-        output = self.tab8_widgets["output"]
         status_message = self.tab8_widgets.get("status_message")
         aoi_map = self.tab8_widgets.get("aoi_map")
         season_slider_obj = self.tab8_widgets.get("season_slider")
-        stop_button = self.tab8_widgets.get("stop_button")
         mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
         enable_cropland_head_checkbox = self.tab8_widgets.get(
             "enable_cropland_head_checkbox"
@@ -3155,232 +3142,193 @@ class WorldCerealTrainingApp:
         tile_resolution_input = self.tab8_widgets.get("tile_resolution_input")
         output_name_input = self.tab8_widgets.get("output_name_input")
         season_id_input = self.tab8_widgets.get("season_id_input")
-        with output:
+        output = self.tab8_widgets.get("output")
+
+        # Clear previous output and create separate widgets inside
+        if output is not None:
             output.clear_output()
-            if self.tab7_model_url is None:
+
+        # Create log_out and plot_out widgets inside the output context
+        log_out = widgets.Output()
+        plot_out = widgets.Output()
+
+        # Display them inside the main output widget
+        with output:
+            display(log_out)
+            display(plot_out)
+
+        # Validate inputs and show messages in log_out
+        if self.tab7_model_url is None:
+            with log_out:
                 print("Model URL not available. Deploy a model in Tab 7 first.")
-                return
-            if aoi_map is None:
+            return
+        if aoi_map is None:
+            with log_out:
                 print("AOI map not initialized.")
-                return
-            if season_slider_obj is None:
+            return
+        if season_slider_obj is None:
+            with log_out:
                 print("Season slider not initialized.")
-                return
-            try:
-                selection = season_slider_obj.get_selection()
-                self.tab8_processing_period = selection.processing_period
-                self.tab8_season_window = selection.season_window
-            except Exception as exc:
+            return
+        try:
+            selection = season_slider_obj.get_selection()
+            self.tab8_processing_period = selection.processing_period
+            self.tab8_season_window = selection.season_window
+        except Exception as exc:
+            with log_out:
                 print(f"Failed to read season selection: {exc}")
-                return
+            return
 
-            mask_cropland = (
-                mask_cropland_checkbox.value
-                if mask_cropland_checkbox is not None
-                else True
-            )
-            enable_cropland_head = (
-                enable_cropland_head_checkbox.value
-                if enable_cropland_head_checkbox is not None
-                else True
-            )
-            export_class_probs = (
-                export_probs_checkbox.value
-                if export_probs_checkbox is not None
-                else True
-            )
-            croptype_pp_enabled = (
-                croptype_postprocess_enabled.value
-                if croptype_postprocess_enabled is not None
-                else True
-            )
-            croptype_pp_method = (
-                croptype_postprocess_method.value
-                if croptype_postprocess_method is not None
-                else "majority_vote"
-            )
-            croptype_pp_kernel = (
-                croptype_postprocess_kernel.value
-                if croptype_postprocess_kernel is not None
-                else 5
-            )
-            cropland_pp_enabled = (
-                cropland_postprocess_enabled.value
-                if cropland_postprocess_enabled is not None
-                else True
-            )
-            cropland_pp_method = (
-                cropland_postprocess_method.value
-                if cropland_postprocess_method is not None
-                else "majority_vote"
-            )
-            cropland_pp_kernel = (
-                cropland_postprocess_kernel.value
-                if cropland_postprocess_kernel is not None
-                else 3
-            )
-            tile_resolution = (
-                tile_resolution_input.value if tile_resolution_input is not None else 50
-            )
+        # Extract parameters
+        mask_cropland = (
+            mask_cropland_checkbox.value if mask_cropland_checkbox is not None else True
+        )
+        enable_cropland_head = (
+            enable_cropland_head_checkbox.value
+            if enable_cropland_head_checkbox is not None
+            else True
+        )
+        export_class_probs = (
+            export_probs_checkbox.value if export_probs_checkbox is not None else True
+        )
+        croptype_pp_enabled = (
+            croptype_postprocess_enabled.value
+            if croptype_postprocess_enabled is not None
+            else True
+        )
+        croptype_pp_method = (
+            croptype_postprocess_method.value
+            if croptype_postprocess_method is not None
+            else "majority_vote"
+        )
+        croptype_pp_kernel = (
+            croptype_postprocess_kernel.value
+            if croptype_postprocess_kernel is not None
+            else 5
+        )
+        cropland_pp_enabled = (
+            cropland_postprocess_enabled.value
+            if cropland_postprocess_enabled is not None
+            else True
+        )
+        cropland_pp_method = (
+            cropland_postprocess_method.value
+            if cropland_postprocess_method is not None
+            else "majority_vote"
+        )
+        cropland_pp_kernel = (
+            cropland_postprocess_kernel.value
+            if cropland_postprocess_kernel is not None
+            else 3
+        )
+        tile_resolution = (
+            tile_resolution_input.value if tile_resolution_input is not None else 50
+        )
 
-            try:
-                run_suffix = (
-                    output_name_input.value.strip() if output_name_input else ""
-                )
-                model_name = self.head_package_path.stem
-                season_start = pd.Timestamp(self.tab8_season_window.start_date)
-                season_end = pd.Timestamp(self.tab8_season_window.end_date)
-                season_extent = (
-                    f"{season_start.strftime('%Y%m%d')}-{season_end.strftime('%Y%m%d')}"
-                )
-                output_dir = (
-                    Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
-                )
-                if output_dir.exists():
+        # Start processing in background thread to avoid blocking the UI, and show logs in log_out
+        try:
+            run_suffix = output_name_input.value.strip() if output_name_input else ""
+            model_name = self.head_package_path.stem
+            season_start = pd.Timestamp(self.tab8_season_window.start_date)
+            season_end = pd.Timestamp(self.tab8_season_window.end_date)
+            season_extent = (
+                f"{season_start.strftime('%Y%m%d')}-{season_end.strftime('%Y%m%d')}"
+            )
+            output_dir = Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
+
+            if output_dir.exists():
+                with log_out:
                     print(
                         f"Output directory {output_dir} already exists. Choose a different output suffix to avoid overwriting."
                     )
-                    return
-                output_dir.mkdir(parents=True, exist_ok=True)
+                return
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-                processing_extent = aoi_map.get_extent(projection="latlon")
-                if processing_extent is None:
+            processing_extent = aoi_map.get_extent(projection="latlon")
+            if processing_extent is None:
+                with log_out:
                     print("Draw an AOI on the map before generating a map.")
-                    return
+                return
 
-                season_id = (
-                    season_id_input.value.strip() if season_id_input is not None else ""
-                )
-                if not season_id or season_id == "":
+            season_id = (
+                season_id_input.value.strip() if season_id_input is not None else ""
+            )
+            if not season_id or season_id == "":
+                with log_out:
                     print("Provide a season ID before generating a map.")
-                    return
-                if not season_id.isalnum():
+                return
+            if not season_id.isalnum():
+                with log_out:
                     print(
                         "Season ID must be alphanumeric (no spaces or special characters)."
                     )
-                    return
-                season_windows = {
-                    season_id: (
-                        season_start.strftime("%Y-%m-%d"),
-                        season_end.strftime("%Y-%m-%d"),
-                    )
-                }
+                return
 
-                workflow_builder = (
-                    WorldCerealWorkflowConfig.builder()
-                    .season_ids([season_id])
-                    .season_windows(season_windows)
-                    .croptype_head_zip(self.tab7_model_url)
-                    .enable_croptype_head(True)
-                    .enable_cropland_head(enable_cropland_head)
-                    .enforce_cropland_gate(mask_cropland)
-                    .export_class_probabilities(export_class_probs)
+            season_windows = {
+                season_id: (
+                    season_start.strftime("%Y-%m-%d"),
+                    season_end.strftime("%Y-%m-%d"),
                 )
-                workflow_builder = workflow_builder.cropland_postprocess(
-                    enabled=cropland_pp_enabled,
-                    method=cropland_pp_method,
-                    kernel_size=cropland_pp_kernel,
-                )
-                workflow_builder = workflow_builder.croptype_postprocess(
-                    enabled=croptype_pp_enabled,
-                    method=croptype_pp_method,
-                    kernel_size=croptype_pp_kernel,
-                )
-                workflow_config = workflow_builder.build()
+            }
 
+            workflow_builder = (
+                WorldCerealWorkflowConfig.builder()
+                .season_ids([season_id])
+                .season_windows(season_windows)
+                .croptype_head_zip(self.tab7_model_url)
+                .enable_croptype_head(True)
+                .enable_cropland_head(enable_cropland_head)
+                .enforce_cropland_gate(mask_cropland)
+                .export_class_probabilities(export_class_probs)
+            )
+            workflow_builder = workflow_builder.cropland_postprocess(
+                enabled=cropland_pp_enabled,
+                method=cropland_pp_method,
+                kernel_size=cropland_pp_kernel,
+            )
+            workflow_builder = workflow_builder.croptype_postprocess(
+                enabled=croptype_pp_enabled,
+                method=croptype_pp_method,
+                kernel_size=croptype_pp_kernel,
+            )
+            workflow_config = workflow_builder.build()
+
+            if status_message is not None:
+                status_message.value = (
+                    "<i>Processing started... this may take a while.</i>"
+                )
+
+            try:
+                _ = run_map_production(
+                    spatial_extent=processing_extent,
+                    temporal_extent=self.tab8_processing_period,
+                    output_dir=output_dir,
+                    tile_resolution=tile_resolution,
+                    product_type=WorldCerealProductType.CROPTYPE,
+                    workflow_config=workflow_config,
+                    stop_event=None,
+                    plot_out=plot_out,
+                    log_out=log_out,
+                    display_outputs=True,
+                )
+                self.tab8_results = output_dir
                 if status_message is not None:
-                    status_message.value = (
-                        "<i>Processing started... this may take a while.</i>"
+                    status_message.value = "<i>Processing finished.</i>"
+                with log_out:
+                    print(
+                        "\n\nProcessing finished. Outputs saved to: " f"{output_dir}\n"
                     )
-
-                print(f"Output directory: {output_dir}\n")
-                print(f"Generating map for season: {season_id}\n")
-                print(
-                    f"Season window: {season_windows[season_id][0]} -> {season_windows[season_id][1]}\n"
-                )
-                print(
-                    f"Processing period (auto): {self.tab8_processing_period.start_date} -> {self.tab8_processing_period.end_date}\n"
-                )
-                print("Workflow overrides applied:\n")
-                workflow_config_json = json.dumps(
-                    workflow_config.to_dict(), indent=2, default=str
-                )
-                print(workflow_config_json + "\n")
-                print("\n\n")
-                print("Starting map generation now, this may take a while...\n")
-                print("You can monitor progress below the application.\n")
-
-                plot_out = widgets.Output()
-                log_out = widgets.Output()
-                display(plot_out)
-                display(log_out)
-
-                stop_event = threading.Event()
-                self.tab8_process = None
-                self.tab8_stop_event = stop_event
-                if stop_button is not None:
-                    stop_button.disabled = False
-                try:
-                    _ = run_map_production(
-                        spatial_extent=processing_extent,
-                        temporal_extent=self.tab8_processing_period,
-                        output_dir=output_dir,
-                        tile_resolution=tile_resolution,
-                        product_type=WorldCerealProductType.CROPTYPE,
-                        workflow_config=workflow_config,
-                        stop_event=stop_event,
-                        plot_out=plot_out,
-                        log_out=log_out,
-                        display_outputs=False,
-                    )
-                    self.tab8_results = output_dir
-                    if status_message is not None:
-                        status_message.value = (
-                            "<i>Processing finished. Outputs saved to "
-                            f"{output_dir}.</i>"
-                        )
-                    print("Processing finished. Outputs saved to: " f"{output_dir}\n")
-                    self._update_tab9_state()
-                except Exception as exc_inner:
-                    if status_message is not None:
-                        status_message.value = (
-                            "<i>Processing failed. Check logs below.</i>"
-                        )
-                    print(f"Map generation failed: {exc_inner}\n")
-                finally:
-                    if stop_button is not None:
-                        stop_button.disabled = True
-                    self.tab8_stop_event = None
-            except Exception as exc:
+                self._update_tab9_state()
+            except Exception as exc_inner:
                 if status_message is not None:
                     status_message.value = "<i>Processing failed. Check logs below.</i>"
-                print(f"Map generation failed: {exc}")
-
-    def _on_tab8_stop_processing(self, _=None) -> None:
-        """Stop the running map generation process, if any."""
-        status_message = self.tab8_widgets.get("status_message")
-        output = self.tab8_widgets.get("output")
-        stop_event = self.tab8_stop_event
-        proc = self.tab8_process
-
-        try:
-            if stop_event is None and proc is None:
-                if status_message is not None:
-                    status_message.value = "<i>No active processing job to stop.</i>"
-                return
-            if stop_event is not None:
-                stop_event.set()
-            if proc is not None and hasattr(proc, "terminate"):
-                proc.terminate()
-            if status_message is not None:
-                status_message.value = "<i>Stop signal sent. Processing will halt.</i>"
-            if output is not None:
-                print("Stop signal sent. Waiting for shutdown...\n")
+                with log_out:
+                    print(f"\n\nMap generation failed: {exc_inner}\n")
         except Exception as exc:
             if status_message is not None:
-                status_message.value = "<i>Failed to stop processing.</i>"
-            if output is not None:
-                print(f"Failed to stop processing: {exc}\n")
+                status_message.value = "<i>Processing failed. Check logs below.</i>"
+            with log_out:
+                print(f"Map generation failed: {exc}")
 
     # =========================================================================
     # Tab 9: Visualize Map
