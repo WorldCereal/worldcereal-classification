@@ -325,7 +325,7 @@ def compute_seasonal_presto_embeddings(
     season_id: str,
     batch_size: int = 256,
     task_type: str = "croptype",
-    augment: bool = True,
+    augment: bool = False,
     mask_on_training: bool = True,
     repeats: int = 3,
     custom_presto_url: Optional[str] = None,
