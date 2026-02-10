@@ -325,7 +325,7 @@ def compute_seasonal_presto_embeddings(
     season_id: str,
     batch_size: int = 256,
     task_type: str = "croptype",
-    augment: bool = True,
+    augment: bool = False,
     mask_on_training: bool = True,
     repeats: int = 3,
     custom_presto_url: Optional[str] = None,
@@ -442,22 +442,24 @@ def compute_seasonal_presto_embeddings(
     )
 
     def _build_dataset(
-        frame: pd.DataFrame, augment_flag: bool
+        frame: pd.DataFrame,
+        augment_flag: bool,
+        masking_config: Optional[SensorMaskingConfig] = None,
     ) -> WorldCerealTrainingDataset:
         return WorldCerealTrainingDataset(
             frame.reset_index(),
             task_type="multiclass" if task_type == "croptype" else "binary",
             augment=augment_flag,
-            masking_config=masking_config
-            if augment_flag
-            else SensorMaskingConfig(enable=False),
-            repeats=repeats if augment_flag else 1,
+            masking_config=masking_config,
+            repeats=repeats if (augment_flag or masking_config) else 1,
             season_ids=[season_id],
             season_calendar_mode=effective_mode,
             season_windows=season_windows,
         )
 
-    train_ds = _build_dataset(samples_train, augment_flag=augment)
+    train_ds = _build_dataset(
+        samples_train, augment_flag=augment, masking_config=masking_config
+    )
     val_ds = _build_dataset(samples_val, augment_flag=False)
     test_ds = _build_dataset(samples_test, augment_flag=False)
 
