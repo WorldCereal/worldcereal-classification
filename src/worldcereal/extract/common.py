@@ -875,11 +875,13 @@ def _run_extraction_jobs(
     pipeline_log.info("Running the extraction jobs.")
 
     # In test mode, only run the first job
-    if test_run and len(job_df) > 0:
+    if test_run:
         pipeline_log.info("TEST MODE: Running only the first job.")
+        job_df = job_db.read()
         job_df = job_df.iloc[:1]
-
-    job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
+        job_manager.run_jobs(start_job=datacube_fn, df=job_df)
+    else:
+        job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
     pipeline_log.info("Extraction jobs completed.")
 
 
