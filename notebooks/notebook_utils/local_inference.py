@@ -9,18 +9,18 @@ the UDF functions directly without running batch jobs on OpenEO.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 import xarray as xr
 from dateutil.parser import parse
 from loguru import logger
-from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-
-# from worldcereal.openeo.classifier import apply_inference
-from worldcereal.openeo.inference import run_single_workflow
+from worldcereal.openeo.inference import SeasonalInferenceEngine
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.parameters import CropLandParameters, CropTypeParameters
+
+from prometheo.predictors import NODATAVALUE
 
 
 def subset_ds_temporally(
@@ -155,132 +155,120 @@ def reconstruct_dataset(arr: xr.DataArray, ds: xr.Dataset) -> xr.Dataset:
     return new_ds
 
 
-def run_cropland_croptype_mapping(
-    ds: xr.Dataset,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
-):
-    """Run full croptype mapping inference workflow on a local xarray with
-    pre-processed inputs.
+def build_postprocess_spec(
+    *,
+    enabled: bool,
+    method: Optional[str],
+    kernel_size: Optional[int],
+) -> Optional[Dict[str, object]]:
+    requested = enabled or method is not None or kernel_size is not None
+    if not requested:
+        return None
 
-    Parameters
-    ----------
-    ds: xr.Dataset
-        Input satellite dataset with pre-processed inputs.
-    cropland_parameters : CropLandParameters, optional
-        Parameters for the cropland mapping pipeline. Default is CropLandParameters().
-    croptype_parameters : CropTypeParameters, optional
-        Parameters for the croptype mapping pipeline. Default is CropTypeParameters().
+    spec: Dict[str, object] = {
+        "enabled": enabled or method is not None or kernel_size is not None
+    }
+    if method:
+        spec["method"] = method
+    if kernel_size is not None:
+        spec["kernel_size"] = kernel_size
+    return spec
 
-    Returns
-    -------
-    dict
-        dictionary with 'cropland' and 'croptype' classification results.
-    """
 
-    logger.info("Running combined cropland/croptype mapping workflow ...")
+def attach_crs_metadata(
+    result: Union[xr.Dataset, xr.DataArray], template: xr.Dataset
+) -> Union[xr.Dataset, xr.DataArray]:
+    crs_var = template.get("crs")
+    coords = {}
+    if "x" in template.coords:
+        coords["x"] = template.coords["x"]
+    if "y" in template.coords:
+        coords["y"] = template.coords["y"]
+    out = result.assign_coords(**coords) if coords else result
 
-    # Initialize results dict
-    results = {}
+    if crs_var is None:
+        return out
 
-    # Optional cropland classification
-    if cropland_parameters is not None and croptype_parameters.mask_cropland:
-        cropland_classification = run_cropland_mapping(ds, cropland_parameters)
-        results["cropland"] = cropland_classification
-        cropland_mask = cropland_classification["classification"]
+    crs_name = "spatial_ref"
+    crs_data = xr.DataArray(0, attrs=crs_var.attrs)
+
+    if isinstance(out, xr.Dataset):
+        out[crs_name] = crs_data
+        for name in out.data_vars:
+            out[name].attrs.setdefault("grid_mapping", crs_name)
+            out[name].encoding.pop("NETCDF_DIM_bands_VALUES", None)
+        return out
+
+    out = out.assign_coords({crs_name: crs_data})
+    out.attrs.setdefault("grid_mapping", crs_name)
+    return out
+
+
+def run_seasonal_inference(
+    ds_or_path: Union[xr.Dataset, str, Path],
+    *,
+    seasonal_model_zip: Union[str, Path] = DEFAULT_SEASONAL_MODEL_URL,
+    landcover_head_zip: Optional[Union[str, Path]] = None,
+    croptype_head_zip: Optional[Union[str, Path]] = None,
+    season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[Mapping[str, Sequence[object]]] = None,
+    export_class_probabilities: bool = False,
+    enable_cropland_head: bool = True,
+    enable_croptype_head: bool = True,
+    enforce_cropland_gate: bool = True,
+    batch_size: int = 2048,
+    cache_root: Optional[Path] = None,
+    device: str = "cpu",
+    cropland_postprocess: Optional[Mapping[str, Any]] = None,
+    croptype_postprocess: Optional[Mapping[str, Any]] = None,
+    epsg: Optional[int] = None,
+    fillna_value: int = NODATAVALUE,
+    as_dataset: bool = True,
+) -> Union[xr.Dataset, xr.DataArray]:
+    """Run seasonal cropland/croptype inference locally with a single entrypoint."""
+
+    if isinstance(ds_or_path, (str, Path)):
+        ds = xr.open_dataset(ds_or_path)
     else:
-        cropland_mask = None
+        ds = ds_or_path
 
-    # Croptype classification
-    croptype_classification = run_croptype_mapping(
-        ds, croptype_parameters, mask=cropland_mask
-    )
-    results["croptype"] = croptype_classification
+    ds = ds.fillna(fillna_value)
+    if epsg is None:
+        if "crs" not in ds:
+            raise ValueError("EPSG not provided and dataset is missing a 'crs' variable.")
+        epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
 
-    return results
+    arr = ds.drop_vars("crs", errors="ignore").astype("uint16").to_array(dim="bands")
 
-
-def run_cropland_mapping(
-    ds: xr.Dataset,
-    parameters: CropLandParameters = CropLandParameters(),
-) -> xr.Dataset:
-    """Run cropland mapping pipeline: embedding extraction + classification.
-    parameters
-    ----------
-    ds : xr.Dataset
-        Input satellite dataset
-    parameters : CropLandParameters, optional
-        Parameters for the cropland mapping pipeline. Default is CropLandParameters().
-
-    Returns
-    -------
-    xr.Dataset
-        Cropland classification dataset
-    """
-    logger.info("Running cropland mapping workflow...")
-
-    # Get CRS and convert to xarray DataArray
-    epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
-    arr = ds.drop_vars("crs").fillna(NODATAVALUE).astype("uint16").to_array(dim="bands")
-
-    # Convert parameters to dict and add local run overrides
-    cropland_params = parameters.model_dump()
-    cropland_params["feature_parameters"].update({"ignore_dependencies": True})
-    cropland_params["classifier_parameters"].update({"ignore_dependencies": True})
-
-    # Run classification UDF
-    classification = run_single_workflow(arr, epsg, parameters=cropland_params)
-
-    # Reconstruct dataset with CRS attributes
-    classification = reconstruct_dataset(classification, ds)
-
-    return classification
-
-
-def run_croptype_mapping(
-    ds: xr.Dataset,
-    parameters: CropTypeParameters = CropTypeParameters(),
-    mask: Optional[xr.DataArray] = None,
-) -> xr.Dataset:
-    """Run croptype mapping pipeline: embedding extraction + classification.
-
-    Parameters
-    ----------
-    ds : xr.Dataset
-        Input satellite dataset
-    parameters : CropTypeParameters, optional
-        Parameters for the croptype mapping pipeline. Default is CropTypeParameters().
-        URL to download the croptype classification model from. If None, uses
-        the default model provided by WorldCereal.
-    mask : xr.DataArray, optional
-        Optional cropland mask to apply during classification. Pixels with mask value
-        of 0 will be set to 254 (non-cropland) in the output classification.
-
-    Returns
-    -------
-    xr.Dataset
-        Croptype classification dataset
-    """
-    logger.info("Running croptype mapping workflow...")
-
-    # Get CRS and convert to xarray DataArray
-    epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
-    arr = ds.drop_vars("crs").fillna(NODATAVALUE).astype("uint16").to_array(dim="bands")
-
-    # Convert parameters to dict and add local run overrides
-    croptype_params = parameters.model_dump()
-    croptype_params["feature_parameters"].update({"ignore_dependencies": True})
-    croptype_params["classifier_parameters"].update({"ignore_dependencies": True})
-
-    # Run classification UDF
-    classification = run_single_workflow(
-        arr, epsg, parameters=croptype_params, mask=mask
+    engine = SeasonalInferenceEngine(
+        seasonal_model_zip=seasonal_model_zip,
+        landcover_head_zip=landcover_head_zip,
+        croptype_head_zip=croptype_head_zip,
+        cache_root=cache_root,
+        device=device,
+        batch_size=batch_size,
+        season_ids=season_ids,
+        export_class_probabilities=export_class_probabilities,
+        enable_cropland_head=enable_cropland_head,
+        enable_croptype_head=enable_croptype_head,
+        cropland_postprocess=cropland_postprocess,
+        croptype_postprocess=croptype_postprocess,
     )
 
-    # Reconstruct dataset with CRS attributes
-    classification = reconstruct_dataset(classification, ds)
+    result = engine.infer(
+        arr,
+        epsg=epsg,
+        season_windows=season_windows,
+        season_ids=season_ids,
+        enforce_cropland_gate=enforce_cropland_gate,
+    )
 
-    return classification
+    if as_dataset and isinstance(result, xr.DataArray):
+        result = xr.Dataset(
+            {str(b): result.sel(bands=b).drop_vars("bands") for b in result.bands.values}
+        )
+
+    return attach_crs_metadata(result, ds)
 
 
 def classification_to_geotiff(
