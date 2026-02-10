@@ -11,6 +11,12 @@ exclude = [
   "/tests",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/worldcereal"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/worldcereal"]
+
 [tool.hatch.version]
 path = "src/worldcereal/_version.py"
 pattern = "^__version__ = ['\"](?P<version>[^'\"]+)['\"]$"
@@ -74,7 +80,8 @@ train = [
   "scikit-learn",
   "torch>=2.3.0",
   "pystac==1.10.1",
-  "pystac-client==0.8.3"
+  "pystac-client==0.8.3",
+  "seaborn"
 ]
 notebooks = [
   "folium>=0.12",
