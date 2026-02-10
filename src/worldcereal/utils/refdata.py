@@ -97,7 +97,7 @@ def map_classes(
     """
 
     df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
-    legend = get_legend().set_index("ewoc_code")
+    legend = get_legend()
 
     # Check if all classes are present in the mapping dictionary
     existing_codes_list = set(df["ewoc_code"].astype(int).astype(str).unique())

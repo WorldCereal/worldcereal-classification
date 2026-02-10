@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import ipywidgets as widgets
+import numpy as np
 import pandas as pd
 from IPython.display import HTML, display
 from notebook_utils.classifier import (
@@ -663,8 +664,8 @@ class WorldCerealTrainingApp:
     def _get_crop_only_codes(self) -> List[int]:
         """Return ewoc codes that start with '11'."""
         legend = get_legend()
-        codes = legend["ewoc_code"].str.replace("-", "")
-        return codes[codes.str.startswith("11")].astype("int64").unique().tolist()
+        codes = list(legend.index.astype(str))
+        return [np.int64(code) for code in codes if code.startswith("11")]
 
     def _build_croptype_picker(self, crop_only: bool) -> CropTypePicker:
         """Create a CropTypePicker with optional crop-only filtering."""
