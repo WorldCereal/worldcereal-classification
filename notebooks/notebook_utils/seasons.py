@@ -1,10 +1,10 @@
 import logging
 from calendar import monthrange
 from typing import List
-from loguru import logger
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from loguru import logger
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent
 from pyproj import Transformer

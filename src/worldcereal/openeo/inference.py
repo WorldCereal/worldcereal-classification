@@ -1,21 +1,44 @@
-"""openEO UDF to compute Presto/Prometheo features with clean code structure."""
+#!/usr/bin/env python3
+"""Seasonal inference utilities for WorldCereal Presto models."""
 
+import datetime
+import hashlib
+import json
 import logging
-import os
 import random
+import shutil
 import sys
+import tempfile
+import urllib.parse
+import urllib.request
+import zipfile
+from collections import OrderedDict
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+
+try:  # Python 3.10+
+    from typing import TypeAlias
+except ImportError:  # pragma: no cover - fallback for older runtimes
+    from typing_extensions import TypeAlias  # type: ignore[misc, assignment]
 
 import numpy as np
-import requests
 import xarray as xr
-from openeo.udf import XarrayDataCube
-from openeo.udf.udf_data import UdfData
 from pyproj import Transformer
 from scipy.ndimage import convolve, zoom
-from shapely.geometry import Point
-from shapely.ops import transform
 
 try:
     from loguru import logger
@@ -37,12 +60,54 @@ try:
 
 except ImportError:
     # loguru not available, use standard logging
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)  # type: ignore
 
-_MODULE_CACHE_KEY = f"__model_cache_{__name__}"
 
-# Constants
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
+from openeo.udf import XarrayDataCube
+from openeo.udf.udf_data import UdfData
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from prometheo.predictors import Predictors
+
+    from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
+
+    try:
+        from torch import Tensor as _TorchTensorType
+        from torch import device as _TorchDeviceType
+    except Exception:  # pragma: no cover - stubs not available
+        _TorchTensorType = Any  # type: ignore[assignment]
+        _TorchDeviceType = Any  # type: ignore[assignment]
+else:  # pragma: no cover - runtime avoids importing torch eagerly
+    _TorchTensorType = Any  # type: ignore[assignment]
+    _TorchDeviceType = Any  # type: ignore[assignment]
+
+TorchTensor: TypeAlias = _TorchTensorType
+TorchDevice: TypeAlias = _TorchDeviceType
+
+
+def _lazy_import_torch():
+    try:
+        import torch  # type: ignore
+    except ImportError as exc:  # pragma: no cover - depends on runtime env
+        raise ImportError(
+            "PyTorch is required for seasonal inference. When running inside openEO, "
+            "call _require_openeo_runtime() first so feature dependencies are available."
+        ) from exc
+    return torch
+
+
+def _seasonal_workflow_presets():
+    from worldcereal.openeo import parameters as _seasonal_parameters
+
+    return (
+        _seasonal_parameters.DEFAULT_SEASONAL_WORKFLOW_PRESET,
+        _seasonal_parameters.SEASONAL_WORKFLOW_PRESETS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Constants shared with legacy inference pipeline
+# ---------------------------------------------------------------------------
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
@@ -61,499 +126,60 @@ GFMAP_BAND_MAPPING = {
     "AGERA5-PRECIP": "total_precipitation",
 }
 
-LAT_HARMONIZED_NAME = "GEO-LAT"
-LON_HARMONIZED_NAME = "GEO-LON"
-EPSG_HARMONIZED_NAME = "GEO-EPSG"
-
-S1_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH", "S1-SIGMA0-HV", "S1-SIGMA0-HH"]
+S1_INPUT_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH"]
 NODATA_VALUE = 65535
+NOCROP_VALUE = 254
 
-POSTPROCESSING_EXCLUDED_VALUES = [254, 255, 65535]
+POSTPROCESSING_EXCLUDED_VALUES = [NOCROP_VALUE, 255, 65535]
 POSTPROCESSING_NODATA = 255
+DEFAULT_POSTPROCESS_METHOD = "majority_vote"
 
-NUM_THREADS = 2
 
-sys.path.append("feature_deps")
-sys.path.append("onnx_deps")
-import onnxruntime as ort  # noqa: E402
+@dataclass
+class PostprocessOptions:
+    enabled: bool = False
+    method: Optional[str] = None
+    kernel_size: int = 5
 
-_PROMETHEO_INSTALLED = False
+    def resolved_method(self) -> Optional[str]:
+        if not self.enabled:
+            return None
+        return self.method or DEFAULT_POSTPROCESS_METHOD
 
-# Global variables for Prometheo imports
-Presto = None
-load_presto_weights = None
-run_model_inference = None
-PoolingMethods = None
 
+DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "worldcereal" / "models"
 
-# =============================================================================
-# STANDALONE FUNCTIONS (Work in both apply_udf_data and apply_metadata contexts)
-# =============================================================================
-def get_model_cache():
-    """Get or create module-specific cache."""
-    if not hasattr(sys, _MODULE_CACHE_KEY):
-        setattr(sys, _MODULE_CACHE_KEY, {})
-    return getattr(sys, _MODULE_CACHE_KEY)
 
+SeasonDateLike = Union[str, datetime.date, datetime.datetime, np.datetime64]
+SeasonWindowValue = Union[
+    Tuple[SeasonDateLike, SeasonDateLike],
+    Sequence[Tuple[SeasonDateLike, SeasonDateLike]],
+]
 
-def _ensure_prometheo_dependencies():
-    """Non-cached dependency check."""
-    global _PROMETHEO_INSTALLED, Presto, load_presto_weights, run_model_inference, PoolingMethods
 
-    if _PROMETHEO_INSTALLED:
-        return
-
-    try:
-        # Try to import first
-        from prometheo.datasets.worldcereal import run_model_inference
-        from prometheo.models import Presto
-        from prometheo.models.pooling import PoolingMethods
-        from prometheo.models.presto.wrapper import load_presto_weights
-
-        # They're now available in the global scope
-        _PROMETHEO_INSTALLED = True
-        return
-    except ImportError:
-        pass
-
-    # Installation required
-    logger.info("Prometheo not available, installing...")
-    _install_prometheo()
-
-    # Import immediately after installation - these will be available globally
-    from prometheo.datasets.worldcereal import run_model_inference
-    from prometheo.models import Presto
-    from prometheo.models.pooling import PoolingMethods
-    from prometheo.models.presto.wrapper import load_presto_weights
-
-    optimize_pytorch_cpu_performance(NUM_THREADS)
-    _PROMETHEO_INSTALLED = True
-
-
-def _install_prometheo():
-    """Non-cached installation function."""
-    import shutil
-    import tempfile
-    import urllib.request
-    import zipfile
-
-    temp_dir = Path(tempfile.mkdtemp())
-    try:
-        # Download wheel
-        wheel_path, _ = urllib.request.urlretrieve(PROMETHEO_WHL_URL)
-
-        # Extract to temp directory
-        with zipfile.ZipFile(wheel_path, "r") as zip_ref:
-            zip_ref.extractall(temp_dir)
-
-        # Add to Python path
-        sys.path.append(str(temp_dir))
-        logger.info(f"Prometheo installed to {temp_dir}.")
-
-    except Exception as e:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-        logger.error(f"Failed to install prometheo: {e}")
-        raise
-
-
-def load_onnx_model_cached(model_url: str):
-    """ONNX loading is fine since it's pure (no side effects)."""
-
-    cache = get_model_cache()
-    if model_url in cache:
-        logger.debug(f"ONNX model cache hit for {model_url}.")
-        return cache[model_url]
-
-    logger.info(f"Loading ONNX model from {model_url}")
-    response = requests.get(model_url, timeout=120)
-
-    session_options, providers = optimize_onnx_cpu_performance(NUM_THREADS)
-
-    model = ort.InferenceSession(response.content, session_options, providers=providers)
-
-    metadata = model.get_modelmeta().custom_metadata_map
-    class_params = eval(metadata["class_params"], {"__builtins__": None}, {})
-
-    lut = dict(zip(class_params["class_names"], class_params["class_to_label"]))
-    sorted_lut = {k: v for k, v in sorted(lut.items(), key=lambda item: item[1])}
-
-    result = (model, sorted_lut)
-    cache[model_url] = result
-    return result
-
-
-def load_presto_weights_cached(presto_model_url: str):
-    """Manual caching for Presto weights with dependency check."""
-    cache = get_model_cache()
-    if presto_model_url in cache:
-        logger.debug(f"Presto model cache hit for {presto_model_url}")
-        return cache[presto_model_url]
-
-    # Ensure dependencies are available (not cached)
-    _ensure_prometheo_dependencies()
-
-    logger.info(f"Loading Presto weights from: {presto_model_url}")
-
-    model = Presto()  # type: ignore
-    result = load_presto_weights(model, presto_model_url)  # type: ignore
-
-    cache[presto_model_url] = result
-    return result
-
-
-def get_output_labels(lut_sorted: dict, postprocess_parameters: dict = {}) -> list:
-    """Generate output band names from LUT - works in both contexts.
-    Parameters
-    ----------
-    lut_sorted : dict
-        Sorted lookup table mapping class names to labels.
-    postprocess_parameters : dict
-        Postprocessing parameters to determine whether to keep per-class probability bands.
-        If not provided, we assume all probabilities are kept."""
-
-    # Determine whether to remove per-class probability bands
-    # based on postprocessing parameters
-    postprocessing_enabled = postprocess_parameters.get("enabled", True)
-    keep_class_probs = postprocess_parameters.get("keep_class_probs", True)
-    if postprocessing_enabled and (not keep_class_probs):
-        # Only classification and overall probability
-        return ["classification", "probability"]
-    else:
-        # Include per-class probabilities
-        class_names = lut_sorted.keys()
-        return ["classification", "probability"] + [
-            f"probability_{name}" for name in class_names
-        ]
-
-
-def optimize_pytorch_cpu_performance(num_threads):
-    """CPU-specific optimizations for Prometheo."""
-    import torch
-
-    # Thread configuration
-
-    torch.set_num_threads(num_threads)
-    torch.set_num_interop_threads(
-        num_threads
-    )  # TODO test setting to 4 due to parallel slope cal ect
-    os.environ["OMP_NUM_THREADS"] = str(num_threads)
-    os.environ["MKL_NUM_THREADS"] = str(num_threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(num_threads)
-
-    logger.info(f"PyTorch CPU:  using {num_threads} threads")
-
-    # CPU-specific optimizations
-    if hasattr(torch.backends, "mkldnn"):
-        torch.backends.mkldnn.enabled = True
-
-    torch.set_grad_enabled(False)  # Disable gradients for inference
-
-    return num_threads
-
-
-def optimize_onnx_cpu_performance(num_threads):
-    """CPU-specific ONNX optimizations."""
-    session_options = ort.SessionOptions()
-
-    session_options.intra_op_num_threads = num_threads
-    session_options.inter_op_num_threads = (
-        num_threads  # TODO test setting to 1 due to sequential nature
-    )
-
-    # CPU-specific optimizations
-    session_options.enable_cpu_mem_arena = True
-    session_options.enable_mem_pattern = True
-    session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-    providers = ["CPUExecutionProvider"]
-
-    return session_options, providers
-
-
-# =============================================================================
-# POSTPROCESSING FUNCTIONS
-# =============================================================================
-
-
-def majority_vote(
-    base_labels: xr.DataArray,
-    max_probabilities: xr.DataArray,
-    kernel_size: int,
-) -> xr.DataArray:
-    """Majority vote is performed using a sliding local kernel.
-    For each pixel, the voting of a final class is done by counting
-    neighbours values.
-    Pixels that have one of the specified excluded values are
-    excluded in the voting process and are unchanged.
-
-    The prediction probabilities are reevaluated by taking, for each pixel,
-    the average of probabilities of the neighbors that belong to the winning class.
-    (For example, if a pixel was voted to class 2 and there are three
-    neighbors of that class, then the new probability is the sum of the
-    old probabilities of each pixels divided by 3)
-
-    Parameters
-    ----------
-    base_labels : xr.DataArray
-        The original predicted classification labels.
-    max_probabilities : xr.DataArray
-        The original probabilities of the winning class (ranging between 0 and 100).
-    kernel_size : int
-        The size of the kernel used for the neighbour around the pixel.
-
-    Returns
-    -------
-    xr.DataArray
-        The cleaned classification labels and associated probabilities.
-    """
-    from scipy.signal import convolve2d
-
-    prediction = base_labels.values
-    probability = max_probabilities.values
-
-    # As the probabilities are in integers between 0 and 100,
-    # we use uint16 matrices to store the vote scores
-    assert (
-        kernel_size <= 25
-    ), f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
-
-    # Build a class mapping, so classes are converted to indexes and vice-versa
-    unique_values = set(np.unique(prediction))
-    unique_values = sorted(unique_values - set(POSTPROCESSING_EXCLUDED_VALUES))  # type: ignore
-    index_value_lut = [(k, v) for k, v in enumerate(unique_values)]
-
-    counts = np.zeros(shape=(*prediction.shape, len(unique_values)), dtype=np.uint16)
-    probabilities = np.zeros(
-        shape=(*probability.shape, len(unique_values)), dtype=np.uint16
-    )
-
-    # Iterates for each classes
-    for cls_idx, cls_value in index_value_lut:
-        # Take the binary mask of the interest class, and multiply by the probabilities
-        class_mask = ((prediction == cls_value) * probability).astype(np.uint16)
-
-        # Set to 0 the class scores where the label is excluded
-        for excluded_value in POSTPROCESSING_EXCLUDED_VALUES:
-            class_mask[prediction == excluded_value] = 0
-
-        # Binary class mask, used to count HOW MANY neighbours pixels are used for this class
-        binary_class_mask = (class_mask > 0).astype(np.uint16)
-
-        # Creates the kernel
-        kernel = np.ones(shape=(kernel_size, kernel_size), dtype=np.uint16)
-
-        # Counts around the window the sum of probabilities for that given class
-        counts[:, :, cls_idx] = convolve2d(class_mask, kernel, mode="same")
-
-        # Counts the number of neighbors pixels that voted for that given class
-        class_voters = convolve2d(binary_class_mask, kernel, mode="same")
-        # Remove the 0 values because might create divide by 0 issues
-        class_voters[class_voters == 0] = 1
-
-        probabilities[:, :, cls_idx] = np.divide(counts[:, :, cls_idx], class_voters)
-
-    # Initializes output array
-    aggregated_predictions = np.zeros(
-        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16
-    )
-    # Initializes probabilities output array
-    aggregated_probabilities = np.zeros(
-        shape=(counts.shape[0], counts.shape[1]), dtype=np.uint16
-    )
-
-    if len(unique_values) > 0:
-        # Takes the indices that have the biggest scores
-        aggregated_predictions_indices = np.argmax(counts, axis=2)
-
-        # Get the new probabilities of the predictions
-        aggregated_probabilities = np.take_along_axis(
-            probabilities,
-            aggregated_predictions_indices.reshape(
-                *aggregated_predictions_indices.shape, 1
-            ),
-            axis=2,
-        ).squeeze()
-
-        # Check which pixels have a counts value equal to 0
-        no_score_mask = np.sum(counts, axis=2) == 0
-
-        # convert back to values from indices
-        for cls_idx, cls_value in index_value_lut:
-            aggregated_predictions[aggregated_predictions_indices == cls_idx] = (
-                cls_value
-            )
-            aggregated_predictions = aggregated_predictions.astype(np.uint16)
-
-        aggregated_predictions[no_score_mask] = POSTPROCESSING_NODATA
-        aggregated_probabilities[no_score_mask] = POSTPROCESSING_NODATA
-
-    # Setting excluded values back to their original values
-    for excluded_value in POSTPROCESSING_EXCLUDED_VALUES:
-        aggregated_predictions[prediction == excluded_value] = excluded_value
-        aggregated_probabilities[prediction == excluded_value] = excluded_value
-
-    return xr.DataArray(
-        np.stack((aggregated_predictions, aggregated_probabilities)),
-        dims=["bands", "y", "x"],
-        coords={
-            "bands": ["classification", "probability"],
-            "y": base_labels.y,
-            "x": base_labels.x,
-        },
-    )
-
-
-def smooth_probabilities(
-    base_labels: xr.DataArray, class_probabilities: xr.DataArray
-) -> xr.DataArray:
-    """Performs gaussian smoothing on the class probabilities. Requires the
-    base labels to keep the pixels that are excluded away from smoothing.
-    """
-    from scipy.signal import convolve2d
-
-    base_labels_vals = base_labels.values
-    probabilities_vals = class_probabilities.values
-
-    excluded_mask = np.isin(
-        base_labels_vals.reshape(-1),
-        POSTPROCESSING_EXCLUDED_VALUES,
-    ).reshape(*base_labels_vals.shape)
-
-    conv_kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.int16)
-
-    for class_idx in range(probabilities_vals.shape[0]):
-        probabilities_vals[class_idx] = (
-            convolve2d(
-                probabilities_vals[class_idx],
-                conv_kernel,
-                mode="same",
-                boundary="symm",
-            )
-            / conv_kernel.sum()
-        )
-        probabilities_vals[class_idx][excluded_mask] = 0
-
-    # Sum of probabilities should be 1, cast to uint16
-    probabilities_vals = np.round(
-        probabilities_vals / probabilities_vals.sum(axis=0) * 100.0
-    ).astype("uint16")
-
-    return xr.DataArray(
-        probabilities_vals,
-        coords=class_probabilities.coords,
-        dims=class_probabilities.dims,
-    )
-
-
-def reclassify(
-    base_labels: xr.DataArray,
-    base_max_probs: xr.DataArray,
-    probabilities: xr.DataArray,
-) -> xr.DataArray:
-    base_labels_vals = base_labels.values
-    base_max_probs_vals = base_max_probs.values
-
-    excluded_mask = np.isin(
-        base_labels_vals.reshape(-1),
-        POSTPROCESSING_EXCLUDED_VALUES,
-    ).reshape(*base_labels_vals.shape)
-
-    new_labels_vals = np.argmax(probabilities.values, axis=0)
-    new_max_probs_vals = np.max(probabilities.values, axis=0)
-
-    new_labels_vals[excluded_mask] = base_labels_vals[excluded_mask]
-    new_max_probs_vals[excluded_mask] = base_max_probs_vals[excluded_mask]
-
-    return xr.DataArray(
-        np.stack((new_labels_vals, new_max_probs_vals)),
-        dims=["bands", "y", "x"],
-        coords={
-            "bands": ["classification", "probability"],
-            "y": base_labels.y,
-            "x": base_labels.x,
-        },
-    )
-
-
-# =============================================================================
-# ERROR HANDLING - SIMPLE VERSION
-# =============================================================================
-
-
-def create_nan_output_array(
-    inarr: xr.DataArray, num_outputs: int, error_info: str = ""
-) -> xr.DataArray:
-    """Creates a NaN-filled output array with proper dimensions and coordinates.
-
-    Parameters
-    ----------
-    inarr : xr.DataArray
-        Input array to derive dimensions from
-    num_outputs : int
-        Number of output bands/classes
-    error_info : str
-        Error information to include in attributes for debugging
-
-    Returns
-    -------
-    xr.DataArray
-        NaN-filled array with proper structure
-    """
-    logger.error(f"Creating NaN output array due to error: {error_info}")
-    logger.error(f"Input array shape: {inarr.shape}, dims: {inarr.dims}")
-    logger.error(
-        f"Input array coords - bands: {inarr.bands.values}, t: {len(inarr.t)}, x: {len(inarr.x)}, y: {len(inarr.y)}"
-    )
-
-    # Create NaN array with same spatial dimensions
-    nan_array = np.full(
-        (num_outputs, len(inarr.y), len(inarr.x)), np.nan, dtype=np.float32
-    )
-
-    # Create output array with proper coordinates
-    output_array = xr.DataArray(
-        nan_array,
-        dims=["bands", "y", "x"],
-        coords={
-            "bands": list(range(num_outputs)),
-            "y": inarr.y,
-            "x": inarr.x,
-        },
-        attrs={"error": error_info},
-    )
-
-    return output_array
-
-
-# =============================================================================
-# CLASSES (Main logic for apply_udf_data)
-# =============================================================================
+# ---------------------------------------------------------------------------
+# DEM helpers reused from the legacy pipeline
+# ---------------------------------------------------------------------------
 
 
 class SlopeCalculator:
-    """Handles slope computation from elevation data."""
+    """Utility that computes slope layers from DEM inputs."""
 
     @staticmethod
-    def compute(resolution: float, elevation_data: np.ndarray) -> np.ndarray:
-        """Compute slope from elevation data."""
-        dem_arr = SlopeCalculator._prepare_dem_array(elevation_data)
-        dem_downsampled = SlopeCalculator._downsample_to_20m(dem_arr, resolution)
-        slope = SlopeCalculator._compute_slope_gradient(dem_downsampled)
-        result = SlopeCalculator._upsample_to_original(slope, dem_arr.shape, resolution)
-        return result
+    def compute(resolution: float, dem: np.ndarray) -> np.ndarray:
+        prepared = SlopeCalculator._prepare_dem_array(dem)
+        downsampled = SlopeCalculator._downsample_to_20m(prepared, resolution)
+        gradient = SlopeCalculator._compute_slope_gradient(downsampled)
+        return SlopeCalculator._upsample_to_original(gradient, dem.shape, resolution)
 
     @staticmethod
     def _prepare_dem_array(dem: np.ndarray) -> np.ndarray:
-        """Prepare DEM array by handling NaNs and invalid values."""
         dem_arr = dem.astype(np.float32)
         dem_arr[dem_arr == NODATA_VALUE] = np.nan
         return SlopeCalculator._fill_nans(dem_arr)
 
     @staticmethod
     def _fill_nans(dem_arr: np.ndarray, max_iter: int = 2) -> np.ndarray:
-        """Fill NaN values using rolling fill approach."""
         if max_iter == 0 or not np.any(np.isnan(dem_arr)):
             return dem_arr
 
@@ -561,52 +187,48 @@ class SlopeCalculator:
         roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         random.shuffle(roll_params)
 
-        for roll_param in roll_params:
-            rolled = np.roll(dem_arr, roll_param, axis=(0, 1))
+        for shift_x, shift_y in roll_params:
+            rolled = np.roll(dem_arr, shift_x, axis=0)
+            rolled = np.roll(rolled, shift_y, axis=1)
             dem_arr[mask] = rolled[mask]
 
         return SlopeCalculator._fill_nans(dem_arr, max_iter - 1)
 
     @staticmethod
     def _downsample_to_20m(dem_arr: np.ndarray, resolution: float) -> np.ndarray:
-        """Downsample DEM to 20m resolution for slope computation."""
         factor = int(20 / resolution)
         if factor < 1 or factor % 2 != 0:
-            raise ValueError(f"Unsupported resolution for slope: {resolution}")
+            raise ValueError(
+                f"Unsupported resolution for slope computation: {resolution}"
+            )
 
-        X, Y = dem_arr.shape
-        pad_X, pad_Y = (
-            (factor - (X % factor)) % factor,
-            (factor - (Y % factor)) % factor,
-        )
-        padded = np.pad(dem_arr, ((0, pad_X), (0, pad_Y)), mode="reflect")
+        x_size, y_size = dem_arr.shape
+        pad_x = (factor - (x_size % factor)) % factor
+        pad_y = (factor - (y_size % factor)) % factor
+        padded = np.pad(dem_arr, ((0, pad_x), (0, pad_y)), mode="reflect")
 
         reshaped = padded.reshape(
-            (X + pad_X) // factor, factor, (Y + pad_Y) // factor, factor
+            (x_size + pad_x) // factor, factor, (y_size + pad_y) // factor, factor
         )
         return np.nanmean(reshaped, axis=(1, 3))
 
     @staticmethod
     def _compute_slope_gradient(dem: np.ndarray) -> np.ndarray:
-        """Compute slope gradient using Sobel operators."""
         kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (8.0 * 20)
         kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (8.0 * 20)
 
-        dx = convolve(dem, kernel_x)
-        dy = convolve(dem, kernel_y)
-        gradient_magnitude = np.sqrt(dx**2 + dy**2)
-
-        return np.arctan(gradient_magnitude) * (180 / np.pi)
+        dx = convolve(dem, kernel_x, mode="nearest")
+        dy = convolve(dem, kernel_y, mode="nearest")
+        gradient = np.sqrt(dx**2 + dy**2)
+        return np.arctan(gradient) * (180 / np.pi)
 
     @staticmethod
     def _upsample_to_original(
-        slope: np.ndarray, original_shape: Tuple[int, ...], resolution: float
+        slope: np.ndarray, original_shape: Tuple[int, int], resolution: float
     ) -> np.ndarray:
-        """Upsample slope back to original resolution."""
         factor = int(20 / resolution)
         slope_upsampled = zoom(slope, zoom=factor, order=1)
 
-        # Handle odd dimensions
         if original_shape[0] % 2 != 0:
             slope_upsampled = slope_upsampled[:-1, :]
         if original_shape[1] % 2 != 0:
@@ -616,576 +238,1980 @@ class SlopeCalculator:
 
 
 class CoordinateTransformer:
-    """Handles coordinate transformations and spatial operations."""
+    """Minimal helpers for resolution estimation and coordinate transforms."""
 
     @staticmethod
-    def get_resolution(inarr: xr.DataArray, epsg: int) -> float:
-        """Calculate resolution in meters."""
+    def get_resolution(arr: xr.DataArray, epsg: int) -> float:
         if epsg == 4326:
-            return CoordinateTransformer._get_wgs84_resolution(inarr)
-        return abs(inarr.x[1].values - inarr.x[0].values)
-
-    @staticmethod
-    def _get_wgs84_resolution(inarr: xr.DataArray) -> float:
-        """Convert WGS84 coordinates to meters for resolution calculation."""
-        transformer = Transformer.from_crs(4326, 3857, always_xy=True)
-        points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]
-        points = [transform(transformer.transform, point) for point in points]
-        return abs(points[1].x - points[0].x)
-
-    @staticmethod
-    def get_lat_lon_array(inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-        """Create latitude/longitude array from coordinates."""
-        lon, lat = np.meshgrid(inarr.x.values, inarr.y.values)
-
-        if epsg != 4326:
-            transformer = Transformer.from_crs(epsg, 4326, always_xy=True)
-            lon, lat = transformer.transform(lon, lat)
-
-        latlon = np.stack([lat, lon])
-        return xr.DataArray(
-            latlon,
-            dims=["bands", "y", "x"],
-            coords={
-                "bands": [LAT_HARMONIZED_NAME, LON_HARMONIZED_NAME],
-                "y": inarr.y,
-                "x": inarr.x,
-            },
-        )
+            transformer = Transformer.from_crs(4326, 3857, always_xy=True)
+            pts = [
+                transformer.transform(arr.x.values[i], arr.y.values[0])
+                for i in range(2)
+            ]
+            return abs(pts[1][0] - pts[0][0])
+        return abs(float(arr.x.values[1] - arr.x.values[0]))
 
 
 class DataPreprocessor:
-    """Handles data preprocessing operations."""
+    """Apply harmonization/rescaling expected by the predictor builder."""
 
     @staticmethod
     def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Rescale Sentinel-1 backscatter from uint16 to dB values."""
-        s1_bands_present = [b for b in S1_BANDS if b in arr.bands.values]
-        if not s1_bands_present:
+        present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
+        if not present:
             return arr
-
-        s1_data = arr.sel(bands=s1_bands_present).astype(np.float32)
-        DataPreprocessor._validate_s1_data(s1_data.values)
-
-        # Convert to power values then to dB
-        power_values = 20.0 * np.log10(s1_data.values) - 83.0
-        power_values = np.power(10, power_values / 10.0)
-        power_values[~np.isfinite(power_values)] = np.nan
-
-        db_values = 10.0 * np.log10(power_values)
-        arr.loc[dict(bands=s1_bands_present)] = db_values
-
+        if not np.issubdtype(arr.dtype, np.floating):
+            # Allow negative dB values to be written back safely
+            arr = arr.astype("float32")
+        s1 = arr.sel(bands=present).astype(np.float32)
+        data = s1.values
+        nodata_mask = data == NODATA_VALUE
+        valid_mask = ~nodata_mask
+        scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
+        if np.any(valid_mask):
+            DataPreprocessor._validate_s1_data(data[valid_mask])
+            power = 20.0 * np.log10(data[valid_mask]) - 83.0
+            power = np.power(10, power / 10.0)
+            power[~np.isfinite(power)] = np.nan
+            scaled[valid_mask] = 10.0 * np.log10(power)
+        arr.loc[{"bands": present}] = scaled
         return arr
 
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
-        """Validate S1 data meets preprocessing requirements."""
         if data.min() < 1 or data.max() > NODATA_VALUE:
             raise ValueError(
-                "S1 data should be uint16 format with values 1-65535. "
-                "Set 'rescale_s1' to False to disable scaling."
+                "S1 data expected as uint16 in range 1-65535 before rescaling."
             )
 
-
-class PrestoFeatureExtractor:
-    """Handles Presto feature extraction pipeline."""
-
-    def __init__(self, parameters: Dict[str, Any]):
-        self.parameters = parameters
-
-    def extract(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-        """Extract Presto features from input array."""
-        if epsg is None:
-            raise ValueError("EPSG code required for Presto feature extraction")
-
-        # ONLY check top level - no nested lookup
-        presto_model_url = self.parameters.get("presto_model_url")
-        if not presto_model_url:
-            logger.error(
-                f"Missing presto_model_url. Available keys: {list(self.parameters.keys())}"
-            )
-            raise ValueError('Missing required parameter "presto_model_url"')
-
-        if len(inarr.t) != 12:
-            error_msg = (
-                f"Presto requires exactly 12 timesteps, but got {len(inarr.t)}. "
-                f"Available timesteps: {inarr.t.values}. "
-                f"Patch coordinates - x: {inarr.x.values.tolist()}, y: {inarr.y.values.tolist()}"
-            )
-            logger.error(error_msg)
-
-            # Return NaN array instead of crashing
-            return create_nan_output_array(
-                inarr, self.parameters["num_outputs"], error_msg
-            )
-
-        inarr = self._preprocess_input(inarr)
-
-        if "slope" not in inarr.bands:
-            inarr = self._add_slope_band(inarr, epsg)
-
-        return self._run_presto_inference(inarr, epsg)
-
-    def _preprocess_input(self, inarr: xr.DataArray) -> xr.DataArray:
-        """Preprocess input array for Presto."""
-        inarr = inarr.transpose("bands", "t", "x", "y")
-
-        # Harmonize band names
-        new_bands = [GFMAP_BAND_MAPPING.get(b.item(), b.item()) for b in inarr.bands]
-        inarr = inarr.assign_coords(bands=new_bands)
-
-        return inarr.fillna(NODATA_VALUE)
-
-    def _add_slope_band(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-        """Compute and add slope band to array."""
-        logger.warning("Slope band not found, computing...")
-        resolution = CoordinateTransformer.get_resolution(inarr.isel(t=0), epsg)
-        elevation_data = inarr.sel(bands="COP-DEM").isel(t=0).values
-
-        slope_array = SlopeCalculator.compute(resolution, elevation_data)
+    @staticmethod
+    def add_slope_band(arr: xr.DataArray, epsg: int) -> xr.DataArray:
+        if "slope" in arr.bands.values:
+            return arr
+        if "COP-DEM" not in arr.bands.values:
+            logger.warning("DEM band missing; slope band cannot be created.")
+            return arr
+        resolution = CoordinateTransformer.get_resolution(arr.isel(t=0), epsg)
+        dem = arr.sel(bands="COP-DEM").isel(t=0).values
+        slope = SlopeCalculator.compute(resolution, dem)
         slope_da = (
             xr.DataArray(
-                slope_array[None, :, :],
+                slope[None, :, :],
                 dims=("bands", "y", "x"),
-                coords={"bands": ["slope"], "y": inarr.y, "x": inarr.x},
+                coords={"bands": ["slope"], "y": arr.y, "x": arr.x},
             )
-            .expand_dims({"t": inarr.t})
+            .expand_dims({"t": arr.t})
             .astype("float32")
         )
-
-        return xr.concat([inarr.astype("float32"), slope_da], dim="bands")
-
-    def _run_presto_inference(self, inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-        """Run Presto model inference with safe dependency handling."""
-        # Dependencies are now handled by load_presto_weights_cached
-        import gc
-
-        import torch
-
-        _ensure_prometheo_dependencies()
-
-        presto_model_url = self.parameters["presto_model_url"]
-
-        model = load_presto_weights_cached(presto_model_url)
-
-        # Import here to ensure dependencies are available
-        pooling_method = (
-            PoolingMethods.TIME  # type: ignore
-            if self.parameters.get("temporal_prediction")
-            else PoolingMethods.GLOBAL  # type: ignore
-        )
-
-        logger.info("Running presto inference ...")
-        try:
-            with torch.inference_mode():
-                features = run_model_inference(
-                    inarr,
-                    model,
-                    epsg=epsg,
-                    batch_size=self.parameters.get("batch_size", 256),  # TODO optimize?
-                    pooling_method=pooling_method,
-                )  # type: ignore
-            logger.info("Inference completed.")
-
-            if self.parameters.get("temporal_prediction"):
-                features = self._select_temporal_features(features)
-            return features.transpose("bands", "y", "x")
-
-        finally:
-            gc.collect()
-
-    def _select_temporal_features(self, features: xr.DataArray) -> xr.DataArray:
-        """Select specific timestep from temporal features."""
-        target_date = self.parameters.get("target_date")
-
-        if target_date is None:
-            mid_idx = len(features.t) // 2
-            return features.isel(t=mid_idx)
-
-        target_dt = np.datetime64(target_date)
-        min_time, max_time = features.t.min().values, features.t.max().values
-
-        if target_dt < min_time or target_dt > max_time:
-            raise ValueError(
-                f"Target date {target_date} outside feature range: {min_time} to {max_time}"
-            )
-
-        return features.sel(t=target_dt, method="nearest")
-
-
-class ONNXClassifier:
-    """Handles ONNX model inference for classification."""
-
-    def __init__(self, parameters: Dict[str, Any]):
-        self.parameters = parameters
-
-    def predict(self, features: xr.DataArray) -> xr.DataArray:
-        """Run classification prediction."""
-        classifier_url = self.parameters.get("classifier_url")
-        if not classifier_url:
-            logger.error(
-                f"Missing classifier_url. Available keys: {list(self.parameters.keys())}"
-            )
-            raise ValueError('Missing required parameter "classifier_url"')
-
-        session, lut = load_onnx_model_cached(classifier_url)
-        features_flat = self._prepare_features(features)
-
-        logger.info("Running ONNX model inference ...")
-        predictions = self._run_inference(session, lut, features_flat)
-        logger.info("ONNX inference completed.")
-
-        return self._reshape_predictions(predictions, features, lut)
-
-    def _prepare_features(self, features: xr.DataArray) -> np.ndarray:
-        """Prepare features for inference."""
-        return (
-            features.transpose("bands", "x", "y")
-            .stack(xy=["x", "y"])
-            .transpose()
-            .values
-        )
-
-    def _run_inference(
-        self, session: Any, lut: Dict, features: np.ndarray
-    ) -> np.ndarray:
-        """Run ONNX model inference."""
-        outputs = session.run(None, {"features": features})
-
-        labels = np.zeros(len(outputs[0]), dtype=np.uint16)
-        probabilities = np.zeros(len(outputs[0]), dtype=np.uint8)
-
-        for i, (label, prob) in enumerate(zip(outputs[0], outputs[1])):
-            labels[i] = lut[label]
-            probabilities[i] = int(round(prob[label] * 100))
-
-        class_probs = np.array(
-            [[prob[label] for label in lut.keys()] for prob in outputs[1]]
-        )
-        class_probs = (class_probs * 100).round().astype(np.uint8)
-
-        return np.hstack([labels[:, None], probabilities[:, None], class_probs]).T
-
-    def _reshape_predictions(
-        self, predictions: np.ndarray, original_features: xr.DataArray, lut: Dict
-    ) -> xr.DataArray:
-        """Reshape predictions to match original spatial dimensions."""
-        output_labels = get_output_labels(lut)
-        x_coords, y_coords = original_features.x.values, original_features.y.values
-
-        reshaped = predictions.reshape(
-            (len(output_labels), len(x_coords), len(y_coords))
-        )
-
-        return xr.DataArray(
-            reshaped,
-            dims=["bands", "x", "y"],
-            coords={"bands": output_labels, "x": x_coords, "y": y_coords},
-        ).transpose("bands", "y", "x")
-
-
-class Postprocessor:
-    """Handles postprocessing of classification results."""
-
-    def __init__(self, parameters: Dict[str, Any], classifier_url: str):
-        self.parameters = parameters
-        self.classifier_url = classifier_url
-
-    def apply(self, inarr: xr.DataArray) -> xr.DataArray:
-        inarr = inarr.transpose(
-            "bands", "y", "x"
-        )  # Ensure correct dimension order for openEO backend
-
-        _, lookup_table = load_onnx_model_cached(self.classifier_url)
-
-        if self.parameters.get("method") == "smooth_probabilities":
-            # Cast to float for more accurate gaussian smoothing
-            class_probabilities = (
-                inarr.isel(bands=slice(2, None)).astype("float32") / 100.0
-            )
-
-            # Peform probability smoothing
-            class_probabilities = smooth_probabilities(
-                inarr.sel(bands="classification"), class_probabilities
-            )
-
-            # Reclassify
-            new_labels = reclassify(
-                inarr.sel(bands="classification"),
-                inarr.sel(bands="probability"),
-                class_probabilities,
-            )
-
-            # Re-apply labels
-            class_labels = list(lookup_table.values())
-
-            # Create a final labels array with same dimensions as new_labels
-            final_labels = xr.full_like(new_labels, fill_value=65535)
-            for idx, label in enumerate(class_labels):
-                final_labels.loc[{"bands": "classification"}] = xr.where(
-                    new_labels.sel(bands="classification") == idx,
-                    label,
-                    final_labels.sel(bands="classification"),
-                )
-            new_labels.sel(bands="classification").values = final_labels.sel(
-                bands="classification"
-            ).values
-
-            # Append the per-class probabalities if required
-            if self.parameters.get("keep_class_probs", False):
-                new_labels = xr.concat([new_labels, class_probabilities], dim="bands")
-
-        elif self.parameters.get("method") == "majority_vote":
-            kernel_size = self.parameters.get("kernel_size", 5)
-
-            new_labels = majority_vote(
-                inarr.sel(bands="classification"),
-                inarr.sel(bands="probability"),
-                kernel_size=kernel_size,
-            )
-
-            # Append the per-class probabalities if required
-            if self.parameters.get("keep_class_probs", False):
-                class_probabilities = inarr.isel(bands=slice(2, None))
-                new_labels = xr.concat([new_labels, class_probabilities], dim="bands")
-
-        else:
-            raise ValueError(
-                f"Unknown post-processing method: {self.parameters.get('method')}"
-            )
-
-        new_labels = new_labels.transpose(
-            "bands", "y", "x"
-        )  # Ensure correct dimension order for openEO backend
-
-        return new_labels
-
-
-# =============================================================================
-# MAIN UDF FUNCTIONS
-# =============================================================================
-
-
-def run_single_workflow(
-    input_array: xr.DataArray,
-    epsg: int,
-    parameters: Dict[str, Any],
-    mask: Optional[xr.DataArray] = None,
-) -> xr.DataArray:
-    """Run a single classification workflow with optional masking."""
-
-    # Preprocess data
-    if parameters["feature_parameters"].get("rescale_s1", True):
-        logger.info("Rescale s1 ...")
-        input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
-
-    # Extract features
-    logger.info("Extract Presto embeddings ...")
-    feature_extractor = PrestoFeatureExtractor(parameters["feature_parameters"])
-    features = feature_extractor.extract(input_array, epsg)
-    logger.info("Presto embedding extraction done.")
-
-    # Classify
-    logger.info("Onnx classification ...")
-    classifier = ONNXClassifier(parameters["classifier_parameters"])
-    classes = classifier.predict(features)
-    logger.info("Onnx classification done.")
-
-    # Postprocess
-    postprocess_parameters: Dict[str, Any] = parameters.get(
-        "postprocess_parameters", {}
-    )
-
-    if postprocess_parameters.get("enable"):
-        logger.info("Postprocessing classification results ...")
-        if postprocess_parameters.get("save_intermediate"):
-            classes_raw = classes.assign_coords(
-                bands=[f"raw_{b}" for b in list(classes.bands.values)]
-            )
-        postprocessor = Postprocessor(
-            postprocess_parameters,
-            classifier_url=parameters.get("classifier_parameters", {}).get(
-                "classifier_url"
-            ),
-        )
-
-        classes = postprocessor.apply(classes)
-        if postprocess_parameters.get("save_intermediate"):
-            classes = xr.concat([classes, classes_raw], dim="bands")
-        logger.info("Postprocessing done.")
-
-    # Set masked areas to specific value
-    if mask is not None:
-        logger.info("`mask` provided, applying to classification results ...")
-        classes = classes.where(mask, 254)  # 254 = non-cropland
-
-    return classes
-
-
-def combine_results(
-    croptype_result: xr.DataArray, cropland_result: xr.DataArray
-) -> xr.DataArray:
-    """Combine crop type results with ALL cropland classification bands."""
-
-    # Rename cropland bands to avoid conflicts
-    cropland_bands_renamed = [
-        f"cropland_{band}" for band in cropland_result.bands.values
-    ]
-    cropland_result = cropland_result.assign_coords(bands=cropland_bands_renamed)
-
-    # Rename croptype bands for clarity
-    croptype_bands_renamed = [
-        f"croptype_{band}" for band in croptype_result.bands.values
-    ]
-    croptype_result = croptype_result.assign_coords(bands=croptype_bands_renamed)
-
-    # Combine all bands from both results
-    combined_bands = list(croptype_bands_renamed) + list(cropland_bands_renamed)
-    combined_data = np.concatenate(
-        [croptype_result.values, cropland_result.values], axis=0
-    )
-
-    result = xr.DataArray(
-        combined_data,
-        dims=["bands", "y", "x"],
-        coords={
-            "bands": combined_bands,
-            "y": croptype_result.y,
-            "x": croptype_result.x,
-        },
-    )
-
+        return xr.concat([arr.astype("float32"), slope_da], dim="bands")
+
+
+# ---------------------------------------------------------------------------
+# Postprocessing helpers
+# ---------------------------------------------------------------------------
+
+
+def _gather_probabilities_for_labels(
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+    class_value_to_index: Mapping[int, int],
+) -> np.ndarray:
+    """Pick per-pixel probabilities corresponding to the provided labels."""
+
+    result = np.zeros(labels.shape, dtype=np.float32)
+    for class_value, prob_index in class_value_to_index.items():
+        mask = labels == class_value
+        if not np.any(mask):
+            continue
+        result[mask] = probabilities[prob_index][mask]
     return result
 
 
-def apply_udf_data(udf_data: UdfData) -> UdfData:
-    """Main UDF entry point - expects cropland_params and croptype_params in context."""
+def _majority_vote_labels(
+    labels: np.ndarray,
+    *,
+    kernel_size: int,
+    excluded_values: Sequence[int],
+) -> np.ndarray:
+    from scipy.signal import convolve2d
 
-    input_cube = udf_data.datacube_list[0]
-    parameters = udf_data.user_context.copy()
+    if kernel_size < 1:
+        raise ValueError("kernel_size must be >= 1 for majority vote")
+    if kernel_size == 1:
+        return labels
+    if kernel_size > 25:
+        raise ValueError("kernel_size cannot exceed 25 for majority vote")
 
-    epsg = udf_data.proj["EPSG"] if udf_data.proj else None
-    if epsg is None:
-        raise ValueError("EPSG code not found in projection information")
+    valid_mask = ~np.isin(labels, excluded_values)
+    if not np.any(valid_mask):
+        return labels
 
-    # Prepare input array
-    input_array = input_cube.get_array().transpose("bands", "t", "y", "x")
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint16)
+    unique_labels = sorted(np.unique(labels[valid_mask]))
+    counts = np.zeros((len(unique_labels), *labels.shape), dtype=np.uint32)
 
-    # Extract both parameter sets directly from context
-    cropland_params = parameters.get("cropland_params", {})
-    croptype_params = parameters.get("croptype_params", {})
+    for idx, class_value in enumerate(unique_labels):
+        class_mask = (labels == class_value).astype(np.uint8)
+        counts[idx] = convolve2d(class_mask, kernel, mode="same", boundary="symm")
 
-    # Check if we have both parameter sets for dual workflow
-    if cropland_params and croptype_params:
-        logger.info(
-            "Running combined workflow: cropland masking + croptype mapping ..."
+    winning_indices = np.argmax(counts, axis=0)
+    new_labels = labels.copy()
+    for idx, class_value in enumerate(unique_labels):
+        vote_mask = (winning_indices == idx) & valid_mask
+        if np.any(vote_mask):
+            new_labels[vote_mask] = class_value
+    return new_labels
+
+
+def _smooth_probability_cube(
+    probabilities: np.ndarray, excluded_mask: np.ndarray
+) -> np.ndarray:
+    from scipy.signal import convolve2d
+
+    kernel = np.array([[1, 2, 1], [2, 3, 2], [1, 2, 1]], dtype=np.float32)
+    kernel_sum = float(kernel.sum())
+    smoothed = np.zeros_like(probabilities, dtype=np.float32)
+    for idx in range(probabilities.shape[0]):
+        smoothed[idx] = (
+            convolve2d(probabilities[idx], kernel, mode="same", boundary="symm")
+            / kernel_sum
         )
+        smoothed[idx][excluded_mask] = 0.0
+    norm = smoothed.sum(axis=0, keepdims=True)
+    norm[norm == 0.0] = 1.0
+    return smoothed / norm
 
-        # Run cropland classification - pass the FLAT parameters
-        logger.info("Running cropland classification ...")
-        cropland_result = run_single_workflow(input_array, epsg, cropland_params)
-        logger.info("Cropland classification done.")
 
-        # Extract cropland mask for masking the crop type classification
-        cropland_mask = cropland_result.sel(bands="classification") > 0
+def _labels_from_probability_cube(
+    probabilities: np.ndarray,
+    class_value_to_index: Mapping[int, int],
+    base_labels: np.ndarray,
+    excluded_mask: np.ndarray,
+) -> np.ndarray:
+    best_idx = np.argmax(probabilities, axis=0)
+    new_labels = base_labels.copy()
+    for class_value, prob_index in class_value_to_index.items():
+        vote_mask = (best_idx == prob_index) & ~excluded_mask
+        if np.any(vote_mask):
+            new_labels[vote_mask] = class_value
+    return new_labels
 
-        # Run crop type classification with mask
-        logger.info("Running crop type classification ...")
-        croptype_result = run_single_workflow(
-            input_array, epsg, croptype_params, cropland_mask
+
+def _run_postprocess(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    class_value_to_index: Mapping[int, int],
+    options: PostprocessOptions,
+    excluded_values: Sequence[int],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    method = options.resolved_method()
+    excluded_mask = np.isin(labels, excluded_values)
+    prob_cube = probabilities.astype(np.float32, copy=False)
+
+    if method is None:
+        updated_labels = labels
+    elif method == "majority_vote":
+        updated_labels = _majority_vote_labels(
+            labels,
+            kernel_size=options.kernel_size,
+            excluded_values=excluded_values,
         )
-        logger.info("Croptype classification done.")
-
-        # Combine ALL bands from both results
-        result = combine_results(croptype_result, cropland_result)
-        result_cube = XarrayDataCube(result)
-
+    elif method == "smooth_probabilities":
+        smoothed = _smooth_probability_cube(prob_cube, excluded_mask)
+        prob_cube = smoothed
+        updated_labels = _labels_from_probability_cube(
+            smoothed,
+            class_value_to_index,
+            base_labels=labels,
+            excluded_mask=excluded_mask,
+        )
     else:
-        # Single workflow (fallback to original behavior)
-        logger.info("Running single workflow ...")
-        result = run_single_workflow(input_array, epsg, parameters)
-        result_cube = XarrayDataCube(result)
+        raise ValueError(f"Unknown postprocess method '{method}'")
 
-    udf_data.datacube_list = [result_cube]
+    updated_probabilities = _gather_probabilities_for_labels(
+        prob_cube, updated_labels, class_value_to_index
+    )
+    return updated_labels, updated_probabilities, prob_cube
 
+
+# ---------------------------------------------------------------------------
+# Artifact loading utilities
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HeadSpec:
+    task: str
+    class_names: List[str]
+    cropland_classes: List[str]
+    gating_enabled: bool
+    head_type: str = "linear"
+    hidden_dim: int = 256
+    dropout: float = 0.0
+
+    @property
+    def num_classes(self) -> int:
+        return len(self.class_names)
+
+
+@dataclass
+class ModelArtifact:
+    source: str
+    zip_path: Path
+    extract_dir: Path
+    manifest: Dict[str, Any]
+    run_config: Optional[Dict[str, Any]]
+    checkpoint_path: Path
+
+
+def _ensure_cache_dir(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "downloads").mkdir(exist_ok=True)
+    (root / "extracted").mkdir(exist_ok=True)
+    return root
+
+
+def _hash_source(source: str) -> str:
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+
+
+def _download_artifact(source: str, cache_root: Path) -> Path:
+    parsed = urllib.parse.urlparse(source)
+    downloads_dir = cache_root / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    if parsed.scheme in {"http", "https"}:
+        slug = _hash_source(source)
+        target = downloads_dir / f"{slug}.zip"
+        if target.exists():
+            return target
+        logger.info(f"Downloading seasonal model artifact from {source}")
+        with urllib.request.urlopen(source) as resp, open(target, "wb") as fh:  # nosec: B310
+            shutil.copyfileobj(resp, fh)
+        return target
+    path = Path(source)
+    if not path.exists():
+        raise FileNotFoundError(f"Artifact not found at {source}")
+    return path
+
+
+def _extract_artifact(zip_path: Path, cache_root: Path) -> Path:
+    slug = (
+        zip_path.stem
+        if zip_path.parent == cache_root / "downloads"
+        else _hash_source(str(zip_path))
+    )
+    extract_dir = cache_root / "extracted" / slug
+    if extract_dir.exists():
+        return extract_dir
+
+    tmp_dir = Path(tempfile.mkdtemp(dir=cache_root / "extracted"))
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(tmp_dir)
+        tmp_dir.rename(extract_dir)
+        return extract_dir
+    except Exception:  # noqa: BLE001
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Expected JSON file missing: {path}")
+    with path.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _resolve_checkpoint_path(
+    manifest: Mapping[str, Any], extract_dir: Path, priority: Sequence[str]
+) -> Path:
+    artifacts = manifest.get("artifacts", {})
+    checkpoints = artifacts.get("checkpoints", {})
+    for key in priority:
+        candidate = checkpoints.get(key)
+        if candidate:
+            candidate_path = extract_dir / candidate
+            if candidate_path.exists():
+                return candidate_path
+    pt_files = list(extract_dir.glob("*.pt"))
+    if len(pt_files) == 1:
+        return pt_files[0]
+    if not pt_files:
+        raise FileNotFoundError(f"No checkpoint found in {extract_dir}")
+    raise FileNotFoundError(
+        "Multiple .pt files found; manifest must declare the checkpoint name explicitly"
+    )
+
+
+def _backbone_fingerprint_from_artifact(artifact: ModelArtifact) -> str:
+    backbone_entry = artifact.manifest.get("backbone") or {}
+    fingerprint = backbone_entry.get("fingerprint")
+    if not fingerprint:
+        raise ValueError(
+            "Seasonal artifact is missing backbone fingerprint. Repackage the model with the encoder fingerprint embedded."
+        )
+    return fingerprint
+
+
+def load_model_artifact(
+    source: str | Path, cache_root: Optional[Path] = None
+) -> ModelArtifact:
+    """Download, extract and load a model artifact package."""
+    cache_root = _ensure_cache_dir(cache_root or DEFAULT_CACHE_ROOT)
+    zip_path = _download_artifact(str(source), cache_root)
+    extract_dir = _extract_artifact(zip_path, cache_root)
+
+    manifest = _load_json(extract_dir / "config.json")
+    run_config = (
+        _load_json(extract_dir / "run_config.json")
+        if (extract_dir / "run_config.json").exists()
+        else None
+    )
+    checkpoint = _resolve_checkpoint_path(
+        manifest, extract_dir, priority=("full", "model")
+    )
+
+    return ModelArtifact(
+        source=str(source),
+        zip_path=zip_path,
+        extract_dir=extract_dir,
+        manifest=manifest,
+        run_config=run_config,
+        checkpoint_path=checkpoint,
+    )
+
+
+def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec:
+    for head in heads:
+        if head.get("task") == task:
+            class_names = [str(cls) for cls in head.get("class_names", [])]
+            if not class_names:
+                raise ValueError(f"Head '{task}' missing class_names in manifest")
+            gating_cfg = head.get("gating", {})
+            cropland_classes = [
+                str(cls) for cls in gating_cfg.get("cropland_classes", [])
+            ]
+            return HeadSpec(
+                task=task,
+                class_names=class_names,
+                cropland_classes=cropland_classes,
+                gating_enabled=bool(gating_cfg.get("enabled", False)),
+                head_type=str(head.get("head_type", "linear")),
+                hidden_dim=int(head.get("hidden_dim", 256)),
+                dropout=float(head.get("dropout", 0.0)),
+            )
+    raise ValueError(f"Manifest does not define a '{task}' head")
+
+
+# ---------------------------------------------------------------------------
+# Seasonal model bundle (loads backbone and optional replacement heads)
+# ---------------------------------------------------------------------------
+
+
+class SeasonalModelBundle:
+    """Convenience wrapper that owns the seasonal model and metadata.
+
+    Custom head overrides are validated to ensure every head uses a compatible
+    Presto backbone checkpoint so embeddings stay aligned across tasks.
+    """
+
+    def __init__(
+        self,
+        base_artifact: ModelArtifact,
+        *,
+        landcover_head_zip: str | Path | None = None,
+        croptype_head_zip: str | Path | None = None,
+        cache_root: Optional[Path] = None,
+        device: Union[str, TorchDevice] = "cpu",
+        enable_croptype_head: bool = True,
+        enable_cropland_head: bool = True,
+    ) -> None:
+        torch = _lazy_import_torch()
+
+        if not (enable_croptype_head or enable_cropland_head):
+            raise ValueError("At least one head must be enabled")
+
+        self.device = torch.device(device)
+        self.base_artifact = base_artifact
+        self.cache_root = _ensure_cache_dir(cache_root or DEFAULT_CACHE_ROOT)
+        self._croptype_head_enabled = enable_croptype_head
+        self._cropland_head_enabled = enable_cropland_head
+
+        heads = base_artifact.manifest.get("heads", [])
+        self.landcover_spec = _select_head_spec(heads, task="landcover")
+        self.croptype_spec = _select_head_spec(heads, task="croptype")
+        self.cropland_gate_classes: List[str] = []
+        self._base_backbone_fingerprint = _backbone_fingerprint_from_artifact(
+            base_artifact
+        )
+        self._custom_head_backbone_fingerprints: Dict[str, str] = {}
+
+        dropout = base_artifact.manifest.get("backbone", {}).get("head_dropout", 0.0)
+        self.model = self._build_model(dropout)
+
+        # Apply custom head overrides if provided
+        if landcover_head_zip and self._cropland_head_enabled:
+            self._apply_custom_head(
+                task="landcover",
+                source=landcover_head_zip,
+                priority=("head", "full", "model"),
+            )
+        elif landcover_head_zip:
+            logger.info("Cropland head disabled; ignoring custom landcover override.")
+
+        if croptype_head_zip and enable_croptype_head:
+            self._apply_custom_head(
+                task="croptype",
+                source=croptype_head_zip,
+                priority=("head", "full", "model"),
+            )
+        elif croptype_head_zip:
+            logger.info("Croptype head disabled; ignoring custom croptype override.")
+
+        if not self._cropland_head_enabled:
+            logger.info("Cropland head disabled; cropland outputs will be skipped.")
+
+        self._update_cropland_gate()
+
+    def _build_model(self, dropout: float) -> "WorldCerealSeasonalModel":
+        """Construct the seasonal model and load base checkpoint."""
+        torch = _lazy_import_torch()
+        from prometheo.models import Presto
+
+        from worldcereal.train.seasonal_head import (
+            SeasonalFinetuningHead,
+            WorldCerealSeasonalModel,
+        )
+
+        backbone = Presto()
+        head = SeasonalFinetuningHead(
+            embedding_dim=backbone.encoder.embedding_size,
+            landcover_num_outputs=(
+                self.landcover_spec.num_classes if self._cropland_head_enabled else None
+            ),
+            crop_num_outputs=(
+                self.croptype_spec.num_classes if self._croptype_head_enabled else None
+            ),
+            dropout=dropout,
+            landcover_head_type=self.landcover_spec.head_type,
+            croptype_head_type=self.croptype_spec.head_type,
+            landcover_hidden_dim=self.landcover_spec.hidden_dim,
+            croptype_hidden_dim=self.croptype_spec.hidden_dim,
+        )
+        model = WorldCerealSeasonalModel(backbone=backbone, head=head)
+
+        # Load checkpoint, filtering disabled heads
+        state_dict = torch.load(
+            self.base_artifact.checkpoint_path, map_location=self.device
+        )
+        if not self._croptype_head_enabled:
+            state_dict = {
+                k: v
+                for k, v in state_dict.items()
+                if not k.startswith("head.crop_head")
+            }
+        if not self._cropland_head_enabled:
+            state_dict = {
+                k: v
+                for k, v in state_dict.items()
+                if not k.startswith("head.landcover_head")
+            }
+
+        model.load_state_dict(state_dict)
+        return model.to(self.device).eval()
+
+    def _apply_custom_head(
+        self,
+        *,
+        task: str,
+        source: str | Path,
+        priority: Sequence[str],
+    ) -> None:
+        """Load and apply a custom head from an artifact package.
+
+        Validates backbone compatibility, replaces head architecture if needed,
+        and loads the custom weights.
+        """
+        torch = _lazy_import_torch()
+        artifact = load_model_artifact(source, cache_root=self.cache_root)
+        backbone_fingerprint = _backbone_fingerprint_from_artifact(artifact)
+        self._validate_backbone_override(task, backbone_fingerprint)
+
+        checkpoint = _resolve_checkpoint_path(
+            artifact.manifest, artifact.extract_dir, priority
+        )
+        state_dict = torch.load(checkpoint, map_location=self.device)
+        head_spec = _select_head_spec(artifact.manifest.get("heads", []), task)
+
+        # Get current head spec and module
+        is_landcover = task == "landcover"
+        current_spec = self.landcover_spec if is_landcover else self.croptype_spec
+        module = (
+            self.model.head.landcover_head
+            if is_landcover
+            else self.model.head.crop_head
+        )
+
+        if module is None:
+            raise ValueError(f"Base model missing {task} head; cannot apply override")
+
+        # Replace head architecture with custom head specification
+        logger.info(
+            f"Replacing {task} head: {current_spec.head_type}/{current_spec.num_classes} -> "
+            f"{head_spec.head_type}/{head_spec.num_classes}"
+        )
+        self.model.head.replace_head(
+            task=task,
+            num_outputs=head_spec.num_classes,
+            head_type=head_spec.head_type,
+            hidden_dim=head_spec.hidden_dim,
+            dropout=head_spec.dropout,
+        )
+        # Get the new module after replacement
+        module = (
+            self.model.head.landcover_head
+            if is_landcover
+            else self.model.head.crop_head
+        )
+
+        # Load custom weights
+        assert module is not None, f"Module for {task} head is None after replacement"
+        missing, unexpected = module.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            logger.warning(
+                f"Custom {task} head state dict mismatch. Missing={missing}, unexpected={unexpected}"
+            )
+
+        # Update spec
+        if is_landcover:
+            self.landcover_spec = head_spec
+        else:
+            # Preserve base model's gating if custom head doesn't specify it
+            if not head_spec.cropland_classes and current_spec:
+                head_spec.cropland_classes = current_spec.cropland_classes
+            self.croptype_spec = head_spec
+
+        self._update_cropland_gate()
+
+    def _validate_backbone_override(
+        self, task: str, override_fingerprint: Optional[str]
+    ) -> None:
+        """Ensure custom head uses a compatible Presto encoder checkpoint."""
+        if not override_fingerprint:
+            raise ValueError(
+                f"Custom {task} head missing backbone fingerprint. "
+                "Repackage with encoder metadata."
+            )
+
+        if not self._base_backbone_fingerprint:
+            raise ValueError(
+                "Base seasonal model missing backbone fingerprint. "
+                "Redeploy the seasonal bundle with encoder metadata."
+            )
+
+        if override_fingerprint != self._base_backbone_fingerprint:
+            raise ValueError(
+                f"Custom {task} head backbone fingerprint mismatch: "
+                f"{override_fingerprint} != {self._base_backbone_fingerprint}"
+            )
+
+        for other_task, other_fp in self._custom_head_backbone_fingerprints.items():
+            if other_fp != override_fingerprint:
+                raise ValueError(
+                    f"Backbone fingerprint mismatch across heads: "
+                    f"{task}={override_fingerprint} != {other_task}={other_fp}"
+                )
+
+        self._custom_head_backbone_fingerprints[task] = override_fingerprint
+
+    def _update_cropland_gate(self) -> None:
+        """Update cropland gating classes from head specs."""
+        if not self._cropland_head_enabled:
+            self.cropland_gate_classes = []
+            logger.info("Cropland head disabled; cropland gating unavailable.")
+            return
+
+        self.cropland_gate_classes = list(
+            self.landcover_spec.cropland_classes
+            or self.croptype_spec.cropland_classes
+            or []
+        )
+        logger.info(
+            f"Cropland gating enabled for classes: {self.cropland_gate_classes}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Season mask helpers
+# ---------------------------------------------------------------------------
+
+
+def _coerce_datetime64(value: SeasonDateLike) -> np.datetime64:
+    if isinstance(value, np.datetime64):
+        return value.astype("datetime64[D]")
+    if isinstance(value, datetime.datetime):
+        return np.datetime64(value.date(), "D")
+    if isinstance(value, datetime.date):
+        return np.datetime64(value, "D")
+    if isinstance(value, str):
+        try:
+            return np.datetime64(value, "D")
+        except ValueError as exc:  # pragma: no cover - bad user input
+            raise ValueError(f"Could not parse season window date '{value}'.") from exc
+    raise TypeError(f"Unsupported season date type: {type(value)!r}")
+
+
+def _ensure_datetime64_array(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if arr.size == 0:
+        return arr.astype("datetime64[D]")
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype("datetime64[D]")
+    try:
+        return arr.astype("datetime64[D]")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Season mask construction requires datetime-like 't' coordinates."
+        ) from exc
+
+
+def _normalize_season_windows_input(
+    season_windows: Optional[Mapping[str, SeasonWindowValue]],
+) -> Dict[str, List[Tuple[np.datetime64, np.datetime64]]]:
+    if not season_windows:
+        return {}
+
+    normalized: Dict[str, List[Tuple[np.datetime64, np.datetime64]]] = {}
+    for season_id, raw_value in season_windows.items():
+        if raw_value is None:
+            raise ValueError(f"Season '{season_id}' requires at least one window")
+
+        if isinstance(raw_value, tuple):
+            candidate_pairs: List[Sequence[SeasonDateLike]] = [raw_value]
+        elif isinstance(raw_value, list):
+            if raw_value and not isinstance(raw_value[0], (tuple, list)):
+                candidate_pairs = [tuple(raw_value)]
+            else:
+                candidate_pairs = raw_value  # type: ignore[assignment]
+        else:
+            raise TypeError(
+                f"Season '{season_id}' windows must be tuples or lists, got {type(raw_value)!r}"
+            )
+
+        normalized_pairs: List[Tuple[np.datetime64, np.datetime64]] = []
+        for pair in candidate_pairs:  # type: ignore[arg-type]
+            if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+                raise ValueError(
+                    f"Season '{season_id}' windows must be (start, end) tuples, got {pair!r}"
+                )
+            start_raw, end_raw = pair
+            start_dt = _coerce_datetime64(start_raw)
+            end_dt = _coerce_datetime64(end_raw)
+            if end_dt < start_dt:
+                raise ValueError(
+                    f"Season '{season_id}' window end {end_dt} is before start {start_dt}."
+                )
+            normalized_pairs.append((start_dt, end_dt))
+
+        if not normalized_pairs:
+            raise ValueError(f"Season '{season_id}' windows cannot be empty")
+        normalized[season_id] = normalized_pairs
+
+    return normalized
+
+
+def _build_masks_from_windows(
+    timestamps: np.ndarray,
+    season_ids: Sequence[str],
+    windows: Mapping[str, List[Tuple[np.datetime64, np.datetime64]]],
+    batch_size: int,
+    composite_frequency: Optional[Literal["month", "dekad"]] = "month",
+) -> np.ndarray:
+    ts_arr = np.asarray(timestamps).astype("datetime64[D]")
+    num_timesteps = ts_arr.shape[0]
+    coverage_start = ts_arr.min()
+    coverage_end = ts_arr.max()
+    align_fn = None
+    if composite_frequency in {"month", "dekad"}:
+        from worldcereal.train.seasonal import align_to_composite_window
+
+        align_fn = align_to_composite_window
+    base = np.zeros((len(season_ids), num_timesteps), dtype=bool)
+    for idx, season_id in enumerate(season_ids):
+        season_windows = windows.get(season_id)
+        if not season_windows:
+            raise ValueError(
+                f"No season windows supplied for '{season_id}' but it was requested."
+            )
+        mask = np.zeros(num_timesteps, dtype=bool)
+        for start, end in season_windows:
+            start_aligned = start
+            end_aligned = end
+            if align_fn is not None and composite_frequency is not None:
+                start_aligned = align_fn(start, composite_frequency)
+                end_aligned = align_fn(end, composite_frequency)
+            if start_aligned < coverage_start or end_aligned > coverage_end:
+                raise ValueError(
+                    f"Season window for '{season_id}' extends beyond available timestamps "
+                    f"({coverage_start} to {coverage_end})."
+                )
+            mask |= (ts_arr >= start_aligned) & (ts_arr <= end_aligned)
+        if not mask.any():
+            raise ValueError(
+                f"Season '{season_id}' window does not overlap any available timesteps."
+            )
+        base[idx] = mask
+    return np.repeat(base[None, ...], batch_size, axis=0)
+
+
+def _build_uniform_masks(
+    batch_size: int, num_timesteps: int, num_seasons: int
+) -> np.ndarray:
+    base = np.ones((num_seasons, num_timesteps), dtype=bool)
+    return np.repeat(base[None, ...], batch_size, axis=0)
+
+
+def _normalize_provided_masks(
+    masks: np.ndarray,
+    batch_size: int,
+    num_timesteps: int,
+) -> np.ndarray:
+    arr = np.asarray(masks)
+    if arr.ndim == 2:
+        arr = np.repeat(arr[None, ...], batch_size, axis=0)
+    elif arr.ndim == 3:
+        if arr.shape[0] not in {1, batch_size}:
+            raise ValueError(
+                "Provided season masks must have shape [S, T] or [B, S, T]."
+            )
+        if arr.shape[0] == 1 and batch_size > 1:
+            arr = np.repeat(arr, batch_size, axis=0)
+    else:
+        raise ValueError("Season masks must be 2D or 3D arrays.")
+
+    if arr.shape[0] != batch_size or arr.shape[2] != num_timesteps:
+        raise ValueError(
+            "Season masks have incompatible batch or timestep dimensions for this cube."
+        )
+    return arr.astype(bool, copy=False)
+
+
+# ---------------------------------------------------------------------------
+# Inference engine
+# ---------------------------------------------------------------------------
+
+
+class SeasonalInferenceEngine:
+    """High-level orchestrator that runs seasonal inference on xarray cubes."""
+
+    def __init__(
+        self,
+        *,
+        seasonal_model_zip: str | Path,
+        landcover_head_zip: str | Path | None = None,
+        croptype_head_zip: str | Path | None = None,
+        cache_root: Optional[Path] = None,
+        device: Union[str, TorchDevice] = "cpu",
+        season_ids: Optional[Sequence[str]] = None,
+        season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
+        batch_size: int = 2048,
+        season_composite_frequency: Optional[Literal["month", "dekad"]] = "month",
+        export_class_probabilities: bool = False,
+        enable_croptype_head: bool = True,
+        enable_cropland_head: bool = True,
+        cropland_postprocess: Optional[Mapping[str, Any]] = None,
+        croptype_postprocess: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        base_artifact = load_model_artifact(seasonal_model_zip, cache_root=cache_root)
+        self.bundle = SeasonalModelBundle(
+            base_artifact,
+            landcover_head_zip=landcover_head_zip,
+            croptype_head_zip=croptype_head_zip,
+            cache_root=cache_root,
+            device=device,
+            enable_croptype_head=enable_croptype_head,
+            enable_cropland_head=enable_cropland_head,
+        )
+        torch = _lazy_import_torch()
+        self.device = torch.device(device)
+        self.batch_size = batch_size
+        self._season_composite_frequency = season_composite_frequency
+        self._export_class_probabilities = export_class_probabilities
+        self._croptype_enabled = enable_croptype_head
+        self._cropland_enabled = enable_cropland_head
+        self._cropland_postprocess = _build_postprocess_options(cropland_postprocess)
+        self._croptype_postprocess = _build_postprocess_options(croptype_postprocess)
+        from worldcereal.train import GLOBAL_SEASON_IDS
+
+        if not self._croptype_enabled:
+            logger.info(
+                "Croptype head disabled by configuration; seasonal outputs will not be emitted."
+            )
+        if not self._cropland_enabled:
+            logger.info(
+                "Cropland head disabled by configuration; cropland outputs will not be emitted."
+            )
+
+        default_ids = list(GLOBAL_SEASON_IDS)
+        if season_ids is not None and len(season_ids) == 0:
+            raise ValueError("season_ids cannot be empty when provided")
+        self._default_season_ids = list(season_ids) if season_ids else default_ids
+        self._default_season_windows = _normalize_season_windows_input(season_windows)
+        logger.info(
+            f"SeasonalInferenceEngine initialized (device={self.device}, batch_size={self.batch_size}, "
+            f"default_seasons={self._default_season_ids}, export_probs={self._export_class_probabilities}, "
+            f"croptype_enabled={self._croptype_enabled}, cropland_enabled={self._cropland_enabled}, "
+            f"cropland_postprocess={self._cropland_postprocess.enabled}, "
+            f"croptype_postprocess={self._croptype_postprocess.enabled})"
+        )
+
+    def infer(
+        self,
+        arr: xr.DataArray,
+        epsg: int,
+        *,
+        enforce_cropland_gate: bool = True,
+        season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
+        season_masks: Optional[np.ndarray] = None,
+        season_ids: Optional[Sequence[str]] = None,
+    ) -> xr.Dataset:
+        dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
+        logger.info(
+            f"Seasonal inference request received (epsg={epsg}, enforce_gate={enforce_cropland_gate}, "
+            f"dims={dims_summary})"
+        )
+        prepped = self._prepare_array(arr, epsg)
+        from worldcereal.train.predictors import generate_predictor
+
+        prepped_summary = {dim: size for dim, size in zip(prepped.dims, prepped.shape)}
+        logger.debug(
+            f"Prepared inference cube (dims={prepped_summary}, dtype={prepped.dtype})"
+        )
+
+        # Log input cube statistics for debugging
+        self._log_input_statistics(prepped)
+
+        predictors = generate_predictor(prepped.transpose("bands", "t", "x", "y"), epsg)
+        num_samples = getattr(predictors, "B", None)
+        num_timesteps = getattr(predictors, "T", None)
+        logger.info(
+            f"Predictors ready (samples={num_samples}, timesteps={num_timesteps}, batch_size={self.batch_size})"
+        )
+        mask_array, active_season_ids = self._resolve_season_masks(
+            timestamps=prepped.t.values,
+            batch_size=predictors.B,
+            season_windows=season_windows,
+            season_masks=season_masks,
+            season_ids=season_ids,
+        )
+        logger.info(
+            f"Season masks resolved for {active_season_ids} (shape={mask_array.shape})"
+        )
+        outputs = self._run_batches(predictors, mask_array)
+        logger.info(
+            f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
+        )
+
+        dataset = self._format_outputs(
+            arr=prepped,
+            outputs=outputs,
+            season_ids=active_season_ids,
+            enforce_cropland_gate=enforce_cropland_gate,
+        )
+
+        return _dataset_to_multiband_array(dataset)
+
+    def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
+        if "bands" not in arr.dims:
+            raise ValueError("Input DataArray must expose a 'bands' dimension")
+        reordered = arr.transpose("bands", "t", "y", "x")
+        reordered = DataPreprocessor.rescale_s1_backscatter(reordered)
+        renamed_bands = [
+            GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
+        ]
+        reordered = reordered.assign_coords(bands=renamed_bands)
+        reordered = reordered.transpose("bands", "t", "x", "y")
+        reordered = DataPreprocessor.add_slope_band(reordered, epsg)
+        return reordered.fillna(NODATA_VALUE).astype(np.float32)
+
+    def _resolve_season_masks(
+        self,
+        *,
+        timestamps: np.ndarray,
+        batch_size: int,
+        season_windows: Optional[Mapping[str, SeasonWindowValue]],
+        season_masks: Optional[np.ndarray],
+        season_ids: Optional[Sequence[str]],
+    ) -> Tuple[np.ndarray, List[str]]:
+        ts_days = _ensure_datetime64_array(timestamps)
+        num_timesteps = ts_days.shape[0]
+        if num_timesteps == 0:
+            raise ValueError(
+                "Input array must expose at least one timestep for seasonal inference"
+            )
+
+        mask_array: Optional[np.ndarray] = None
+        if season_masks is not None:
+            mask_array = _normalize_provided_masks(
+                season_masks, batch_size, num_timesteps
+            )
+
+        normalized_windows = (
+            _normalize_season_windows_input(season_windows)
+            if season_windows is not None
+            else self._default_season_windows
+        )
+
+        mask_season_count = mask_array.shape[1] if mask_array is not None else None
+        active_ids = self._resolve_season_ids(
+            override=season_ids,
+            windows=normalized_windows,
+            mask_season_count=mask_season_count,
+        )
+
+        if mask_array is not None:
+            if mask_array.shape[1] != len(active_ids):
+                raise ValueError(
+                    "Provided season masks do not match the requested season identifiers."
+                )
+            return mask_array, active_ids
+
+        if normalized_windows:
+            mask_array = _build_masks_from_windows(
+                ts_days,
+                active_ids,
+                normalized_windows,
+                batch_size,
+                composite_frequency=self._season_composite_frequency,
+            )
+            return mask_array, active_ids
+
+        if len(active_ids) > 1 and self._croptype_enabled:
+            raise ValueError(
+                "Season masks/windows are required to evaluate multiple seasons."
+                " Provide `season_windows` or `season_masks` to avoid uniform coverage."
+            )
+
+        if len(active_ids) > 1 and not self._croptype_enabled:
+            logger.info(
+                f"Croptype head disabled; evaluating {len(active_ids)} seasons with uniform full-coverage masks."
+            )
+        else:
+            log_fn = logger.warning if self._croptype_enabled else logger.info
+            log_fn(
+                f"No season windows or masks provided; treating season '{active_ids[0]}' as full-year coverage"
+            )
+        mask_array = _build_uniform_masks(batch_size, num_timesteps, len(active_ids))
+        return mask_array, active_ids
+
+    def _resolve_season_ids(
+        self,
+        *,
+        override: Optional[Sequence[str]],
+        windows: Dict[str, List[Tuple[np.datetime64, np.datetime64]]],
+        mask_season_count: Optional[int],
+    ) -> List[str]:
+        if override is not None:
+            if len(override) == 0:
+                raise ValueError("season_ids override cannot be empty")
+            return list(override)
+        if windows:
+            return list(windows.keys())
+        if mask_season_count is not None:
+            if len(self._default_season_ids) != mask_season_count:
+                raise ValueError(
+                    "Provided season masks require explicit season_ids when their count"
+                    " differs from the engine defaults."
+                )
+            return list(self._default_season_ids)
+        if not self._default_season_ids:
+            raise ValueError(
+                "Seasonal inference requires at least one season identifier"
+            )
+        return list(self._default_season_ids)
+
+    def _log_input_statistics(self, arr: xr.DataArray) -> None:
+        """Log statistics of the input cube for debugging purposes."""
+        try:
+            bands_to_check = arr.bands.values
+
+            # Overall statistics
+            total_values = arr.size
+            nan_count = np.isnan(arr.values).sum()
+            nan_pct = (nan_count / total_values * 100) if total_values > 0 else 0.0
+
+            logger.info(
+                f"Input cube statistics: shape={arr.shape}, total_values={total_values}, "
+                f"NaN_count={nan_count} ({nan_pct:.2f}%)"
+            )
+
+            for i, band in enumerate(bands_to_check):
+                band_data = arr.sel(bands=band).values
+                valid_mask = ~np.isnan(band_data)
+                n_valid = valid_mask.sum()
+                n_total = band_data.size
+
+                if n_valid > 0:
+                    valid_data = band_data[valid_mask]
+                    min_val = float(np.nanmin(valid_data))
+                    max_val = float(np.nanmax(valid_data))
+                    mean_val = float(np.nanmean(valid_data))
+                    logger.debug(
+                        f"  Band '{band}': valid={n_valid}/{n_total} ({n_valid / n_total * 100:.1f}%), "
+                        f"min={min_val:.4f}, max={max_val:.4f}, mean={mean_val:.4f}"
+                    )
+                else:
+                    logger.warning(
+                        f"  Band '{band}': all values are NaN ({n_total} values)"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Failed to compute input statistics: {e}")
+
+    def _run_batches(
+        self, predictors: "Predictors", season_masks: np.ndarray
+    ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor]]:
+        torch = _lazy_import_torch()
+        from prometheo.predictors import Predictors, to_torchtensor
+
+        landcover_logits: List[TorchTensor] = []
+        croptype_logits: List[TorchTensor] = []
+
+        total_samples = getattr(predictors, "B", 0)
+        estimated_batches = (
+            (total_samples + self.batch_size - 1) // self.batch_size
+            if total_samples
+            else None
+        )
+        if total_samples:
+            logger.info(
+                f"Running seasonal heads on {total_samples} samples (~{estimated_batches or 1} batches)"
+            )
+        processed_batches = 0
+        start = 0
+        for processed_batches, batch in enumerate(
+            predictors.as_batches(self.batch_size), start=1
+        ):
+            batch_size = batch.B
+            if estimated_batches:
+                logger.debug(
+                    f"Processing predictor batch {processed_batches}/{estimated_batches} (size={batch_size})"
+                )
+            batch_dict = {
+                field: to_torchtensor(getattr(batch, field), device=self.device)
+                for field in batch._fields
+                if getattr(batch, field) is not None
+            }
+            batch_predictors = Predictors(**batch_dict)
+            mask_tensor = torch.as_tensor(
+                season_masks[start : start + batch_size],
+                device=self.device,
+                dtype=torch.bool,
+            )
+            start += batch_size
+            with torch.inference_mode():
+                output = self.bundle.model(
+                    batch_predictors, attrs={"season_masks": mask_tensor}
+                )
+            if output.global_logits is not None:
+                landcover_logits.append(output.global_logits.detach().cpu())
+            if output.season_logits is not None:
+                croptype_logits.append(output.season_logits.detach().cpu())
+
+        logger.info(
+            f"Finished running {processed_batches} predictor batches (landcover={len(landcover_logits)}, "
+            f"croptype={len(croptype_logits)})"
+        )
+
+        lc_pieces = [t for t in landcover_logits if t.numel() > 0]
+        ct_pieces = [t for t in croptype_logits if t.numel() > 0]
+        lc_tensor = torch.cat(lc_pieces, dim=0) if lc_pieces else None
+        ct_tensor = torch.cat(ct_pieces, dim=0) if ct_pieces else None
+        return lc_tensor, ct_tensor
+
+    def _format_outputs(
+        self,
+        *,
+        arr: xr.DataArray,
+        outputs: Tuple[Optional[TorchTensor], Optional[TorchTensor]],
+        season_ids: Sequence[str],
+        enforce_cropland_gate: bool,
+    ) -> xr.Dataset:
+        torch = _lazy_import_torch()
+        height = arr.sizes["y"]
+        width = arr.sizes["x"]
+        landcover_logits, croptype_logits = outputs
+
+        band_layers: List[Tuple[str, np.ndarray]] = []
+        cropland_mask_bool: Optional[np.ndarray] = None
+
+        def _register_band(name: str, values: np.ndarray) -> None:
+            if values.shape != (height, width):
+                raise ValueError(
+                    f"Band '{name}' has incompatible shape {values.shape}; expected {(height, width)}."
+                )
+            band_layers.append((name, values.astype(np.uint8, copy=False)))
+
+        if landcover_logits is not None and landcover_logits.numel() > 0:
+            probs = torch.softmax(landcover_logits, dim=-1)
+            preds = torch.argmax(probs, dim=-1)
+            prob_cube = (
+                probs.detach()
+                .cpu()
+                .numpy()
+                .reshape(height, width, self.bundle.landcover_spec.num_classes)
+            )
+            prob_cube = np.transpose(prob_cube, (2, 0, 1))
+            preds_np = preds.numpy().reshape(height, width)
+
+            landcover_classes = list(self.bundle.landcover_spec.class_names)
+            cropland_gate_labels = list(self.bundle.cropland_gate_classes)
+            class_index = {name: idx for idx, name in enumerate(landcover_classes)}
+            cropland_label_order = [
+                name for name in cropland_gate_labels if name in class_index
+            ]
+            missing_cropland = [
+                name for name in cropland_gate_labels if name not in class_index
+            ]
+            if missing_cropland:
+                logger.warning(
+                    f"Cropland classes {missing_cropland} missing from landcover outputs; treating them as non-cropland."
+                )
+            cropland_indices = [class_index[name] for name in cropland_label_order]
+            cropland_index_set = set(cropland_indices)
+            other_indices = [
+                idx
+                for idx in range(len(landcover_classes))
+                if idx not in cropland_index_set
+            ]
+
+            cropland_prob_other = (
+                prob_cube[other_indices].sum(axis=0)
+                if other_indices
+                else np.zeros((height, width), dtype=np.float32)
+            )
+            cropland_prob_crops = (
+                prob_cube[cropland_indices].sum(axis=0)
+                if cropland_indices
+                else np.zeros((height, width), dtype=np.float32)
+            )
+            raw_cropland_prob_cube = np.stack(
+                [cropland_prob_other, cropland_prob_crops], axis=0
+            )
+            cropland_prob_cube = raw_cropland_prob_cube.copy()
+
+            if cropland_gate_labels:
+                if cropland_indices:
+                    cropland_mask_bool = np.isin(preds_np, cropland_indices)
+                else:
+                    logger.warning(
+                        "Configured cropland classes do not match landcover outputs; defaulting to all pixels as cropland."
+                    )
+                    cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
+            else:
+                logger.warning(
+                    "Cropland classes unavailable; defaulting to all pixels as cropland."
+                )
+                cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
+
+            cropland_labels_uint8 = cropland_mask_bool.astype(np.uint8)
+            cropland_method = self._cropland_postprocess.resolved_method()
+            if cropland_method:
+                logger.info(
+                    f"Applying {cropland_method} postprocess to cropland mask (kernel_size={self._cropland_postprocess.kernel_size})"
+                )
+            (
+                cropland_labels_uint8,
+                _cropland_probability_np,
+                cropland_prob_cube,
+            ) = _run_postprocess(
+                cropland_labels_uint8,
+                cropland_prob_cube,
+                class_value_to_index={0: 0, 1: 1},
+                options=self._cropland_postprocess,
+                excluded_values=(),
+            )
+            cropland_mask_bool = cropland_labels_uint8.astype(bool)
+            cropland_probability_uint8 = _probabilities_to_uint8(
+                raw_cropland_prob_cube[1]
+            )
+            probability_other_uint8 = _probabilities_to_uint8(raw_cropland_prob_cube[0])
+
+            _register_band("cropland_classification", cropland_labels_uint8)
+            _register_band("probability_cropland", cropland_probability_uint8)
+            _register_band("probability_other", probability_other_uint8)
+        else:
+            if self._cropland_enabled:
+                logger.warning(
+                    "Landcover head missing; cropland mask cannot be derived."
+                )
+            else:
+                logger.info(
+                    "Cropland head disabled; skipping cropland classification outputs."
+                )
+
+        if croptype_logits is not None and croptype_logits.numel() > 0:
+            probs = torch.softmax(croptype_logits, dim=-1)
+            preds = torch.argmax(probs, dim=-1)
+            num_seasons = preds.shape[1]
+            preds_np = preds.numpy().reshape(height, width, num_seasons)
+            prob_np = (
+                probs.detach()
+                .cpu()
+                .numpy()
+                .reshape(
+                    height, width, num_seasons, self.bundle.croptype_spec.num_classes
+                )
+            )
+            gate_applicable = (
+                enforce_cropland_gate
+                and self._cropland_enabled
+                and cropland_mask_bool is not None
+            )
+            if gate_applicable:
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
+                gate = cropland_mask_bool[:, :, None]
+                preds_np = np.where(gate, preds_np, NOCROP_VALUE)
+
+            prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
+            if gate_applicable:
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
+                gating = cropland_mask_bool[None, None, :, :]
+                prob_cube = np.where(gating, prob_cube, 0.0)
+            class_value_to_index = {
+                idx: idx for idx in range(self.bundle.croptype_spec.num_classes)
+            }
+
+            processed_labels: List[np.ndarray] = []
+            processed_probabilities: List[np.ndarray] = []
+            processed_probability_cubes: List[np.ndarray] = []
+            raw_probability_cubes: List[np.ndarray] = []
+            croptype_method = self._croptype_postprocess.resolved_method()
+            if croptype_method:
+                logger.info(
+                    f"Applying {croptype_method} postprocess to croptype logits (kernel_size={self._croptype_postprocess.kernel_size}, seasons={num_seasons})"
+                )
+            for season_idx in range(num_seasons):
+                season_labels = preds_np[:, :, season_idx].astype(np.uint16, copy=True)
+                season_prob_cube = prob_cube[season_idx]
+                raw_probability_cubes.append(season_prob_cube.copy())
+                (
+                    season_labels,
+                    season_probabilities,
+                    season_prob_cube_processed,
+                ) = _run_postprocess(
+                    season_labels,
+                    season_prob_cube,
+                    class_value_to_index=class_value_to_index,
+                    options=self._croptype_postprocess,
+                    excluded_values=POSTPROCESSING_EXCLUDED_VALUES,
+                )
+                processed_labels.append(season_labels)
+                processed_probabilities.append(season_probabilities)
+                processed_probability_cubes.append(season_prob_cube_processed)
+
+            preds_stack = np.stack(processed_labels, axis=0)
+            _ensure_uint8_range(preds_stack, name="croptype_classification")
+            preds_uint8 = preds_stack.astype(np.uint8, copy=False)
+            conf_uint8 = _probabilities_to_uint8(
+                np.stack(processed_probabilities, axis=0)
+            )
+            if gate_applicable and cropland_mask_bool is not None:
+                gate = cropland_mask_bool[None, :, :]
+                sentinel_uint8 = np.uint8(NOCROP_VALUE)
+                conf_uint8 = np.where(gate, conf_uint8, sentinel_uint8)
+
+            season_labels = list(season_ids[:num_seasons])
+            for idx, season_id in enumerate(season_labels):
+                band_name = f"croptype_classification:{season_id}"
+                _register_band(band_name, preds_uint8[idx])
+            for idx, season_id in enumerate(season_labels):
+                band_name = f"croptype_probability:{season_id}"
+                _register_band(band_name, conf_uint8[idx])
+
+            if self._export_class_probabilities:
+                # Use raw probabilities (before postprocessing) for per-class outputs
+                raw_prob_stack = np.stack(raw_probability_cubes, axis=0)
+                prob_uint8 = _probabilities_to_uint8(raw_prob_stack)
+                if gate_applicable and cropland_mask_bool is not None:
+                    gate = cropland_mask_bool[None, None, :, :]
+                    sentinel_uint8 = np.uint8(NOCROP_VALUE)
+                    prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
+                for season_idx, season_id in enumerate(season_labels):
+                    for class_idx, class_name in enumerate(
+                        self.bundle.croptype_spec.class_names
+                    ):
+                        layer_name = f"croptype_probability:{season_id}:{class_name}"
+                        _register_band(layer_name, prob_uint8[season_idx, class_idx])
+
+        elif self._croptype_enabled:
+            logger.warning("Croptype head missing; skipping seasonal crop outputs.")
+        else:
+            logger.info(
+                "Croptype outputs skipped because the croptype head is disabled."
+            )
+
+        ordered_vars: OrderedDict[str, xr.DataArray] = OrderedDict()
+        for name, values in band_layers:
+            ordered_vars[name] = xr.DataArray(
+                values,
+                dims=("y", "x"),
+                coords={"y": arr.y, "x": arr.x},
+            )
+        return xr.Dataset(ordered_vars)
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper for ad-hoc usage
+# ---------------------------------------------------------------------------
+
+
+def run_seasonal_workflow(
+    arr: xr.DataArray,
+    epsg: int,
+    *,
+    seasonal_model_zip: str | Path,
+    landcover_head_zip: str | Path | None = None,
+    croptype_head_zip: str | Path | None = None,
+    enforce_cropland_gate: bool = True,
+    cache_root: Optional[Path] = None,
+    device: Union[str, TorchDevice] = "cpu",
+    batch_size: int = 256,
+    season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
+    season_masks: Optional[np.ndarray] = None,
+    season_composite_frequency: Optional[Literal["month", "dekad"]] = "month",
+    export_class_probabilities: bool = False,
+    enable_croptype_head: bool = True,
+    enable_cropland_head: bool = True,
+    cropland_postprocess: Optional[Mapping[str, Any]] = None,
+    croptype_postprocess: Optional[Mapping[str, Any]] = None,
+) -> xr.DataArray:
+    """Run the full seasonal workflow and return a multi-band array."""
+
+    engine = SeasonalInferenceEngine(
+        seasonal_model_zip=seasonal_model_zip,
+        landcover_head_zip=landcover_head_zip,
+        croptype_head_zip=croptype_head_zip,
+        cache_root=cache_root,
+        device=device,
+        batch_size=batch_size,
+        season_ids=season_ids,
+        season_windows=season_windows,
+        season_composite_frequency=season_composite_frequency,
+        export_class_probabilities=export_class_probabilities,
+        enable_croptype_head=enable_croptype_head,
+        enable_cropland_head=enable_cropland_head,
+        cropland_postprocess=cropland_postprocess,
+        croptype_postprocess=croptype_postprocess,
+    )
+    datacube = engine.infer(
+        arr,
+        epsg,
+        enforce_cropland_gate=enforce_cropland_gate,
+        season_ids=season_ids,
+        season_windows=season_windows,
+        season_masks=season_masks,
+    )
+    return datacube
+
+
+# ---------------------------------------------------------------------------
+# openEO UDF integration hooks
+# ---------------------------------------------------------------------------
+
+
+def _require_openeo_runtime() -> None:
+    sys.path.insert(0, "feature_deps")
+    sys.path.insert(0, "worldcereallib")
+    sys.path.insert(0, "prometheolib")
+
+    try:
+        import prometheo
+        import torch
+
+        import worldcereal
+
+        logger.debug(f"Loading worldcereal from {worldcereal.__file__}")
+        logger.debug(f"Loading prometheo from {prometheo.__file__}")
+        logger.debug(f"Loading torch from {torch.__file__}")
+    except ImportError as exc:
+        raise ImportError(
+            "openEO UDF seasonal inference requires the worldcereal, prometheo, and loguru packages."
+        ) from exc
+
+
+def _infer_udf_epsg(udf_data: "UdfData") -> int:
+    proj = getattr(udf_data, "proj", None)
+    if proj and "EPSG" in proj:
+        return int(proj["EPSG"])
+    raise ValueError("EPSG code not found in UDF projection metadata")
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    raise TypeError(f"Cannot interpret boolean value from type {type(value)!r}")
+
+
+def _build_postprocess_options(
+    spec: Optional[Union[PostprocessOptions, Mapping[str, Any]]],
+) -> PostprocessOptions:
+    if spec is None:
+        return PostprocessOptions()
+    if isinstance(spec, PostprocessOptions):
+        return spec
+    if not isinstance(spec, Mapping):
+        raise TypeError(
+            "Postprocess options must be provided as a mapping or PostprocessOptions instance"
+        )
+
+    enabled = _as_bool(spec.get("enabled"), False)
+    method = spec.get("method")
+    kernel_value = spec.get("kernel_size", 5)
+    try:
+        kernel_size = int(kernel_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"kernel_size must be an integer, got {kernel_value!r}"
+        ) from exc
+
+    return PostprocessOptions(enabled=enabled, method=method, kernel_size=kernel_size)
+
+
+def _normalize_season_id_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parts = [piece.strip() for piece in value.replace(";", ",").split(",")]
+        result = [piece for piece in parts if piece]
+        return result or None
+    if isinstance(value, Sequence):
+        collected: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                collected.extend(
+                    piece.strip()
+                    for piece in item.replace(";", ",").split(",")
+                    if piece.strip()
+                )
+            else:
+                collected.append(str(item))
+        return collected or None
+    raise TypeError("season_ids must be a string or sequence of strings")
+
+
+def _resolve_effective_season_ids(context: Mapping[str, Any]) -> List[str]:
+    override = _normalize_season_id_list(
+        context.get("season_ids") or context.get("season_id")
+    )
+    if override:
+        return list(override)
+
+    config_block = context.get("workflow_config")
+    if isinstance(config_block, Mapping):
+        season_section = config_block.get("season") or {}
+        override = _normalize_season_id_list(season_section.get("season_ids"))
+        if override:
+            return list(override)
+
+    workflow_block = context.get("seasonal_workflow")
+    if isinstance(workflow_block, Mapping):
+        season_section = workflow_block.get("season") or {}
+        override = _normalize_season_id_list(season_section.get("season_ids"))
+        if override:
+            return list(override)
+
+    preset_name = context.get("parameters") or context.get("preset")
+    try:
+        preset, _ = _select_workflow_preset(preset_name)
+        preset_ids = preset.get("season", {}).get("season_ids")
+        override = _normalize_season_id_list(preset_ids)
+        if override:
+            return list(override)
+    except ValueError:
+        logger.warning(
+            f"Unknown seasonal workflow preset '{preset_name}' in metadata context"
+        )
+
+    from worldcereal.train import GLOBAL_SEASON_IDS
+
+    return list(GLOBAL_SEASON_IDS)
+
+
+def _coerce_window_pair(value: Any) -> Tuple[SeasonDateLike, SeasonDateLike]:
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        return value[0], value[1]
+    raise ValueError(
+        "Season windows must be expressed as (start, end) pairs or ID:START:END strings"
+    )
+
+
+def _parse_udf_season_windows(
+    value: Any,
+) -> Optional[Dict[str, Tuple[SeasonDateLike, SeasonDateLike]]]:
+    if value is None:
+        return None
+    windows: Dict[str, Tuple[SeasonDateLike, SeasonDateLike]] = {}
+
+    def _add_window(spec_id: Any, start: SeasonDateLike, end: SeasonDateLike) -> None:
+        name = str(spec_id).strip()
+        if not name:
+            raise ValueError("Season window identifiers must be non-empty")
+        windows[name] = (start, end)
+
+    if isinstance(value, Mapping):
+        for key, raw in value.items():
+            start, end = _coerce_window_pair(raw)
+            _add_window(key, start, end)
+        return windows
+
+    entries: Sequence[Any]
+    if isinstance(value, str):
+        entries = [value]
+    elif isinstance(value, Sequence):
+        entries = value
+    else:
+        raise TypeError(
+            "season_windows must be a mapping, list/tuple, or ID:START:END string"
+        )
+
+    for entry in entries:
+        if isinstance(entry, str):
+            parts = [piece.strip() for piece in entry.split(":")]
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Invalid season window specification '{entry}'. Expected ID:START:END"
+                )
+            _add_window(parts[0], parts[1], parts[2])
+        elif isinstance(entry, (list, tuple)) and len(entry) == 3:
+            season_id, start, end = entry
+            _add_window(season_id, start, end)
+        else:
+            raise ValueError(
+                "Season window list entries must be ID:START:END strings or (id,start,end) tuples"
+            )
+    return windows
+
+
+def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
+    if value is None:
+        return None
+    arr = np.asarray(value)
+    if arr.ndim < 2:
+        raise ValueError("season_masks must have at least two dimensions (S, T)")
+    return arr
+
+
+def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
+    scaled = np.rint(np.clip(array, 0.0, 1.0) * 100.0)
+    return scaled.astype(np.uint8)
+
+
+def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
+    if values.size == 0:
+        return
+    min_val = values.min()
+    max_val = values.max()
+    if min_val < 0 or max_val > 255:
+        raise ValueError(
+            f"{name} contains values outside the uint8 range (min={min_val}, max={max_val})."
+        )
+
+
+def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
+    if not dataset.data_vars:
+        raise ValueError("Seasonal workflow produced an empty dataset")
+
+    band_arrays: List[xr.DataArray] = []
+    for band_name, data_array in dataset.data_vars.items():
+        if data_array.dims != ("y", "x"):
+            raise ValueError(
+                f"Band '{band_name}' must expose ('y', 'x') dimensions; got {data_array.dims}."
+            )
+        layer = (
+            data_array.astype(np.uint8, copy=False)
+            .expand_dims("bands")
+            .assign_coords(bands=[band_name])
+        )
+        band_arrays.append(layer)
+
+    stacked = xr.concat(band_arrays, dim="bands").astype(np.uint8, copy=False)
+    return stacked.transpose("bands", "y", "x")
+
+
+def _expected_udf_band_labels(
+    season_ids: Sequence[str],
+    *,
+    export_class_probabilities: bool = False,
+    croptype_classes: Optional[Sequence[str]] = None,
+    croptype_enabled: bool = True,
+    cropland_enabled: bool = True,
+) -> List[str]:
+    labels: List[str] = []
+    if cropland_enabled:
+        labels.extend(
+            [
+                "cropland_classification",
+                "probability_cropland",
+                "probability_other",
+            ]
+        )
+    if croptype_enabled:
+        for season_id in season_ids:
+            labels.append(f"croptype_classification:{season_id}")
+        for season_id in season_ids:
+            labels.append(f"croptype_probability:{season_id}")
+        if export_class_probabilities:
+            ct_classes = list(croptype_classes) if croptype_classes else []
+            if ct_classes:
+                for season_id in season_ids:
+                    labels.extend(
+                        [
+                            f"croptype_probability:{season_id}:{cls}"
+                            for cls in ct_classes
+                        ]
+                    )
+            else:
+                for season_id in season_ids:
+                    labels.append(f"croptype_probability:{season_id}")
+    return labels
+
+
+def _select_workflow_preset(name: Any) -> Tuple[Dict[str, Dict[str, Any]], str]:
+    default_preset, preset_map = _seasonal_workflow_presets()
+    preset_key = str(name).strip() if isinstance(name, str) and name.strip() else name
+    if not preset_key:
+        preset_key = default_preset
+    preset = preset_map.get(str(preset_key))
+    if preset is None:
+        available = ", ".join(sorted(preset_map)) or "<none>"
+        raise ValueError(
+            f"Unknown seasonal workflow preset '{preset_key}'. Available: {available}"
+        )
+    preset_copy = deepcopy(preset)
+    _normalize_workflow_section_names(preset_copy)
+    return preset_copy, str(preset_key)
+
+
+def _normalize_workflow_section_names(workflow_cfg: Dict[str, Any]) -> None:
+    workflow_cfg.setdefault("season", {})
+    workflow_cfg.setdefault("postprocess", {})
+
+
+def _merge_workflow_sections(
+    base: Dict[str, Dict[str, Any]], overrides: Mapping[str, Any]
+) -> None:
+    for section, values in overrides.items():
+        if section not in base:
+            raise ValueError(
+                f"Unsupported seasonal_workflow section '{section}'. "
+                "Expected sections: model, runtime, season, postprocess"
+            )
+        if isinstance(values, Mapping):
+            base_section = base[section]
+            if not isinstance(base_section, dict):
+                raise TypeError(
+                    f"Preset section '{section}' cannot accept nested overrides"
+                )
+            for key, value in values.items():
+                base_section[key] = value
+        else:
+            base[section] = values
+
+
+def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(workflow_cfg, Mapping):
+        raise TypeError("workflow_config must be provided as a mapping")
+    workflow_dict = {key: value for key, value in workflow_cfg.items()}
+    _normalize_workflow_section_names(workflow_dict)
+
+    model_cfg_raw = workflow_dict.get("model", {})
+    runtime_cfg_raw = workflow_dict.get("runtime", {})
+    season_cfg_raw = workflow_dict.get("season", {}) or {}
+    postprocess_cfg_raw = workflow_dict.get("postprocess", {}) or {}
+
+    if not isinstance(model_cfg_raw, Mapping):
+        raise TypeError("workflow 'model' section must be a mapping")
+    if not isinstance(runtime_cfg_raw, Mapping):
+        raise TypeError("workflow 'runtime' section must be a mapping")
+    if not isinstance(season_cfg_raw, Mapping):
+        raise TypeError("workflow 'season' section must be a mapping")
+    if not isinstance(postprocess_cfg_raw, Mapping):
+        raise TypeError("workflow 'postprocess' section must be a mapping")
+
+    model_cfg = dict(model_cfg_raw)
+    runtime_cfg = dict(runtime_cfg_raw)
+    season_cfg = dict(season_cfg_raw)
+    postprocess_cfg = dict(postprocess_cfg_raw)
+
+    model_source = model_cfg.get("seasonal_model_zip")
+    if not model_source:
+        raise ValueError(
+            "seasonal_workflow configuration does not define a 'seasonal_model_zip'"
+        )
+
+    cache_root_raw = runtime_cfg.get("cache_root")
+    cache_root = Path(cache_root_raw) if cache_root_raw else None
+
+    batch_size_value = runtime_cfg.get("batch_size", 2048)
+    try:
+        batch_size_int = int(batch_size_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"batch_size must be an integer, got {batch_size_value!r}"
+        ) from exc
+    device = runtime_cfg.get("device", "cpu")
+
+    export_probs_value = season_cfg.get("export_class_probabilities")
+    export_class_probabilities = _as_bool(export_probs_value, False)
+    enable_croptype_head_value = model_cfg.get("enable_croptype_head")
+    enable_croptype_head = _as_bool(enable_croptype_head_value, True)
+    enable_cropland_head_value = model_cfg.get("enable_cropland_head")
+    enable_cropland_head = _as_bool(enable_cropland_head_value, True)
+
+    season_ids = _normalize_season_id_list(season_cfg.get("season_ids"))
+    season_windows = _parse_udf_season_windows(season_cfg.get("season_windows"))
+    season_masks = _normalize_udf_season_masks(season_cfg.get("season_masks"))
+    enforce_gate = _as_bool(season_cfg.get("enforce_cropland_gate"), True)
+    composite_frequency_raw = season_cfg.get("composite_frequency", "month")
+    if composite_frequency_raw not in (None, "month", "dekad"):
+        raise ValueError("Season composite frequency must be 'month', 'dekad', or None")
+    composite_frequency = (
+        str(composite_frequency_raw)
+        if composite_frequency_raw in {"month", "dekad"}
+        else None
+    )
+
+    if enforce_gate and not enable_cropland_head:
+        logger.info(
+            "Cropland head disabled in config but gating requested; auto-enabling cropland head."
+        )
+        enable_cropland_head = True
+
+    def _normalize_postprocess_entry(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise TypeError("postprocess entries must be provided as mappings")
+        return dict(value)
+
+    cropland_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("cropland"))
+    croptype_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("croptype"))
+
+    if not (enable_croptype_head or enable_cropland_head):
+        raise ValueError(
+            "Seasonal workflow configuration must enable at least one head."
+        )
+
+    return {
+        "seasonal_model_zip": model_source,
+        "landcover_head_zip": model_cfg.get("landcover_head_zip"),
+        "croptype_head_zip": model_cfg.get("croptype_head_zip"),
+        "enforce_cropland_gate": enforce_gate,
+        "cache_root": cache_root,
+        "device": device,
+        "batch_size": batch_size_int,
+        "season_ids": season_ids,
+        "season_windows": season_windows,
+        "season_masks": season_masks,
+        "season_composite_frequency": composite_frequency or "month",
+        "export_class_probabilities": export_class_probabilities,
+        "enable_croptype_head": enable_croptype_head,
+        "enable_cropland_head": enable_cropland_head,
+        "cropland_postprocess": cropland_post_cfg,
+        "croptype_postprocess": croptype_post_cfg,
+    }
+
+
+def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
+    config_block = context.get("workflow_config")
+    if config_block is not None:
+        if not isinstance(config_block, Mapping):
+            raise TypeError("workflow_config overrides must be provided as a mapping")
+        return _finalize_workflow_config(dict(config_block))
+
+    preset_name = context.get("parameters") or context.get("preset")
+    workflow_cfg, _ = _select_workflow_preset(preset_name)
+    _normalize_workflow_section_names(workflow_cfg)
+    workflow_cfg.setdefault("model", {})
+    workflow_cfg.setdefault("runtime", {})
+    workflow_cfg.setdefault("season", {})
+    workflow_cfg.setdefault("postprocess", {})
+
+    workflow_overrides = context.get("seasonal_workflow")
+    if workflow_overrides is not None:
+        if not isinstance(workflow_overrides, Mapping):
+            raise TypeError("seasonal_workflow overrides must be provided as a mapping")
+        _merge_workflow_sections(workflow_cfg, workflow_overrides)
+
+    direct_model_source = (
+        context.get("seasonal_model_zip")
+        or context.get("seasonal_zip")
+        or context.get("seasonal_model_url")
+    )
+    if direct_model_source:
+        workflow_cfg["model"]["seasonal_model_zip"] = direct_model_source
+    for head_key in ("landcover_head_zip", "croptype_head_zip"):
+        if head_key in context:
+            workflow_cfg["model"][head_key] = context.get(head_key)
+
+    if "enable_croptype_head" in context:
+        workflow_cfg["model"]["enable_croptype_head"] = _as_bool(
+            context.get("enable_croptype_head"), True
+        )
+    disable_ctx = None
+    if "disable_croptype_head" in context:
+        disable_ctx = context.get("disable_croptype_head")
+    elif "disable_croptype" in context:
+        disable_ctx = context.get("disable_croptype")
+    if disable_ctx is not None and _as_bool(disable_ctx, False):
+        workflow_cfg["model"]["enable_croptype_head"] = False
+
+    if "enable_cropland_head" in context:
+        workflow_cfg["model"]["enable_cropland_head"] = _as_bool(
+            context.get("enable_cropland_head"), True
+        )
+    disable_cropland_ctx = context.get("disable_cropland_head")
+    if disable_cropland_ctx is not None and _as_bool(disable_cropland_ctx, False):
+        workflow_cfg["model"]["enable_cropland_head"] = False
+
+    croptype_only_ctx = context.get("croptype_only")
+    if croptype_only_ctx is not None and _as_bool(croptype_only_ctx, False):
+        workflow_cfg["model"]["enable_cropland_head"] = False
+        workflow_cfg["model"]["enable_croptype_head"] = True
+        workflow_cfg["season"]["enforce_cropland_gate"] = False
+
+    cache_root_override = context.get("cache_root") or context.get("cache_dir")
+    if cache_root_override is not None:
+        workflow_cfg["runtime"]["cache_root"] = cache_root_override
+    if "device" in context:
+        workflow_cfg["runtime"]["device"] = context.get("device")
+    if "batch_size" in context:
+        workflow_cfg["runtime"]["batch_size"] = context.get("batch_size")
+
+    season_id_override = context.get("season_ids") or context.get("season_id")
+    if season_id_override is not None:
+        workflow_cfg["season"]["season_ids"] = season_id_override
+    windows_override = context.get("season_windows") or context.get("season_window")
+    if windows_override is not None:
+        workflow_cfg["season"]["season_windows"] = windows_override
+    masks_override = context.get("season_masks") or context.get("season_mask")
+    if masks_override is not None:
+        workflow_cfg["season"]["season_masks"] = masks_override
+    composite_override = context.get("season_composite_frequency") or context.get(
+        "composite_frequency"
+    )
+    if composite_override is not None:
+        workflow_cfg["season"]["composite_frequency"] = composite_override
+
+    if "cropland_postprocess" in context:
+        workflow_cfg["postprocess"]["cropland"] = context.get("cropland_postprocess")
+    if "croptype_postprocess" in context:
+        workflow_cfg["postprocess"]["croptype"] = context.get("croptype_postprocess")
+
+    if "enforce_cropland_gate" in context:
+        workflow_cfg["season"]["enforce_cropland_gate"] = _as_bool(
+            context.get("enforce_cropland_gate"), True
+        )
+    if "disable_cropland_gate" in context:
+        disable_flag = _as_bool(context.get("disable_cropland_gate"), False)
+        if disable_flag:
+            workflow_cfg["season"]["enforce_cropland_gate"] = False
+
+    if "export_class_probabilities" in context:
+        workflow_cfg["season"]["export_class_probabilities"] = context.get(
+            "export_class_probabilities"
+        )
+
+    return _finalize_workflow_config(workflow_cfg)
+
+
+def apply_udf_data(udf_data: UdfData) -> UdfData:
+    """openEO entry point that wraps the seasonal inference workflow."""
+
+    _require_openeo_runtime()
+    if not udf_data.datacube_list:
+        raise ValueError("UDF input does not contain any data cubes")
+
+    context = udf_data.user_context or {}
+    config = _extract_udf_configuration(context)
+    epsg = _infer_udf_epsg(udf_data)
+
+    input_array = udf_data.datacube_list[0].get_array()
+    try:
+        prepared = input_array.transpose("bands", "t", "y", "x")
+    except ValueError as exc:  # pragma: no cover - guard unexpected layouts
+        raise ValueError(
+            "Input cube must expose dimensions ('bands', 't', 'y', 'x') for seasonal inference"
+        ) from exc
+
+    datacube = run_seasonal_workflow(arr=prepared, epsg=epsg, **config)
+    udf_data.datacube_list = [XarrayDataCube(datacube)]
     return udf_data
 
 
-def apply_metadata(metadata, context: Dict) -> Any:
-    """Update collection metadata for combined output with ALL bands.
+def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
+    """openEO metadata hook that keeps band labels in sync with the workflow outputs."""
 
-    Band naming logic summary (kept for mapping module resilience):
-    - Single workflow (either cropland OR croptype parameters only):
-        Base bands: classification, probability, probability_<class>
-        If save_intermediate: raw_<band> duplicates are appended.
-    - Combined workflow (both croptype_params & cropland_params):
-        Prefixed bands: croptype_<band> and cropland_<band>
-        If save_intermediate: croptype_raw_<band> and cropland_raw_<band> duplicates appended.
+    _require_openeo_runtime()
 
-    No renaming occurs here beyond prefixing for the combined workflow; logic in
-    mapping.py must therefore accept both prefixed and unprefixed forms.
-    """
     try:
-        # For dual workflow, combine band names from both models
-        if "croptype_params" in context and "cropland_params" in context:
-            # Get croptype band names
-            croptype_classifier_url = context["croptype_params"][
-                "classifier_parameters"
-            ].get("classifier_url")
-            if croptype_classifier_url:
-                _, croptype_lut = load_onnx_model_cached(croptype_classifier_url)
-                postprocess_parameters = context["croptype_params"].get(
-                    "postprocess_parameters", {}
+        context_map = dict(context or {})
+        season_ids = _resolve_effective_season_ids(context_map)
+        export_probs = False
+        croptype_classes: Optional[Sequence[str]] = None
+        croptype_enabled = True
+        cropland_enabled = True
+
+        try:
+            config = _extract_udf_configuration(context_map)
+            export_probs = config.get("export_class_probabilities", False)
+            croptype_enabled = config.get("enable_croptype_head", True)
+            cropland_enabled = config.get("enable_cropland_head", True)
+
+            if cropland_enabled or croptype_enabled:
+                cache_root = config.get("cache_root")
+                base_artifact = load_model_artifact(
+                    config["seasonal_model_zip"], cache_root=cache_root
                 )
-                croptype_bands = [
-                    f"croptype_{band}"
-                    for band in get_output_labels(croptype_lut, postprocess_parameters)
-                ]
-                if postprocess_parameters.get("save_intermediate", False):
-                    croptype_bands += [
-                        band.replace("croptype_", "croptype_raw_")
-                        for band in croptype_bands
-                    ]
-            else:
-                raise ValueError("No croptype LUT found")
+                base_heads = base_artifact.manifest.get("heads", [])
 
-            # Get cropland band names
-            cropland_classifier_url = context["cropland_params"][
-                "classifier_parameters"
-            ].get("classifier_url")
-            if cropland_classifier_url:
-                _, cropland_lut = load_onnx_model_cached(cropland_classifier_url)
-                postprocess_parameters = context["cropland_params"].get(
-                    "postprocess_parameters", {}
-                )
-                cropland_bands = [
-                    f"cropland_{band}"
-                    for band in get_output_labels(cropland_lut, postprocess_parameters)
-                ]
-                if postprocess_parameters.get("save_intermediate", False):
-                    cropland_bands += [
-                        band.replace("cropland_", "cropland_raw_")
-                        for band in cropland_bands
-                    ]
-            else:
-                raise ValueError("No cropland LUT found")
+                def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
+                    override_source = config.get(key)
+                    if override_source:
+                        return load_model_artifact(
+                            override_source, cache_root=cache_root
+                        ).manifest.get("heads", [])
+                    return base_heads
 
-            output_labels = croptype_bands + cropland_bands
+                if croptype_enabled:
+                    croptype_heads = _heads_for_override("croptype_head_zip")
+                    croptype_classes = _select_head_spec(
+                        croptype_heads, "croptype"
+                    ).class_names
+        except Exception as exc:
+            logger.warning(f"Metadata configuration fallback: {exc}")
 
-        else:
-            # Single workflow
-            classifier_url = context["classifier_parameters"].get("classifier_url")
-            if classifier_url:
-                _, lut_sorted = load_onnx_model_cached(classifier_url)
-                postprocess_parameters = context.get("postprocess_parameters", {})
-                output_labels = get_output_labels(lut_sorted, postprocess_parameters)
-                if postprocess_parameters.get("save_intermediate", False):
-                    output_labels += [f"raw_{band}" for band in output_labels]
-            else:
-                raise ValueError("No classifier URL found in context")
-
-        return metadata.rename_labels(dimension="bands", target=output_labels)
-
-    except Exception as e:
-        logger.warning(f"Could not load model in metadata context: {e}")
+        labels = _expected_udf_band_labels(
+            season_ids,
+            export_class_probabilities=export_probs,
+            croptype_classes=croptype_classes,
+            croptype_enabled=croptype_enabled,
+            cropland_enabled=cropland_enabled,
+        )
+        return metadata.rename_labels(dimension="bands", target=labels)
+    except Exception as exc:  # pragma: no cover - metadata best-effort
+        logger.warning(f"apply_metadata fallback: {exc}")
         return metadata

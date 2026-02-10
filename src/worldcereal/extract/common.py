@@ -5,23 +5,24 @@ import os
 import shutil
 from datetime import datetime
 from functools import partial
-import duckdb
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, Iterable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
+import duckdb
 import geopandas as gpd
 import pandas as pd
 import pystac
 import pystac_client
 import xarray as xr
+from openeo.extra.job_management import CsvJobDatabase
 from openeo_gfmap import Backend
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
-from openeo_gfmap.manager.job_manager import GFMAPJobManager
 from openeo_gfmap.manager.job_splitters import split_job_s2grid
 from tabulate import tabulate
 
+from worldcereal.extract.job_manager import ExtractionJobManager
 from worldcereal.extract.patch_meteo import (
     create_job_dataframe_patch_meteo,
     create_job_patch_meteo,
@@ -419,7 +420,7 @@ def prepare_job_dataframe(
     collection: ExtractionCollection,
     max_locations: int,
     backend: Backend,
-) -> gpd.GeoDataFrame:
+) -> pd.DataFrame:
     """Prepare the job dataframe to extract the data from the given input
     dataframe."""
     pipeline_log.info("Preparing the job dataframe.")
@@ -462,20 +463,12 @@ def prepare_job_dataframe(
     return job_df
 
 
-def _count_by_status(job_status_df, statuses: Iterable[str] = ()) -> dict:
-    status_histogram = job_status_df.groupby("status").size().to_dict()
-    statuses = set(statuses)
-    if statuses:
-        status_histogram = {k: v for k, v in status_histogram.items() if k in statuses}
-    return status_histogram
-
-
-def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
+def _read_job_tracking_csv(job_db: CsvJobDatabase) -> pd.DataFrame:
     """Read job tracking csv file.
 
     Parameters
     ----------
-    output_folder : Path
+    job_db : CsvJobDatabase
         folder where extractions are stored
 
     Returns
@@ -488,21 +481,20 @@ def _read_job_tracking_csv(output_folder: Path) -> pd.DataFrame:
     FileNotFoundError
         if the job status file is not found in the designated folder
     """
-    job_status_file = output_folder / "job_tracking.csv"
-    if job_status_file.exists():
-        job_status_df = pd.read_csv(job_status_file)
+    if job_db.exists():
+        job_status_df = job_db.read()
     else:
-        raise FileNotFoundError(f"Job status file not found at {job_status_file}")
+        raise FileNotFoundError(f"Job status file not found at {job_db.path}")
     return job_status_df
 
 
-def check_job_status(output_folder: Path) -> dict:
+def check_job_status(job_db: CsvJobDatabase) -> dict:
     """Check the status of the jobs in the given output folder.
 
     Parameters
     ----------
-    output_folder : Path
-        folder where extractions are stored
+    job_db : CsvJobDatabase
+        job database where extractions are stored
 
     Returns
     -------
@@ -510,11 +502,8 @@ def check_job_status(output_folder: Path) -> dict:
         status_histogram
     """
 
-    # Read job tracking csv file
-    job_status_df = _read_job_tracking_csv(output_folder)
-
     # Summarize the status in histogram
-    status_histogram = _count_by_status(job_status_df)
+    status_histogram = job_db.count_by_status()
 
     # convert to pandas dataframe
     status_count = pd.DataFrame(status_histogram.items(), columns=["status", "count"])
@@ -527,7 +516,7 @@ def check_job_status(output_folder: Path) -> dict:
     return status_histogram
 
 
-def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
+def get_succeeded_job_details(job_db: CsvJobDatabase) -> pd.DataFrame:
     """Get details of succeeded extraction jobs in the given output folder.
 
     Parameters
@@ -541,7 +530,7 @@ def get_succeeded_job_details(output_folder: Path) -> pd.DataFrame:
     """
 
     # Read job tracking csv file
-    job_status_df = _read_job_tracking_csv(output_folder)
+    job_status_df = _read_job_tracking_csv(job_db)
 
     # Gather metadata on succeeded jobs
     succeeded_jobs = job_status_df[
@@ -744,7 +733,7 @@ def _prepare_extraction_jobs(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
-) -> tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]:
+) -> tuple[ExtractionJobManager, CsvJobDatabase, Callable]:
     """Function responsible for preparing the extraction jobs:
     splitting jobs, preparing the job manager, setting up the extraction functions.
 
@@ -787,8 +776,8 @@ def _prepare_extraction_jobs(
 
     Returns
     -------
-    tuple[GFMAPJobManager, pd.DataFrame, Callable, Path]
-        JobManager, job dataframe, datacube function, job tracking dataframe path
+    tuple[ExtractionJobManager, CsvJobDatabase, Callable]
+        JobManager, job database, datacube function,
     """
 
     # Make sure output folder exists
@@ -798,10 +787,12 @@ def _prepare_extraction_jobs(
     # Create path to tracking dataframe
     tracking_df_path = output_folder / "job_tracking.csv"
 
+    job_db = CsvJobDatabase(tracking_df_path)
+
     # If the tracking dataframe already exists, load it
-    if tracking_df_path.exists():
+    if job_db.exists():
         pipeline_log.info("Loading existing job tracking dataframe.")
-        job_df = pd.read_csv(tracking_df_path)
+        job_df = job_db.read()
 
         # Change status "canceled" to "not_started"
         job_df.loc[job_df.status.isin(["canceled"]), "status"] = "not_started"
@@ -818,9 +809,9 @@ def _prepare_extraction_jobs(
             ] = "not_started"
 
         # Save new job tracking dataframe
-        job_df.to_csv(tracking_df_path, index=False)
+        job_db.persist(job_df)
 
-        status_histogram = check_job_status(output_folder)
+        status_histogram = check_job_status(job_db)
         pipeline_log.info(
             "Job status histogram: %s",
             status_histogram,
@@ -840,6 +831,8 @@ def _prepare_extraction_jobs(
             samples_gdf, collection, max_locations_per_job, backend
         )
 
+        job_db.initialize_from_df(job_df)
+
     # Setup the extraction functions
     pipeline_log.info("Setting up the extraction functions.")
     datacube_fn, path_fn, post_job_fn = setup_extraction_functions(
@@ -849,14 +842,11 @@ def _prepare_extraction_jobs(
     # Initialize and setup the job manager
     pipeline_log.info("Initializing the job manager.")
 
-    job_manager = GFMAPJobManager(
-        output_dir=output_folder,
+    job_manager = ExtractionJobManager(
+        root_dir=output_folder,
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
         poll_sleep=60,
-        n_threads=4,
-        restart_failed=restart_failed,
-        stac_enabled=False,
     )
 
     job_manager.add_backend(
@@ -865,7 +855,7 @@ def _prepare_extraction_jobs(
         parallel_jobs=parallel_jobs,
     )
 
-    return job_manager, job_df, datacube_fn, tracking_df_path
+    return job_manager, job_db, datacube_fn
 
 
 @retry(
@@ -876,10 +866,9 @@ def _prepare_extraction_jobs(
     logger=pipeline_log,
 )
 def _run_extraction_jobs(
-    job_manager: GFMAPJobManager,
-    job_df: pd.DataFrame,
+    job_manager: ExtractionJobManager,
+    job_db: CsvJobDatabase,
     datacube_fn: Callable,
-    tracking_df_path: Path,
     test_run: bool = False,
 ) -> None:
     # Run the extraction jobs
@@ -890,7 +879,7 @@ def _run_extraction_jobs(
         pipeline_log.info("TEST MODE: Running only the first job.")
         job_df = job_df.iloc[:1]
 
-    job_manager.run_jobs(job_df, datacube_fn, tracking_df_path)
+    job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
     pipeline_log.info("Extraction jobs completed.")
 
 
@@ -929,7 +918,7 @@ def run_extractions(
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
     test_run: bool = False,
-) -> None:
+) -> CsvJobDatabase:
     """Main function responsible for launching point and patch extractions.
 
     Parameters
@@ -971,11 +960,15 @@ def run_extractions(
     test_run : bool, optional
         Run only the first extraction job for testing purposes, by default False
 
+    Returns
+    -------
+    CsvJobDatabase
+        The job database containing the status and metadata of the extraction jobs.
     """
     pipeline_log.info("Starting the extractions workflow...")
 
     # Prepare the extraction jobs
-    job_manager, job_df, datacube_fn, tracking_df_path = _prepare_extraction_jobs(
+    job_manager, job_db, datacube_fn = _prepare_extraction_jobs(
         collection,
         output_folder,
         samples_df_path,
@@ -991,7 +984,7 @@ def run_extractions(
     )
 
     # Run the extraction jobs
-    _run_extraction_jobs(job_manager, job_df, datacube_fn, tracking_df_path, test_run)
+    _run_extraction_jobs(job_manager, job_db, datacube_fn, test_run)
 
     # Merge the extraction jobs (for point extractions)
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
@@ -1000,3 +993,5 @@ def run_extractions(
 
     pipeline_log.info("Extractions workflow completed.")
     pipeline_log.info(f"Results stored in folder: {output_folder}.")
+
+    return job_db

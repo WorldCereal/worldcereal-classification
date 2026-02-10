@@ -1,4 +1,4 @@
-from unittest.mock import call, MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pystac
 import pytest
