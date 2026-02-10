@@ -14,6 +14,8 @@ import tempfile
 import threading
 import time
 import traceback
+import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1632,13 +1634,22 @@ class WorldCerealExtractionsApp:
                     with status_output:
                         clear_output(wait=True)
                         print("🧭 Extraction status summary")
+                        print(
+                            f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
 
                         if not tracking_path.exists():
                             print("Waiting for job tracking file to be created...")
                             return
 
                         try:
-                            check_job_status(job_db)
+                            with warnings.catch_warnings():
+                                warnings.filterwarnings(
+                                    "ignore",
+                                    category=FutureWarning,
+                                    message=".*WKTReadingError is deprecated.*",
+                                )
+                                check_job_status(job_db)
                         except Exception as exc:
                             print(f"⚠️  Could not read job status: {exc}")
 
