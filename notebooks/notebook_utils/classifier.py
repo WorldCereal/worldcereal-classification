@@ -30,6 +30,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
+from tabulate import tabulate
 
 from worldcereal.train.backbone import (
     build_presto_backbone,
@@ -161,7 +162,15 @@ def align_extractions_to_season(
     logger.info("Distribution of samples across years:")
     # extract year from ref_id
     df["year"] = df["ref_id"].str.split("_").str[0].astype(int)
-    logger.info(f"\n{df.year.value_counts()}")
+    logger.info(
+        "\n"
+        + tabulate(
+            df["year"].value_counts().reset_index(),
+            headers=["Year", "Count"],
+            tablefmt="psql",
+            showindex=False,
+        )
+    )
 
     # Get crop statistics
     ncroptypes = df["ewoc_code"].nunique()
