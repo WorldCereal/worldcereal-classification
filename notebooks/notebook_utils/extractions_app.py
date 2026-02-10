@@ -519,11 +519,10 @@ class WorldCerealExtractionsApp:
         # Build local file selection UI
         explanation = self._info_callout(
             "<strong>Attention:</strong> We only accept <code>.parquet</code> files which have been"
-            " harmonized through and downloaded <a href='https://rdm.esa-worldcereal.org/' target='_blank' rel='noopener'>WorldCereal RDM</a>."
-        )
-        explanation2 = self._info_callout(
+            " harmonized through and downloaded <a href='https://rdm.esa-worldcereal.org/' target='_blank' rel='noopener'>WorldCereal RDM</a>.<br><br>"
             "<strong>Note:</strong> We use the name of your file as the ID of your dataset."
         )
+
         file_path_text = widgets.Text(
             description="File Path:",
             placeholder="Enter the FULL path to your .parquet file",
@@ -545,7 +544,7 @@ class WorldCerealExtractionsApp:
 
         # Display in dynamic content area
         dynamic_content.children = [
-            widgets.VBox([explanation, explanation2, file_path_text, file_load_button])
+            widgets.VBox([explanation, file_path_text, file_load_button])
         ]
 
     def _on_file_load(self, button):
@@ -646,7 +645,7 @@ class WorldCerealExtractionsApp:
         explanation_selection = self._info_callout(
             "A representative subset of samples is automatically available for each reference dataset uploaded to the RDM.<br>"
             "Learn more about this subsampling routine, <a href='https://worldcereal.github.io/worldcereal-documentation/rdm/refdata.html#dataset-subsampling' target='_blank' rel='noopener'>HERE</a>.<br><br>"
-            "You now have the choice to:<br>"
+            "<b>You now have the choice to:</b><br>"
             "   - make use of this subset (default),<br>"
             "   - use all samples, or<br>"
             "   - select only your classes of interest and/or run your own sampling routine."
@@ -2282,9 +2281,9 @@ class WorldCerealExtractionsApp:
             color = colors.get(level, "black")
             print(f"<span style='color: {color}'>[{level.upper()}] {message}</span>")
 
-    def _info_callout(self, message: str) -> widgets.HTML:
-        """Create a reusable subtle callout box for inline documentation."""
-        return widgets.HTML(
+    def _info_callout(self, message: str) -> widgets.Widget:
+        """Create a collapsible info callout box for inline documentation."""
+        info_html = widgets.HTML(
             value=(
                 "<div style='"
                 "box-sizing:border-box;"
@@ -2306,3 +2305,19 @@ class WorldCerealExtractionsApp:
                 "</div>"
             )
         )
+        info_html.layout.display = "none"
+        info_html.layout.width = "100%"
+
+        toggle = widgets.ToggleButton(
+            value=False,
+            description="Learn more",
+            icon="info-circle",
+            layout=widgets.Layout(width="140px"),
+        )
+
+        def _on_toggle(change):
+            info_html.layout.display = "block" if change["new"] else "none"
+
+        toggle.observe(_on_toggle, names="value")
+
+        return widgets.VBox([toggle, info_html], layout=widgets.Layout(width="100%"))
