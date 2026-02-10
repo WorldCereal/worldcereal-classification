@@ -114,7 +114,7 @@ def main(
         )
 
     # Fire up extractions
-    run_extractions(
+    _ = run_extractions(
         collection,
         output_folder,
         samples_df_path,
@@ -129,7 +129,7 @@ def main(
         check_existing_extractions=check_existing_extractions,
     )
 
-    return
+    return None
 
 
 if __name__ == "__main__":

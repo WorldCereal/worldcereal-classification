@@ -350,7 +350,9 @@ def load_dataframe(
         {filters_query}
         """
         df = db.sql(query).df()
-        df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
+        df = gpd.GeoDataFrame(
+            df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326"
+        )
     else:
         df = gpd.read_file(df_path, filters=filters)
 
@@ -844,7 +846,7 @@ def _prepare_extraction_jobs(
         root_dir=output_folder,
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
-        poll_sleep=60
+        poll_sleep=60,
     )
 
     job_manager.add_backend(
@@ -908,7 +910,7 @@ def run_extractions(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
-) -> None:
+) -> CsvJobDatabase:
     """Main function responsible for launching point and patch extractions.
 
     Parameters
@@ -948,6 +950,10 @@ def run_extractions(
         Check if the samples already exist in the STAC API and filter them out,
         by default False
 
+    Returns
+    -------
+    CsvJobDatabase
+        The job database containing the status and metadata of the extraction jobs.
     """
     pipeline_log.info("Starting the extractions workflow...")
 
@@ -977,3 +983,5 @@ def run_extractions(
 
     pipeline_log.info("Extractions workflow completed.")
     pipeline_log.info(f"Results stored in folder: {output_folder}.")
+
+    return job_db
