@@ -27,6 +27,7 @@ from notebook_utils.extractions import (
     validate_required_attributes,
     visualize_timeseries,
 )
+from openeo.extra.job_management import CsvJobDatabase
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from tabulate import tabulate
 
@@ -1319,20 +1320,6 @@ class WorldCerealExtractionsApp:
             layout=widgets.Layout(width="auto"),
         )
 
-        # Test mode checkbox - with explanation
-        test_mode_explanation = widgets.HTML(
-            value="<p style='margin: 15px 0 5px 0; color: #555;'>"
-            "🧪 <b>Test Mode:</b> Run only the first extraction job to verify "
-            "configuration before processing all samples.</p>"
-        )
-        test_mode_checkbox = widgets.Checkbox(
-            value=True,  # Default to True for safety
-            description="Test mode (run first job only)",
-            tooltip="Enable to run only the first extraction job for testing purposes",
-            style={"description_width": "auto"},
-            layout=widgets.Layout(width="auto"),
-        )
-
         # Run button
         run_button = widgets.Button(
             description="Start Extractions",
@@ -1346,13 +1333,17 @@ class WorldCerealExtractionsApp:
             "ℹ️ <strong>Background information:</strong><br>"
             "Samples to be extracted are now automatically split into one or several OpenEO extraction jobs.<br>"
             "The OpenEO job manager automatically handles the execution of these jobs on the CDSE platform.<br><br>"
+            "<b>Want to stop extractions?</b><br>"
+            "Kill this app by restarting the kernel.<br>"
+            "Important: visit the <a href='https://openeo.dataspace.copernicus.eu/' target='_blank' rel='noopener'>OpenEO web editor</a> to check for any running jobs and stop them if needed to avoid unnecessary credit consumption.<br>"
+            "Make sure to enable the 'Restart Failed Jobs' option if you want to continue with existing extractions later on.<br><br>"
             "Execution of an OpenEO job will consume credits from your CDSE account.<br>"
-            "Average credit consumption of one job amounts to 30 credits, but can vary up to 300 credits depending on local data density.<br>"
-            "You can consult the credit consumption of an individual job through the <a href='https://openeo.dataspace.copernicus.eu/?discover=0' target='_blank' rel='noopener'>OpenEO web editor</a>.<br><br>"
+            "Average credit consumption of one job amounts to 30 credits, but can vary up to 300 credits depending on local data density.<br><br"
+            "<b>Extractions done?</b><br>"
             "Upon finalization of all extraction jobs, the extracted data will be saved automatically to your output directory.<br>"
             "The output directory is called <code>extractions_output</code> and is created in the same folder where this notebook is located.<br>"
             "This directory contains one subfolder per collection ID, holding the extracted data, and the status of the jobs in the job tracking csv.<br>"
-            "All your private extractions will be automatically grouped into one partitioned worldcereal_merged_extractions.geoparquet file, directly located in your extractions folder.<br>"
+            "All your private extractions will be automatically grouped into one partitioned <b>worldcereal_merged_extractions.geoparquet</b> file, directly located in your extractions folder.<br>"
         )
 
         # Progress display
@@ -1360,6 +1351,15 @@ class WorldCerealExtractionsApp:
             layout=widgets.Layout(
                 width="100%",
                 min_height="200px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+
+        status_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="140px",
                 border="1px solid #ccc",
                 padding="10px",
             )
@@ -1374,9 +1374,9 @@ class WorldCerealExtractionsApp:
             "reset_auth_button": reset_auth_button,
             "auth_output": auth_output,
             "restart_failed_checkbox": restart_failed_checkbox,
-            "test_mode_checkbox": test_mode_checkbox,
             "run_button": run_button,
             "progress_output": progress_output,
+            "status_output": status_output,
         }
 
         # Connect callbacks
@@ -1416,8 +1416,6 @@ class WorldCerealExtractionsApp:
                 settings_header,
                 restart_failed_explanation,
                 restart_failed_checkbox,
-                test_mode_explanation,
-                test_mode_checkbox,
                 widgets.HBox(
                     [run_button],
                     layout=widgets.Layout(justify_content="center", margin="20px 0"),
@@ -1425,6 +1423,8 @@ class WorldCerealExtractionsApp:
                 background_info,
                 widgets.HTML("<b>Progress:</b>"),
                 progress_output,
+                widgets.HTML("<b>Extraction Status Summary:</b>"),
+                status_output,
                 self._build_tab_navigation(),
             ]
         )
@@ -1541,8 +1541,8 @@ class WorldCerealExtractionsApp:
     def _on_run_extractions_click(self, button):
         """Handle run extractions button click."""
         progress_output = self.tab3_widgets["progress_output"]
+        status_output = self.tab3_widgets["status_output"]
         restart_failed_checkbox = self.tab3_widgets["restart_failed_checkbox"]
-        test_mode_checkbox = self.tab3_widgets["test_mode_checkbox"]
 
         with progress_output:
             clear_output(wait=True)
@@ -1553,10 +1553,6 @@ class WorldCerealExtractionsApp:
                 # Get parameters (output folder is fixed to self.extractions_folder)
                 output_folder = self.extractions_folder
                 restart_failed = restart_failed_checkbox.value
-                test_mode = test_mode_checkbox.value
-
-                if test_mode:
-                    print("⚠️  TEST MODE ENABLED - Only first job will be run")
 
                 # Validate samples_df exists
                 if self.samples_df is None:
@@ -1624,26 +1620,36 @@ class WorldCerealExtractionsApp:
                 print("\nNote: This may take a while depending on dataset size.")
                 print("You can monitor progress below...\n")
 
-                # Start heartbeat thread to show activity
-                heartbeat_active = {"running": True}
-                heartbeat_interval = 30  # seconds
+                # Start status summary thread to show job tracking overview
+                status_active = {"running": True}
+                status_interval = 30  # seconds
 
-                def heartbeat():
-                    """Print periodic heartbeat messages to show extraction is still running."""
-                    start_time = time.time()
-                    while heartbeat_active["running"]:
-                        time.sleep(heartbeat_interval)
-                        if heartbeat_active["running"]:
-                            elapsed = int(time.time() - start_time)
-                            minutes = elapsed // 60
-                            seconds = elapsed % 60
-                            print(
-                                f"⏳ Still running... (elapsed: {minutes}m {seconds}s)",
-                                flush=True,
-                            )
+                def render_status_summary():
+                    """Render a summary of job statuses to the dedicated output widget."""
+                    tracking_path = outfolder_col / "job_tracking.csv"
+                    job_db = CsvJobDatabase(tracking_path)
 
-                heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
-                heartbeat_thread.start()
+                    with status_output:
+                        clear_output(wait=True)
+                        print("🧭 Extraction status summary")
+
+                        if not tracking_path.exists():
+                            print("Waiting for job tracking file to be created...")
+                            return
+
+                        try:
+                            check_job_status(job_db)
+                        except Exception as exc:
+                            print(f"⚠️  Could not read job status: {exc}")
+
+                def status_updater():
+                    """Periodically update extraction status summary."""
+                    while status_active["running"]:
+                        render_status_summary()
+                        time.sleep(status_interval)
+
+                status_thread = threading.Thread(target=status_updater, daemon=True)
+                status_thread.start()
 
                 try:
                     # Run the extraction workflow
@@ -1654,14 +1660,14 @@ class WorldCerealExtractionsApp:
                         self.collection_id,
                         extract_value=1,  # Fixed value - only extract samples with extract=1
                         restart_failed=restart_failed,
-                        test_run=test_mode,  # Only run first job if test mode enabled
                     )
                 except KeyboardInterrupt:
                     print("\n🛑 Extractions interrupted by user")
                 finally:
-                    # Stop heartbeat thread
-                    heartbeat_active["running"] = False
-                    heartbeat_thread.join(timeout=1)
+                    # Stop status update thread
+                    status_active["running"] = False
+                    status_thread.join(timeout=1)
+                    render_status_summary()
 
                 print("\n" + "=" * 60)
                 print("✅ EXTRACTIONS COMPLETED")

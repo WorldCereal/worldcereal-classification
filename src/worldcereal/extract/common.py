@@ -869,19 +869,10 @@ def _run_extraction_jobs(
     job_manager: ExtractionJobManager,
     job_db: CsvJobDatabase,
     datacube_fn: Callable,
-    test_run: bool = False,
 ) -> None:
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
-
-    # In test mode, only run the first job
-    if test_run:
-        pipeline_log.info("TEST MODE: Running only the first job.")
-        job_df = job_db.read()
-        job_df = job_df.iloc[:1]
-        job_manager.run_jobs(start_job=datacube_fn, df=job_df)
-    else:
-        job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
+    job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
     pipeline_log.info("Extraction jobs completed.")
 
 
@@ -919,7 +910,6 @@ def run_extractions(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
-    test_run: bool = False,
 ) -> CsvJobDatabase:
     """Main function responsible for launching point and patch extractions.
 
@@ -959,9 +949,6 @@ def run_extractions(
     check_existing_extractions : bool, optional
         Check if the samples already exist in the STAC API and filter them out,
         by default False
-    test_run : bool, optional
-        Run only the first extraction job for testing purposes, by default False
-
     Returns
     -------
     CsvJobDatabase
@@ -986,7 +973,7 @@ def run_extractions(
     )
 
     # Run the extraction jobs
-    _run_extraction_jobs(job_manager, job_db, datacube_fn, test_run)
+    _run_extraction_jobs(job_manager, job_db, datacube_fn)
 
     # Merge the extraction jobs (for point extractions)
     if collection == ExtractionCollection.POINT_WORLDCEREAL:
