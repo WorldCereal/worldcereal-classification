@@ -18,7 +18,6 @@ This module provides an interactive widget-based interface for:
 
 import json
 import platform
-import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
