@@ -5,13 +5,12 @@ This module contains functions for distance and class-balanced sampling of refer
 copied from worldcereal-referencedata to avoid cross-repository dependencies.
 """
 
-from typing import Optional, List
+from typing import List, Optional
 
-import h3
 import geopandas as gpd
+import h3
 import numpy as np
 from sklearn.neighbors import BallTree
-
 
 DEFAULT_SEED: int = 42
 LC_CODES = [

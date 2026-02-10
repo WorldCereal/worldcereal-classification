@@ -21,7 +21,6 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier, Pool
 from loguru import logger
-from tabulate import tabulate
 from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from sklearn.metrics import (
@@ -31,6 +30,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
+from tabulate import tabulate
 
 from worldcereal.train.backbone import (
     build_presto_backbone,

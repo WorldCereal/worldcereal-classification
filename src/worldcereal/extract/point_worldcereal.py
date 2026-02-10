@@ -1,12 +1,12 @@
 """Extract S1, S2, METEO and DEM point data using OpenEO-GFMAP package."""
 
 import copy
+import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-import os
-import time
 
 import duckdb
 import geojson
