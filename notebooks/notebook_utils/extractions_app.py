@@ -8,38 +8,39 @@ This module provides an interactive widget-based interface for:
 4. Visualizing and inspecting results
 """
 
-from pathlib import Path
 import platform
-from typing import Optional, Dict, Any, List
-import tempfile
 import shutil
+import tempfile
 import threading
 import time
-import ipywidgets as widgets
-from IPython.display import display, clear_output, HTML
-import geopandas as gpd
-from loguru import logger
 import traceback
-from tabulate import tabulate
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from worldcereal.rdm_api import RdmInteraction
-from worldcereal.utils.legend import ewoc_code_to_label, get_legend
-from worldcereal.utils.refdata import gdf_to_points
-from worldcereal.utils.map import visualize_rdm_geoparquet
-from worldcereal.extract.common import (
-    run_extractions,
-    check_job_status,
-    get_succeeded_job_details,
-)
-from worldcereal.stac.constants import ExtractionCollection
-from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
-from openeo_gfmap.manager.job_splitters import load_s2_grid
+import geopandas as gpd
+import ipywidgets as widgets
+from IPython.display import HTML, clear_output, display
+from loguru import logger
 from notebook_utils.extractions import (
-    validate_required_attributes,
-    load_point_extractions,
     get_band_statistics,
+    load_point_extractions,
+    validate_required_attributes,
     visualize_timeseries,
 )
+from openeo_gfmap.manager.job_splitters import load_s2_grid
+from tabulate import tabulate
+
+from worldcereal.extract.common import (
+    check_job_status,
+    get_succeeded_job_details,
+    run_extractions,
+)
+from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
+from worldcereal.rdm_api import RdmInteraction
+from worldcereal.stac.constants import ExtractionCollection
+from worldcereal.utils.legend import ewoc_code_to_label, get_legend
+from worldcereal.utils.map import visualize_rdm_geoparquet
+from worldcereal.utils.refdata import gdf_to_points
 from worldcereal.utils.sampling import run_sampling
 
 
@@ -1647,7 +1648,7 @@ class WorldCerealExtractionsApp:
 
                 try:
                     # Run the extraction workflow
-                    run_extractions(
+                    job_db = run_extractions(
                         ExtractionCollection.POINT_WORLDCEREAL,
                         outfolder_col,
                         samples_df_path,
@@ -1673,10 +1674,10 @@ class WorldCerealExtractionsApp:
 
                 # Check job status
                 print("\n📈 Checking job status...")
-                check_job_status(outfolder_col)
+                check_job_status(job_db)
 
                 # Get details of succeeded jobs
-                get_succeeded_job_details(outfolder_col)
+                get_succeeded_job_details(job_db)
 
                 print("\n✅ You can now proceed to Tab 4 to visualize results.")
 
