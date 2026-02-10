@@ -3310,13 +3310,6 @@ class WorldCerealTrainingApp:
                 print("Starting map generation now, this may take a while...\n")
                 print("You can monitor progress below the application.\n")
 
-                args = (processing_extent, self.tab8_processing_period, output_dir)
-                kwargs = dict(
-                    tile_resolution=tile_resolution,
-                    product_type=WorldCerealProductType.CROPTYPE,
-                    workflow_config=workflow_config,
-                )
-
                 plot_out = widgets.Output()
                 log_out = widgets.Output()
                 display(plot_out)
@@ -3328,13 +3321,17 @@ class WorldCerealTrainingApp:
                 if stop_button is not None:
                     stop_button.disabled = False
                 try:
-                    run_map_production(
-                        *args,
+                    _ = run_map_production(
+                        spatial_extent=processing_extent,
+                        temporal_extent=self.tab8_processing_period,
+                        output_dir=output_dir,
+                        tile_resolution=tile_resolution,
+                        product_type=WorldCerealProductType.CROPTYPE,
+                        workflow_config=workflow_config,
                         stop_event=stop_event,
                         plot_out=plot_out,
                         log_out=log_out,
                         display_outputs=False,
-                        **kwargs,
                     )
                     self.tab8_results = output_dir
                     if status_message is not None:
