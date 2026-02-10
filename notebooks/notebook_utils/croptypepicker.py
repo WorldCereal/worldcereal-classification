@@ -153,20 +153,20 @@ class CropTypePicker:
 
         for i in range(4, 1, -1):
             self.legend[f"level_{i}"] = self.legend[f"level_{i}"].fillna(
-                self.legend[f"level_{i+1}"]
+                self.legend[f"level_{i + 1}"]
             )
 
         for i in range(2, 4):
             upper = f"level_{i}"
-            lower = f"level_{i+1}"
+            lower = f"level_{i + 1}"
             self.legend.loc[self.legend[upper] == self.legend[lower], lower] = (
-                self.legend[f"level_{i+2}"]
+                self.legend[f"level_{i + 2}"]
             )
 
         # set duplicates to NaN
         for i in range(5, 1, -1):
             self.legend.loc[
-                self.legend[f"level_{i}"] == self.legend[f"level_{i-1}"], f"level_{i}"
+                self.legend[f"level_{i}"] == self.legend[f"level_{i - 1}"], f"level_{i}"
             ] = np.nan
 
     def _legend_to_hierarchy(self):
@@ -176,6 +176,15 @@ class CropTypePicker:
         hierarchy = {}
         for i, row in self.legend.iterrows():
             hierarchy[i] = (tuple(row[levels].dropna().values), row["count"])
+
+        # Pre-build lookup dictionaries for O(1) access instead of O(n) searches
+        label_to_code = dict(
+            zip(self.full_legend["label_full"], self.full_legend.index)
+        )
+        level_lookups = {}
+        for i in range(1, 6):
+            level_series = self.full_legend[f"level_{i}"].dropna()
+            level_lookups[i] = dict(zip(level_series.values, level_series.index))
 
         nested_hierarchy = {}
 
@@ -187,18 +196,17 @@ class CropTypePicker:
                         code_to_assign = 0
                     if key == info[0][-1]:
                         code_to_assign = ewoc_code
-                    elif key in self.full_legend["label_full"].values:
-                        code_to_assign = self.full_legend.loc[
-                            self.full_legend["label_full"] == key
-                        ].index.values[0]
+                    elif key in label_to_code:
+                        code_to_assign = label_to_code[key]
                     else:
                         # rare case where the key is not in the legend
+                        code_to_assign = None
                         for i in range(1, 6):
-                            if key in self.full_legend[f"level_{i}"].values:
-                                code_to_assign = self.full_legend.loc[
-                                    self.full_legend[f"level_{i}"] == key
-                                ].index.values[0]
+                            if key in level_lookups[i]:
+                                code_to_assign = level_lookups[i][key]
                                 break
+                        if code_to_assign is None:
+                            code_to_assign = 0
 
                     node[key] = {
                         "__count__": info[1],
@@ -249,8 +257,8 @@ class CropTypePicker:
 
     def _build_hierarchy(self):
 
-        # First get the legend
-        self.full_legend = get_legend()
+        # First get the legend (make a copy to avoid modifying cached version)
+        self.full_legend = get_legend().copy()
         self.full_legend["ewoc_code"] = (
             self.full_legend["ewoc_code"].str.replace("-", "").astype(np.int64)
         )
@@ -953,12 +961,21 @@ class CropTypePicker:
         for i in range(3):
             hierarchy = recursive_simplify(hierarchy)
 
-        result = clean_hierarchy_keys(hierarchy)
+        result = clean_hierarchy_keys(hierarchy, self.full_legend)
 
         return result
 
 
-def clean_hierarchy_keys(hierarchy):
+def clean_hierarchy_keys(hierarchy, legend=None):
+    """Clean hierarchy keys using a pre-loaded legend to avoid repeated downloads.
+
+    Parameters
+    ----------
+    hierarchy : dict
+        The hierarchy dictionary to clean
+    legend : pd.DataFrame, optional
+        Pre-loaded legend DataFrame to avoid repeated get_legend() calls
+    """
 
     # Recursively check and update keys
     def recursive_update_key(node):
@@ -970,7 +987,9 @@ def clean_hierarchy_keys(hierarchy):
                 if isinstance(value, dict):
                     if value.get("ewoc_code", 0) != 0:
                         code = value["ewoc_code"]
-                        full_name = translate_ewoc_codes([code])["label_full"].values[0]
+                        full_name = translate_ewoc_codes([code], legend=legend)[
+                            "label_full"
+                        ].values[0]
                         if (key != full_name) and (len(value.get("children", [])) == 0):
                             # Replace key and update value recursively
                             updated_node[full_name] = recursive_update_key(value)
