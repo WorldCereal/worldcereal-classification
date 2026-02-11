@@ -3633,11 +3633,9 @@ class WorldCerealTrainingApp:
         )
 
         products_info = self._info_callout(
-            "With each map generation run, up to four products are generated:<br>"
-            "- <code>croptype-raw</code>: custom crop type product<br>"
-            "- <code>croptype</code>: post-processed crop type product<br>"
-            "- <code>cropland-raw</code>: cropland mask (raw)<br>"
-            "- <code>cropland</code>: cropland mask (post-processed)<br><br>"
+            "With each map generation run, up to two products are generated:<br>"
+            "- <code>cropland</code>: cropland mask <br>"
+            "- <code>croptype</code>: crop type product<br><br>"
             "Each raster includes at least two bands:<br>"
             "1) winning class label<br>"
             "2) winning class probability (50-100)<br>"
