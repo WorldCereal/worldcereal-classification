@@ -15,11 +15,11 @@ import pandas as pd
 import xarray as xr
 from dateutil.parser import parse
 from loguru import logger
-from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+
+from prometheo.predictors import NODATAVALUE
 
 
 def subset_ds_temporally(
@@ -279,6 +279,7 @@ def classification_to_geotiff(
     classification: xr.DataArray,
     epsg: int,
     out_path: Path,
+    class_map: Optional[Mapping[int, str]] = None,
 ) -> None:
     """Save classification DataArray as GeoTIFF.
     Parameters
@@ -288,12 +289,29 @@ def classification_to_geotiff(
     epsg : int
         EPSG code for the CRS.
     out_path : Path
-        Output path for the GeoTIFF file."""
+        Output path for the GeoTIFF file.
+    class_map : Optional[Mapping[int, str]]
+        Optional integer-to-class mapping (e.g. head_config["classes_list"]).
+        Stored as metadata tags on croptype classification bands."""
 
     # ignore import error for rioxarray if not used
+    import rasterio
     import rioxarray  # noqa: F401
 
     logger.info(f"Saving classification to GeoTIFF at: {out_path}")
-
+    band_names = [str(b) for b in classification.bands.values]
     classification.rio.set_crs(f"epsg:{epsg}", inplace=True)
     classification.rio.to_raster(out_path)
+
+    class_map_json = None
+    if class_map:
+        class_map_json = json.dumps({int(k): str(v) for k, v in class_map.items()})
+
+    with rasterio.open(out_path, "r+") as dst:
+        dst.descriptions = tuple(band_names)
+        if class_map_json:
+            # Store globally and on croptype classification bands for GIS tools.
+            dst.update_tags(croptype_class_map=class_map_json)
+            for idx, name in enumerate(band_names, start=1):
+                if name.startswith("croptype_classification"):
+                    dst.update_tags(idx, class_map=class_map_json)
