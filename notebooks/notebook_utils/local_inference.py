@@ -321,3 +321,131 @@ def classification_to_geotiff(
                     dst.update_tags(idx, class_map=class_map_json)
 
     logger.info("Classification saved!")
+
+
+def _reproject_bands_from_raster(
+    src_path: Union[str, Path],
+    out_path: Union[str, Path],
+    band_list: list[int],
+    resampling: str = "nearest",
+    target_epsg: str = "EPSG:3857",
+) -> None:
+    """Reproject selected raster bands into a new GeoTIFF.
+
+    Parameters
+    ----------
+    src_path : Union[str, Path]
+        Source raster path.
+    out_path : Union[str, Path]
+        Output raster path.
+    band_list : list[int]
+        1-based band indices to extract and reproject in the given order.
+    resampling : str, optional
+        Resampling method name, by default "nearest".
+    target_epsg : str, optional
+        Target CRS (e.g. "EPSG:3857"), by default "EPSG:3857".
+    """
+
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.warp import calculate_default_transform, reproject
+
+    resampling_map = {
+        "nearest": Resampling.nearest,
+        "bilinear": Resampling.bilinear,
+        "cubic": Resampling.cubic,
+        "lanczos": Resampling.lanczos,
+    }
+    resampling_enum = resampling_map.get(resampling, Resampling.nearest)
+
+    src_path = Path(src_path)
+    out_path = Path(out_path)
+
+    with rasterio.open(src_path) as src:
+        if src.crs is None:
+            raise ValueError("Source raster is missing CRS metadata.")
+
+        dst_crs = target_epsg
+        transform, width, height = calculate_default_transform(
+            src.crs,
+            dst_crs,
+            src.width,
+            src.height,
+            *src.bounds,
+        )
+
+        meta = src.meta.copy()
+        meta.update(
+            {
+                "crs": dst_crs,
+                "transform": transform,
+                "width": width,
+                "height": height,
+                "count": len(band_list),
+            }
+        )
+
+        with rasterio.open(out_path, "w", **meta) as dst:
+            new_band = 1
+            for band_idx in band_list:
+                reproject(
+                    source=rasterio.band(src, band_idx),
+                    destination=rasterio.band(dst, new_band),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=resampling_enum,
+                )
+                new_band += 1
+
+    logger.info(f"Exported bands {band_list} to {target_epsg}: {out_path}")
+
+
+def isolate_cropland_croptype_products(
+    src_path: Union[str, Path],
+    cropland_included: bool,
+    resampling: str = "nearest",
+    target_epsg: str = "EPSG:3857",
+) -> dict:
+    """Extract cropland/croptype products from a multi-band inference raster.
+
+    When cropland is included, bands 1-2 are cropland (class + probability)
+    and bands 4-5 are croptype (class + probability). When cropland is
+    not included, bands 1-2 represent croptype instead.
+    """
+
+    src_path = Path(src_path)
+    outdir = src_path.parent
+
+    products = {}
+
+    # First two bands are either cropland or crop type product.
+    if cropland_included:
+        dst_path = outdir / f"{src_path.stem}_cropland.tif"
+        products["cropland"] = dst_path
+    else:
+        dst_path = outdir / f"{src_path.stem}_croptype.tif"
+        products["croptype"] = dst_path
+
+    _reproject_bands_from_raster(
+        src_path,
+        dst_path,
+        [1, 2],
+        resampling=resampling,
+        target_epsg=target_epsg,
+    )
+
+    # If there was a cropland product, export croptype from bands 4 and 5.
+    if cropland_included:
+        dst_path = outdir / f"{src_path.stem}_croptype.tif"
+        products["croptype"] = dst_path
+        _reproject_bands_from_raster(
+            src_path,
+            dst_path,
+            [4, 5],
+            resampling=resampling,
+            target_epsg=target_epsg,
+        )
+
+    return products

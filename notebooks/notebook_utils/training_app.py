@@ -3126,7 +3126,7 @@ class WorldCerealTrainingApp:
             "<b>Land cover mapping</b>:<br>"
             "   - Generate cropland product: By default enabled to export the cropland head predictions as a separate layer in the output map. Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
             "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output. Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
-            "   - Custom land cover model URL: Optionally override the default land cover model used for cropland masking and product generation. Needs to point to a .zip file deployed in the cloud (e.g. CDSE bucket).<br><br>"
+            "   - Custom seasonal model URL: Optionally override the default seasonal model used for cropland masking and product generation. Needs to point to a .zip file deployed in the cloud (e.g. CDSE bucket).<br><br>"
             "<b>Postprocessing:</b> By default enabled to run a majority vote postprocessing step on the predicted classes to smooth the results.<br>"
             "       Depending on your use case, you may want to disable postprocessing to get the raw model predictions without any smoothing.<br>"
             "       Postprocessing can be enabled/disabled separately for the crop type and cropland predictions.<br>"
@@ -3144,14 +3144,14 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
             tooltip="Required. Keep it short and avoid spaces and special characters.",
         )
-        custom_landcover_model_value = ""
+        custom_seasonal_model_value = ""
         if self.presto_model_package is not None:
-            custom_landcover_model_value = (
+            custom_seasonal_model_value = (
                 self.presto_model_package.get("seasonal_model_path") or ""
             )
-        custom_landcover_model_input = widgets.Text(
-            value=custom_landcover_model_value,
-            description="Custom land cover model URL:",
+        custom_seasonal_model_input = widgets.Text(
+            value=custom_seasonal_model_value,
+            description="Custom seasonal model URL:",
             placeholder="https://... .zip",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
             description_width="200px",
@@ -3231,7 +3231,7 @@ class WorldCerealTrainingApp:
             "season_hint": season_hint,
             "season_id_input": season_id_input,
             "output_name_input": output_name_input,
-            "custom_landcover_model_input": custom_landcover_model_input,
+            "custom_seasonal_model_input": custom_seasonal_model_input,
             "mask_cropland_checkbox": mask_cropland_checkbox,
             "enable_cropland_head_checkbox": enable_cropland_head_checkbox,
             "export_probs_checkbox": export_probs_checkbox,
@@ -3277,7 +3277,7 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h4>Land cover mapping</h4>"),
                 widgets.HBox([enable_cropland_head_checkbox]),
                 widgets.HBox([mask_cropland_checkbox]),
-                widgets.HBox([custom_landcover_model_input]),
+                widgets.HBox([custom_seasonal_model_input]),
                 widgets.HTML("<h4>Postprocessing</h4>"),
                 widgets.HBox([croptype_postprocess_enabled]),
                 widgets.HBox(
@@ -3339,8 +3339,8 @@ class WorldCerealTrainingApp:
             "enable_cropland_head_checkbox"
         )
         export_probs_checkbox = self.tab8_widgets.get("export_probs_checkbox")
-        custom_landcover_model_input = self.tab8_widgets.get(
-            "custom_landcover_model_input"
+        custom_seasonal_model_input = self.tab8_widgets.get(
+            "custom_seasonal_model_input"
         )
         croptype_postprocess_enabled = self.tab8_widgets.get(
             "croptype_postprocess_enabled"
@@ -3420,9 +3420,9 @@ class WorldCerealTrainingApp:
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
-        custom_landcover_model_url = (
-            custom_landcover_model_input.value.strip()
-            if custom_landcover_model_input is not None
+        custom_seasonal_model_url = (
+            custom_seasonal_model_input.value.strip()
+            if custom_seasonal_model_input is not None
             else ""
         )
         croptype_pp_enabled = (
@@ -3519,13 +3519,9 @@ class WorldCerealTrainingApp:
                 .enforce_cropland_gate(mask_cropland)
                 .export_class_probabilities(export_class_probs)
             )
-            if custom_landcover_model_url:
+            if custom_seasonal_model_url:
                 workflow_builder = workflow_builder.seasonal_model_zip(
-                    custom_landcover_model_url
-                )
-            if custom_landcover_model_url and enable_cropland_head:
-                workflow_builder = workflow_builder.landcover_head_zip(
-                    custom_landcover_model_url
+                    custom_seasonal_model_url
                 )
             workflow_builder = workflow_builder.cropland_postprocess(
                 enabled=cropland_pp_enabled,
