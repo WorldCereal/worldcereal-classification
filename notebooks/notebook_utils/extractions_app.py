@@ -1653,6 +1653,10 @@ class WorldCerealExtractionsApp:
                 print("=" * 60)
                 print("\nNote: This may take a while depending on dataset size.")
                 print("You can monitor progress below...\n")
+                print(
+                    "Visit the OpenEO web editor for a more detailed view on your processing jobs:"
+                )
+                print("https://openeo.dataspace.copernicus.eu/")
 
                 # Start status summary thread to show job tracking overview
                 status_active = {"running": True}
