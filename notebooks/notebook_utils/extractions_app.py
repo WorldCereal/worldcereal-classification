@@ -1307,16 +1307,16 @@ class WorldCerealExtractionsApp:
         )
 
         # CDSE authentication section
-        auth_header = widgets.HTML("<h4>CDSE Authentication</h4>")
+        # auth_header = widgets.HTML("<h4>CDSE Authentication</h4>")
         auth_status = widgets.HTML(
             value="<i>Checking CDSE authentication status...</i>"
         )
-        authentication_explanation = self._info_callout(
-            "To run extractions, you need to authenticate with a valid <a href='https://dataspace.copernicus.eu/' target='_blank' rel='noopener'>CDSE</a> account.<br>"
-            "Your account credentials are automatically stored on your computer in a secure manner and used for extraction requests.<br>"
-            "For your first time authentication, click the 'Authenticate' button below.<br>"
-            "If you wish to switch accounts, use the 'Reset CDSE Authentication' button."
-        )
+        # authentication_explanation = self._info_callout(
+        #     "To run extractions, you need to authenticate with a valid <a href='https://dataspace.copernicus.eu/' target='_blank' rel='noopener'>CDSE</a> account.<br>"
+        #     "Your account credentials are automatically stored on your computer in a secure manner and used for extraction requests.<br>"
+        #     "For your first time authentication, click the 'Authenticate' button below.<br>"
+        #     "If you wish to switch accounts, use the 'Reset CDSE Authentication' button."
+        # )
 
         authenticate_button = widgets.Button(
             description="Authenticate",
