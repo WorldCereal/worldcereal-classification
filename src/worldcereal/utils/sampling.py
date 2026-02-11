@@ -179,9 +179,6 @@ def get_sampling_ewoc_codes(gdf, legend) -> gpd.GeoDataFrame:
     """
     Assigns sampling ewoc codes to the GeoDataFrame based on the legend.
     """
-    # Prepare the legend
-    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
-    legend.set_index("ewoc_code", inplace=True)
 
     # Assign sampling ewoc codes based on the legend
     gdf["sampling_ewoc_code"] = gdf["ewoc_code"].map(legend["sampling_label"])
@@ -213,6 +210,7 @@ def run_sampling(
         Required attributes = [ewoc_code, sample_id, h3_l3_cell, geometry]
     legend : pd.DataFrame
         Legend DataFrame containing the ewoc_code to sampling_label mapping.
+        Pre-processed version with ewoc_code as index.
     max_samples_lc : int, optional
         Maximum number of samples per H3 L3 cell to be extracted for LC codes, by default 30.
     max_samples_ct : int, optional

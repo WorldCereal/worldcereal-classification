@@ -1,7 +1,6 @@
 import datetime
 import json
 import tempfile
-import warnings
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -351,10 +350,8 @@ def visualize_rdm_geoparquet(
     if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
-    # Compute centroid, ignoring warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        center = (gdf.centroid.y.mean(), gdf.centroid.x.mean())
+    # Compute total bounds for map centering and auto-zoom
+    minx, miny, maxx, maxy = gdf.total_bounds
 
     # Extract unique ewoc_code values and assign colors
     unique_codes = sorted(gdf["ewoc_code"].unique())
@@ -408,10 +405,10 @@ def visualize_rdm_geoparquet(
 
     m = Map(
         basemap=basemaps.Esri.WorldImagery,
-        center=center,
-        zoom=7,
         scroll_wheel_zoom=True,
     )
+    # Fit map to data extent
+    m.fit_bounds([[miny, minx], [maxy, maxx]])
 
     # Handle selected vs non-selected visualization
     if selected_sample_ids is not None and "sample_id" in gdf.columns:

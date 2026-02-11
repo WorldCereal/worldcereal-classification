@@ -193,7 +193,11 @@ def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.Da
 
     legend = pd.read_csv(url, header=0, sep=";")
 
-    return legend
+    # Preprocess the legend by removing dashes from ewoc_code and converting to int, and setting it as index
+    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(np.int64)
+    legend = legend.set_index("ewoc_code")
+
+    return legend.copy()
 
 
 def download_legend(
@@ -298,10 +302,7 @@ def translate_ewoc_codes(
 
     if legend is None:
         legend = get_legend()
-        legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(np.int64)
-        legend = legend.set_index("ewoc_code")
     else:
-        # Legend is already preprocessed with ewoc_code as index
         legend = legend.copy()
     columns_to_keep = [
         "label_full",
