@@ -1437,16 +1437,16 @@ class WorldCerealExtractionsApp:
                 general_info,
                 status_message,
                 warning_output,
-                auth_header,
-                authentication_explanation,
-                auth_status,
-                widgets.HBox(
-                    [authenticate_button, reset_auth_button],
-                    layout=widgets.Layout(
-                        justify_content="flex-start", margin="10px 0"
-                    ),
-                ),
-                auth_output,
+                # auth_header,
+                # authentication_explanation,
+                # auth_status,
+                # widgets.HBox(
+                #     [authenticate_button, reset_auth_button],
+                #     layout=widgets.Layout(
+                #         justify_content="flex-start", margin="10px 0"
+                #     ),
+                # ),
+                # auth_output,
                 settings_header,
                 restart_failed_explanation,
                 restart_failed_checkbox,
