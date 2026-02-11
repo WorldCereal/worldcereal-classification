@@ -178,6 +178,8 @@ class WorldCerealTrainingApp:
             "visualize": tab9,
         }
 
+        self._app_height = "1200px"
+
         self.tabs = widgets.Tab(children=[])
         self.tabs.layout = widgets.Layout(width="100%", max_width="100%")
 
@@ -198,7 +200,11 @@ class WorldCerealTrainingApp:
         self.welcome_screen = tab0
         self.tabs_container = widgets.VBox([self.welcome_screen])
         self.tabs_container.layout = widgets.Layout(
-            width="100%", max_width="100%", overflow="hidden", align_items="stretch"
+            width="100%",
+            max_width="100%",
+            height=self._app_height,
+            overflow="auto",
+            align_items="stretch",
         )
         self.tabs.observe(self._on_tab_change, names="selected_index")
         self._update_nav_buttons()
@@ -252,9 +258,7 @@ class WorldCerealTrainingApp:
 
         for child in children:
             if hasattr(child, "layout"):
-                child.layout = widgets.Layout(
-                    width="100%", max_width="100%", overflow="hidden"
-                )
+                child.layout = widgets.Layout(width="100%", max_width="100%")
 
         self.tabs.children = children
         for index, title in enumerate(titles):
@@ -2514,7 +2518,7 @@ class WorldCerealTrainingApp:
             "The following <b>parameters</b> need to be set:<br>"
             "<b>Head task</b>: <code>croptype</code> for multi-class crop type prediction or <code>landcover</code> for land-cover training.<br>"
             "<b>Head type</b>: <code>linear</code> uses a single linear layer, <code>mlp</code> adds a small MLP head for extra capacity.<br>"
-            "<b>Epochs</b>: number of training epochs for the head.<br>"
+            "<b>Epochs</b>: maximum number of training epochs for the head.<br>"
             "<b>LR</b>: learning rate (float); only adjust if you know what you're doing.<br>"
             "<b>Weight decay</b>: (float); only adjust if you know what you're doing.<br>"
             "<b>Use class balancing</b>: By default enabled to ensure minority classes are not discarded. However, depending on your training class distribution this may lead to undesired results.<br>"
@@ -2539,7 +2543,7 @@ class WorldCerealTrainingApp:
         )
         epochs_input = widgets.IntText(
             value=40,
-            description="Epochs:",
+            description="Max epochs:",
             layout=widgets.Layout(width="160px"),
         )
         lr_input = widgets.Text(
@@ -2554,7 +2558,7 @@ class WorldCerealTrainingApp:
             description="Weight decay:",
             placeholder="e.g., 0.0",
             layout=widgets.Layout(width="150px"),
-            description_width="150px",
+            description_width="200px",
         )
         use_balancing_checkbox = widgets.Checkbox(
             value=True,
@@ -3142,7 +3146,7 @@ class WorldCerealTrainingApp:
             description="Custom seasonal model URL:",
             placeholder="https://... .zip",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
-            description_width="200px",
+            description_width="250px",
         )
 
         enable_cropland_head_checkbox = widgets.Checkbox(
@@ -3152,7 +3156,7 @@ class WorldCerealTrainingApp:
         )
         mask_cropland_checkbox = widgets.Checkbox(
             value=True,
-            description="Mask cropland in crop type product",
+            description="Mask cropland?",
             description_width="350px",
         )
         export_probs_checkbox = widgets.Checkbox(
