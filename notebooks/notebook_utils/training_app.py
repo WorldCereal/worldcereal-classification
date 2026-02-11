@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
+from IPython import get_ipython
 from IPython.display import HTML, display
 from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.classifier import (
@@ -3332,6 +3333,7 @@ class WorldCerealTrainingApp:
         status_message = self.tab8_widgets.get("status_message")
         aoi_map = self.tab8_widgets.get("aoi_map")
         season_slider_obj = self.tab8_widgets.get("season_slider")
+        generate_button = self.tab8_widgets.get("generate_button")
         mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
         enable_cropland_head_checkbox = self.tab8_widgets.get(
             "enable_cropland_head_checkbox"
@@ -3362,6 +3364,14 @@ class WorldCerealTrainingApp:
         output_name_input = self.tab8_widgets.get("output_name_input")
         season_id_input = self.tab8_widgets.get("season_id_input")
         output = self.tab8_widgets.get("output")
+
+        def _schedule_output(callback) -> None:
+            ip = get_ipython()
+            io_loop = getattr(getattr(ip, "kernel", None), "io_loop", None)
+            if io_loop is not None:
+                io_loop.add_callback(callback)
+            else:
+                callback()
 
         # Clear previous output and create separate widgets inside
         if output is not None:
@@ -3528,38 +3538,58 @@ class WorldCerealTrainingApp:
                 kernel_size=croptype_pp_kernel,
             )
             workflow_config = workflow_builder.build()
-
             if status_message is not None:
                 status_message.value = (
                     "<i>Processing started... this may take a while.</i>"
                 )
+            if generate_button is not None:
+                generate_button.disabled = True
 
-            try:
-                _ = run_map_production(
-                    spatial_extent=processing_extent,
-                    temporal_extent=self.tab8_processing_period,
-                    output_dir=output_dir,
-                    tile_resolution=tile_resolution,
-                    product_type=WorldCerealProductType.CROPTYPE,
-                    workflow_config=workflow_config,
-                    stop_event=None,
-                    plot_out=plot_out,
-                    log_out=log_out,
-                    display_outputs=True,
-                )
-                self.tab8_results = output_dir
-                if status_message is not None:
-                    status_message.value = "<i>Processing finished.</i>"
-                with log_out:
-                    print(
-                        "\n\nProcessing finished. Outputs saved to: " f"{output_dir}\n"
+            def _run_production() -> None:
+                try:
+                    _ = run_map_production(
+                        spatial_extent=processing_extent,
+                        temporal_extent=self.tab8_processing_period,
+                        output_dir=output_dir,
+                        tile_resolution=tile_resolution,
+                        product_type=WorldCerealProductType.CROPTYPE,
+                        workflow_config=workflow_config,
+                        stop_event=None,
+                        plot_out=plot_out,
+                        log_out=log_out,
+                        display_outputs=True,
                     )
-                self._update_tab9_state()
-            except Exception as exc_inner:
-                if status_message is not None:
-                    status_message.value = "<i>Processing failed. Check logs below.</i>"
-                with log_out:
-                    print(f"\n\nMap generation failed: {exc_inner}\n")
+                    self.tab8_results = output_dir
+
+                    def _on_success() -> None:
+                        if status_message is not None:
+                            status_message.value = "<i>Processing finished.</i>"
+                        with log_out:
+                            print(
+                                "\n\nProcessing finished. Outputs saved to: "
+                                f"{output_dir}\n"
+                            )
+                        if generate_button is not None:
+                            generate_button.disabled = False
+                        self._update_tab9_state()
+
+                    _schedule_output(_on_success)
+                except Exception as exc_inner:
+                    error_message = f"\n\nMap generation failed: {exc_inner}\n"
+
+                    def _on_failure() -> None:
+                        if status_message is not None:
+                            status_message.value = (
+                                "<i>Processing failed. Check logs below.</i>"
+                            )
+                        with log_out:
+                            print(error_message)
+                        if generate_button is not None:
+                            generate_button.disabled = False
+
+                    _schedule_output(_on_failure)
+
+            threading.Thread(target=_run_production, daemon=True).start()
         except Exception as exc:
             if status_message is not None:
                 status_message.value = "<i>Processing failed. Check logs below.</i>"
