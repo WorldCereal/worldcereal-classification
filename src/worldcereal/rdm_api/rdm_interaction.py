@@ -11,9 +11,9 @@ import pandas as pd
 import requests
 from loguru import logger
 from openeo.rest.auth.oidc import (
-    OidcDeviceCodePollTimeout,
     OidcClientInfo,
     OidcDeviceAuthenticator,
+    OidcDeviceCodePollTimeout,
     OidcException,
     OidcProviderInfo,
     VerificationInfo,
