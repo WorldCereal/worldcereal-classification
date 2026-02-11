@@ -27,18 +27,12 @@ def get_probability_cmap():
 NODATAVALUE = {
     "cropland": 255,
     "croptype": 255,
-    "cropland-raw": 255,
-    "croptype-raw": 255,
     "probability": 255,
 }
 
 
 COLORMAP = {
     "cropland": {
-        0: (186, 186, 186, 0),  # no cropland
-        1: (224, 24, 28, 200),  # cropland
-    },
-    "cropland-raw": {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
     },
@@ -140,14 +134,10 @@ def visualize_products(
         return dict(lut) if lut is not None else default_cropland
 
     rendered = []
-    base_colormaps: dict[str, dict] = {}
-
     for product, path in paths.items():
         if product not in [
             "cropland",
             "croptype",
-            "cropland-raw",
-            "croptype-raw",
         ]:
             logger.warning("Skipping unsupported product: %s", product)
             continue
@@ -161,10 +151,7 @@ def visualize_products(
 
         nodata = _get_nodata(product)
 
-        base_key = product.replace("-raw", "")
-        if base_key not in base_colormaps:
-            base_colormaps[base_key] = _get_colormap(base_key, lut)
-        colormap = copy.deepcopy(base_colormaps[base_key])
+        colormap = _get_colormap(product, lut)
         # Adjust LUT and colormap for crop type product
         if product.startswith("croptype"):
             # add no cropland class

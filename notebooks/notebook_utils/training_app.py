@@ -2,7 +2,7 @@
 Interactive application for the WorldCereal training and inference workflow.
 
 Usage:
-    app = WorldCerealTrainingApp.run()
+    app = WorldCerealTrainingApp.run(presto_model_package=presto_model_package)
 
 This module provides an interactive widget-based interface for:
 1. Retrieving reference data
@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
+from IPython import get_ipython
 from IPython.display import HTML, display
 from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.classifier import (
@@ -63,13 +64,26 @@ from worldcereal.utils.upload import OpenEOArtifactHelper
 
 class WorldCerealTrainingApp:
     @classmethod
-    def run(cls) -> "WorldCerealTrainingApp":
+    def run(
+        cls, presto_model_package: Optional[dict] = None
+    ) -> "WorldCerealTrainingApp":
         """Instantiate and display the training application."""
-        app = cls()
+        app = cls(presto_model_package=presto_model_package)
         display(app.tabs_container)
         return app
 
-    def __init__(self):
+    def __init__(self, presto_model_package: Optional[dict] = None):
+        """
+        Initialize the training application, setting up state variables and building the UI.
+
+        Parameters:
+        - presto_model_package: Optional dictionary containing information about the Presto model to use, including:
+            - "presto_remote_path": URL to the remote Presto model
+            - "presto_local_path": Path to the local Presto model
+            - "presto_fingerprint": Fingerprint of the Presto model
+            - "seasonal_model_path": Optional URL to a seasonal model package (.zip)
+
+        """
         self.workflow_mode = "full"
         self._nav_buttons: List[Dict[str, widgets.Button]] = []
 
@@ -104,6 +118,9 @@ class WorldCerealTrainingApp:
         self.tab8_results: Optional[Path] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
         self.tab9_model_url: Optional[str] = None
+
+        self.presto_model_package = presto_model_package
+        self.init_warnings = self._validate_init_params(presto_model_package)
 
         self.cdse_auth_cleared = False
         self.cdse_auth_failed = False
@@ -308,6 +325,30 @@ class WorldCerealTrainingApp:
             "<p>Select whether you want to train a custom model or run inference only, then launch the application.</p>"
         )
 
+        warning_box = None
+        if self.init_warnings:
+            items = "".join(f"<li>{warning}</li>" for warning in self.init_warnings)
+            warning_box = widgets.HTML(
+                value=(
+                    "<div style='"
+                    "box-sizing:border-box;"
+                    "width:100%;"
+                    "max-width:100%;"
+                    "background:#fff4e5;"
+                    "border:1px solid #f5c38b;"
+                    "border-left:4px solid #f0a04b;"
+                    "padding:8px 10px;"
+                    "border-radius:4px;"
+                    "color:#6b3d00;"
+                    "font-size:13px;"
+                    "line-height:1.4;"
+                    "margin:8px 0 10px 0;"
+                    "'>"
+                    "<b>Initialization warnings</b><ul style='margin:6px 0 0 18px;'>"
+                    f"{items}</ul></div>"
+                )
+            )
+
         workflow_mode_radio = widgets.RadioButtons(
             options=[
                 ("Full workflow (train custom model)", "full"),
@@ -332,13 +373,47 @@ class WorldCerealTrainingApp:
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
-        return widgets.VBox(
-            [
-                header,
-                workflow_mode_radio,
-                widgets.HBox([select_button]),
-            ]
-        )
+        children = [header]
+        if warning_box is not None:
+            children.append(warning_box)
+        children.extend([workflow_mode_radio, widgets.HBox([select_button])])
+
+        return widgets.VBox(children)
+
+    def _validate_init_params(self, presto_model_package: Optional[dict]) -> List[str]:
+        warnings: List[str] = []
+        if presto_model_package is None:
+            return warnings
+        if not isinstance(presto_model_package, dict):
+            return ["presto_model_package must be a dict or None."]
+        if not presto_model_package:
+            warnings.append("presto_model_package is empty.")
+            return warnings
+
+        allowed_and_required_keys = {
+            "presto_remote_path",
+            "presto_local_path",
+            "presto_fingerprint",
+            "seasonal_model_path",
+        }
+        unknown_keys = sorted(set(presto_model_package) - allowed_and_required_keys)
+        if unknown_keys:
+            warnings.append(
+                "presto_model_package has unknown keys: " + ", ".join(unknown_keys)
+            )
+        missing_keys = sorted(allowed_and_required_keys - set(presto_model_package))
+        if missing_keys:
+            warnings.append(
+                "presto_model_package is missing required keys: "
+                + ", ".join(missing_keys)
+            )
+        # all values should be str
+        for key in allowed_and_required_keys:
+            value = presto_model_package.get(key)
+            if not isinstance(value, str):
+                warnings.append(f"presto_model_package['{key}'] should be a string.")
+
+        return warnings
 
     def _on_workflow_mode_change(self, change):
         """Handle workflow mode selection changes."""
@@ -489,9 +564,12 @@ class WorldCerealTrainingApp:
         )
 
         crop_only_explanation = self._info_callout(
-            "By default, only temporary crop samples are retrieved.<br>"
+            "By default, <b>only temporary crop samples</b> are retrieved.<br>"
             "This effectively means that you will only be able to train a model distinguishing different types of temporary crops.<br>"
-            "Uncheck the 'Only temporary crop samples' option below to include all land cover classes in your query.<br>"
+            "You will need to rely on another model to first separate cropland from non-cropland.<br>"
+            "By default, this is done by using our globally pretrained Presto model, but you will also have the possiblity to provide a custom land cover model.<br><br>"
+            "<b>When to uncheck this option?</b><br>"
+            "If you want to include non-crop or permanent crop classes in your model!.<br>"
         )
 
         crop_only_checkbox = widgets.Checkbox(
@@ -637,6 +715,7 @@ class WorldCerealTrainingApp:
                 widgets.HBox([select_crops_button]),
                 croptype_picker_status,
                 croptype_picker_container,
+                widgets.HTML("<b>5) Start your search for reference data!</b>"),
                 widgets.HBox([run_query_button]),
                 widgets.HTML("<h3 style='margin: 10px 0;'>Query results</h3>"),
                 query_output,
@@ -1805,6 +1884,33 @@ class WorldCerealTrainingApp:
             )
         )
 
+        presto_title = widgets.HTML("<h3>Presto model</h3>")
+        presto_items: List[str] = []
+        if self.presto_model_package is None:
+            presto_message = widgets.HTML(
+                value="<i>Using default globally trained Presto model...</i>"
+            )
+        else:
+            for key in (
+                "presto_remote_path",
+                "presto_local_path",
+                "seasonal_model_path",
+            ):
+                value = self.presto_model_package.get(key)
+                if value:
+                    presto_items.append(f"<li><b>{key}:</b> {value}</li>")
+            if presto_items:
+                presto_message = widgets.HTML(
+                    value=(
+                        "<i>Using custom Presto model with the following paths:</i><br>"
+                        f"<ul>{''.join(presto_items)}</ul>"
+                    )
+                )
+            else:
+                presto_message = widgets.HTML(
+                    value="<i>Presto model package provided, but no paths were found, cannot continue!.</i>"
+                )
+
         embeddings_message = widgets.HTML(
             value="<i>Tune parameters and click the button below to compress the EO time series of your samples into comprehensive geospatial embeddings (your training features).</i>"
         )
@@ -1833,6 +1939,26 @@ class WorldCerealTrainingApp:
             description="Repeats:",
             layout=widgets.Layout(width="200px"),
         )
+        dataset_split_title = widgets.HTML("<h4>Dataset splitting</h4>")
+        use_spatial_split_checkbox = widgets.Checkbox(
+            value=True,
+            description="Use spatial split",
+        )
+        bin_size_degrees_input = widgets.FloatText(
+            value=0.25,
+            description="Bin size (deg):",
+            layout=widgets.Layout(width="220px"),
+        )
+        val_size_input = widgets.FloatText(
+            value=0.15,
+            description="Val size:",
+            layout=widgets.Layout(width="180px"),
+        )
+        test_size_input = widgets.FloatText(
+            value=0.15,
+            description="Test size:",
+            layout=widgets.Layout(width="180px"),
+        )
         embeddings_button = widgets.Button(
             description="Compute Presto embeddings",
             button_style="success",
@@ -1854,9 +1980,14 @@ class WorldCerealTrainingApp:
             "load_input": load_input,
             "load_button": load_button,
             "load_output": load_output,
+            "presto_message": presto_message,
             "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
+            "use_spatial_split_checkbox": use_spatial_split_checkbox,
+            "bin_size_degrees_input": bin_size_degrees_input,
+            "val_size_input": val_size_input,
+            "test_size_input": test_size_input,
             "embeddings_button": embeddings_button,
             "embeddings_output": embeddings_output,
         }
@@ -1879,11 +2010,16 @@ class WorldCerealTrainingApp:
                 load_input,
                 widgets.HBox([load_button]),
                 load_output,
+                presto_title,
+                presto_message,
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
                 embeddings_message,
                 embeddings_info,
                 widgets.HBox([augment_checkbox, repeats_input]),
                 widgets.HBox([mask_on_training_checkbox]),
+                dataset_split_title,
+                widgets.HBox([use_spatial_split_checkbox, bin_size_degrees_input]),
+                widgets.HBox([val_size_input, test_size_input]),
                 widgets.HBox([embeddings_button]),
                 embeddings_output,
                 self._build_tab_navigation(),
@@ -2267,6 +2403,10 @@ class WorldCerealTrainingApp:
         augment_checkbox = self.tab5_widgets.get("augment_checkbox")
         mask_on_training_checkbox = self.tab5_widgets.get("mask_on_training_checkbox")
         repeats_input = self.tab5_widgets.get("repeats_input")
+        use_spatial_split_checkbox = self.tab5_widgets.get("use_spatial_split_checkbox")
+        bin_size_degrees_input = self.tab5_widgets.get("bin_size_degrees_input")
+        val_size_input = self.tab5_widgets.get("val_size_input")
+        test_size_input = self.tab5_widgets.get("test_size_input")
 
         with output:
             output.clear_output()
@@ -2290,9 +2430,29 @@ class WorldCerealTrainingApp:
                 else mask_on_training_checkbox.value
             )
             repeats = repeats_input.value if repeats_input is not None else 3
+            use_spatial_split = (
+                True
+                if use_spatial_split_checkbox is None
+                else use_spatial_split_checkbox.value
+            )
+            bin_size_degrees = (
+                0.25 if bin_size_degrees_input is None else bin_size_degrees_input.value
+            )
+            val_size = 0.15 if val_size_input is None else val_size_input.value
+            if val_size < 0 or val_size >= 1:
+                print("Val size must be in the range [0, 1).")
+                return
+            test_size = 0.15 if test_size_input is None else test_size_input.value
+            if test_size < 0 or test_size >= 1:
+                print("Test size must be in the range [0, 1).")
+                return
             if repeats <= 0:
                 print("Repeats must be >= 1.")
                 return
+            if self.presto_model_package is None:
+                custom_presto_url = None
+            else:
+                custom_presto_url = self.presto_model_package.get("presto_local_path")
             try:
                 print("Computing Presto embeddings...")
                 self.tab5_df = compute_seasonal_presto_embeddings(
@@ -2303,6 +2463,11 @@ class WorldCerealTrainingApp:
                     repeats=repeats,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
+                    custom_presto_url=custom_presto_url,
+                    use_spatial_split=use_spatial_split,
+                    bin_size_degrees=bin_size_degrees,
+                    val_size=val_size,
+                    test_size=test_size,
                 )
                 embeddings_dir = Path("./embeddings")
                 embeddings_dir.mkdir(exist_ok=True)
@@ -2358,8 +2523,7 @@ class WorldCerealTrainingApp:
         )
         training_params_info = self._info_callout(
             "The seasonal torch head is a lightweight classifier trained on top of the Presto embeddings.<br><br>"
-            "The training process includes a small grid search over learning rates and weight decay values to find the best combination for your dataset.<br><br>"
-            "The following parameters need to be set:<br>"
+            "The following <b>parameters</b> need to be set:<br>"
             "<b>Head task</b>: <code>croptype</code> for multi-class crop type prediction or <code>landcover</code> for land-cover training.<br>"
             "<b>Head type</b>: <code>linear</code> uses a single linear layer, <code>mlp</code> adds a small MLP head for extra capacity.<br>"
             "<b>Epochs</b>: number of training epochs for the head.<br>"
@@ -2367,12 +2531,11 @@ class WorldCerealTrainingApp:
             "<b>Weight decay</b>: (float); only adjust if you know what you're doing.<br>"
             "<b>Use class balancing</b>: By default enabled to ensure minority classes are not discarded. However, depending on your training class distribution this may lead to undesired results.<br>"
             "       There is no golden rule here. If your main goal is to make sure the most dominant classes in your training data are very precisely identified in your map, you can opt to NOT apply class balancing.<br><br>"
+            "<b>Custom suffix</b>: an optional short string added to the default model name for easier identification. Avoid spaces and special characters to ensure compatibility with CDSE upload and future model management.<br><br>"
+            "<b>Training completed?</b><br>"
             "Your ready-to-use classification model, along with cal/val metrics, confusion matrices, and logs will be written to disk.<br>"
             "The resulting artifacts (model weights + config + packaged `.zip`) are stored in the `./downstream_heads/` directory.<br>"
             "Keep this directory around: the zip bundle will be uploaded to CDSE in the next step and the config is reused whenever you redeploy or troubleshoot the head.<br><br>"
-            "The name of your model is set automatically based on the season ID and number of classes in your training data.<br>"
-            "You have the option to provide a <b>custom suffix</b> to be added to the default model name.<br>"
-            "Keep the suffix short and avoid spaces and special characters to ensure compatibility with CDSE upload and future model management."
         )
         head_task_dropdown = widgets.Dropdown(
             options=["croptype", "landcover"],
@@ -2583,6 +2746,15 @@ class WorldCerealTrainingApp:
             self.head_output_path = Path(base_output_dir) / model_name
             self.head_output_path.mkdir(parents=True, exist_ok=True)
 
+            # Get custom presto model info if available
+            presto_model_path = None
+            presto_model_fingerprint = None
+            if self.presto_model_package is not None:
+                presto_model_path = self.presto_model_package.get("presto_local_path")
+                presto_model_fingerprint = self.presto_model_package.get(
+                    "presto_fingerprint"
+                )
+
             try:
                 print("Training started...")
                 train_seasonal_torch_head(
@@ -2596,6 +2768,8 @@ class WorldCerealTrainingApp:
                     weight_decay=weight_decay,
                     use_balancing=use_balancing,
                     num_workers=0,
+                    presto_model_path=presto_model_path,
+                    presto_model_fingerprint=presto_model_fingerprint,
                 )
                 print(
                     f"Training completed. Artifacts saved to: {self.head_output_path}"
@@ -2749,10 +2923,10 @@ class WorldCerealTrainingApp:
                 load_output,
                 widgets.HTML("<h3>Model to be deployed:</h3>"),
                 model_path_output,
-                widgets.HTML("<h3>CDSE authentication</h3>"),
-                auth_info,
-                widgets.HBox([authenticate_button, reset_auth_button]),
-                auth_output,
+                # widgets.HTML("<h3>CDSE authentication</h3>"),
+                # auth_info,
+                # widgets.HBox([authenticate_button, reset_auth_button]),
+                # auth_output,
                 widgets.HTML("<h3>Deployment</h3>"),
                 widgets.HBox(
                     [deploy_button],
@@ -2949,32 +3123,49 @@ class WorldCerealTrainingApp:
         )
         processing_params_info = self._info_callout(
             "The following parameters are available to configure the map generation process:<br><br>"
-            "<b>Output suffix:</b> An optional label that will be appended to the output folder name to help you identify different runs or configurations.<br>"
-            "      By default, your output folder receives the name of your model and selected growing season.<br>"
-            "<b>Mask cropland:</b> By default enabled to mask out non-cropland areas in the output map. Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
-            "<b>Export cropland results:</b> By default enabled to export the cropland head predictions as a separate layer in the output map. Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
-            "<b>Export class probabilities:</b> By default enabled to export the predicted class probabilities as separate layers in the output map. Disable if you are not interested in the probabilities to save processing time and output storage space.<br>"
+            "<b>Land cover mapping</b>:<br>"
+            "   - Generate cropland product: By default enabled to export the cropland head predictions as a separate layer in the output map. Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
+            "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output. Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
+            "   - Custom land cover model URL: Optionally override the default land cover model used for cropland masking and product generation. Needs to point to a .zip file deployed in the cloud (e.g. CDSE bucket).<br><br>"
             "<b>Postprocessing:</b> By default enabled to run a majority vote postprocessing step on the predicted classes to smooth the results.<br>"
             "       Depending on your use case, you may want to disable postprocessing to get the raw model predictions without any smoothing.<br>"
             "       Postprocessing can be enabled/disabled separately for the crop type and cropland predictions.<br>"
             "       For the majority vote method, you can adjust the <b>kernel size</b> of the majority vote filter to make it more or less aggressive.<br>"
-            "       You can also opt for the simpler and less aggressive <b>'smooth_probabilities'</b> method."
+            "       You can also opt for the simpler and less aggressive <b>'smooth_probabilities'</b> method.<br><br>"
+            "<b>Export</b>:<br>"
+            "   - Export class probabilities: By default enabled to export the predicted class probabilities as separate layers in the output map. Disable if you are not interested in the probabilities to save processing time and output storage space.<br>"
+            "   - Output suffix: A required label that will be appended to the output folder name to help you identify different runs or configurations.<br>"
+            "      Keep it short and without special characters."
         )
         output_name_input = widgets.Text(
             value="",
             description="Output suffix:",
-            placeholder="optional suffix for output folder name",
+            placeholder="required suffix for output folder name",
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
-            tooltip="Keep it short and avoid spaces and special characters.",
+            tooltip="Required. Keep it short and avoid spaces and special characters.",
+        )
+        custom_landcover_model_value = ""
+        if self.presto_model_package is not None:
+            custom_landcover_model_value = (
+                self.presto_model_package.get("seasonal_model_path") or ""
+            )
+        custom_landcover_model_input = widgets.Text(
+            value=custom_landcover_model_value,
+            description="Custom land cover model URL:",
+            placeholder="https://... .zip",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+            description_width="200px",
         )
 
-        mask_cropland_checkbox = widgets.Checkbox(
-            value=True,
-            description="Mask cropland",
-        )
         enable_cropland_head_checkbox = widgets.Checkbox(
             value=True,
-            description="Export cropland results",
+            description="Generate cropland product",
+            description_width="300px",
+        )
+        mask_cropland_checkbox = widgets.Checkbox(
+            value=True,
+            description="Mask cropland in crop type product",
+            description_width="350px",
         )
         export_probs_checkbox = widgets.Checkbox(
             value=True,
@@ -2983,7 +3174,7 @@ class WorldCerealTrainingApp:
         croptype_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on crop type results",
-            description_width="300px",
+            description_width="500px",
         )
         croptype_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
@@ -2999,7 +3190,7 @@ class WorldCerealTrainingApp:
         cropland_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on cropland results",
-            description_width="300px",
+            description_width="500px",
         )
         cropland_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
@@ -3040,6 +3231,7 @@ class WorldCerealTrainingApp:
             "season_hint": season_hint,
             "season_id_input": season_id_input,
             "output_name_input": output_name_input,
+            "custom_landcover_model_input": custom_landcover_model_input,
             "mask_cropland_checkbox": mask_cropland_checkbox,
             "enable_cropland_head_checkbox": enable_cropland_head_checkbox,
             "export_probs_checkbox": export_probs_checkbox,
@@ -3082,9 +3274,11 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>3) Processing parameters</h3>"),
                 processing_params_message,
                 processing_params_info,
-                widgets.HBox([output_name_input]),
-                widgets.HBox([mask_cropland_checkbox, enable_cropland_head_checkbox]),
-                widgets.HBox([export_probs_checkbox]),
+                widgets.HTML("<h4>Land cover mapping</h4>"),
+                widgets.HBox([enable_cropland_head_checkbox]),
+                widgets.HBox([mask_cropland_checkbox]),
+                widgets.HBox([custom_landcover_model_input]),
+                widgets.HTML("<h4>Postprocessing</h4>"),
                 widgets.HBox([croptype_postprocess_enabled]),
                 widgets.HBox(
                     [croptype_postprocess_method, croptype_postprocess_kernel]
@@ -3093,6 +3287,9 @@ class WorldCerealTrainingApp:
                 widgets.HBox(
                     [cropland_postprocess_method, cropland_postprocess_kernel]
                 ),
+                widgets.HTML("<h4>Export</h4>"),
+                widgets.HBox([export_probs_checkbox]),
+                widgets.HBox([output_name_input]),
                 widgets.HTML("<h3>4) Generate your map!</h3>"),
                 widgets.HBox(
                     [generate_button],
@@ -3136,11 +3333,15 @@ class WorldCerealTrainingApp:
         status_message = self.tab8_widgets.get("status_message")
         aoi_map = self.tab8_widgets.get("aoi_map")
         season_slider_obj = self.tab8_widgets.get("season_slider")
+        generate_button = self.tab8_widgets.get("generate_button")
         mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
         enable_cropland_head_checkbox = self.tab8_widgets.get(
             "enable_cropland_head_checkbox"
         )
         export_probs_checkbox = self.tab8_widgets.get("export_probs_checkbox")
+        custom_landcover_model_input = self.tab8_widgets.get(
+            "custom_landcover_model_input"
+        )
         croptype_postprocess_enabled = self.tab8_widgets.get(
             "croptype_postprocess_enabled"
         )
@@ -3163,6 +3364,14 @@ class WorldCerealTrainingApp:
         output_name_input = self.tab8_widgets.get("output_name_input")
         season_id_input = self.tab8_widgets.get("season_id_input")
         output = self.tab8_widgets.get("output")
+
+        def _schedule_output(callback) -> None:
+            ip = get_ipython()
+            io_loop = getattr(getattr(ip, "kernel", None), "io_loop", None)
+            if io_loop is not None:
+                io_loop.add_callback(callback)
+            else:
+                callback()
 
         # Clear previous output and create separate widgets inside
         if output is not None:
@@ -3211,6 +3420,11 @@ class WorldCerealTrainingApp:
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
+        custom_landcover_model_url = (
+            custom_landcover_model_input.value.strip()
+            if custom_landcover_model_input is not None
+            else ""
+        )
         croptype_pp_enabled = (
             croptype_postprocess_enabled.value
             if croptype_postprocess_enabled is not None
@@ -3248,6 +3462,10 @@ class WorldCerealTrainingApp:
         # Start processing in background thread to avoid blocking the UI, and show logs in log_out
         try:
             run_suffix = output_name_input.value.strip() if output_name_input else ""
+            if not run_suffix:
+                with log_out:
+                    print("Provide an output suffix before generating a map.")
+                return
             model_name = self.head_package_path.stem
             season_start = pd.Timestamp(self.tab8_season_window.start_date)
             season_end = pd.Timestamp(self.tab8_season_window.end_date)
@@ -3301,6 +3519,14 @@ class WorldCerealTrainingApp:
                 .enforce_cropland_gate(mask_cropland)
                 .export_class_probabilities(export_class_probs)
             )
+            if custom_landcover_model_url:
+                workflow_builder = workflow_builder.seasonal_model_zip(
+                    custom_landcover_model_url
+                )
+            if custom_landcover_model_url and enable_cropland_head:
+                workflow_builder = workflow_builder.landcover_head_zip(
+                    custom_landcover_model_url
+                )
             workflow_builder = workflow_builder.cropland_postprocess(
                 enabled=cropland_pp_enabled,
                 method=cropland_pp_method,
@@ -3312,38 +3538,58 @@ class WorldCerealTrainingApp:
                 kernel_size=croptype_pp_kernel,
             )
             workflow_config = workflow_builder.build()
-
             if status_message is not None:
                 status_message.value = (
                     "<i>Processing started... this may take a while.</i>"
                 )
+            if generate_button is not None:
+                generate_button.disabled = True
 
-            try:
-                _ = run_map_production(
-                    spatial_extent=processing_extent,
-                    temporal_extent=self.tab8_processing_period,
-                    output_dir=output_dir,
-                    tile_resolution=tile_resolution,
-                    product_type=WorldCerealProductType.CROPTYPE,
-                    workflow_config=workflow_config,
-                    stop_event=None,
-                    plot_out=plot_out,
-                    log_out=log_out,
-                    display_outputs=True,
-                )
-                self.tab8_results = output_dir
-                if status_message is not None:
-                    status_message.value = "<i>Processing finished.</i>"
-                with log_out:
-                    print(
-                        "\n\nProcessing finished. Outputs saved to: " f"{output_dir}\n"
+            def _run_production() -> None:
+                try:
+                    _ = run_map_production(
+                        spatial_extent=processing_extent,
+                        temporal_extent=self.tab8_processing_period,
+                        output_dir=output_dir,
+                        tile_resolution=tile_resolution,
+                        product_type=WorldCerealProductType.CROPTYPE,
+                        workflow_config=workflow_config,
+                        stop_event=None,
+                        plot_out=plot_out,
+                        log_out=log_out,
+                        display_outputs=True,
                     )
-                self._update_tab9_state()
-            except Exception as exc_inner:
-                if status_message is not None:
-                    status_message.value = "<i>Processing failed. Check logs below.</i>"
-                with log_out:
-                    print(f"\n\nMap generation failed: {exc_inner}\n")
+                    self.tab8_results = output_dir
+
+                    def _on_success() -> None:
+                        if status_message is not None:
+                            status_message.value = "<i>Processing finished.</i>"
+                        with log_out:
+                            print(
+                                "\n\nProcessing finished. Outputs saved to: "
+                                f"{output_dir}\n"
+                            )
+                        if generate_button is not None:
+                            generate_button.disabled = False
+                        self._update_tab9_state()
+
+                    _schedule_output(_on_success)
+                except Exception as exc_inner:
+                    error_message = f"\n\nMap generation failed: {exc_inner}\n"
+
+                    def _on_failure() -> None:
+                        if status_message is not None:
+                            status_message.value = (
+                                "<i>Processing failed. Check logs below.</i>"
+                            )
+                        with log_out:
+                            print(error_message)
+                        if generate_button is not None:
+                            generate_button.disabled = False
+
+                    _schedule_output(_on_failure)
+
+            threading.Thread(target=_run_production, daemon=True).start()
         except Exception as exc:
             if status_message is not None:
                 status_message.value = "<i>Processing failed. Check logs below.</i>"
@@ -3387,11 +3633,9 @@ class WorldCerealTrainingApp:
         )
 
         products_info = self._info_callout(
-            "With each map generation run, up to four products are generated:<br>"
-            "- <code>croptype-raw</code>: custom crop type product<br>"
-            "- <code>croptype</code>: post-processed crop type product<br>"
-            "- <code>cropland-raw</code>: cropland mask (raw)<br>"
-            "- <code>cropland</code>: cropland mask (post-processed)<br><br>"
+            "With each map generation run, up to two products are generated:<br>"
+            "- <code>cropland</code>: cropland mask <br>"
+            "- <code>croptype</code>: crop type product<br><br>"
             "Each raster includes at least two bands:<br>"
             "1) winning class label<br>"
             "2) winning class probability (50-100)<br>"

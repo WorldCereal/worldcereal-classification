@@ -350,9 +350,41 @@ def visualize_timeseries(
     if sample_ids is None:
         sample_ids = extractions_gdf["sample_id"].unique()
         rng = np.random.default_rng(random_seed)
-        selected_ids = rng.choice(sample_ids, nsamples, replace=False)
+        selected_ids = None
+        if crop_label_attr is not None and crop_label_attr in extractions_gdf.columns:
+            labels_by_sample = extractions_gdf.groupby("sample_id")[
+                crop_label_attr
+            ].first()
+            labels_by_sample = labels_by_sample.dropna()
+            if not labels_by_sample.empty:
+                per_label = labels_by_sample.groupby(labels_by_sample).sample(
+                    n=1,
+                    random_state=random_seed,
+                )
+                selected_ids = per_label.index.to_numpy()
+                if selected_ids.size > nsamples:
+                    logger.warning(
+                        "More crop types available than requested samples; "
+                        "showing a subset."
+                    )
+                    selected_ids = rng.choice(
+                        selected_ids,
+                        nsamples,
+                        replace=False,
+                    )
+                if selected_ids.size < nsamples:
+                    remaining = np.setdiff1d(sample_ids, selected_ids)
+                    if remaining.size:
+                        extra = rng.choice(
+                            remaining,
+                            min(nsamples - selected_ids.size, remaining.size),
+                            replace=False,
+                        )
+                        selected_ids = np.concatenate([selected_ids, extra])
+        if selected_ids is None:
+            selected_ids = rng.choice(sample_ids, nsamples, replace=False)
     else:
-        selected_ids = sample_ids
+        selected_ids = np.array(sample_ids)
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
