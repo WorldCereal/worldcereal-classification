@@ -199,7 +199,11 @@ class WorldCerealTrainingApp:
         self.welcome_screen = tab0
         self.tabs_container = widgets.VBox([self.welcome_screen])
         self.tabs_container.layout = widgets.Layout(
-            width="100%", max_width="100%", overflow="hidden", align_items="stretch"
+            width="100%",
+            max_width="100%",
+            height="900px",
+            overflow="auto",
+            align_items="stretch",
         )
         self.tabs.observe(self._on_tab_change, names="selected_index")
         self._update_nav_buttons()
