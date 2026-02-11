@@ -3162,7 +3162,7 @@ class WorldCerealTrainingApp:
         )
         croptype_postprocess_enabled = widgets.Checkbox(
             value=True,
-            description="Run postprocessing on crop type results",
+            description="Enable for crop type",
             description_width="500px",
         )
         croptype_postprocess_method = widgets.Dropdown(
@@ -3178,7 +3178,7 @@ class WorldCerealTrainingApp:
         )
         cropland_postprocess_enabled = widgets.Checkbox(
             value=True,
-            description="Run postprocessing on cropland results",
+            description="Enable for cropland",
             description_width="500px",
         )
         cropland_postprocess_method = widgets.Dropdown(
