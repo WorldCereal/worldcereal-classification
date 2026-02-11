@@ -104,6 +104,7 @@ def visualize_products(
     ----------
     paths : dict
         Mapping of product name -> raster path.
+        The raster file should contain a classification band (1) and probability band (2).
     luts : dict, optional
         Mapping of product name (cropland/croptype) -> LUT.
     interactive_mode : bool, optional
