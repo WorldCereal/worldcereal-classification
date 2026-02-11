@@ -1918,17 +1918,16 @@ class WorldCerealTrainingApp:
             "Using a geospatial foundation model (Presto), we derive training features for each of your training samples.<br>"
             "Presto was pre-trained on millions of unlabeled samples around the world and finetuned on a global dataset of labelled land cover and crop type observations from the WorldCereal reference database.<br>"
             "The resulting <b>128 embeddings</b> (`presto_ft_0` -> `presto_ft_127`) nicely condense the Sentinel-1, Sentinel-2, meteo timeseries and ancillary data for your season of interest into a limited number of meaningful features which we will use for downstream model training.<br><br>"
-            "We provide some options aimed at increasing temporal robustness of your final crop model.<br>"
+            "We provide some options aimed at increasing robustness of your final crop model.<br>"
             "This is controlled by the following arguments:<br>"
-            "    - <b>augment</b> parameter: when set to `True`, it introduces slight temporal jittering of the processing window, making the model more robust to slight variations in seasonality across different years. <br>"
-            "           By default, this option is set to `True`, but especially when training a model for a specific region and year with good local data, disabling this option could be considered.<br>"
-            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
             "    - <b>mask_on_training</b> parameter: when `True`, applies sensor masking augmentations (e.g. simulating S1/S2 dropouts, additional clouds, ancillary feature removals) only to the training split to improve robustness to real-world data gaps.<br>"
             "           The validation/test split is kept untouched for fair evaluation.<br>"
-        )
-        augment_checkbox = widgets.Checkbox(
-            value=True,
-            description="Augment",
+            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
+            "<br>"
+            "<b>Dataset splitting options</b>:<br>"
+            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used.<br>"
+            "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
+            "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
         )
         mask_on_training_checkbox = widgets.Checkbox(
             value=True,
@@ -1981,7 +1980,6 @@ class WorldCerealTrainingApp:
             "load_button": load_button,
             "load_output": load_output,
             "presto_message": presto_message,
-            "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
             "use_spatial_split_checkbox": use_spatial_split_checkbox,
@@ -1991,13 +1989,6 @@ class WorldCerealTrainingApp:
             "embeddings_button": embeddings_button,
             "embeddings_output": embeddings_output,
         }
-
-        def _on_augment_toggle(change):
-            if repeats_input is not None:
-                repeats_input.disabled = not change["new"]
-
-        augment_checkbox.observe(_on_augment_toggle, names="value")
-        _on_augment_toggle({"new": augment_checkbox.value})
 
         load_button.on_click(self._on_tab5_load_training_df)
         embeddings_button.on_click(self._on_tab5_compute_embeddings)
@@ -2015,8 +2006,8 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
                 embeddings_message,
                 embeddings_info,
-                widgets.HBox([augment_checkbox, repeats_input]),
                 widgets.HBox([mask_on_training_checkbox]),
+                widgets.HBox([repeats_input]),
                 dataset_split_title,
                 widgets.HBox([use_spatial_split_checkbox, bin_size_degrees_input]),
                 widgets.HBox([val_size_input, test_size_input]),
@@ -2400,7 +2391,6 @@ class WorldCerealTrainingApp:
     def _on_tab5_compute_embeddings(self, _=None):
         df = self._get_tab4_working_df()
         output = self.tab5_widgets["embeddings_output"]
-        augment_checkbox = self.tab5_widgets.get("augment_checkbox")
         mask_on_training_checkbox = self.tab5_widgets.get("mask_on_training_checkbox")
         repeats_input = self.tab5_widgets.get("repeats_input")
         use_spatial_split_checkbox = self.tab5_widgets.get("use_spatial_split_checkbox")
@@ -2423,7 +2413,6 @@ class WorldCerealTrainingApp:
                     "Season window missing. Complete Tab 3 season alignment or load a valid training dataframe containing a season window in its name."
                 )
                 return
-            augment = True if augment_checkbox is None else augment_checkbox.value
             mask_on_training = (
                 True
                 if mask_on_training_checkbox is None
@@ -2458,9 +2447,9 @@ class WorldCerealTrainingApp:
                 self.tab5_df = compute_seasonal_presto_embeddings(
                     df,
                     season_id=self.season_id,
-                    augment=augment,
                     mask_on_training=mask_on_training,
                     repeats=repeats,
+                    augment=False,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
                     custom_presto_url=custom_presto_url,
