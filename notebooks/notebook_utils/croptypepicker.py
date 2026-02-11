@@ -259,10 +259,6 @@ class CropTypePicker:
 
         # First get the legend (make a copy to avoid modifying cached version)
         self.full_legend = get_legend().copy()
-        self.full_legend["ewoc_code"] = (
-            self.full_legend["ewoc_code"].str.replace("-", "").astype(np.int64)
-        )
-        self.full_legend = self.full_legend.set_index("ewoc_code")
 
         # Get rid of unknown class
         self.legend = self.full_legend.loc[self.full_legend.index != 0]

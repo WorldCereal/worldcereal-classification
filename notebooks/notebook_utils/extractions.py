@@ -2,7 +2,7 @@ import logging
 import textwrap
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import geopandas as gpd
 import ipywidgets as widgets
@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from ipyleaflet import GeoJSON, Map, WidgetControl, basemaps
 from loguru import logger
+from openeo_gfmap.manager.job_splitters import load_s2_grid
 from prometheo.utils import DEFAULT_SEED
 from shapely.geometry import Polygon, box
 from tabulate import tabulate
@@ -20,6 +21,7 @@ from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.legend import ewoc_code_to_label
 from worldcereal.utils.refdata import (
+    gdf_to_points,
     query_private_extractions,
     query_public_extractions,
 )
@@ -55,6 +57,92 @@ def validate_required_attributes(
         raise ValueError(
             f"Missing essential attributes in the input dataframe: {missing_attributes}"
         )
+
+
+def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
+    """Load the input dataframe from the given path.
+
+    Parameters
+    ----------
+    df_path : Path
+        path to the input dataframe
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame containing the
+        input dataframe
+    """
+
+    if df_path.name.endswith("parquet"):
+        return gpd.read_parquet(df_path)
+    else:
+        return gpd.read_file(df_path)
+
+
+def prepare_samples_dataframe(
+    samples_df_path: Union[str, Path],
+    ref_id: str,
+) -> gpd.GeoDataFrame:
+    """Prepare the samples dataframe for the point extractions.
+
+    Parameters
+    ----------
+    samples_df_path : Union[str, Path]
+        The path to the input dataframe containing the geometries
+        for which extractions need to be done
+    ref_id : str
+        The collection ID.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Processed GeoDataFrame containing the samples
+
+    Raises
+    ------
+    ValueError
+        If the input dataframe is missing essential attributes
+    """
+
+    gdf = load_dataframe(Path(samples_df_path))
+
+    # Add ref_id attribute
+    gdf["ref_id"] = ref_id
+
+    # Check presence of essential attributes
+    validate_required_attributes(gdf, required_columns=RDM_DEFAULT_COLUMNS)
+
+    # Keep essential attributes only
+    gdf = gdf[RDM_DEFAULT_COLUMNS]
+
+    # Convert geometries to points
+    logger.info(f"Loaded {len(gdf)} samples from {samples_df_path}")
+    gdf = gdf_to_points(gdf)
+    if len(gdf) == 0:
+        logger.warning("No valid samples left in your dataset.")
+    if len(gdf) > 1000:
+        logger.warning(
+            "More than 1000 samples in your dataset. Extractions will likely consume a considerable amount of credits."
+        )
+
+    # Check how many S2 tiles are involved
+    gdf = gdf.to_crs(epsg=4326)
+    s2_grid = load_s2_grid()
+    gdf = gpd.sjoin(
+        gdf,
+        s2_grid[["tile", "geometry"]],
+        predicate="intersects",
+    ).drop(columns=["index_right"])
+    n_tiles = len(gdf["tile"].unique())
+    logger.info(f"Samples cover {n_tiles} S2 tiles.")
+    if n_tiles > 50:
+        logger.warning(
+            "The number of S2 tiles is high. Extractions will take a while..."
+        )
+    # drop tile attribute again
+    gdf = gdf.drop(columns=["tile"])
+
+    return gdf
 
 
 def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
