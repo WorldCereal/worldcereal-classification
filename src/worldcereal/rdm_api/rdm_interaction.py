@@ -58,7 +58,7 @@ class RdmInteraction:
     MAX_RETRIES = 5
 
     def __init__(self, resilient: bool = True):
-        self.headers = None
+        self.headers: Optional[dict[str, str]] = None
         self.session = requests.Session()
         if resilient:
             self._make_resilient()
