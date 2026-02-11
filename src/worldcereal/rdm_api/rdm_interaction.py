@@ -1,8 +1,9 @@
 """Interaction with the WorldCereal RDM API. Used to generate the reference data in geoparquet format for the point extractions."""
 
 import json
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import duckdb
 import geopandas as gpd
@@ -10,9 +11,14 @@ import pandas as pd
 import requests
 from loguru import logger
 from openeo.rest.auth.oidc import (
+    OidcDeviceCodePollTimeout,
     OidcClientInfo,
     OidcDeviceAuthenticator,
+    OidcException,
     OidcProviderInfo,
+    VerificationInfo,
+    clip,
+    create_timer,
 )
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from requests.adapters import HTTPAdapter
@@ -68,12 +74,22 @@ class RdmInteraction:
         self.session.mount("https://", HTTPAdapter(max_retries=retries))
         self.session.mount("http://", HTTPAdapter(max_retries=retries))
 
-    def authenticate(self):
+    def authenticate(
+        self,
+        display_callback: Optional[Callable[[VerificationInfo], None]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
         """Authenticate the user with the RDM API via device code flow."""
-        self.headers = self._get_api_bearer_token()
+        self.headers = self._get_api_bearer_token(
+            display_callback=display_callback, progress_callback=progress_callback
+        )
         return self
 
-    def _get_api_bearer_token(self) -> dict[str, str]:
+    def _get_api_bearer_token(
+        self,
+        display_callback: Optional[Callable[[VerificationInfo], None]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, str]:
         """Get API bearer access token via device code flow.
 
         Returns
@@ -93,9 +109,88 @@ class RdmInteraction:
 
         authenticator = OidcDeviceAuthenticator(client_info=client_info)
 
-        tokens = authenticator.get_tokens()
+        if display_callback is None:
+            tokens = authenticator.get_tokens()
+            return {"Authorization": f"Bearer {tokens.access_token}"}
+
+        tokens = self._get_tokens_with_device_flow(
+            authenticator=authenticator,
+            display_callback=display_callback,
+            progress_callback=progress_callback,
+        )
 
         return {"Authorization": f"Bearer {tokens.access_token}"}
+
+    def _get_tokens_with_device_flow(
+        self,
+        authenticator: OidcDeviceAuthenticator,
+        display_callback: Callable[[VerificationInfo], None],
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
+        """Run device flow with custom UI callbacks to keep output inside widgets."""
+        verification_info = authenticator._get_verification_info()
+        display_callback(verification_info)
+
+        token_endpoint = authenticator._provider_config["token_endpoint"]
+        post_data = {
+            "client_id": authenticator.client_id,
+            "device_code": verification_info.device_code,
+            "grant_type": authenticator.grant_type,
+        }
+        if authenticator._pkce:
+            post_data["code_verifier"] = authenticator._pkce.code_verifier
+        else:
+            post_data["client_secret"] = authenticator.client_secret
+
+        poll_interval = verification_info.interval
+        elapsed = create_timer()
+        next_poll = elapsed() + poll_interval
+        sleep = clip(authenticator._max_poll_time / 100, min=1, max=5)
+
+        while elapsed() <= authenticator._max_poll_time:
+            time.sleep(sleep)
+
+            if elapsed() >= next_poll:
+                if progress_callback:
+                    progress_callback("Polling authorization status...")
+                try:
+                    resp = authenticator._requests.post(
+                        url=token_endpoint, data=post_data, timeout=5
+                    )
+                except requests.exceptions.RequestException as exc:
+                    raise OidcException(
+                        f"Failed to retrieve access token at {token_endpoint!r}: {exc!r}"
+                    ) from exc
+
+                if resp.status_code == 200:
+                    if progress_callback:
+                        progress_callback("Authorized successfully.")
+                    return authenticator._get_access_token_result(data=resp.json())
+
+                try:
+                    error = resp.json()["error"]
+                except Exception:
+                    error = "unknown"
+
+                if error == "authorization_pending":
+                    if progress_callback:
+                        progress_callback("Authorization pending...")
+                elif error == "slow_down":
+                    if progress_callback:
+                        progress_callback("Slowing down...")
+                    poll_interval += 5
+                else:
+                    raise OidcException(
+                        f"Failed to retrieve access token at {token_endpoint!r}: {resp.status_code} {resp.reason!r} {resp.text!r}"
+                    )
+
+                next_poll = elapsed() + poll_interval
+
+        if progress_callback:
+            progress_callback("Timed out while waiting for authorization.")
+        raise OidcDeviceCodePollTimeout(
+            f"Timeout ({authenticator._max_poll_time:.1f}s) while polling for access token."
+        )
 
     def _get_headers(self) -> Dict[str, str]:
         """

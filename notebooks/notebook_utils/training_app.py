@@ -19,6 +19,7 @@ This module provides an interactive widget-based interface for:
 import json
 import platform
 from pathlib import Path
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -26,6 +27,7 @@ import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 from IPython.display import HTML, display
+from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.classifier import (
     align_extractions_to_season,
     compute_seasonal_presto_embeddings,
@@ -104,6 +106,9 @@ class WorldCerealTrainingApp:
         self.tab9_model_url: Optional[str] = None
 
         self.cdse_auth_cleared = False
+        self.cdse_auth_failed = False
+        self.cdse_auth_in_progress = False
+        self.cdse_connection = None
 
         # Widgets per tab
         self.tab0_widgets: Dict[str, Any] = {}
@@ -2683,6 +2688,12 @@ class WorldCerealTrainingApp:
             icon="refresh",
             layout=widgets.Layout(width="220px", height="40px"),
         )
+        authenticate_button = widgets.Button(
+            description="Authenticate",
+            button_style="success",
+            icon="key",
+            layout=widgets.Layout(width="150px", height="40px"),
+        )
         auth_output = widgets.Output(
             layout=widgets.Layout(
                 width="100%",
@@ -2720,10 +2731,12 @@ class WorldCerealTrainingApp:
             "report_output": report_output,
             "auth_output": auth_output,
             "reset_auth_button": reset_auth_button,
+            "authenticate_button": authenticate_button,
         }
         load_button.on_click(self._on_tab7_load_model)
         deploy_button.on_click(self._on_deploy_click)
         reset_auth_button.on_click(self._on_reset_cdse_auth_click)
+        authenticate_button.on_click(self._on_authenticate_cdse_click)
 
         return widgets.VBox(
             [
@@ -2738,7 +2751,7 @@ class WorldCerealTrainingApp:
                 model_path_output,
                 widgets.HTML("<h3>CDSE authentication</h3>"),
                 auth_info,
-                widgets.HBox([reset_auth_button]),
+                widgets.HBox([authenticate_button, reset_auth_button]),
                 auth_output,
                 widgets.HTML("<h3>Deployment</h3>"),
                 widgets.HBox(
@@ -2809,19 +2822,26 @@ class WorldCerealTrainingApp:
             if self.head_package_path.suffix.lower() != ".zip":
                 print("Torch head archive must be a .zip file.")
                 return
+            if self.cdse_connection is None:
+                print(
+                    "CDSE authentication required. Use the Authenticate button in the CDSE authentication section above."
+                )
+                return
             target_object_name = self.head_package_path.name
             print(f"Uploading torch head archive as {target_object_name} ...")
 
         try:
             artifact_helper = OpenEOArtifactHelper.from_openeo_connection(
-                cdse_connection()
+                self.cdse_connection
             )
             model_s3_uri = artifact_helper.upload_file(
                 target_object_name, str(self.head_package_path)
             )
             model_url = artifact_helper.get_presigned_url(model_s3_uri)
         except Exception as exc:
-            print(f"Deployment failed: {exc}")
+            with report_output:
+                print(f"Deployment failed: {exc}")
+            return
 
         with report_output:
             self.tab7_model_url = model_url
@@ -3814,6 +3834,7 @@ class WorldCerealTrainingApp:
         load_output = self.tab7_widgets.get("load_output")
         auth_output = self.tab7_widgets.get("auth_output")
         reset_auth_button = self.tab7_widgets.get("reset_auth_button")
+        authenticate_button = self.tab7_widgets.get("authenticate_button")
         model_output = self.tab7_widgets.get("model_path_output")
 
         if self.workflow_mode == "inference-only":
@@ -3844,19 +3865,38 @@ class WorldCerealTrainingApp:
             load_button.layout.display = "block"
             load_output.layout.display = "block"
 
-        needs_auth = self._needs_cdse_authentication()
-        with auth_output:
-            auth_output.clear_output()
-            if needs_auth:
-                print(
-                    "No CDSE refresh token found. You will be asked to authenticate upon pressing the 'Deploy Model' button. Make sure to click the link appearing below the application."
-                )
-            else:
-                print(
-                    "CDSE refresh token found on this machine. Click the reset button if you want to login with another account."
-                )
+        has_connection = self.cdse_connection is not None
+        needs_auth = self._needs_cdse_authentication() and not has_connection
+        if not self.cdse_auth_failed and not self.cdse_auth_in_progress:
+            with auth_output:
+                auth_output.clear_output()
+                if has_connection:
+                    print("CDSE authentication ready. You can deploy your model.")
+                elif needs_auth:
+                    print(
+                        "No CDSE refresh token found. Use the Authenticate button to sign in."
+                    )
+                else:
+                    print(
+                        "CDSE refresh token found on this machine. Click the reset button if you want to login with another account."
+                    )
+        if needs_auth:
+            self.cdse_connection = None
+        elif self.cdse_connection is None:
+            try:
+                self.cdse_connection = cdse_connection()
+            except Exception as exc:
+                self.cdse_connection = None
+                with auth_output:
+                    print(
+                        "Failed to initialize CDSE connection.\n"
+                        f"Error: {exc}\n\n"
+                        "Use the Authenticate button to sign in."
+                    )
         if reset_auth_button is not None:
             reset_auth_button.layout.display = "none" if needs_auth else "block"
+        if authenticate_button is not None:
+            authenticate_button.disabled = has_connection or self.cdse_auth_in_progress
         return
 
     def _update_tab8_state(self):
@@ -3965,13 +4005,50 @@ class WorldCerealTrainingApp:
 
                 clear_openeo_token_cache()
                 self.cdse_auth_cleared = True
+                self.cdse_auth_failed = False
+                self.cdse_auth_in_progress = False
+                self.cdse_connection = None
                 print(
-                    "<i>CDSE authentication cache cleared. You will be asked to authenticate upon model deployment.</i>"
+                    "CDSE authentication cache cleared. Use Authenticate to sign in again."
                 )
             except Exception as exc:
-                print(f"<i>Failed to clear CDSE authentication cache: {exc}</i>")
+                print(f"Failed to clear CDSE authentication cache: {exc}")
 
         self._update_tab7_state()
+
+    def _on_authenticate_cdse_click(self, _=None) -> None:
+        output = self.tab7_widgets.get("auth_output")
+        authenticate_button = self.tab7_widgets.get("authenticate_button")
+        reset_auth_button = self.tab7_widgets.get("reset_auth_button")
+        if output is None:
+            return
+        if self.cdse_auth_in_progress:
+            return
+        self.cdse_auth_in_progress = True
+        output.clear_output()
+        with output:
+            print("🔐 Authenticating with CDSE...")
+
+        def _run_auth() -> None:
+            connection = trigger_cdse_authentication(output)
+            self.cdse_connection = connection
+            self.cdse_auth_in_progress = False
+            if connection is None:
+                self.cdse_auth_failed = True
+                with output:
+                    print("❌ Authentication failed. Please try again.")
+            else:
+                self.cdse_auth_cleared = False
+                self.cdse_auth_failed = False
+                with output:
+                    print("CDSE authentication ready. You can deploy your model.")
+                if authenticate_button is not None:
+                    authenticate_button.disabled = True
+                if reset_auth_button is not None:
+                    reset_auth_button.layout.display = "block"
+            self._update_tab7_state()
+
+        threading.Thread(target=_run_auth, daemon=True).start()
 
     def _is_valid_url(self, value: str) -> bool:
         try:
