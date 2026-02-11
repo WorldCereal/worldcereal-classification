@@ -2,7 +2,7 @@
 Interactive application for the WorldCereal training and inference workflow.
 
 Usage:
-    app = WorldCerealTrainingApp.run()
+    app = WorldCerealTrainingApp.run(presto_model_package=presto_model_package)
 
 This module provides an interactive widget-based interface for:
 1. Retrieving reference data
@@ -63,9 +63,11 @@ from worldcereal.utils.upload import OpenEOArtifactHelper
 
 class WorldCerealTrainingApp:
     @classmethod
-    def run(cls) -> "WorldCerealTrainingApp":
+    def run(
+        cls, presto_model_package: Optional[dict] = None
+    ) -> "WorldCerealTrainingApp":
         """Instantiate and display the training application."""
-        app = cls()
+        app = cls(presto_model_package=presto_model_package)
         display(app.tabs_container)
         return app
 
@@ -712,6 +714,7 @@ class WorldCerealTrainingApp:
                 widgets.HBox([select_crops_button]),
                 croptype_picker_status,
                 croptype_picker_container,
+                widgets.HTML("<b>5) Start your search for reference data!</b>"),
                 widgets.HBox([run_query_button]),
                 widgets.HTML("<h3 style='margin: 10px 0;'>Query results</h3>"),
                 query_output,
@@ -1896,7 +1899,12 @@ class WorldCerealTrainingApp:
                 if value:
                     presto_items.append(f"<li><b>{key}:</b> {value}</li>")
             if presto_items:
-                presto_message = widgets.HTML(value=f"<ul>{''.join(presto_items)}</ul>")
+                presto_message = widgets.HTML(
+                    value=(
+                        "<i>Using custom Presto model with the following paths:</i><br>"
+                        f"<ul>{''.join(presto_items)}</ul>"
+                    )
+                )
             else:
                 presto_message = widgets.HTML(
                     value="<i>Presto model package provided, but no paths were found, cannot continue!.</i>"
@@ -1971,6 +1979,7 @@ class WorldCerealTrainingApp:
             "load_input": load_input,
             "load_button": load_button,
             "load_output": load_output,
+            "presto_message": presto_message,
             "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
@@ -3144,6 +3153,7 @@ class WorldCerealTrainingApp:
             description="Custom land cover model URL:",
             placeholder="https://... .zip",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+            description_width="200px",
         )
 
         enable_cropland_head_checkbox = widgets.Checkbox(
@@ -3154,7 +3164,7 @@ class WorldCerealTrainingApp:
         mask_cropland_checkbox = widgets.Checkbox(
             value=True,
             description="Mask cropland in crop type product",
-            description_width="300px",
+            description_width="350px",
         )
         export_probs_checkbox = widgets.Checkbox(
             value=True,
@@ -3163,7 +3173,7 @@ class WorldCerealTrainingApp:
         croptype_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on crop type results",
-            description_width="400px",
+            description_width="500px",
         )
         croptype_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
@@ -3179,7 +3189,7 @@ class WorldCerealTrainingApp:
         cropland_postprocess_enabled = widgets.Checkbox(
             value=True,
             description="Run postprocessing on cropland results",
-            description_width="400px",
+            description_width="500px",
         )
         cropland_postprocess_method = widgets.Dropdown(
             options=["majority_vote", "smooth_probabilities"],
