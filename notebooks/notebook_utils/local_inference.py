@@ -15,11 +15,11 @@ import pandas as pd
 import xarray as xr
 from dateutil.parser import parse
 from loguru import logger
+from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
+
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
-
-from prometheo.predictors import NODATAVALUE
 
 
 def subset_ds_temporally(
@@ -295,6 +295,8 @@ def classification_to_geotiff(
         Stored as metadata tags on croptype classification bands."""
 
     # ignore import error for rioxarray if not used
+    import json
+
     import rasterio
     import rioxarray  # noqa: F401
 
