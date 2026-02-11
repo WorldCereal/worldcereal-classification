@@ -23,6 +23,7 @@ import geopandas as gpd
 import ipywidgets as widgets
 from IPython.display import HTML, clear_output, display
 from loguru import logger
+from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.extractions import (
     get_band_statistics,
     load_point_extractions,
@@ -94,6 +95,7 @@ class WorldCerealExtractionsApp:
         self.append_existing = False
         self.append_samples_df: Optional[gpd.GeoDataFrame] = None
         self.cdse_auth_cleared = False
+        self.cdse_auth_in_progress = False
 
         # UI components (initialized in build methods)
         self.tabs: Optional[widgets.Tab] = None
@@ -360,7 +362,37 @@ class WorldCerealExtractionsApp:
                     print(
                         "Click the link you see below to authenticate with your CDSE credentials ⬇️"
                     )
-                rdm.authenticate()
+
+                def _show_verification(info):
+                    with status_output:
+                        if info.verification_uri_complete:
+                            display(
+                                HTML(
+                                    '<p><a href="{url}" target="_blank" rel="noopener">'
+                                    "Open the CDSE login page</a></p>".format(
+                                        url=info.verification_uri_complete
+                                    )
+                                )
+                            )
+                        else:
+                            display(
+                                HTML(
+                                    '<p>Open <a href="{url}" target="_blank" rel="noopener">'
+                                    "this link</a> and enter code <b>{code}</b>.</p>".format(
+                                        url=info.verification_uri,
+                                        code=info.user_code,
+                                    )
+                                )
+                            )
+
+                def _show_progress(message):
+                    with status_output:
+                        print(message)
+
+                rdm.authenticate(
+                    display_callback=_show_verification,
+                    progress_callback=_show_progress,
+                )
 
                 with status_output:
                     print("\n✓ Authentication successful!")
@@ -1705,38 +1737,44 @@ class WorldCerealExtractionsApp:
     def _on_reset_auth_click(self, button):
         """Clear openEO token cache and inform user."""
         auth_output = self.tab3_widgets["auth_output"]
+        auth_output.clear_output()
         with auth_output:
-            clear_output(wait=True)
             try:
                 from notebook_utils.openeo import clear_openeo_token_cache
 
                 clear_openeo_token_cache()
                 self.cdse_auth_cleared = True
+                self.cdse_auth_in_progress = False
                 print("✅ CDSE authentication token has been cleared.")
                 print(
-                    "Click the link you see below the app to authenticate with your CDSE credentials ⬇️"
+                    "Click the link below to authenticate with your CDSE credentials ⬇️"
                 )
             except Exception as e:
                 print(f"❌ Error clearing authentication token: {e}")
                 return
+            trigger_cdse_authentication(auth_output)
 
-        self._trigger_cdse_authentication()
         self.cdse_auth_cleared = False
         self._update_cdse_auth_ui()
 
     def _on_authenticate_cdse_click(self, button):
         """Trigger CDSE device authentication flow."""
         auth_output = self.tab3_widgets["auth_output"]
+        if self.cdse_auth_in_progress:
+            return
+        self.cdse_auth_in_progress = True
+        auth_output.clear_output()
         with auth_output:
-            clear_output(wait=True)
             print("🔐 Authenticating with CDSE...")
-            print(
-                "Click the link you see below the app to authenticate with your CDSE credentials ⬇️"
-            )
+            print("Click the link below to authenticate with your CDSE credentials ⬇️")
 
-        self._trigger_cdse_authentication()
-        self.cdse_auth_cleared = False
-        self._update_cdse_auth_ui()
+        def _run_auth() -> None:
+            trigger_cdse_authentication(auth_output)
+            self.cdse_auth_in_progress = False
+            self.cdse_auth_cleared = False
+            self._update_cdse_auth_ui()
+
+        threading.Thread(target=_run_auth, daemon=True).start()
 
     def _needs_cdse_authentication(self) -> bool:
         if self.cdse_auth_cleared:
@@ -1753,11 +1791,6 @@ class WorldCerealExtractionsApp:
             )
 
         return not token_path.exists()
-
-    def _trigger_cdse_authentication(self) -> None:
-        from openeo_gfmap.backend import cdse_connection
-
-        cdse_connection()
 
     # =========================================================================
     # Tab 4: Visualize Results
@@ -2246,6 +2279,13 @@ class WorldCerealExtractionsApp:
             or authenticate_button is None
             or reset_auth_button is None
         ):
+            return
+
+        if self.cdse_auth_in_progress:
+            if auth_status is not None:
+                auth_status.value = "<b>⏳ CDSE authentication in progress...</b>"
+            authenticate_button.disabled = True
+            reset_auth_button.disabled = True
             return
 
         has_token = not self._needs_cdse_authentication()
