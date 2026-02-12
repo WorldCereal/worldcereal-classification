@@ -19,6 +19,7 @@ This module provides an interactive widget-based interface for:
 import json
 import platform
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -1199,8 +1200,12 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="100%", overflow="auto")
         )
         season_slider_obj = None
+        start_d = datetime(2019, 7, 1)
+        end_d = datetime(2021, 6, 30)
         with season_slider_output:
-            season_slider_obj = season_slider()
+            season_slider_obj = season_slider(
+                year_selector=False, show_year=False, start_date=start_d, end_date=end_d
+            )
 
         season_id_input = widgets.Text(
             value="",
