@@ -1982,7 +1982,7 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="180px"),
         )
         test_size_input = widgets.FloatText(
-            value=0.15,
+            value=0.2,
             description="Test size:",
             layout=widgets.Layout(width="180px"),
         )
@@ -2459,7 +2459,7 @@ class WorldCerealTrainingApp:
             if val_size < 0 or val_size >= 1:
                 print("Val size must be in the range [0, 1).")
                 return
-            test_size = 0.15 if test_size_input is None else test_size_input.value
+            test_size = 0.2 if test_size_input is None else test_size_input.value
             if test_size < 0 or test_size >= 1:
                 print("Test size must be in the range [0, 1).")
                 return
