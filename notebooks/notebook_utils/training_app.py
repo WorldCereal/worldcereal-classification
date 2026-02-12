@@ -49,7 +49,6 @@ from openeo_gfmap import TemporalContext
 from openeo_gfmap.backend import cdse_connection
 from tabulate import tabulate
 
-from worldcereal.openeo.inference import load_model_artifact
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import WorldCerealProductType
@@ -117,7 +116,6 @@ class WorldCerealTrainingApp:
         self.tab8_season_window: Optional[TemporalContext] = None
         self.tab8_results: Optional[Path] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
-        self.tab9_model_url: Optional[str] = None
 
         self.presto_model_package = presto_model_package
         self.init_warnings = self._validate_init_params(presto_model_package)
@@ -1188,10 +1186,9 @@ class WorldCerealTrainingApp:
             value="<i>Based on previous insights, define your growing season (max 12 months!). </i>"
         )
         season_picking_info = self._info_callout(
-            "Now use the controls below to pin down the exact <b>growing season window and year</b> you plan to target (maximum 12 consecutive months).<br><br>"
-            "    1. Pick the target year from the dropdown (this centers the slider around that year).<br>"
-            "    2. Drag the slider handles to the desired start/end months.<br>"
-            "    3. The summary automatically reports both the growing-season window and the derived full-year processing period (ending on your selected end month).<br><br>"
+            "Now use the controls below to pin down the exact <b>growing season window</b> you plan to target (maximum 12 consecutive months).<br><br>"
+            "    1. Drag the slider handles to the desired start/end months.<br>"
+            "    2. The summary automatically reports both the growing-season window and the derived full-year processing period (ending on your selected end month).<br><br>"
             "After picking a season, provide a short name for your season (e.g. 'ShortRains') in the text input below.<br>"
             "No spaces or special characters allowed, only letters and numbers.<br>"
             "This name will be used in the next step to refer to your season and to name your trained model, so choose wisely ;).<br><br>"
@@ -1219,7 +1216,10 @@ class WorldCerealTrainingApp:
             value="<i>Drops irrelevant samples and aligns your data to the selected season.</i>"
         )
         align_info = self._info_callout(
-            "Once you are satisfied with your season selection, click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season window.<br><br>"
+            "You have the option to select whether or not to apply strict seasonal alignment:<br>"
+            "   - relaxed mode (default): validity time of the sample should be within your selected season<br>"
+            "   - strict mode: same as relaxed mode, but additonal requirment that the full processing period should be covered by available EO time series for the sample<br><br>"
+            "Click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season."
         )
         strict_align_checkbox = widgets.Checkbox(
             value=False,
@@ -3626,33 +3626,6 @@ class WorldCerealTrainingApp:
             "For a more detailed inspection of the products, we advise to use QGIS for visualization."
         )
 
-        model_url_info = self._info_callout(
-            "The visualization tool needs to know which model was used to generate the map in order to correctly interpret the class labels and probabilities.<br><br>"
-            "If you generated the map yourself in Tab 8, the model URL is pre-filled for you.<br>"
-            "In case your model is no longer hosted on your private CDSE bucket (URL expired), make sure to deploy it again in Tab 7.<br><br>"
-            "If you want to visualize products which have been generated before, you will always need to provide the URL of the model that was used for product generation.<br>"
-        )
-        model_url_input = widgets.Text(
-            value=self.tab9_model_url or self.tab7_model_url or "",
-            description="Model URL:",
-            placeholder="https://...",
-            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
-        )
-        model_url_button = widgets.Button(
-            description="Use model URL",
-            button_style="warning",
-            icon="link",
-            layout=widgets.Layout(width="200px", height="40px"),
-        )
-        model_url_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="60px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
-
         merge_info = self._info_callout(
             "If you generated your map using the default settings in Tab 8, the output is split into multiple tiles that are stored in a single folder. In order to visualize the map, these tiles need to be merged back into a single raster file.<br>"
             "Click the button below to run the merging step.<br><br>"
@@ -3705,9 +3678,6 @@ class WorldCerealTrainingApp:
             "results_input": results_input,
             "results_button": results_button,
             "results_output": results_output,
-            "model_url_input": model_url_input,
-            "model_url_button": model_url_button,
-            "model_url_output": model_url_output,
             "interactive_checkbox": interactive_checkbox,
             "merge_button": merge_button,
             "visualize_button": visualize_button,
@@ -3716,7 +3686,6 @@ class WorldCerealTrainingApp:
         }
 
         results_button.on_click(self._on_tab9_load_results)
-        model_url_button.on_click(self._on_tab9_use_model_url)
         merge_button.on_click(self._on_tab9_merge_maps)
         visualize_button.on_click(self._on_visualize_click)
 
@@ -3729,13 +3698,6 @@ class WorldCerealTrainingApp:
                 results_input,
                 widgets.HBox([results_button]),
                 results_output,
-                widgets.HTML(
-                    "<h3>Provide the URL of the model used for product generation</h3>"
-                ),
-                model_url_info,
-                model_url_input,
-                widgets.HBox([model_url_button]),
-                model_url_output,
                 widgets.HTML("<h3>1) Create merged product</h3>"),
                 merge_info,
                 widgets.HBox([merge_button]),
@@ -3777,33 +3739,20 @@ class WorldCerealTrainingApp:
             self.tab8_results = path
             self.tab9_merged_paths = {}
             print(f"Results folder loaded: {path}")
+            if self.head_output_path is not None:
+                print(
+                    "Found the model that was used to generate these results, you can proceed!"
+                )
+            else:
+                print("\n\n")
+                print("!! Model used to generate these results is unkonwn\n")
+                print(
+                    "Visit the Deploy Model tab to provide the path to your model .zip file before proceeding!!"
+                )
 
         if status_message is not None:
             status_message.value = "<i>Results folder loaded. Ready to merge tiles.</i>"
         self._update_tab9_state()
-
-    def _on_tab9_use_model_url(self, _=None) -> None:
-        """Use a model URL for visualization."""
-        model_url_input = self.tab9_widgets.get("model_url_input")
-        output = self.tab9_widgets.get("model_url_output")
-        status_message = self.tab9_widgets.get("status_message")
-        if model_url_input is None or output is None:
-            return
-
-        with output:
-            output.clear_output()
-            model_url = model_url_input.value.strip()
-            if not model_url:
-                print("Provide a model URL.")
-                return
-            if not self._is_valid_url(model_url):
-                print("Model URL must start with http:// or https://")
-                return
-            self.tab9_model_url = model_url
-            print("Model URL set!")
-
-        if status_message is not None:
-            status_message.value = "<i>Model URL set for visualization.</i>"
 
     def _on_tab9_merge_maps(self, _=None) -> None:
         """Merge output tiles into a single product."""
@@ -3852,32 +3801,23 @@ class WorldCerealTrainingApp:
             if not self.tab9_merged_paths:
                 print("Merged products not available. Run the merge step first.")
                 return
-            model_url = self.tab9_model_url or self.tab7_model_url
-            if model_url is None:
-                print(
-                    "Model URL not available. Provide one above or deploy in Tab 7 first."
-                )
-                return
+            interactive_mode = (
+                interactive_checkbox.value
+                if interactive_checkbox is not None
+                else False
+            )
             try:
-                artifact = load_model_artifact(model_url)
-                heads = artifact.manifest.get("heads", [])
-                interactive_mode = (
-                    interactive_checkbox.value
-                    if interactive_checkbox is not None
-                    else False
-                )
-                luts = {}
-                for task in ("cropland", "croptype"):
-                    head = next(
-                        (head for head in heads if head.get("task") == task), None
-                    )
-                    if head and head.get("class_names"):
-                        luts[task] = {
-                            name: idx for idx, name in enumerate(head["class_names"])
-                        }
-                if "croptype" not in luts:
-                    print("Torch head manifest is missing croptype class metadata.")
-                    return
+                print("Reading LUT from local config file...")
+                config_file = self.head_output_path / "config.json"
+                with config_file.open() as fp:
+                    head_config = json.load(fp)
+                class_map = {
+                    i: name for i, name in enumerate(head_config["classes_list"])
+                }
+                lut_croptype = {
+                    v: k for k, v in sorted(class_map.items(), key=lambda kv: kv[0])
+                }
+                luts = {"croptype": lut_croptype}
 
                 result = visualize_products(
                     self.tab9_merged_paths,
@@ -4133,10 +4073,13 @@ class WorldCerealTrainingApp:
         if season_hint is not None:
             hint = None
             if self.season_window is not None:
+                window_dt = self.season_window.to_datetime()
+                hint_start = window_dt[0].strftime("%d %b")
+                hint_end = window_dt[1].strftime("%d %b")
                 hint = (
                     "<i>Growing season for which your model was trained:</i> "
-                    f"<b>{self.season_window.start_date}</b> → "
-                    f"<b>{self.season_window.end_date}</b>"
+                    f"<b>{hint_start}</b> → "
+                    f"<b>{hint_end}</b>"
                 )
             else:
                 hint = (
@@ -4175,12 +4118,6 @@ class WorldCerealTrainingApp:
         results_input = self.tab9_widgets.get("results_input")
         results_button = self.tab9_widgets.get("results_button")
         results_output = self.tab9_widgets.get("results_output")
-        model_url_input = self.tab9_widgets.get("model_url_input")
-
-        if model_url_input is not None and not self.tab9_model_url:
-            if self.tab7_model_url:
-                model_url_input.value = self.tab7_model_url
-                self.tab9_model_url = self.tab7_model_url
 
         if visualize_button and status_message:
             has_results = self.tab8_results is not None
