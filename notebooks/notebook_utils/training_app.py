@@ -1221,6 +1221,10 @@ class WorldCerealTrainingApp:
         align_info = self._info_callout(
             "Once you are satisfied with your season selection, click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season window.<br><br>"
         )
+        strict_align_checkbox = widgets.Checkbox(
+            value=False,
+            description="Strict alignment?",
+        )
         align_button = widgets.Button(
             description="Align data to season",
             button_style="success",
@@ -1245,6 +1249,7 @@ class WorldCerealTrainingApp:
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_id_input": season_id_input,
+            "strict_align_checkbox": strict_align_checkbox,
             "align_button": align_button,
             "align_output": align_output,
         }
@@ -1278,6 +1283,7 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>4) Run seasonal alignment</h3>"),
                 align_message,
                 align_info,
+                widgets.HBox([strict_align_checkbox]),
                 widgets.HBox([align_button]),
                 align_output,
                 self._build_tab_navigation(),
@@ -1492,6 +1498,7 @@ class WorldCerealTrainingApp:
         output = self.tab3_widgets["align_output"]
         slider = self.tab3_widgets["season_slider"]
         season_id = self.tab3_widgets["season_id_input"].value.strip() or None
+        strict_align_checkbox = self.tab3_widgets["strict_align_checkbox"]
 
         with output:
             output.clear_output()
@@ -1510,6 +1517,9 @@ class WorldCerealTrainingApp:
                 )
                 return
             self.season_id = season_id
+            strict_alignment = (
+                False if strict_align_checkbox is None else strict_align_checkbox.value
+            )
             try:
                 if slider is None:
                     print("Season slider not initialized.")
@@ -1517,9 +1527,19 @@ class WorldCerealTrainingApp:
                 selection = slider.get_selection()
                 self.season_window = selection.season_window
                 self.processing_period = selection.processing_period
-                self.tab3_df = align_extractions_to_season(
-                    df, self.processing_period, season_window=self.season_window
-                )
+                if strict_alignment:
+                    print(
+                        "Strict alignment mode - requiring complete temporal coverage of EO data!"
+                    )
+                    self.tab3_df = align_extractions_to_season(
+                        df, self.processing_period, season_window=self.season_window
+                    )
+                else:
+                    print("Relaxed alignment mode - no data gaps can occur")
+                    self.tab3_df = align_extractions_to_season(
+                        df, season_window=self.season_window
+                    )
+
                 print("Seasonal alignment completed")
                 if self.tab3_df is None or self.tab3_df.empty:
                     self.tab3_df = None
