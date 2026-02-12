@@ -1188,10 +1188,9 @@ class WorldCerealTrainingApp:
             value="<i>Based on previous insights, define your growing season (max 12 months!). </i>"
         )
         season_picking_info = self._info_callout(
-            "Now use the controls below to pin down the exact <b>growing season window and year</b> you plan to target (maximum 12 consecutive months).<br><br>"
-            "    1. Pick the target year from the dropdown (this centers the slider around that year).<br>"
-            "    2. Drag the slider handles to the desired start/end months.<br>"
-            "    3. The summary automatically reports both the growing-season window and the derived full-year processing period (ending on your selected end month).<br><br>"
+            "Now use the controls below to pin down the exact <b>growing season window</b> you plan to target (maximum 12 consecutive months).<br><br>"
+            "    1. Drag the slider handles to the desired start/end months.<br>"
+            "    2. The summary automatically reports both the growing-season window and the derived full-year processing period (ending on your selected end month).<br><br>"
             "After picking a season, provide a short name for your season (e.g. 'ShortRains') in the text input below.<br>"
             "No spaces or special characters allowed, only letters and numbers.<br>"
             "This name will be used in the next step to refer to your season and to name your trained model, so choose wisely ;).<br><br>"
@@ -1219,7 +1218,10 @@ class WorldCerealTrainingApp:
             value="<i>Drops irrelevant samples and aligns your data to the selected season.</i>"
         )
         align_info = self._info_callout(
-            "Once you are satisfied with your season selection, click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season window.<br><br>"
+            "You have the option to select whether or not to apply strict seasonal alignment:<br>"
+            "   - relaxed mode (default): validity time of the sample should be within your selected season<br>"
+            "   - strict mode: same as relaxed mode, but additonal requirment that the full processing period should be covered by available EO time series for the sample<br><br>"
+            "Click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season."
         )
         strict_align_checkbox = widgets.Checkbox(
             value=False,
