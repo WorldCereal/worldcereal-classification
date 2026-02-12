@@ -19,6 +19,7 @@ This module provides an interactive widget-based interface for:
 import json
 import platform
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -26,7 +27,6 @@ from urllib.parse import urlparse
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
-from IPython import get_ipython
 from IPython.display import HTML, display
 from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.classifier import (
@@ -179,6 +179,8 @@ class WorldCerealTrainingApp:
             "visualize": tab9,
         }
 
+        self._app_height = "1200px"
+
         self.tabs = widgets.Tab(children=[])
         self.tabs.layout = widgets.Layout(width="100%", max_width="100%")
 
@@ -199,7 +201,11 @@ class WorldCerealTrainingApp:
         self.welcome_screen = tab0
         self.tabs_container = widgets.VBox([self.welcome_screen])
         self.tabs_container.layout = widgets.Layout(
-            width="100%", max_width="100%", overflow="hidden", align_items="stretch"
+            width="100%",
+            max_width="100%",
+            height=self._app_height,
+            overflow="auto",
+            align_items="stretch",
         )
         self.tabs.observe(self._on_tab_change, names="selected_index")
         self._update_nav_buttons()
@@ -253,9 +259,7 @@ class WorldCerealTrainingApp:
 
         for child in children:
             if hasattr(child, "layout"):
-                child.layout = widgets.Layout(
-                    width="100%", max_width="100%", overflow="hidden"
-                )
+                child.layout = widgets.Layout(width="100%", max_width="100%")
 
         self.tabs.children = children
         for index, title in enumerate(titles):
@@ -1196,8 +1200,12 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="100%", overflow="auto")
         )
         season_slider_obj = None
+        start_d = datetime(2019, 7, 1)
+        end_d = datetime(2021, 6, 30)
         with season_slider_output:
-            season_slider_obj = season_slider()
+            season_slider_obj = season_slider(
+                year_selector=False, show_year=False, start_date=start_d, end_date=end_d
+            )
 
         season_id_input = widgets.Text(
             value="",
@@ -1212,6 +1220,10 @@ class WorldCerealTrainingApp:
         )
         align_info = self._info_callout(
             "Once you are satisfied with your season selection, click the 'Align extractions to season' button to let the app automatically drop all samples that do not match your selected season window.<br><br>"
+        )
+        strict_align_checkbox = widgets.Checkbox(
+            value=False,
+            description="Strict alignment?",
         )
         align_button = widgets.Button(
             description="Align data to season",
@@ -1237,6 +1249,7 @@ class WorldCerealTrainingApp:
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_id_input": season_id_input,
+            "strict_align_checkbox": strict_align_checkbox,
             "align_button": align_button,
             "align_output": align_output,
         }
@@ -1270,6 +1283,7 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>4) Run seasonal alignment</h3>"),
                 align_message,
                 align_info,
+                widgets.HBox([strict_align_checkbox]),
                 widgets.HBox([align_button]),
                 align_output,
                 self._build_tab_navigation(),
@@ -1484,6 +1498,7 @@ class WorldCerealTrainingApp:
         output = self.tab3_widgets["align_output"]
         slider = self.tab3_widgets["season_slider"]
         season_id = self.tab3_widgets["season_id_input"].value.strip() or None
+        strict_align_checkbox = self.tab3_widgets["strict_align_checkbox"]
 
         with output:
             output.clear_output()
@@ -1502,6 +1517,9 @@ class WorldCerealTrainingApp:
                 )
                 return
             self.season_id = season_id
+            strict_alignment = (
+                False if strict_align_checkbox is None else strict_align_checkbox.value
+            )
             try:
                 if slider is None:
                     print("Season slider not initialized.")
@@ -1509,9 +1527,19 @@ class WorldCerealTrainingApp:
                 selection = slider.get_selection()
                 self.season_window = selection.season_window
                 self.processing_period = selection.processing_period
-                self.tab3_df = align_extractions_to_season(
-                    df, self.processing_period, season_window=self.season_window
-                )
+                if strict_alignment:
+                    print(
+                        "Strict alignment mode - requiring complete temporal coverage of EO data!"
+                    )
+                    self.tab3_df = align_extractions_to_season(
+                        df, self.processing_period, season_window=self.season_window
+                    )
+                else:
+                    print("Relaxed alignment mode - no data gaps can occur")
+                    self.tab3_df = align_extractions_to_season(
+                        df, season_window=self.season_window
+                    )
+
                 print("Seasonal alignment completed")
                 if self.tab3_df is None or self.tab3_df.empty:
                     self.tab3_df = None
@@ -1918,17 +1946,16 @@ class WorldCerealTrainingApp:
             "Using a geospatial foundation model (Presto), we derive training features for each of your training samples.<br>"
             "Presto was pre-trained on millions of unlabeled samples around the world and finetuned on a global dataset of labelled land cover and crop type observations from the WorldCereal reference database.<br>"
             "The resulting <b>128 embeddings</b> (`presto_ft_0` -> `presto_ft_127`) nicely condense the Sentinel-1, Sentinel-2, meteo timeseries and ancillary data for your season of interest into a limited number of meaningful features which we will use for downstream model training.<br><br>"
-            "We provide some options aimed at increasing temporal robustness of your final crop model.<br>"
+            "We provide some options aimed at increasing robustness of your final crop model.<br>"
             "This is controlled by the following arguments:<br>"
-            "    - <b>augment</b> parameter: when set to `True`, it introduces slight temporal jittering of the processing window, making the model more robust to slight variations in seasonality across different years. <br>"
-            "           By default, this option is set to `True`, but especially when training a model for a specific region and year with good local data, disabling this option could be considered.<br>"
-            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
             "    - <b>mask_on_training</b> parameter: when `True`, applies sensor masking augmentations (e.g. simulating S1/S2 dropouts, additional clouds, ancillary feature removals) only to the training split to improve robustness to real-world data gaps.<br>"
             "           The validation/test split is kept untouched for fair evaluation.<br>"
-        )
-        augment_checkbox = widgets.Checkbox(
-            value=True,
-            description="Augment",
+            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
+            "<br>"
+            "<b>Dataset splitting options</b>:<br>"
+            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used.<br>"
+            "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
+            "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
         )
         mask_on_training_checkbox = widgets.Checkbox(
             value=True,
@@ -1955,7 +1982,7 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="180px"),
         )
         test_size_input = widgets.FloatText(
-            value=0.15,
+            value=0.2,
             description="Test size:",
             layout=widgets.Layout(width="180px"),
         )
@@ -1981,7 +2008,6 @@ class WorldCerealTrainingApp:
             "load_button": load_button,
             "load_output": load_output,
             "presto_message": presto_message,
-            "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
             "use_spatial_split_checkbox": use_spatial_split_checkbox,
@@ -1991,13 +2017,6 @@ class WorldCerealTrainingApp:
             "embeddings_button": embeddings_button,
             "embeddings_output": embeddings_output,
         }
-
-        def _on_augment_toggle(change):
-            if repeats_input is not None:
-                repeats_input.disabled = not change["new"]
-
-        augment_checkbox.observe(_on_augment_toggle, names="value")
-        _on_augment_toggle({"new": augment_checkbox.value})
 
         load_button.on_click(self._on_tab5_load_training_df)
         embeddings_button.on_click(self._on_tab5_compute_embeddings)
@@ -2015,8 +2034,8 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
                 embeddings_message,
                 embeddings_info,
-                widgets.HBox([augment_checkbox, repeats_input]),
                 widgets.HBox([mask_on_training_checkbox]),
+                widgets.HBox([repeats_input]),
                 dataset_split_title,
                 widgets.HBox([use_spatial_split_checkbox, bin_size_degrees_input]),
                 widgets.HBox([val_size_input, test_size_input]),
@@ -2400,7 +2419,6 @@ class WorldCerealTrainingApp:
     def _on_tab5_compute_embeddings(self, _=None):
         df = self._get_tab4_working_df()
         output = self.tab5_widgets["embeddings_output"]
-        augment_checkbox = self.tab5_widgets.get("augment_checkbox")
         mask_on_training_checkbox = self.tab5_widgets.get("mask_on_training_checkbox")
         repeats_input = self.tab5_widgets.get("repeats_input")
         use_spatial_split_checkbox = self.tab5_widgets.get("use_spatial_split_checkbox")
@@ -2423,7 +2441,6 @@ class WorldCerealTrainingApp:
                     "Season window missing. Complete Tab 3 season alignment or load a valid training dataframe containing a season window in its name."
                 )
                 return
-            augment = True if augment_checkbox is None else augment_checkbox.value
             mask_on_training = (
                 True
                 if mask_on_training_checkbox is None
@@ -2442,7 +2459,7 @@ class WorldCerealTrainingApp:
             if val_size < 0 or val_size >= 1:
                 print("Val size must be in the range [0, 1).")
                 return
-            test_size = 0.15 if test_size_input is None else test_size_input.value
+            test_size = 0.2 if test_size_input is None else test_size_input.value
             if test_size < 0 or test_size >= 1:
                 print("Test size must be in the range [0, 1).")
                 return
@@ -2458,9 +2475,9 @@ class WorldCerealTrainingApp:
                 self.tab5_df = compute_seasonal_presto_embeddings(
                     df,
                     season_id=self.season_id,
-                    augment=augment,
                     mask_on_training=mask_on_training,
                     repeats=repeats,
+                    augment=False,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
                     custom_presto_url=custom_presto_url,
@@ -2526,7 +2543,7 @@ class WorldCerealTrainingApp:
             "The following <b>parameters</b> need to be set:<br>"
             "<b>Head task</b>: <code>croptype</code> for multi-class crop type prediction or <code>landcover</code> for land-cover training.<br>"
             "<b>Head type</b>: <code>linear</code> uses a single linear layer, <code>mlp</code> adds a small MLP head for extra capacity.<br>"
-            "<b>Epochs</b>: number of training epochs for the head.<br>"
+            "<b>Epochs</b>: maximum number of training epochs for the head.<br>"
             "<b>LR</b>: learning rate (float); only adjust if you know what you're doing.<br>"
             "<b>Weight decay</b>: (float); only adjust if you know what you're doing.<br>"
             "<b>Use class balancing</b>: By default enabled to ensure minority classes are not discarded. However, depending on your training class distribution this may lead to undesired results.<br>"
@@ -2551,7 +2568,7 @@ class WorldCerealTrainingApp:
         )
         epochs_input = widgets.IntText(
             value=40,
-            description="Epochs:",
+            description="Max epochs:",
             layout=widgets.Layout(width="160px"),
         )
         lr_input = widgets.Text(
@@ -2566,7 +2583,7 @@ class WorldCerealTrainingApp:
             description="Weight decay:",
             placeholder="e.g., 0.0",
             layout=widgets.Layout(width="150px"),
-            description_width="150px",
+            description_width="200px",
         )
         use_balancing_checkbox = widgets.Checkbox(
             value=True,
@@ -3154,7 +3171,7 @@ class WorldCerealTrainingApp:
             description="Custom seasonal model URL:",
             placeholder="https://... .zip",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
-            description_width="200px",
+            description_width="250px",
         )
 
         enable_cropland_head_checkbox = widgets.Checkbox(
@@ -3164,7 +3181,7 @@ class WorldCerealTrainingApp:
         )
         mask_cropland_checkbox = widgets.Checkbox(
             value=True,
-            description="Mask cropland in crop type product",
+            description="Mask cropland?",
             description_width="350px",
         )
         export_probs_checkbox = widgets.Checkbox(
@@ -3173,7 +3190,7 @@ class WorldCerealTrainingApp:
         )
         croptype_postprocess_enabled = widgets.Checkbox(
             value=True,
-            description="Run postprocessing on crop type results",
+            description="Enable for crop type",
             description_width="500px",
         )
         croptype_postprocess_method = widgets.Dropdown(
@@ -3189,7 +3206,7 @@ class WorldCerealTrainingApp:
         )
         cropland_postprocess_enabled = widgets.Checkbox(
             value=True,
-            description="Run postprocessing on cropland results",
+            description="Enable for cropland",
             description_width="500px",
         )
         cropland_postprocess_method = widgets.Dropdown(
@@ -3365,14 +3382,6 @@ class WorldCerealTrainingApp:
         season_id_input = self.tab8_widgets.get("season_id_input")
         output = self.tab8_widgets.get("output")
 
-        def _schedule_output(callback) -> None:
-            ip = get_ipython()
-            io_loop = getattr(getattr(ip, "kernel", None), "io_loop", None)
-            if io_loop is not None:
-                io_loop.add_callback(callback)
-            else:
-                callback()
-
         # Clear previous output and create separate widgets inside
         if output is not None:
             output.clear_output()
@@ -3459,7 +3468,7 @@ class WorldCerealTrainingApp:
             tile_resolution_input.value if tile_resolution_input is not None else 50
         )
 
-        # Start processing in background thread to avoid blocking the UI, and show logs in log_out
+        # Run processing on main thread to keep logs visible in output widgets.
         try:
             run_suffix = output_name_input.value.strip() if output_name_input else ""
             if not run_suffix:
@@ -3541,56 +3550,33 @@ class WorldCerealTrainingApp:
             if generate_button is not None:
                 generate_button.disabled = True
 
-            def _run_production() -> None:
-                try:
-                    _ = run_map_production(
-                        spatial_extent=processing_extent,
-                        temporal_extent=self.tab8_processing_period,
-                        output_dir=output_dir,
-                        tile_resolution=tile_resolution,
-                        product_type=WorldCerealProductType.CROPTYPE,
-                        workflow_config=workflow_config,
-                        stop_event=None,
-                        plot_out=plot_out,
-                        log_out=log_out,
-                        display_outputs=True,
-                    )
-                    self.tab8_results = output_dir
-
-                    def _on_success() -> None:
-                        if status_message is not None:
-                            status_message.value = "<i>Processing finished.</i>"
-                        with log_out:
-                            print(
-                                "\n\nProcessing finished. Outputs saved to: "
-                                f"{output_dir}\n"
-                            )
-                        if generate_button is not None:
-                            generate_button.disabled = False
-                        self._update_tab9_state()
-
-                    _schedule_output(_on_success)
-                except Exception as exc_inner:
-                    error_message = f"\n\nMap generation failed: {exc_inner}\n"
-
-                    def _on_failure() -> None:
-                        if status_message is not None:
-                            status_message.value = (
-                                "<i>Processing failed. Check logs below.</i>"
-                            )
-                        with log_out:
-                            print(error_message)
-                        if generate_button is not None:
-                            generate_button.disabled = False
-
-                    _schedule_output(_on_failure)
-
-            threading.Thread(target=_run_production, daemon=True).start()
+            _ = run_map_production(
+                spatial_extent=processing_extent,
+                temporal_extent=self.tab8_processing_period,
+                output_dir=output_dir,
+                tile_resolution=tile_resolution,
+                product_type=WorldCerealProductType.CROPTYPE,
+                workflow_config=workflow_config,
+                stop_event=None,
+                plot_out=plot_out,
+                log_out=log_out,
+                display_outputs=True,
+            )
+            self.tab8_results = output_dir
+            if status_message is not None:
+                status_message.value = "<i>Processing finished.</i>"
+            with log_out:
+                print("\n\nProcessing finished. Outputs saved to: " f"{output_dir}\n")
+            if generate_button is not None:
+                generate_button.disabled = False
+            self._update_tab9_state()
         except Exception as exc:
             if status_message is not None:
                 status_message.value = "<i>Processing failed. Check logs below.</i>"
             with log_out:
                 print(f"Map generation failed: {exc}")
+            if generate_button is not None:
+                generate_button.disabled = False
 
     # =========================================================================
     # Tab 9: Visualize Map
