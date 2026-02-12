@@ -4135,10 +4135,13 @@ class WorldCerealTrainingApp:
         if season_hint is not None:
             hint = None
             if self.season_window is not None:
+                window_dt = self.season_window.to_datetime()
+                hint_start = window_dt[0].strftime("%d %b")
+                hint_end = window_dt[1].strftime("%d %b")
                 hint = (
                     "<i>Growing season for which your model was trained:</i> "
-                    f"<b>{self.season_window.start_date}</b> → "
-                    f"<b>{self.season_window.end_date}</b>"
+                    f"<b>{hint_start}</b> → "
+                    f"<b>{hint_end}</b>"
                 )
             else:
                 hint = (
