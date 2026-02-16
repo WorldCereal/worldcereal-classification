@@ -13,6 +13,7 @@ Grouping:
 from pathlib import Path
 from statistics import median
 from typing import Iterable, List, Optional, Tuple, Sequence, Union
+import json
 
 import duckdb
 import h3
@@ -351,6 +352,94 @@ def _require_label_columns(df: pd.DataFrame, label_cols: Sequence[str]) -> None:
     missing = [c for c in label_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Requested label column(s) not found after mapping: {missing}")
+
+
+_EXCEL_SUFFIXES = {
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    ".ods",
+}
+
+
+def _load_mapping_df(
+    mapping_file: str,
+    *,
+    label_cols: Sequence[str],
+    class_mappings_name: str,
+) -> pd.DataFrame:
+    """Load a mapping file (Excel or JSON) into a DataFrame with columns:
+    - ewoc_code
+    - label_cols...
+
+    JSON formats supported:
+    1) {"LANDCOVER10": {"110...": "temporary_crops", ...}, "CROPTYPE25": {...}}
+       (uses `class_mappings_name` to select the inner mapping)
+    2) {"110...": "label", ...}  (single label column)
+    3) {"110...": {"lvl0": "...", "lvl1": "..."}, ...}  (hierarchical)
+    4) {"110...": ["lvl0", "lvl1", ...], ...}  (hierarchical by position)
+    5) [{"ewoc_code": "110...", "lvl0": "...", ...}, ...]  (table)
+    """
+
+    p = Path(mapping_file)
+    suf = p.suffix.lower()
+
+    if suf in _EXCEL_SUFFIXES:
+        return pd.read_excel(mapping_file)
+
+    if suf != ".json":
+        raise ValueError(
+            f"Unsupported mapping_file type '{suf}'. Use an Excel file ({sorted(_EXCEL_SUFFIXES)}) or a .json file."
+        )
+
+    with open(mapping_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Table-like JSON
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+
+    if not isinstance(data, dict):
+        raise ValueError("mapping_file JSON must be a dict or a list of records")
+
+    # If this is a multi-mapping JSON (e.g. class_mappings.json), select the named mapping
+    if class_mappings_name in data and isinstance(data[class_mappings_name], dict):
+        data = data[class_mappings_name]
+
+    rows = []
+    for ewoc_code, v in data.items():
+        row = {"ewoc_code": ewoc_code}
+
+        if isinstance(v, (str, int, float)) or v is None:
+            if len(label_cols) != 1:
+                raise ValueError(
+                    "mapping_file JSON maps ewoc_code to a single value, but label_domain requests multiple label columns. "
+                    f"Expected columns: {list(label_cols)}"
+                )
+            row[label_cols[0]] = v
+
+        elif isinstance(v, dict):
+            for lc in label_cols:
+                if lc in v:
+                    row[lc] = v[lc]
+
+        elif isinstance(v, (list, tuple)):
+            if len(v) < len(label_cols):
+                raise ValueError(
+                    f"mapping_file JSON list for ewoc_code={ewoc_code} has {len(v)} values but {len(label_cols)} label columns were requested: {list(label_cols)}"
+                )
+            for lc, vv in zip(label_cols, v):
+                row[lc] = vv
+
+        else:
+            raise ValueError(
+                f"Unsupported JSON mapping value type for ewoc_code={ewoc_code}: {type(v)}"
+            )
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
 def _add_hierarchical_ref_outlier_class(
@@ -1009,7 +1098,7 @@ def run_pipeline(
     label_domain: Union[str, Sequence[str]] = "ewoc_code",
     map_to_finetune: bool = False,
     class_mappings_name: str = "LANDCOVER10",
-    mapping_xlsx: Optional[str] = None,
+    mapping_file: Optional[str] = None,
     h3_level: int = 3,
     group_cols: Optional[Sequence[str]] = None,
     min_slice_size: int = 100,
@@ -1047,10 +1136,12 @@ def run_pipeline(
     label_cols = _as_label_levels(label_domain)
     label_col = label_cols[0]  # keep existing logic anchored to level-0
 
-    # only enforce when mapping xlsx is not provided
-    if mapping_xlsx is None:
+    # only enforce when mapping_file is not provided
+    if mapping_file is None:
         if isinstance(label_domain, (list, tuple)):
-            raise ValueError("Hierarchical label_domain requires mapping_xlsx (labels provided by Excel).")
+            raise ValueError(
+                "Hierarchical label_domain requires mapping_file (labels provided by Excel or JSON)."
+            )
         if label_domain not in {"ewoc_code", "finetune_class", "balancing_class"}:
             raise ValueError("label_domain must be 'ewoc_code' or 'finetune_class'")
 
@@ -1141,29 +1232,33 @@ def run_pipeline(
         df["ewoc_code"] = pd.to_numeric(df["ewoc_code"], errors="coerce").astype("Int64")
 
     if debug:
-        print("[DUBUG] Running in debug mode: restricting to small sample of data, only loading 25 H3 cells...")
+        print("[DUBUG] Running in debug mode: restricting to small sample of data, only loading 10 H3 cells...")
         # df = df.head(5000)
         # load only two h3 cells for faster testing
-        sample_cells = df[h3_level_name].unique()[:25].tolist()
+        sample_cells = df[h3_level_name].unique()[:10].tolist()
         df = df[df[h3_level_name].isin(sample_cells)]
 
     if map_to_finetune:
         print(f"[anomaly] Mapping classes using '{class_mappings_name}'...")
         df = map_classes(df, class_mappings_name)
 
-    elif mapping_xlsx is not None:
-        print(f"[anomaly] Mapping classes using Excel file: {mapping_xlsx}")
+    elif mapping_file is not None:
+        print(f"[anomaly] Mapping classes using mapping_file: {mapping_file}")
 
-        map_df = pd.read_excel(mapping_xlsx)
+        map_df = _load_mapping_df(
+            mapping_file,
+            label_cols=label_cols,
+            class_mappings_name=class_mappings_name,
+        )
 
         if "ewoc_code" not in map_df.columns:
             con.close()
-            raise ValueError("mapping_xlsx must contain an 'ewoc_code' column")
+            raise ValueError("mapping_file must contain an 'ewoc_code' column")
 
         missing_map_cols = [c for c in label_cols if c not in map_df.columns]
         if missing_map_cols:
             con.close()
-            raise ValueError(f"mapping_xlsx missing required label column(s): {missing_map_cols}")
+            raise ValueError(f"mapping_file missing required label column(s): {missing_map_cols}")
 
         # Normalize ewoc_code for joining (remove dashes)
         keep_cols = ["ewoc_code", *label_cols]
@@ -1192,7 +1287,12 @@ def run_pipeline(
     _require_label_columns(df, label_cols)
 
     # For hierarchical mode, enforce all levels present (required for fallback)
+    count_before_drop = len(df)
+    print(f"[anomaly] count_before_drop: {count_before_drop:,}")
     df = df.dropna(subset=label_cols).copy()
+    count_after_drop = len(df)
+    print(f"[anomaly] count_after_drop: {count_after_drop:,}")
+    print(f"[anomaly] Dropped {count_before_drop - count_after_drop:,} rows with missing label columns {label_cols} and dropped!")
 
     label_col = label_cols[0]
 
@@ -1231,62 +1331,6 @@ def run_pipeline(
         context_cols=context_cols,
         embedding_col="embedding",
     )
-
-    # print("[anomaly] Computing per-slice centroids...")
-    # centroids = compute_slice_centroids(
-    #     df,
-    #     label_col=label_col,
-    #     h3_level_name=h3_level_name,
-    #     group_cols=group_cols,
-    # )
-
-    # print("[anomaly] Scoring slices...")
-    # df_with_centroid = df.merge(
-    #     centroids,
-    #     on=slice_keys,
-    #     how="left",
-    # )
-
-    # def _score_group(g: pd.DataFrame) -> pd.DataFrame:
-    #     g["slice_n"] = len(g)
-    #     if len(g) < MIN_SCORING_SLICE_SIZE:
-    #         g = g.copy()
-    #         g = g[[c for c in g.columns if "embedding" not in c]]
-    #         g["cosine_distance"] = 0.0
-    #         g["knn_distance"] = 0.0
-    #         g["cos_norm"] = 0.0
-    #         g["knn_norm"] = 0.0
-    #         g["S"] = 0.0
-    #         g["rank_percentile"] = 0.0
-    #         g["S_rank_min"] = 0.0
-    #         # g["rank_percentile_rank"] = 0.0
-    #         g["cos_rank"] = 0.0
-    #         g["knn_rank"] = 0.0
-    #         g["S_rank"] = 0.0
-    #         g["cos_z"] = 0.0
-    #         g["knn_z"] = 0.0
-    #         g["S_z"] = 0.0
-    #         g["mean_score"] = 0.0
-    #         g["confidence"] = 0.99
-    #         return g
-    #
-    #     return compute_scores_for_slice(
-    #         g,
-    #         centroid=g["centroid"].iloc[0],
-    #         norm_percentiles=norm_percentiles,
-    #         max_full_pairwise_n=max_full_pairwise_n,  # <-- switch happens inside
-    #         force_knn=False,
-    #         knn_k=10,
-    #     )
-    #
-    # # Can we have a progress bar here?
-    # from tqdm import tqdm
-    # tqdm.pandas()
-    # scored_df = (
-    #     df_with_centroid.groupby(slice_keys, group_keys=False)
-    #     .progress_apply(_score_group)
-    #     .reset_index(drop=True)
-    # )
 
     print("[anomaly] Scoring slices...")
 
