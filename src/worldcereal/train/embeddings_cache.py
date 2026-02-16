@@ -250,6 +250,28 @@ def _collate_predictors_with_ids(batch):
     collated = default_collate([p.as_dict(ignore_nones=True) for p in predictors])
     return Predictors(**collated), list(sample_ids)
 
+def list_cached_ids_for_requested(
+    db_path: str, model_hash: str, sample_ids: Iterable[str]
+) -> Set[str]:
+    """Return subset of sample_ids that are already cached for this model_hash."""
+    sample_ids = list(map(str, sample_ids))
+    if not sample_ids:
+        return set()
+    con = init_cache(db_path)
+    df_ids = pd.DataFrame({"sample_id": sample_ids})
+    con.register("requested", df_ids)
+    df = con.execute(
+        """
+        SELECT r.sample_id
+        FROM requested r
+        INNER JOIN embeddings_cache e
+        ON e.sample_id = r.sample_id
+        WHERE e.model_hash = ?
+        """,
+        [model_hash],
+    ).fetchdf()
+    return set(df.sample_id.tolist()) if not df.empty else set()
+
 
 def compute_embeddings(
     data_df: pd.DataFrame,
@@ -271,11 +293,12 @@ def compute_embeddings(
         )
     if "sample_id" not in data_df.columns:
         raise ValueError("data_df must contain a 'sample_id' column for caching")
+
     # ensure DB and table exist before querying cache
     init_cache(embeddings_db_path)
     model_hash = get_model_hash(model)
     requested_ids = set(data_df.sample_id.astype(str).tolist())
-    cached_ids = list_cached_ids(embeddings_db_path, model_hash)
+    cached_ids = list_cached_ids_for_requested(embeddings_db_path, model_hash, requested_ids)
     if force_recompute:
         delete_cached_ids(embeddings_db_path, model_hash, requested_ids)
         cached_ids = set()
@@ -360,11 +383,14 @@ def compute_embeddings(
     else:
         logger.info("All embeddings present in cache; skipping computation.")
     wide_df = fetch_embeddings(embeddings_db_path, model_hash, requested_ids)
+    logger.info(f"Fetched {wide_df.shape[0]} embeddings from cache.")
     hydrated = rehydrate_embedding_vectors(wide_df)
+    logger.info("Rehydrated embedding vectors.")
     emb_map = {sid: emb for sid, emb in zip(hydrated.sample_id, hydrated.embedding)}
     ordered_embeddings = [emb_map[sid] for sid in data_df.sample_id.astype(str)]
     out_df = data_df.copy().reset_index(drop=True)
     out_df["embedding"] = ordered_embeddings
+    logger.info("Ordered embeddings to match input dataframe.")
     return out_df
 
 
