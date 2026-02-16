@@ -140,7 +140,7 @@ def long_to_wide_parquets(
 	wide_dir: Path,
 	cfg: ParquetProcessConfig,
 	overwrite: bool = False,
-) -> tuple[list[Path], list[Path], list[Path]]:
+) -> tuple[list[Path], list[Path], list[Path], bool]:
 	"""Convert many long-format parquet files to wide-format parquet files."""
 
 	wide_dir.mkdir(parents=True, exist_ok=True)
@@ -148,6 +148,7 @@ def long_to_wide_parquets(
 	produced: list[Path] = []
 	empty: list[Path] = []
 	errored: list[Path] = []
+	wrote_any = False
 
 	for i, pf in enumerate(raw_files, start=1):
 		out_path = _wide_out_path(wide_dir, pf)
@@ -183,12 +184,13 @@ def long_to_wide_parquets(
 			compression=cfg.compression,
 			index=False,
 		)
+		wrote_any = True
 		produced.append(out_path)
 		logger.info(f"[{i}/{len(raw_files)}] wrote wide parquet: {out_path.name} shape={df_wide.shape}")
 		del df_long, df_wide
 		gc.collect()
 
-	return produced, empty, errored
+	return produced, empty, errored, wrote_any
 
 
 def _is_numeric(t: pa.DataType) -> bool:
@@ -613,7 +615,7 @@ def update_embeddings_cache(
 		logger.info("dry-run enabled; stopping before processing")
 		return
 
-	wide_files, empty_files, errored_files = long_to_wide_parquets(
+	wide_files, empty_files, errored_files, wrote_any_wide = long_to_wide_parquets(
 		raw_files,
 		wide_dir=wide_dir,
 		cfg=process_cfg,
@@ -623,15 +625,22 @@ def update_embeddings_cache(
 		f"long->wide done: wide={len(wide_files)} empty={len(empty_files)} errored={len(errored_files)}"
 	)
 
+	overwrite_merged_effective = bool(overwrite_merged)
+	if wrote_any_wide and not overwrite_merged_effective:
+		logger.info(
+			"new/updated wide parquet(s) detected; forcing overwrite of merged parquet to keep it up-to-date"
+		)
+		overwrite_merged_effective = True
+
 	wide_files = [p for p in wide_files if p.exists()]
 	if not wide_files:
 		raise RuntimeError("No wide parquet files were produced; aborting.")
-
+	
 	merged_wide = merge_parquets_stream_to_one(
 		files=wide_files,
 		out_path=merged_wide_path,
 		cfg=merge_cfg,
-		overwrite=overwrite_merged,
+		overwrite=overwrite_merged_effective,
 	)
 
 	compute_embeddings_from_merged_parquet(
