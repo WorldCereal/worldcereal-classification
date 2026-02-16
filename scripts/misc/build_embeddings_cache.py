@@ -315,21 +315,110 @@ def _input_ref_ids(raw_files: Sequence[Path]) -> set[str]:
 	return ref_ids
 
 
+def _open_cache_readonly(db_path: Path) -> duckdb.DuckDBPyConnection:
+	"""Open the embeddings cache in read-only mode for prematch checks."""
+
+	return duckdb.connect(str(db_path), read_only=True)
+
+
 def _cached_ref_ids(db_path: Path, model_hash: str) -> set[str]:
-	con = init_cache(str(db_path))
-	df = con.execute(
-		"""
-		SELECT DISTINCT ref_id
-		FROM embeddings_cache
-		WHERE model_hash = ?
-		  AND ref_id IS NOT NULL
-		  AND ref_id <> ''
-		""",
-		[model_hash],
-	).fetchdf()
-	if df.empty:
-		return set()
-	return set(df["ref_id"].astype(str).tolist())
+	con = _open_cache_readonly(db_path)
+	try:
+		df = con.execute(
+			"""
+			SELECT DISTINCT ref_id
+			FROM embeddings_cache
+			WHERE model_hash = ?
+			  AND ref_id IS NOT NULL
+			  AND ref_id <> ''
+			""",
+			[model_hash],
+		).fetchdf()
+		if df.empty:
+			return set()
+		return set(df["ref_id"].astype(str).tolist())
+	finally:
+		con.close()
+
+
+def _count_cached_sample_ids(
+	*,
+	db_path: Path,
+	model_hash: str,
+	sample_ids: Sequence[str],
+) -> int:
+	"""Count how many requested sample_ids exist in cache for model_hash."""
+
+	if not sample_ids:
+		return 0
+	ids_unique = list(dict.fromkeys(str(sid) for sid in sample_ids if sid is not None and str(sid) != ""))
+	if not ids_unique:
+		return 0
+
+	con = _open_cache_readonly(db_path)
+	try:
+		df_ids = pd.DataFrame({"sample_id": ids_unique})
+		con.register("ids", df_ids)
+		df = con.execute(
+			"""
+			SELECT COUNT(*) AS n_cached
+			FROM ids r
+			INNER JOIN embeddings_cache e
+			  ON e.sample_id = r.sample_id
+			WHERE e.model_hash = ?
+			""",
+			[model_hash],
+		).fetchdf()
+		return int(df.loc[0, "n_cached"]) if not df.empty else 0
+	finally:
+		con.close()
+
+
+def _count_missing_for_ids_batch(
+	*,
+	db_path: Path,
+	model_hash: str,
+	ids_df: pd.DataFrame,
+	use_ref_id: bool,
+) -> int:
+	"""Return number of ids missing from cache for this model_hash."""
+
+	if ids_df.empty:
+		return 0
+
+	con = _open_cache_readonly(db_path)
+	try:
+		con.register("ids", ids_df)
+		if use_ref_id:
+			stats = con.execute(
+				"""
+				SELECT
+					COUNT(*) AS n_total,
+					SUM(CASE WHEN e.sample_id IS NULL THEN 1 ELSE 0 END) AS n_missing
+				FROM ids i
+				LEFT JOIN embeddings_cache e
+				  ON e.model_hash = ?
+				 AND e.sample_id = i.sample_id
+				 AND e.ref_id IS NOT DISTINCT FROM i.ref_id
+				""",
+				[model_hash],
+			).fetchone()
+		else:
+			stats = con.execute(
+				"""
+				SELECT
+					COUNT(*) AS n_total,
+					SUM(CASE WHEN e.sample_id IS NULL THEN 1 ELSE 0 END) AS n_missing
+				FROM ids i
+				LEFT JOIN embeddings_cache e
+				  ON e.model_hash = ?
+				 AND e.sample_id = i.sample_id
+				""",
+				[model_hash],
+			).fetchone()
+		return int((stats[1] if stats else 0) or 0)
+	finally:
+		con.close()
 
 
 def _iter_sample_id_batches_from_parquet(
@@ -356,7 +445,6 @@ def _any_missing_sample_ids(
 	"""Return True if any input sample_id is missing in cache for this model."""
 
 	# Avoid importing a large list at once: scan ids from parquet and check in chunks.
-	con = init_cache(str(db_path))
 	for f in raw_files:
 		batch_buf: list[str] = []
 		for ids in _iter_sample_id_batches_from_parquet(
@@ -365,36 +453,20 @@ def _any_missing_sample_ids(
 			batch_buf.extend(ids)
 			if len(batch_buf) < check_batch_ids:
 				continue
-			df_ids = pd.DataFrame({"sample_id": batch_buf})
-			con.register("requested", df_ids)
-			df = con.execute(
-				"""
-				SELECT COUNT(*) AS n_cached
-				FROM requested r
-				INNER JOIN embeddings_cache e
-				  ON e.sample_id = r.sample_id
-				WHERE e.model_hash = ?
-				""",
-				[model_hash],
-			).fetchdf()
-			n_cached = int(df.loc[0, "n_cached"]) if not df.empty else 0
+			n_cached = _count_cached_sample_ids(
+				db_path=db_path,
+				model_hash=model_hash,
+				sample_ids=batch_buf,
+			)
 			if n_cached < len(set(batch_buf)):
 				return True
 			batch_buf = []
 		if batch_buf:
-			df_ids = pd.DataFrame({"sample_id": batch_buf})
-			con.register("requested", df_ids)
-			df = con.execute(
-				"""
-				SELECT COUNT(*) AS n_cached
-				FROM requested r
-				INNER JOIN embeddings_cache e
-				  ON e.sample_id = r.sample_id
-				WHERE e.model_hash = ?
-				""",
-				[model_hash],
-			).fetchdf()
-			n_cached = int(df.loc[0, "n_cached"]) if not df.empty else 0
+			n_cached = _count_cached_sample_ids(
+				db_path=db_path,
+				model_hash=model_hash,
+				sample_ids=batch_buf,
+			)
 			if n_cached < len(set(batch_buf)):
 				return True
 	return False
@@ -422,10 +494,6 @@ def compute_embeddings_from_merged_parquet(
 			unit="batch",
 		)
 
-	con = None
-	if cfg.prematch and not cfg.force_recompute:
-		con = init_cache(str(cfg.embeddings_db_path))
-
 	for batch in iterator:  # type: ignore
 		tbl = pa.Table.from_batches([batch])
 		if tbl.num_rows == 0:
@@ -439,7 +507,7 @@ def compute_embeddings_from_merged_parquet(
 
 		# Optional pre-match: if everything in this batch is already cached, skip
 		# converting full batch to pandas + calling compute_embeddings.
-		if con is not None:
+		if cfg.prematch and not cfg.force_recompute:
 			id_cols = ["sample_id"]
 			if "ref_id" in tbl.column_names:
 				id_cols.append("ref_id")
@@ -452,35 +520,12 @@ def compute_embeddings_from_merged_parquet(
 			use_ref_id = "ref_id" in ids_df.columns
 			if use_ref_id:
 				ids_df["ref_id"] = ids_df["ref_id"].astype(str)
-			con.register("ids", ids_df)
-			if use_ref_id:
-				stats = con.execute(
-					"""
-					SELECT
-						COUNT(*) AS n_total,
-						SUM(CASE WHEN e.sample_id IS NULL THEN 1 ELSE 0 END) AS n_missing
-					FROM ids i
-					LEFT JOIN embeddings_cache e
-					  ON e.model_hash = ?
-					 AND e.sample_id = i.sample_id
-					 AND e.ref_id IS NOT DISTINCT FROM i.ref_id
-					""",
-					[model_hash],
-				).fetchone()
-			else:
-				stats = con.execute(
-					"""
-					SELECT
-						COUNT(*) AS n_total,
-						SUM(CASE WHEN e.sample_id IS NULL THEN 1 ELSE 0 END) AS n_missing
-					FROM ids i
-					LEFT JOIN embeddings_cache e
-					  ON e.model_hash = ?
-					 AND e.sample_id = i.sample_id
-					""",
-					[model_hash],
-				).fetchone()
-			n_missing = int((stats[1] if stats else 0) or 0)
+			n_missing = _count_missing_for_ids_batch(
+				db_path=cfg.embeddings_db_path,
+				model_hash=model_hash,
+				ids_df=ids_df,
+				use_ref_id=use_ref_id,
+			)
 			if n_missing == 0:
 				del batch, tbl, ids_df
 				gc.collect()
