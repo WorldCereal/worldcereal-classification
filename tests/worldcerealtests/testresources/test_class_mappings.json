@@ -1,0 +1,18 @@
+{
+    "LANDCOVER10": {
+        "11011000": "temporary_crops",
+        "11012000": "temporary_crops",
+        "12000000": "permanent_crops",
+        "20000000": "grasslands",
+        "30000000": "forest",
+        "40000000": "built_up"
+    },
+    "CROPTYPE25": {
+        "11011000": "wheat",
+        "11012000": "maize",
+        "12000000": "permanent_other",
+        "20000000": "grasslands",
+        "30000000": "forest",
+        "40000000": "built_up"
+    }
+}
