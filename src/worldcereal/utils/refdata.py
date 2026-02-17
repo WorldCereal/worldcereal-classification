@@ -438,7 +438,9 @@ def query_private_extractions(
 
     if ref_ids is not None:
         private_collection_paths = [
-            p for p in private_collection_paths if Path(p).stem in ref_ids
+            p
+            for p in private_collection_paths
+            if str(Path(p).parent).split("ref_id=")[-1] in ref_ids
         ]
     if len(private_collection_paths) == 0:
         logger.warning("No private collections found.")
