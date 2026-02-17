@@ -9,10 +9,16 @@ Grouping:
 - Slices are defined by: group_cols (optional) + [h3 cell] + [label col]
 - group_cols defaults to [] (i.e., global per (h3, label) slices)
 
+Adaptive H3 resolution:
+- When ``h3_level`` is a list (e.g. ``[3, 2, 1]``), each point is assigned
+  the finest H3 level whose slice meets ``min_slice_size``.  Dense regions
+  (Europe) stay at the finest level while sparse regions (Africa) are
+  automatically promoted to coarser levels.
+
 Module layout
 ~~~~~~~~~~~~~
 - **anomaly_utils.py** — pure computation helpers (scoring, metrics, mapping,
-  flagging).  Stateless building blocks.
+  flagging, adaptive H3 assignment).  Stateless building blocks.
 - **anomaly.py** *(this file)* — pipeline orchestration: data loading,
   incremental mode, class mapping, scoring dispatch, anomaly categorization,
   and output writing.
@@ -41,6 +47,7 @@ from worldcereal.train.anomaly_utils import (
     _require_label_columns,
     _load_mapping_df,
     _add_hierarchical_ref_outlier_class,
+    assign_adaptive_h3_level,
     merge_small_slices,
     compute_slice_centroids,
     compute_scores_for_slice,
@@ -77,6 +84,7 @@ def _load_embeddings(
         "sample_id",
         "ewoc_code",
         "model_hash",
+        "ref_id",
         "h3_l3_cell",
         "lat",
         "lon",
@@ -396,9 +404,10 @@ def run_pipeline(
     map_to_finetune: bool = False,
     class_mappings_name: str = "LANDCOVER10",
     mapping_file: Optional[str] = None,
-    h3_level: int = 3,
+    h3_level: Union[int, Sequence[int]] = 3,
     group_cols: Optional[Sequence[str]] = None,
     min_slice_size: int = 100,
+    max_slice_size: Optional[int] = None,
     merge_small_slice: bool = True,
     threshold_mode: str = "percentile",
     percentile_q: float = 0.96,
@@ -422,6 +431,23 @@ def run_pipeline(
 
     Parameters
     ----------
+    h3_level
+        H3 resolution(s) for spatial grouping.
+
+        - **Single int** (e.g. ``3``): use a fixed H3 level for all points
+          (original behaviour).
+        - **List of ints** (e.g. ``[3, 2, 1]``): *adaptive* mode.  Points
+          are assigned to the finest H3 level whose slice size ≥
+          *min_slice_size*.  Levels are tried finest → coarsest.
+          Remaining unresolved points fall back to the coarsest level.
+          This prevents sparse regions (e.g. Africa) from having too-small
+          slices at high resolution while dense regions (e.g. Europe) avoid
+          excessively large slices at low resolution.
+    max_slice_size
+        (Adaptive mode only.)  Upper cap on slice size.  Slices that already
+        exceed this at the current H3 level are locked in to prevent them
+        growing even larger at coarser resolutions.  Ignored when *h3_level*
+        is a single int.
     norm_percentiles
         Percentiles used for per-slice min-max normalization of
         cosine_distance and knn_distance.  Default ``(5, 95)``
@@ -435,6 +461,14 @@ def run_pipeline(
     group_cols = list(group_cols or [])
     label_cols = _as_label_levels(label_domain)
     label_col = label_cols[0]  # keep existing logic anchored to level-0
+
+    # Normalize h3_level into a list; determine if adaptive mode is active
+    if isinstance(h3_level, (list, tuple)):
+        h3_levels = [int(x) for x in h3_level]
+        adaptive_h3 = len(h3_levels) > 1
+    else:
+        h3_levels = [int(h3_level)]
+        adaptive_h3 = False
 
     # Only enforce when mapping_file is not provided
     if mapping_file is None:
@@ -484,24 +518,42 @@ def run_pipeline(
             f"Requested group_cols not found in loaded data: {missing_group_cols}"
         )
 
-    h3_level_name = f"h3_l{h3_level}_cell"
-    if h3_level != 3:
-        df[h3_level_name] = df["h3_l3_cell"].apply(
-            lambda h: h3.cell_to_parent(h, h3_level)
-        )
+    # For adaptive mode, we use the finest level as the reference for
+    # debug filtering; the actual adaptive assignment happens after
+    # class mapping + embedding preparation (section 5b).
+    # For fixed mode, we use the single level as before.
+    _finest_h3_level = max(h3_levels)  # finest = highest resolution number
+    h3_level_name = "effective_h3_cell" if adaptive_h3 else f"h3_l{h3_levels[0]}_cell"
+
+    if not adaptive_h3:
+        _fixed_level = h3_levels[0]
+        if _fixed_level != 3:
+            df[h3_level_name] = df["h3_l3_cell"].apply(
+                lambda h: h3.cell_to_parent(h, _fixed_level)
+            )
+        else:
+            df[h3_level_name] = df["h3_l3_cell"]
 
     if df["ewoc_code"].dtype != np.int64:
         df["ewoc_code"] = pd.to_numeric(df["ewoc_code"], errors="coerce").astype("Int64")
 
     if debug:
         print(
-            "[DUBUG] Running in debug mode: restricting to small sample of data, "
+            "[DEBUG] Running in debug mode: restricting to small sample of data, "
             "only loading 10 H3 cells..."
         )
-        # df = df.head(5000)
-        # load only two h3 cells for faster testing
-        sample_cells = df[h3_level_name].unique()[:10].tolist()
-        df = df[df[h3_level_name].isin(sample_cells)]
+        # Use finest level for debug cell sampling
+        if adaptive_h3:
+            _debug_col = f"_h3_l{_finest_h3_level}_dbg"
+            df[_debug_col] = df["h3_l3_cell"].apply(
+                lambda h: h3.cell_to_parent(h, _finest_h3_level)
+            ) if _finest_h3_level != 3 else df["h3_l3_cell"]
+            sample_cells = df[_debug_col].unique()[:10].tolist()
+            df = df[df[_debug_col].isin(sample_cells)]
+            df = df.drop(columns=[_debug_col], errors="ignore")
+        else:
+            sample_cells = df[h3_level_name].unique()[:10].tolist()
+            df = df[df[h3_level_name].isin(sample_cells)]
 
     # ------------------------------------------------------------------
     # 4. Class mapping
@@ -539,6 +591,28 @@ def run_pipeline(
 
     label_col = label_cols[0]
     slice_keys = [*group_cols, h3_level_name, label_col]
+
+    # ------------------------------------------------------------------
+    # 5b. Adaptive H3 level assignment (if h3_level is a list)
+    # ------------------------------------------------------------------
+    if adaptive_h3:
+        print(
+            f"[anomaly] Adaptive H3 mode: levels {h3_levels} "
+            f"(finest→coarsest), min_slice_size={min_slice_size}"
+        )
+        if max_slice_size is not None:
+            print(f"[anomaly] Max slice size cap: {max_slice_size:,}")
+        df = assign_adaptive_h3_level(
+            df,
+            h3_levels=h3_levels,
+            label_col=label_col,
+            group_cols=group_cols,
+            min_slice_size=min_slice_size,
+            max_slice_size=max_slice_size,
+        )
+        # h3_level_name is already "effective_h3_cell" for adaptive mode
+        # Update slice_keys to use the effective cell
+        slice_keys = [*group_cols, h3_level_name, label_col]
 
     # ------------------------------------------------------------------
     # 6. Merge small slices
@@ -787,9 +861,13 @@ if __name__ == "__main__":
         label_domain="finetune_class",
         map_to_finetune=True,
         class_mappings_name="LANDCOVER10",
-        h3_level=2,
+        # Adaptive H3: try level 3 first (finest), fall back to 2 then 1
+        # for sparse regions.  Use a single int (e.g. h3_level=2) for
+        # fixed-level mode (original behaviour).
+        h3_level=[3, 2, 1],
         group_cols=["ref_id"],
         min_slice_size=100,
+        max_slice_size=1000,  # cap to prevent runaway merging in dense areas
         merge_small_slice=True,
         threshold_mode="mad",
         percentile_q=0.96,

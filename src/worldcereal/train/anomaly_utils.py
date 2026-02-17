@@ -218,8 +218,147 @@ def _load_mapping_df(
 
 
 # ---------------------------------------------------------------------------
-# 5. Slice operations (merge, centroids)
+# 5. Slice operations (merge, centroids, adaptive H3)
 # ---------------------------------------------------------------------------
+
+
+def assign_adaptive_h3_level(
+    df: pd.DataFrame,
+    h3_levels: Sequence[int],
+    label_col: str = "ewoc_code",
+    group_cols: Optional[Sequence[str]] = None,
+    min_slice_size: int = 100,
+    max_slice_size: Optional[int] = None,
+) -> pd.DataFrame:
+    """Assign each point an effective H3 cell based on point density.
+
+    Iterates from **finest** to **coarsest** H3 resolution.  For each
+    ``(group_cols, label, h3_cell)`` slice:
+
+    - If the slice has **≥ min_slice_size** points → keep those points at
+      this resolution (they are "resolved").
+    - If *max_slice_size* is set and the slice already exceeds it at this
+      level, the points are also kept at this level to avoid creating even
+      larger groups at coarser resolutions.
+    - Remaining unresolved points are promoted to the next coarser level and
+      re-evaluated.
+
+    After the loop, any still-unresolved points are assigned the coarsest
+    requested level.
+
+    New columns added
+    ~~~~~~~~~~~~~~~~~
+    - ``effective_h3_cell`` : the H3 cell index used for this point
+    - ``h3_effective_level``: the H3 resolution that was selected (int)
+
+    Parameters
+    ----------
+    h3_levels
+        H3 resolutions sorted **finest → coarsest**, e.g. ``[3, 2, 1]``.
+    min_slice_size
+        Minimum number of points in a slice before it is considered
+        adequately populated.
+    max_slice_size
+        Optional upper bound.  Slices already exceeding this at the current
+        resolution are *not* promoted further (prevents runaway merging in
+        dense areas).
+    """
+    import h3 as _h3
+
+    # Ensure finest → coarsest ordering
+    h3_levels = sorted(h3_levels, reverse=True)
+
+    df = df.copy()
+    group_cols = list(group_cols or [])
+
+    # Make sure h3_l3_cell exists (source column)
+    if "h3_l3_cell" not in df.columns:
+        raise ValueError("DataFrame must contain an 'h3_l3_cell' column")
+
+    # Pre-compute H3 cells at every requested level from h3_l3_cell
+    h3_col_map: dict[int, str] = {}
+    for lvl in h3_levels:
+        col = f"_h3_l{lvl}_cell"
+        if lvl == 3:
+            df[col] = df["h3_l3_cell"]
+        else:
+            df[col] = df["h3_l3_cell"].apply(
+                lambda h, _lvl=lvl: _h3.cell_to_parent(h, _lvl)
+            )
+        h3_col_map[lvl] = col
+
+    # Track which rows are resolved
+    resolved = np.zeros(len(df), dtype=bool)
+    effective_cell = np.empty(len(df), dtype=object)
+    effective_level = np.full(len(df), -1, dtype=np.int8)
+
+    for lvl in h3_levels:
+        if resolved.all():
+            break
+
+        h3_col = h3_col_map[lvl]
+        unresolved_idx = np.where(~resolved)[0]
+        if len(unresolved_idx) == 0:
+            break
+
+        # Build slice keys for unresolved rows at this level
+        sub = df.iloc[unresolved_idx]
+        key_cols = [*group_cols, label_col, h3_col]
+        counts = sub.groupby(key_cols).size()
+
+        # Identify slices that meet min_slice_size at this level
+        adequate_keys = set(
+            counts[counts >= min_slice_size].index.tolist()
+        )
+
+        # Also respect max_slice_size: if a slice is already huge at this
+        # level, lock it in rather than promoting to an even coarser level
+        # where it would be even bigger.
+        if max_slice_size is not None:
+            # Points in oversized slices should also be resolved here
+            # (prevents runaway aggregation in dense regions)
+            extra_keys = set(
+                counts[counts > max_slice_size].index.tolist()
+            )
+        else:
+            extra_keys = set()
+
+        resolve_keys = adequate_keys | extra_keys
+        if not resolve_keys:
+            continue
+
+        # Mark matching unresolved rows as resolved at this level
+        sub_indexed = sub.set_index(key_cols)
+        match_mask = sub_indexed.index.isin(resolve_keys)
+        matched_positions = unresolved_idx[match_mask]
+
+        resolved[matched_positions] = True
+        effective_cell[matched_positions] = df.iloc[matched_positions][h3_col].to_numpy()
+        effective_level[matched_positions] = np.int8(lvl)
+
+    # Assign remaining unresolved points to the coarsest level
+    coarsest = h3_levels[-1]
+    still_unresolved = ~resolved
+    if still_unresolved.any():
+        coarsest_col = h3_col_map[coarsest]
+        effective_cell[still_unresolved] = (
+            df.loc[still_unresolved, coarsest_col].to_numpy()
+        )
+        effective_level[still_unresolved] = np.int8(coarsest)
+
+    df["effective_h3_cell"] = effective_cell
+    df["h3_effective_level"] = effective_level
+
+    # Clean up temporary columns
+    for col in h3_col_map.values():
+        df = df.drop(columns=[col], errors="ignore")
+
+    # Summary stats
+    for lvl in h3_levels:
+        n_at_lvl = int((effective_level == lvl).sum())
+        print(f"[adaptive_h3] Level {lvl}: {n_at_lvl:,} points")
+
+    return df
 
 
 def merge_small_slices(
