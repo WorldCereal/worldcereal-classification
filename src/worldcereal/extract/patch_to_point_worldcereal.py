@@ -32,8 +32,12 @@ STAC_ENDPOINT_S2 = (
     "https://stac.openeo.vito.be/collections/worldcereal_sentinel_2_patch_extractions"
 )
 
-STAC_ENDPOINT_METEO_TERRASCOPE = (
-    "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
+STAC_ENDPOINT_MONTHLY_METEO = (
+    "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
+)
+
+STAC_ENDPOINT_DEKADAL_METEO = (
+    "https://stac.openeo.vito.be/collections/agera5_dekadal_composite"
 )
 
 STAC_ENDPOINT_SLOPE_TERRASCOPE = (
@@ -633,14 +637,14 @@ def worldcereal_preprocessed_inputs_from_patches(
     if period == "month":
         # Load precomposited monthly meteo data
         meteo_raw = connection.load_stac(
-            url=STAC_ENDPOINT_METEO_TERRASCOPE,
+            url=STAC_ENDPOINT_MONTHLY_METEO,
             temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
             bands=["temperature-mean", "precipitation-flux"],
         )
     elif period == "dekad":
         # Load precomposited dekadal meteo data
         meteo_raw = connection.load_stac(
-            url="https://stac.openeo.vito.be/collections/agera5_dekad_terrascope",
+            url=STAC_ENDPOINT_DEKADAL_METEO,
             temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
             bands=["temperature-mean", "precipitation-flux"],
         )
