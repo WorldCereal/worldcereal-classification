@@ -413,7 +413,7 @@ def precomposited_datacube_METEO(
     elif compositing_window == "dekad":
         # Load precomposited dekadal meteo data
         cube = connection.load_stac(
-            url="https://stac.openeo.vito.be/collections/agera5_dekad",
+            url="https://stac.openeo.vito.be/collections/agera5_dekadal_composite",
             temporal_extent=temporal_extent,
             bands=["precipitation-flux", "temperature-mean"],
         )
