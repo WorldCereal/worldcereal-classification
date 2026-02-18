@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
+
 from worldcereal.train.datasets import (
-    WorldCerealDataset,
-    SensorMaskingConfig,
     NODATAVALUE,
+    SensorMaskingConfig,
+    WorldCerealDataset,
 )
 
 

@@ -196,6 +196,7 @@ catboost_info/*
 notebooks/bbox/*
 notebooks/catboost_info/*
 notebooks/download/*
+notebooks/downstream_heads/*
 notebooks/extractions/*
 notebooks/local_inference/*
 notebooks/preprocessed_inputs/*
@@ -207,6 +208,7 @@ notebooks/*/bbox/*
 notebooks/*/catboost_info/*
 notebooks/*/data/*
 notebooks/*/download/*
+notebooks/*/downstream_heads/*
 notebooks/*/extractions/*
 notebooks/*/local_inference/*
 notebooks/*/preprocessed_inputs/*

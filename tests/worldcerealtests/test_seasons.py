@@ -20,7 +20,7 @@ def test_doy_from_tiff():
 
     assert doy_data.size == 1
 
-    doy_data = int(doy_data)
+    doy_data = int(doy_data.item())
 
     assert doy_data != 0
 
@@ -30,6 +30,7 @@ def test_doy_to_date_after():
     epsg = 32631
 
     doy_data = doy_from_tiff("tc-s2", "SOS", bounds, epsg, resolution=10000)
+    doy_data = int(np.asarray(doy_data).squeeze())
 
     after_date = datetime.datetime(2019, 1, 1)
     doy_date = doy_to_date_after(int(doy_data), after_date)

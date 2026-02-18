@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 
-from worldcereal.train.datasets import MIN_EDGE_BUFFER
+from worldcereal.train import MIN_EDGE_BUFFER
 
 STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
@@ -1128,6 +1128,7 @@ def process_parquet(
         df["valid_position_diff"] = df["timestamp_ind"] - df["valid_position"]
         df = processor.check_vt_closeness(df, min_edge_buffer, freq)
 
+    df = df.reset_index(drop=True)
     if max_timesteps_trim is not None:
         logger.info(
             f"Trimming to max_timesteps_trim={max_timesteps_trim} per sample prior to pivot."
@@ -1173,7 +1174,5 @@ def process_parquet(
 
     df_pivot["start_date"] = df_pivot["start_date"].dt.strftime("%Y-%m-%d")
     df_pivot["end_date"] = df_pivot["end_date"].dt.strftime("%Y-%m-%d")
-
-    df_pivot = df_pivot.set_index("sample_id")
 
     return df_pivot

@@ -1,16 +1,19 @@
+import json
+
 import numpy as np
 import pandas as pd
-from prometheo.models import Presto
-from prometheo.models.presto.wrapper import load_presto_weights
 from torch.utils.data import DataLoader
 
-from worldcereal.parameters import CropLandParameters
+from worldcereal.train.backbone import build_presto_backbone
 from worldcereal.train.data import (
     collate_fn,
-    get_training_df,
+    compute_embeddings_from_splits,
+    dataset_to_embeddings,
     get_training_dfs_from_parquet,
+    train_val_test_split,
 )
 from worldcereal.train.datasets import WorldCerealTrainingDataset
+from worldcereal.train.downstream import TorchTrainer
 from worldcereal.utils.refdata import get_class_mappings
 
 LANDCOVER_KEY = "LANDCOVER10"
@@ -34,10 +37,12 @@ def test_worldcerealtraindataset(WorldCerealExtractionsDF):
         assert predictors.dem.shape == (2, 1, 1, 2)
         assert predictors.timestamps.shape == (2, 12, 3)
         assert isinstance(attrs, dict)
+        assert "season_masks" in attrs
+        assert attrs["season_masks"].shape[-1] == 12
         break
 
 
-def test_get_trainingdf(WorldCerealExtractionsDF):
+def test_dataset_to_embeddings(WorldCerealExtractionsDF):
     """Test the function that computes embeddings and targets into
     a training dataframe using a presto model
     """
@@ -45,11 +50,9 @@ def test_get_trainingdf(WorldCerealExtractionsDF):
     df = WorldCerealExtractionsDF.reset_index()
     ds = WorldCerealTrainingDataset(df)
 
-    presto_url = CropLandParameters().feature_parameters.presto_model_url
-    presto_model = Presto()
-    presto_model = load_presto_weights(presto_model, presto_url)
+    presto_model = build_presto_backbone()
 
-    training_df = get_training_df(ds, presto_model, batch_size=256)
+    training_df = dataset_to_embeddings(ds, presto_model, batch_size=256)
 
     for ft in range(128):
         assert f"presto_ft_{ft}" in training_df.columns
@@ -147,3 +150,37 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
         val_to_trainval_ratio = len(val_df) / (len(train_df) + len(val_df))
         np.testing.assert_almost_equal(train_to_trainval_ratio, 0.8, decimal=decimal)
         np.testing.assert_almost_equal(val_to_trainval_ratio, 0.2, decimal=decimal)
+
+
+def test_train_downstream_torch(WorldCerealExtractionsDF, tmp_path):
+    df = WorldCerealExtractionsDF.reset_index()
+
+    # Split data into train/val/test
+    train_df, val_df, test_df = train_val_test_split(
+        df, split_column="split", stratify_label="finetune_class"
+    )
+
+    # Compute seasonal embeddings for tc-s1 (temporary crops - season 1)
+    embeddings_df = compute_embeddings_from_splits(
+        train_df=train_df,
+        val_df=val_df,
+        test_df=test_df,
+        season_id="tc-s2",
+        season_calendar_mode="calendar",
+    )
+
+    # Train classifier using tc-s1
+    trainer = TorchTrainer(
+        embeddings_df,
+        season_id="tc-s2",
+        lr=1e-2,
+        epochs=2,
+        output_dir=tmp_path,
+    )
+
+    trainer.train()
+    config_path = tmp_path / "config.json"
+    with config_path.open("r", encoding="utf-8") as fh:
+        config = json.load(fh)
+    assert "heads" in config
+    assert config["heads"][0]["task"] == "croptype"

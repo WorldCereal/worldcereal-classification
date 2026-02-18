@@ -580,6 +580,7 @@
                 "DEM"
             ],
             "id": "COPERNICUS_30",
+            "properties": {},
             "spatial_extent": null,
             "temporal_extent": null
         }
@@ -703,7 +704,7 @@
                 "2020-06-01",
                 "2021-05-31"
             ],
-            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
         }
     },
     "renamelabels7": {

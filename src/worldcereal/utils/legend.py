@@ -1,5 +1,6 @@
 import os
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -157,6 +158,7 @@ def upload_legend(srcpath: Path, date: str) -> str:
     return artifactory_link
 
 
+@lru_cache(maxsize=2)
 def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.DataFrame:
     """Get the latest version of the WorldCereal land cover/crop type or irrigation legend
     from artifactory.
@@ -176,6 +178,10 @@ def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.Da
     ------
     ValueError
         if topic got an invalid value
+
+    Notes
+    -----
+    This function is cached using lru_cache to avoid repeated downloads from Artifactory.
     """
 
     if topic == "landcover":
@@ -187,7 +193,11 @@ def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.Da
 
     legend = pd.read_csv(url, header=0, sep=";")
 
-    return legend
+    # Preprocess the legend by removing dashes from ewoc_code and converting to int, and setting it as index
+    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(np.int64)
+    legend = legend.set_index("ewoc_code")
+
+    return legend.copy()
 
 
 def download_legend(
@@ -270,7 +280,9 @@ def delete_legend_file(srcpath: str, retries=3, wait=2):
     )
 
 
-def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
+def translate_ewoc_codes(
+    ewoc_codes: list[int], legend: pd.DataFrame = None
+) -> pd.DataFrame:
     """Translate EWOC codes to their corresponding labels in the WorldCereal legend,
         keeping all levels of the hierarchy.
 
@@ -278,6 +290,9 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
     ----------
     ewoc_codes : list[int]
         List of EWOC codes to be translated.
+    legend : pd.DataFrame, optional
+        Pre-loaded legend DataFrame. If None, will call get_legend().
+        If provided, should already have ewoc_code as index (preprocessed format).
 
     Returns
     -------
@@ -285,9 +300,10 @@ def translate_ewoc_codes(ewoc_codes: list[int]) -> pd.DataFrame:
         DataFrame containing the EWOC codes and their corresponding labels across the hierarchy.
     """
 
-    legend = get_legend()
-    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(np.int64)
-    legend = legend.set_index("ewoc_code")
+    if legend is None:
+        legend = get_legend()
+    else:
+        legend = legend.copy()
     columns_to_keep = [
         "label_full",
         "level_1",
