@@ -322,7 +322,10 @@ def main(args):
     use_valid_time = args.use_valid_time
 
     # Path to the training data
-    parquet_files = get_parquet_file_list(timestep_freq)
+    if args.parquet_files:
+        parquet_files = args.parquet_files
+    else:
+        parquet_files = get_parquet_file_list(timestep_freq)
     val_samples_file = args.val_samples_file  # If None, random split is used
 
     # Most popular maps: LANDCOVER10, CROPTYPE9, CROPTYPE0, CROPLAND2
@@ -449,15 +452,14 @@ def main(args):
         )
 
     # setup path for processed wide parquet file so that it can be reused across experiments
-    if not debug:
+    if args.explicit_training_dataframe:
+        wide_parquet_output_path = Path(args.explicit_training_dataframe)
+    elif not debug:
         wide_parquet_output_path = Path(
             "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
         )
     else:
         wide_parquet_output_path = None
-        # wide_parquet_output_path = Path(
-        # "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
-        # )
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
@@ -1052,6 +1054,19 @@ def parse_args(arg_list=None):
         type=str,
         default=None,
         help="Path to a CSV with val sample IDs. If not set, a random split will be used.",
+    )
+    parser.add_argument(
+        "--parquet_files",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Explicit list of parquet files to use for training. If not set, uses get_parquet_file_list based on timestep_freq.",
+    )
+    parser.add_argument(
+        "--explicit_training_dataframe",
+        type=str,
+        default=None,
+        help="Path to cache the merged wide parquet file for reuse across experiments. If not set, uses default location in non-debug mode.",
     )
 
     # Task setup
