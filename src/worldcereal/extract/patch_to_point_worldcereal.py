@@ -20,7 +20,7 @@ from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
-from worldcereal.openeo.masking import scl_mask_erode_dilate
+from worldcereal.openeo.masking import scl_mask_erode_dilate, scl_mask_raw_values
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
@@ -275,7 +275,16 @@ def create_job_dataframe_patch_to_point_worldcereal(
     logger.info("Looking for unique EPSG codes in STAC collection ...")
     epsg_codes = {}
     for item in search.items():
-        epsg = int(item.properties["proj:epsg"])
+        try:
+            epsg = int(item.properties["proj:epsg"])
+        except KeyError:
+            try:
+                epsg = int(item.properties["proj:code"].split(":")[-1])
+            except KeyError:
+                logger.warning(
+                    f"Item {item.id} does not have neither 'proj:epsg' nor 'proj:code' property, skipping ..."
+                )
+                continue
 
         if epsg not in epsg_codes and epsg != 4038:
             logger.debug(f"Found EPSG: {epsg}")
@@ -426,7 +435,9 @@ def create_job_patch_to_point_worldcereal(
     connection_provider,
     job_options: dict,
     period="month",
-    optical_mask_method: Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"] = "mask_scl_dilation",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
     erode_r: int = 3,
     dilate_r: int = 21,
 ):
@@ -542,9 +553,9 @@ def post_job_action_point_worldcereal(parquet_file):
         gdf = gdf[gdf["sample_id"].isin(valid_sample_ids)]
 
     # Do some checks and perform corrections
-    assert len(gdf["ref_id"].unique()) == 1, (
-        f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
-    )
+    assert (
+        len(gdf["ref_id"].unique()) == 1
+    ), f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
     ref_id = gdf["ref_id"].iloc[0]
     year = int(ref_id.split("_")[0])
     gdf["year"] = year
@@ -568,7 +579,9 @@ def worldcereal_preprocessed_inputs_from_patches(
     epsg: int,
     s1_orbit_state: Optional[str] = None,
     period: Optional[str] = "month",
-    optical_mask_method: Literal["mask_scl_dilation", "satio", "mask_raw_scl_values"] = "mask_scl_dilation",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
     erode_r: int = 3,
     dilate_r: int = 21,
 ):
@@ -637,9 +650,12 @@ def worldcereal_preprocessed_inputs_from_patches(
         return if_(not_(invalid), input)
 
     if optical_mask_method == "mask_scl_dilation":
-        s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_precomputed)
-    elif optical_mask_method == "mask_raw_scl_values":
-        s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_raw_scl_values)
+        s2 = s2_raw.apply_dimension(
+            dimension="bands", process=optimized_mask_precomputed
+        )
+    elif optical_mask_method == "mask_scl_raw_values":
+        scl_raw_values_mask = scl_mask_raw_values(s2_raw.filter_bands(["S2-L2A-SCL"]))
+        s2 = s2_raw.mask(scl_raw_values_mask)
     elif optical_mask_method == "satio":
         # Compute satio-based mask
         scl_dilated_mask = scl_mask_erode_dilate(
@@ -649,7 +665,7 @@ def worldcereal_preprocessed_inputs_from_patches(
     else:
         raise ValueError(
             f"Unknown optical_mask_method: {optical_mask_method}. "
-            f"Supported methods are 'mask_scl_dilation', 'mask_raw_scl_values', and 'satio'."
+            f"Supported methods are 'mask_scl_dilation', 'mask_scl_raw_values', and 'satio'."
         )
 
     s2 = median_compositing(s2, period=period)
