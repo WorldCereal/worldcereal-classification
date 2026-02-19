@@ -586,13 +586,13 @@ def _validate_temporal_context(temporal_context: TemporalContext) -> None:
         )
         raise InvalidTemporalContextError(error_msg)
 
-    # if pd.Timedelta(end_date - start_date).days > 365:
-    #     error_msg = (
-    #         "WorldCereal currently does not support temporal ranges spanning "
-    #         "more than a year. Got: "
-    #         f"{temporal_context.start_date} - {temporal_context.end_date}."
-    #     )
-    #     raise InvalidTemporalContextError(error_msg)
+    if pd.Timedelta(end_date - start_date).days > 365:
+        error_msg = (
+            "WorldCereal currently does not support temporal ranges spanning "
+            "more than a year. Got: "
+            f"{temporal_context.start_date} - {temporal_context.end_date}."
+        )
+        raise InvalidTemporalContextError(error_msg)
 
 
 def correct_temporal_context(temporal_context: TemporalContext) -> TemporalContext:
