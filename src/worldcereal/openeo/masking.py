@@ -1,5 +1,6 @@
 import numpy as np
 import openeo
+from openeo.processes import if_, not_, or_
 
 
 def disk_footprint(radius: int) -> np.ndarray:
@@ -21,8 +22,7 @@ def convolve(img, radius):
 def scl_mask_erode_dilate(
     scl_cube: openeo.DataCube,
     erode_r: int = 3,
-    dilate_r: int = 21,
-    target_crs=None,
+    dilate_r: int = 13,
 ):
     """OpenEO method to construct a Sentinel-2 mask based on SCL.
     It involves an erosion step followed by a dilation step.
@@ -58,3 +58,24 @@ def scl_mask_erode_dilate(
     dilate_cube = dilate_cube > 0.1
 
     return dilate_cube
+
+
+def scl_mask_raw_values(scl_cube: openeo.DataCube):
+    """
+    Using raw SCL values to mask invalid pixels and get less aggressive masking compared to precomputed masks with large erode/dilate radius.
+    Valid pixels are those with SCL values not in [0,1,3,8,9,10,11].
+    0: No data
+    1: Saturated or defective
+    3: Cloud shadows
+    8: Medium probability cloud
+    9: High probability cloud
+    10: Thin cirrus
+    11: Snow or ice
+    """
+    invalid = or_(scl_cube == 0, scl_cube == 1)
+    invalid = or_(invalid, scl_cube == 3)
+    invalid = or_(invalid, scl_cube == 8)
+    invalid = or_(invalid, scl_cube == 9)
+    invalid = or_(invalid, scl_cube == 10)
+    invalid = or_(invalid, scl_cube == 11)
+    return if_(not_(invalid), input)
