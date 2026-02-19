@@ -4,8 +4,8 @@ from openeo.processes import if_, not_, or_
 
 
 def disk_footprint(radius: int) -> np.ndarray:
-    y, x = np.ogrid[-radius:radius + 1, -radius:radius + 1]
-    return (x*x + y*y) <= radius*radius  # bool mask
+    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return (x * x + y * y) <= radius * radius  # bool mask
 
 
 def convolve(img, radius):
