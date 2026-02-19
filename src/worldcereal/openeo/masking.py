@@ -8,7 +8,7 @@ def disk_footprint(radius: int) -> np.ndarray:
     return (x * x + y * y) <= radius * radius  # bool mask
 
 
-def convolve(img, radius):
+def convolve(img: openeo.DataCube, radius: int) -> openeo.DataCube:
     """OpenEO method to apply convolution
     with a circular kernel of `radius` pixels.
     NOTE: make sure the resolution of the image
