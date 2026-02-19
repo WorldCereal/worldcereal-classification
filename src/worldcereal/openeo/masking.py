@@ -1,6 +1,6 @@
 import numpy as np
 import openeo
-from openeo.processes import if_, not_, or_
+from openeo.processes import or_
 
 
 def disk_footprint(radius: int) -> np.ndarray:
@@ -78,4 +78,4 @@ def scl_mask_raw_values(scl_cube: openeo.DataCube):
     invalid = or_(invalid, scl_cube == 9)
     invalid = or_(invalid, scl_cube == 10)
     invalid = or_(invalid, scl_cube == 11)
-    return if_(not_(invalid), input)
+    return invalid
