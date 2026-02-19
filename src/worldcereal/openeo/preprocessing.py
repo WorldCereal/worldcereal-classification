@@ -230,13 +230,13 @@ def raw_datacube_S2(
     elif optical_mask_method == "mask_scl_raw_values":
         # Compute the SCL raw values mask
         scl_mask = scl_mask_raw_values(scl_cube.filter_bands(["SCL"])).rename_labels(
-            "bands", ["S2-L2A-SCL_RAW_VALUES_MASK"]
+            "bands", ["S2-L2A-SCL_DILATED_MASK"]
         )
     elif optical_mask_method == "satio":
         # Compute satio-based mask
         scl_mask = scl_mask_erode_dilate(
             scl_cube, erode_r=erode_r, dilate_r=dilate_r
-        ).rename_labels("bands", ["S2-L2A-SCL_SATIO_MASK"])
+        ).rename_labels("bands", ["S2-L2A-SCL_DILATED_MASK"])
     else:
         raise ValueError(
             f"Unknown optical_mask_method: {optical_mask_method}. "

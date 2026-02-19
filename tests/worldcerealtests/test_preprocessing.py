@@ -163,8 +163,8 @@ def test_worldcereal_preprocessed_inputs_from_patches_no_s1_graph():
 @pytest.mark.parametrize(
     "optical_mask_method, expected_band_label, expected_process_id",
     [
-        ("mask_scl_raw_values", "S2-L2A-SCL_RAW_VALUES_MASK", "or"),
-        ("satio", "S2-L2A-SCL_SATIO_MASK", "apply_kernel"),
+        ("mask_scl_raw_values", "S2-L2A-SCL_DILATED_MASK", "or"),
+        ("satio", "S2-L2A-SCL_DILATED_MASK", "apply_kernel"),
     ],
 )
 def test_worldcereal_preprocessed_inputs_graph_non_default_optical_mask_options(
