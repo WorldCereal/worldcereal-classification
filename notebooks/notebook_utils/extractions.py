@@ -1,20 +1,22 @@
 import logging
+import textwrap
 import urllib.request
 from pathlib import Path
 from typing import List, Optional, Union
 
 import geopandas as gpd
-import textwrap
+import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from ipyleaflet import GeoJSON, Map, WidgetControl, basemaps
 from loguru import logger
 from openeo_gfmap.manager.job_splitters import load_s2_grid
-from shapely.geometry import Polygon, box
-from tqdm import tqdm
-from tabulate import tabulate
-
 from prometheo.utils import DEFAULT_SEED
+from shapely.geometry import Polygon, box
+from tabulate import tabulate
+from tqdm import tqdm
+
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.legend import ewoc_code_to_label
@@ -28,6 +30,33 @@ logging.getLogger("rasterio").setLevel(logging.ERROR)
 
 
 NODATAVALUE = 65535
+
+
+def validate_required_attributes(
+    gdf: gpd.GeoDataFrame, required_columns: Optional[List[str]] = None
+) -> None:
+    """Validate that a GeoDataFrame has all required attributes.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        The GeoDataFrame to validate
+    required_columns : Optional[List[str]], optional
+        List of required column names. If None, uses RDM_DEFAULT_COLUMNS.
+
+    Raises
+    ------
+    ValueError
+        If any required attributes are missing from the dataframe
+    """
+    if required_columns is None:
+        required_columns = RDM_DEFAULT_COLUMNS
+
+    missing_attributes = set(required_columns) - set(gdf.columns)
+    if len(missing_attributes) > 0:
+        raise ValueError(
+            f"Missing essential attributes in the input dataframe: {missing_attributes}"
+        )
 
 
 def load_dataframe(df_path: Path) -> gpd.GeoDataFrame:
@@ -81,11 +110,7 @@ def prepare_samples_dataframe(
     gdf["ref_id"] = ref_id
 
     # Check presence of essential attributes
-    missing_attributes = set(RDM_DEFAULT_COLUMNS) - set(gdf.columns)
-    if len(missing_attributes) > 0:
-        raise ValueError(
-            f"Missing essential attributes in the input dataframe: {missing_attributes}"
-        )
+    validate_required_attributes(gdf, required_columns=RDM_DEFAULT_COLUMNS)
 
     # Keep essential attributes only
     gdf = gdf[RDM_DEFAULT_COLUMNS]
@@ -313,20 +338,53 @@ def visualize_timeseries(
         raise ValueError(f"Band {band} not found in the extractions dataframe")
 
     # Check whether we have sufficient data
-    if len(extractions_gdf) < nsamples:
+    available_samples = extractions_gdf["sample_id"].nunique()
+    if available_samples < nsamples:
         logger.warning(
             f"Not enough samples in the dataframe to visualize {nsamples} samples. "
-            f"Visualizing {len(extractions_gdf)} samples instead."
+            f"Visualizing {available_samples} samples instead."
         )
-        nsamples = len(extractions_gdf)
+        nsamples = available_samples
 
     # Sample the data
     if sample_ids is None:
         sample_ids = extractions_gdf["sample_id"].unique()
         rng = np.random.default_rng(random_seed)
-        selected_ids = rng.choice(sample_ids, nsamples, replace=False)
+        selected_ids = None
+        if crop_label_attr is not None and crop_label_attr in extractions_gdf.columns:
+            labels_by_sample = extractions_gdf.groupby("sample_id")[
+                crop_label_attr
+            ].first()
+            labels_by_sample = labels_by_sample.dropna()
+            if not labels_by_sample.empty:
+                per_label = labels_by_sample.groupby(labels_by_sample).sample(
+                    n=1,
+                    random_state=random_seed,
+                )
+                selected_ids = per_label.index.to_numpy()
+                if selected_ids.size > nsamples:
+                    logger.warning(
+                        "More crop types available than requested samples; "
+                        "showing a subset."
+                    )
+                    selected_ids = rng.choice(
+                        selected_ids,
+                        nsamples,
+                        replace=False,
+                    )
+                if selected_ids.size < nsamples:
+                    remaining = np.setdiff1d(sample_ids, selected_ids)
+                    if remaining.size:
+                        extra = rng.choice(
+                            remaining,
+                            min(nsamples - selected_ids.size, remaining.size),
+                            replace=False,
+                        )
+                        selected_ids = np.concatenate([selected_ids, extra])
+        if selected_ids is None:
+            selected_ids = rng.choice(sample_ids, nsamples, replace=False)
     else:
-        selected_ids = sample_ids
+        selected_ids = np.array(sample_ids)
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -616,18 +674,22 @@ def query_extractions(
     return merged_df
 
 
-def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataFrame:
+def retrieve_extractions_extent(
+    include_crop_types: bool = True,
+) -> tuple[gpd.GeoDataFrame, Map]:
     """Function to retrieve the extents of publicly available WorldCereal reference datasets
     with satellite extractions.
     Parameters
     ----------
     include_crop_types : bool, optional
         Whether to only include datasets with crop type information, by default True
-    Returns
-    -------
-    gpd.GeoDataFrame
-        GeoDataFrame containing the extents of publicly available WorldCereal reference datasets
-        with satellite extractions.
+        Returns
+        -------
+        tuple[gpd.GeoDataFrame, Map]
+                A tuple containing:
+                - GeoDataFrame with the extents of publicly available WorldCereal reference datasets
+                    with satellite extractions.
+                - An ipyleaflet Map widget showing those extents.
     """
     # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
     local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
@@ -637,6 +699,16 @@ def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataF
 
     # Read with geopandas
     gdf = gpd.read_parquet(local_file)
+    # Some environments may return a tuple (data, metadata)
+    if isinstance(gdf, tuple):
+        gdf = gdf[0]
+    # Ensure we have a GeoDataFrame
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        if "geometry" not in gdf.columns:
+            raise ValueError(
+                "Public extractions extent parquet lacks a 'geometry' column."
+            )
+        gdf = gpd.GeoDataFrame(gdf, geometry="geometry")
     # Ignore global extents
     gdf = gdf[~gdf.ref_id.str.contains("GLO")]
     # Optionally filter on crop types
@@ -644,7 +716,47 @@ def retrieve_extractions_extent(include_crop_types: bool = True) -> gpd.GeoDataF
         # Drop datasets with "_100" or "_101" in the ref_id
         gdf = gdf[~gdf.ref_id.str.contains("_100|_101")]
 
-    return gdf
+    # Visualization of the map with hover functionality using ipyleaflet
+    extent_gdf = gdf.to_crs(epsg=4326)
+    info = widgets.HTML(value="<b>ref_id:</b> hover over a dataset")
+    info_control = WidgetControl(widget=info, position="topright")
+
+    extent_map = Map(
+        basemap=basemaps.CartoDB.Positron,
+        center=(0, 0),
+        zoom=1,
+        scroll_wheel_zoom=True,
+    )
+
+    geojson = GeoJSON(
+        data=extent_gdf.__geo_interface__,
+        style={
+            "color": "#3112bb",
+            "weight": 1,
+            "fillColor": "#3b82f6",
+            "fillOpacity": 0.15,
+        },
+        hover_style={
+            "color": "#2563eb",
+            "weight": 2,
+            "fillOpacity": 0.25,
+        },
+    )
+
+    def handle_hover(feature, **kwargs):
+        ref_id = feature.get("properties", {}).get("ref_id", "N/A")
+        info.value = f"<b>ref_id:</b> {ref_id}"
+
+    def handle_mouseout(**kwargs):
+        info.value = "<b>ref_id:</b> hover over a dataset"
+
+    geojson.on_hover(handle_hover)
+    geojson.on_mouseout(handle_mouseout)
+
+    extent_map.add_control(info_control)
+    extent_map.add_layer(geojson)
+
+    return gdf, extent_map
 
 
 def generate_extractions_extent(
@@ -811,7 +923,7 @@ def _classify_ref_ids(
             logger.info(
                 "Checking which datasets are available in public extractions..."
             )
-            public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+            public_extent_gdf, _ = retrieve_extractions_extent(include_crop_types=True)
             all_public_ref_ids = set(public_extent_gdf["ref_id"].unique())
             available_public_ref_ids = [
                 ref_id for ref_id in ref_ids if ref_id in all_public_ref_ids
@@ -1076,7 +1188,9 @@ def sample_extractions(
         if include_public:
             try:
                 logger.info("Retrieving public extractions extent...")
-                public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+                public_extent_gdf, _ = retrieve_extractions_extent(
+                    include_crop_types=True
+                )
                 available_public_ref_ids = find_extractions_in_area(
                     extent_gdf=public_extent_gdf,
                     bbox_poly=bbox_poly,
@@ -1121,7 +1235,9 @@ def sample_extractions(
         if include_public:
             try:
                 logger.info("Checking spatial intersection for public datasets...")
-                public_extent_gdf = retrieve_extractions_extent(include_crop_types=True)
+                public_extent_gdf, _ = retrieve_extractions_extent(
+                    include_crop_types=True
+                )
                 public_extent_gdf = public_extent_gdf[
                     public_extent_gdf["ref_id"].isin(ref_ids)
                 ]

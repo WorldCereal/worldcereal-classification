@@ -1,7 +1,8 @@
 import copy
 import glob
+import json
+import sys
 import time
-from multiprocessing import Event, Process, Queue
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -13,25 +14,24 @@ from IPython.display import display
 from ipywidgets import Output
 from loguru import logger
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
+from pandas.errors import EmptyDataError
 from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.warp import Resampling, calculate_default_transform, reproject
-from shapely import wkt
 from shapely.geometry import box
 
 from worldcereal.job import setup_inference_job_manager
-from worldcereal.parameters import (
-    CropLandParameters,
-    CropTypeParameters,
-    WorldCerealProductType,
-)
 from worldcereal.utils.production_grid import create_production_grid
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
+from worldcereal.parameters import WorldCerealProductType
 
 # Define the color mapping for job statuses
 JOB_STATUS_COLORS = {
     "not_started": "grey",
     "created": "gold",
     "queued": "lightsteelblue",
+    "queued_for_start": "lightsteelblue",
     "running": "navy",
     "finished": "lime",
     "error": "darkred",
@@ -67,8 +67,7 @@ def plot_job_status(status_df, color_dict, center, zoom=10):
         A Plotly figure object containing the choropleth map of job statuses.
     """
     status_plot = copy.deepcopy(status_df)
-    status_plot["geometry"] = status_plot["geometry"].apply(wkt.loads)
-    status_plot = gpd.GeoDataFrame(status_plot, geometry="geometry", crs="EPSG:4326")
+    status_plot.crs = "EPSG:4326"
     status_plot["color"] = (
         status_plot["status"].map(color_dict).fillna(color_dict[None])
     )
@@ -100,14 +99,18 @@ def run_map_production(
     tile_resolution: int = 20,
     tiling_crs: Optional[str] = None,
     product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     stop_event=None,
+    plot_out: Optional[Output] = None,
+    log_out: Optional[Output] = None,
+    display_outputs: bool = True,
+    poll_sleep: int = 60,
 ) -> pd.DataFrame:
     """Run a WorldCereal map production for the given spatial and temporal extent.
     Parameters
@@ -127,10 +130,6 @@ def run_map_production(
         If None, the best local UTM CRS will be derived.
     product_type : WorldCerealProductType, optional
         The type of product to produce, by default WorldCerealProductType.CROPLAND
-    cropland_parameters : CropLandParameters, optional
-        Parameters for the cropland product, by default CropLandParameters()
-    croptype_parameters : CropTypeParameters, optional
-        Parameters for the crop type product, by default CropTypeParameters()
     backend_context : BackendContext, optional
         The backend context to use for the production, by default BackendContext(Backend.CDSE)
     target_epsg : Optional[int], optional
@@ -144,9 +143,22 @@ def run_map_production(
         If None, default options will be used.
     parallel_jobs : int, optional
         The number of parallel jobs to run, by default 2.
+    seasonal_preset : str, optional
+        Name of the seasonal workflow preset to use when building the inference context.
+    workflow_config : Optional[WorldCerealWorkflowConfig], optional
+        Structured overrides applied on top of the preset to tweak model/runtime/season settings.
     stop_event : Optional[threading.Event], optional
         An optional threading event to stop the job manager gracefully, by default None.
-
+    plot_out : Optional[Output], optional
+        An optional ipywidgets Output widget to use for plotting the job status.
+        If None, a new Output widget will be created, by default None.
+    log_out : Optional[Output], optional
+        An optional ipywidgets Output widget to use for logging the job status.
+        If None, a new Output widget will be created, by default None.
+    display_outputs : bool, optional
+        Whether to display the output widgets in the notebook, by default True.
+    poll_sleep : int, optional
+        The number of seconds to wait between polling the job status, by default 60.
     Returns
     -------
     pd.DataFrame
@@ -156,17 +168,54 @@ def run_map_production(
     ValueError
         If the spatial extent is not in WGS84 (EPSG:4326) coordinate reference system.
     """
+    # Configure logger of job manager to output to stdout
+    logger.remove()  # Remove default handler
+    logger.add(sys.stdout, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
+
+    # Create output widgets (if not provided) and track if we created them
+    plot_out_created = plot_out is None
+    log_out_created = log_out is None
+
+    if plot_out is None:
+        plot_out = Output()
+    if log_out is None:
+        log_out = Output()
+
+    # Only display widgets if we created them internally
+    if display_outputs and (plot_out_created or log_out_created):
+        if log_out_created:
+            display(log_out)
+        if plot_out_created:
+            display(plot_out)
+
+    # Helper function to log messages either to widget or logger
+    def _log(message: str):
+        if display_outputs:
+            with log_out:
+                print(message)
+        else:
+            print(message)
 
     # Create output directory if it does not exist
     output_dir.mkdir(exist_ok=True, parents=True)
+    _log(f"Output directory set to: {output_dir.resolve()}")
+
+    # Some additional logs about the processing parameters
+    _log(
+        f"Full processing period: {temporal_extent.start_date} to {temporal_extent.end_date}"
+    )
+
+    _log("Detailed processing parameters:")
+    _log(json.dumps(workflow_config.to_dict(), indent=2))
+    _log("----------------------------------")
 
     # Create production grid according to tile resolution and spatial extent
     grid_file = output_dir / "production_grid.gpkg"
     if grid_file.exists():
-        logger.info(f"Loading existing production grid from {grid_file}")
+        _log(f"Loading existing production grid from {grid_file}")
         production_grid = gpd.read_file(grid_file)
     else:
-        logger.info("Creating new production grid.")
+        _log(f"Creating new production grid with resolution {tile_resolution} km.")
         production_grid = create_production_grid(
             spatial_extent,
             temporal_extent,
@@ -176,199 +225,178 @@ def run_map_production(
         production_grid.to_file(grid_file, driver="GPKG")
 
     # Prepare the job manager and job database
+    _log("Setting up job manager to handle map production...")
     job_manager, job_db, start_job = setup_inference_job_manager(
         production_grid,
         output_dir,
         product_type=product_type,
-        cropland_parameters=cropland_parameters,
-        croptype_parameters=croptype_parameters,
         backend_context=backend_context,
         target_epsg=target_epsg,
         s1_orbit_state=s1_orbit_state,
         job_options=job_options,
         parallel_jobs=parallel_jobs,
+        seasonal_preset=seasonal_preset,
+        workflow_config=workflow_config,
     )
 
     # Start a threaded job manager
+    _log("Starting map production...")
+    if display_outputs:
+        _log("Job status will be displayed in the output widget below.")
+        _log(
+            "For individual job tracking, we refer to: https://openeo.dataspace.copernicus.eu/"
+        )
     job_manager.start_job_thread(start_job=start_job, job_db=job_db)
 
     # Compute center of total bounding box (used for map centering)
     minx, miny, maxx, maxy = production_grid.total_bounds
     center = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
 
-    # Create output widgets
-    plot_out = Output()
-    log_out = Output()
-    display(plot_out)
-    display(log_out)
+    # Initialize status_df to None
+    status_df = None
 
-    # Now run an update every 60 seconds
-    poll_sleep = 60
-    while not job_manager._stop_thread:
-        if stop_event and stop_event.is_set():
-            with log_out:
-                print("Stop event triggered. Exiting loop.")
-            job_manager.stop_job_thread()
-            break
+    break_msg = (
+        "Stopping map production...\n"
+        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
+        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
+    )
 
-        try:
-            status_df = pd.read_csv(job_db.path)
-            fig = plot_job_status(
-                status_df=status_df, color_dict=JOB_STATUS_COLORS, center=center
-            )
-            with plot_out:
-                plot_out.clear_output(wait=True)
-                fig.show(renderer="notebook")
-            with log_out:
-                log_out.clear_output(wait=True)
-                print(
-                    f"[{time.strftime('%H:%M:%S')}] Checked job status:\n"
-                    f"{status_df['status'].value_counts().to_string()}\n"
-                )
-
-            # Check if all jobs are done
-            if (
-                status_df["status"]
-                .isin(["not_started", "created", "queued", "running"])
-                .sum()
-                == 0
-            ):
+    try:
+        # Monitor while the job manager thread is alive
+        while job_manager._thread and job_manager._thread.is_alive():
+            # Check if external stop event was triggered
+            if stop_event is not None and stop_event.is_set():
+                _log(break_msg)
                 job_manager.stop_job_thread()
                 break
 
-            time.sleep(poll_sleep)  # Wait before the next update
+            try:
+                status_df = job_db.read()
 
-        except Exception as e:
-            with log_out:
-                print(f"Error occurred: {e}")
-            job_manager.stop_job_thread()
-            raise
+                # Update plot and job status table with current status
+                if display_outputs:
+                    fig = plot_job_status(
+                        status_df=status_df, color_dict=JOB_STATUS_COLORS, center=center
+                    )
+                    status_msg = f"[{time.strftime('%H:%M:%S')}] Job status:\n{status_df['status'].value_counts().to_string()}\n"
+                    with plot_out:
+                        plot_out.clear_output(wait=True)
+                        fig.show(renderer="notebook")
+                        print(status_msg)
 
-    with log_out:
-        print("Job manager stopped or finished.")
+                time.sleep(poll_sleep)
+
+            except (EmptyDataError, pd.errors.EmptyDataError):
+                _log(
+                    f"[{time.strftime('%H:%M:%S')}] Job database is empty, waiting for jobs to start..."
+                )
+                time.sleep(10)
+                continue
+
+    except KeyboardInterrupt:
+        _log(break_msg)
+        job_manager.stop_job_thread()
+
+    _log("Map production has stopped.")
 
     # Get final status
-    status_df = pd.read_csv(job_db.path)
+    try:
+        status_df = job_db.read()
+    except Exception as e:
+        _log(f"Warning: Could not read final job status: {e}")
+        if status_df is None:
+            status_df = pd.DataFrame()  # Return empty DataFrame if we never got data
 
     return status_df
 
 
-def run_production_wrapper(queue, stop_event, args, kwargs):
-    try:
-        result = run_map_production(*args, stop_event=stop_event, **kwargs)
-        queue.put(("done", result))
-    except Exception as e:
-        queue.put(("error", e))
+def merge_maps(outdir: Path) -> dict[str, Path]:
+    """Merge all product maps in the output directory into .tif files.
 
-
-def start_production_process(args, kwargs):
-    queue = Queue()
-    stop_event = Event()
-    proc = Process(
-        target=run_production_wrapper, args=(queue, stop_event, args, kwargs)
-    )
-    proc.start()
-    return proc, queue, stop_event
-
-
-def monitor_production_process(proc, queue, stop_event):
-    try:
-        while proc.is_alive():
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("⚠️ KeyboardInterrupt: requesting shutdown...")
-        stop_event.set()
-        proc.terminate()
-        proc.join()
-        print("✅ Process forcibly terminated.")
-        return
-
-    if not queue.empty():
-        status, result = queue.get()
-        if status == "done":
-            print("✅ Processing completed successfully.")
-            return result
-        elif status == "error":
-            print("❌ Job failed with exception:")
-            raise result
-    else:
-        print("⚠️ No result returned. The process may have been killed or crashed.")
-
-
-def merge_maps(outdir: Path, product="croptype") -> Path:
-    """Merge all maps in the output directory into a single .tif file."""
+    Returns a mapping of product name -> merged output path.
+    """
 
     if not outdir.exists():
         raise FileNotFoundError(f"Output directory {outdir} does not exist.")
 
     # Find all .tif files in the output directory
-    tifs = glob.glob(str(outdir / "*" / f"{product}_*.tif"))
+    tifs = glob.glob(str(outdir / "*" / "*.tif"))
     if len(tifs) == 0:
-        raise FileNotFoundError(
-            "No tif files found in the output directory matching your product."
-        )
+        raise FileNotFoundError("No tif files found in the output directory to merge.")
 
-    reprojected_tifs = []
+    product_groups: dict[str, list[str]] = {}
+    for tif in tifs:
+        product = Path(tif).name.split("_")[0]
+        product_groups.setdefault(product, []).append(tif)
 
-    with rasterio.Env(CPL_LOG="ERROR"):
-        for tif in tifs:
-            # reproject to EPSG:3857 if not already in that CRS
-            with rasterio.open(tif) as src:
-                dst_crs = "EPSG:3857"
-                transform, width, height = calculate_default_transform(
-                    src.crs, dst_crs, src.width, src.height, *src.bounds
-                )
+    merged_outputs: dict[str, Path] = {}
 
-                kwargs = src.meta.copy()
-                kwargs.update(
-                    {
-                        "crs": dst_crs,
-                        "transform": transform,
-                        "width": width,
-                        "height": height,
-                    }
-                )
+    def _merge_tifs(product_name: str, product_tifs: list[str]) -> Path:
+        reprojected_tifs = []
+        with rasterio.Env(CPL_LOG="ERROR"):
+            for tif in product_tifs:
+                # reproject to EPSG:3857 if not already in that CRS
+                with rasterio.open(tif) as src:
+                    dst_crs = "EPSG:3857"
+                    transform, width, height = calculate_default_transform(
+                        src.crs, dst_crs, src.width, src.height, *src.bounds
+                    )
 
-                memfile = MemoryFile()
-                with memfile.open(**kwargs) as dst:
-                    for i in range(1, src.count + 1):
-                        reproject(
-                            source=rasterio.band(src, i),
-                            destination=rasterio.band(dst, i),
-                            src_transform=src.transform,
-                            src_crs=src.crs,
-                            dst_transform=transform,
-                            dst_crs=dst_crs,
-                            resampling=Resampling.nearest,
-                        )
-                    dst.descriptions = src.descriptions
-                reprojected_tifs.append(memfile.open())
+                    kwargs = src.meta.copy()
+                    kwargs.update(
+                        {
+                            "crs": dst_crs,
+                            "transform": transform,
+                            "width": width,
+                            "height": height,
+                        }
+                    )
 
-        # Merge all reprojected rasters
-        mosaic, out_trans = merge(reprojected_tifs)
+                    memfile = MemoryFile()
+                    with memfile.open(**kwargs) as dst:
+                        for i in range(1, src.count + 1):
+                            reproject(
+                                source=rasterio.band(src, i),
+                                destination=rasterio.band(dst, i),
+                                src_transform=src.transform,
+                                src_crs=src.crs,
+                                dst_transform=transform,
+                                dst_crs=dst_crs,
+                                resampling=Resampling.nearest,
+                            )
+                        dst.descriptions = src.descriptions
+                    reprojected_tifs.append(memfile.open())
 
-        # Use metadata from one of the input files and update
-        out_meta = reprojected_tifs[0].meta.copy()
-        out_meta.update(
-            {
-                "driver": "GTiff",
-                "height": mosaic.shape[1],
-                "width": mosaic.shape[2],
-                "transform": out_trans,
-                "compress": "lzw",
-            }
-        )
+            # Merge all reprojected rasters
+            mosaic, out_trans = merge(reprojected_tifs)
 
-        # Write to output
-        outfile = outdir / f"{product}_merged.tif"
-        with rasterio.open(outfile, "w", **out_meta) as dest:
-            dest.write(mosaic)
-            # Preserve band descriptions (if any)
-            for idx, desc in enumerate(reprojected_tifs[0].descriptions, start=1):
-                if desc:
-                    dest.set_band_description(idx, desc)
+            # Use metadata from one of the input files and update
+            out_meta = reprojected_tifs[0].meta.copy()
+            out_meta.update(
+                {
+                    "driver": "GTiff",
+                    "height": mosaic.shape[1],
+                    "width": mosaic.shape[2],
+                    "transform": out_trans,
+                    "compress": "lzw",
+                }
+            )
 
-    return outfile
+            # Write to output
+            outfile = outdir / f"{product_name}_merged.tif"
+            with rasterio.open(outfile, "w", **out_meta) as dest:
+                dest.write(mosaic)
+                # Preserve band descriptions (if any)
+                for idx, desc in enumerate(reprojected_tifs[0].descriptions, start=1):
+                    if desc:
+                        dest.set_band_description(idx, desc)
+
+        return outfile
+
+    for product_name, product_tifs in product_groups.items():
+        merged_outputs[product_name] = _merge_tifs(product_name, product_tifs)
+
+    return merged_outputs
 
 
 def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataFrame:

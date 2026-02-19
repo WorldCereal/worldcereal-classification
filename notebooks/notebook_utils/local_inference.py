@@ -9,7 +9,7 @@ the UDF functions directly without running batch jobs on OpenEO.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 import xarray as xr
@@ -18,9 +18,8 @@ from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
-# from worldcereal.openeo.classifier import apply_inference
-from worldcereal.openeo.inference import run_single_workflow
-from worldcereal.parameters import CropLandParameters, CropTypeParameters
+from worldcereal.openeo.inference import SeasonalInferenceEngine
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
 
 def subset_ds_temporally(
@@ -155,165 +154,132 @@ def reconstruct_dataset(arr: xr.DataArray, ds: xr.Dataset) -> xr.Dataset:
     return new_ds
 
 
-def run_cropland_croptype_mapping(
-    ds: xr.Dataset,
-    cropland_parameters: CropLandParameters = CropLandParameters(),
-    croptype_parameters: CropTypeParameters = CropTypeParameters(),
-):
-    """Run full croptype mapping inference workflow on local files.
-    Parameters
-    ----------
-    input_patches : dict[str,Path]
-        Dictionary of input patch names and their corresponding file paths.
-    outdir : Path
-        Output directory to save results.
-    model_url : str, optional
-        URL to download the croptype classification model from. If None, uses
-        the default model provided by WorldCereal.
-    mask_croptype_with_cropland : bool, optional
-        Whether to mask croptype classification with cropland classification.
-        Defaults to True.
-    custom_landcover_presto_url : str, optional
-        URL to download the cropland feature extraction model from. If None, uses
-        the default model provided by WorldCereal.
-    custom_landcover_classifier_url : str, optional
-        URL to download the cropland classification model from. If None, uses
-        the default model provided by WorldCereal.
-    Returns
-    -------
-    dict[str, dict[str, Path]]
-        Dictionary with patch names as keys and another dictionary as values,
-        containing paths to cropland and croptype classification GeoTIFFs.
-    """
+def build_postprocess_spec(
+    *,
+    enabled: bool,
+    method: Optional[str],
+    kernel_size: Optional[int],
+) -> Optional[Dict[str, object]]:
+    requested = enabled or method is not None or kernel_size is not None
+    if not requested:
+        return None
 
-    logger.info("Running combined cropland/croptype mapping workflow ...")
+    spec: Dict[str, object] = {
+        "enabled": enabled or method is not None or kernel_size is not None
+    }
+    if method:
+        spec["method"] = method
+    if kernel_size is not None:
+        spec["kernel_size"] = kernel_size
+    return spec
 
-    # Initialize results dict
-    results = {}
 
-    # Optional cropland classification
-    if cropland_parameters is not None and croptype_parameters.mask_cropland:
-        cropland_classification = run_cropland_mapping(ds, cropland_parameters)
+def attach_crs_metadata(
+    result: Union[xr.Dataset, xr.DataArray], template: xr.Dataset
+) -> Union[xr.Dataset, xr.DataArray]:
+    crs_var = template.get("crs")
+    coords = {}
+    if "x" in template.coords:
+        coords["x"] = template.coords["x"]
+    if "y" in template.coords:
+        coords["y"] = template.coords["y"]
+    out = result.assign_coords(**coords) if coords else result
 
-        # Reconstruct dataset with CRS attributes
-        cropland_classification = reconstruct_dataset(cropland_classification, ds)
-        results["cropland"] = cropland_classification
+    if crs_var is None:
+        return out
 
-        cropland_mask = cropland_classification.sel(bands="classification")
+    crs_name = "spatial_ref"
+    crs_data = xr.DataArray(0, attrs=crs_var.attrs)
+
+    if isinstance(out, xr.Dataset):
+        out[crs_name] = crs_data
+        for name in out.data_vars:
+            out[name].attrs.setdefault("grid_mapping", crs_name)
+            out[name].encoding.pop("NETCDF_DIM_bands_VALUES", None)
+        return out
+
+    out = out.assign_coords({crs_name: crs_data})
+    out.attrs.setdefault("grid_mapping", crs_name)
+    return out
+
+
+def run_seasonal_inference(
+    ds_or_path: Union[xr.Dataset, str, Path],
+    *,
+    seasonal_model_zip: Union[str, Path] = DEFAULT_SEASONAL_MODEL_URL,
+    landcover_head_zip: Optional[Union[str, Path]] = None,
+    croptype_head_zip: Optional[Union[str, Path]] = None,
+    season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[Mapping[str, Sequence[object]]] = None,
+    export_class_probabilities: bool = False,
+    enable_cropland_head: bool = True,
+    enable_croptype_head: bool = True,
+    enforce_cropland_gate: bool = True,
+    batch_size: int = 2048,
+    cache_root: Optional[Path] = None,
+    device: str = "cpu",
+    cropland_postprocess: Optional[Mapping[str, Any]] = None,
+    croptype_postprocess: Optional[Mapping[str, Any]] = None,
+    epsg: Optional[int] = None,
+    fillna_value: int = NODATAVALUE,
+    as_dataset: bool = True,
+) -> Union[xr.Dataset, xr.DataArray]:
+    """Run seasonal cropland/croptype inference locally with a single entrypoint."""
+
+    if isinstance(ds_or_path, (str, Path)):
+        ds = xr.open_dataset(ds_or_path)
     else:
-        cropland_mask = None
+        ds = ds_or_path
 
-    # Croptype classification
-    croptype_classification = run_croptype_mapping(
-        ds, croptype_parameters, mask=cropland_mask
+    ds = ds.fillna(fillna_value)
+    if epsg is None:
+        if "crs" not in ds:
+            raise ValueError(
+                "EPSG not provided and dataset is missing a 'crs' variable."
+            )
+        epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
+
+    arr = ds.drop_vars("crs", errors="ignore").astype("uint16").to_array(dim="bands")
+
+    engine = SeasonalInferenceEngine(
+        seasonal_model_zip=seasonal_model_zip,
+        landcover_head_zip=landcover_head_zip,
+        croptype_head_zip=croptype_head_zip,
+        cache_root=cache_root,
+        device=device,
+        batch_size=batch_size,
+        season_ids=season_ids,
+        export_class_probabilities=export_class_probabilities,
+        enable_cropland_head=enable_cropland_head,
+        enable_croptype_head=enable_croptype_head,
+        cropland_postprocess=cropland_postprocess,
+        croptype_postprocess=croptype_postprocess,
     )
 
-    # Reconstruct dataset with CRS attributes
-    croptype_classification = reconstruct_dataset(croptype_classification, ds)
-    results["croptype"] = croptype_classification
-
-    # # Save cropland classification to GeoTIFF
-    # cropland_path = outdir / name / "cropland_classification.tif"
-    # cropland_path.parent.mkdir(exist_ok=True)
-    # classification_to_geotiff(cropland_classification, epsg, cropland_path)
-    # output_paths[name]["cropland"] = cropland_path
-
-    # # save crop type map to GeoTIFF
-    # croptype_path = outdir / name / "croptype_classification.tif"
-    # croptype_path.parent.mkdir(exist_ok=True)
-    # classification_to_geotiff(
-    #     classification=croptype_classification, epsg=epsg, out_path=croptype_path
-
-    return results
-
-
-def run_cropland_mapping(
-    ds: xr.Dataset,
-    parameters: CropLandParameters = CropLandParameters(),
-) -> xr.Dataset:
-    """Run cropland mapping pipeline: embedding extraction + classification.
-    parameters
-    ----------
-    ds : xr.Dataset
-        Input satellite dataset
-    parameters : CropLandParameters, optional
-        Parameters for the cropland mapping pipeline. Default is CropLandParameters().
-
-    Returns
-    -------
-    xr.Dataset
-        Cropland classification dataset
-    """
-    logger.info("Running cropland mapping workflow...")
-
-    # Get CRS and convert to xarray DataArray
-    epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
-    arr = ds.drop_vars("crs").fillna(NODATAVALUE).astype("uint16").to_array(dim="bands")
-
-    # Convert parameters to dict and add local run overrides
-    cropland_params = parameters.model_dump()
-    cropland_params["feature_parameters"].update({"ignore_dependencies": True})
-    cropland_params["classifier_parameters"].update({"ignore_dependencies": True})
-
-    # Run classification UDF
-    classification = run_single_workflow(arr, epsg, parameters=cropland_params)
-
-    # Reconstruct dataset with CRS attributes
-    classification = reconstruct_dataset(classification, ds)
-
-    return classification
-
-
-def run_croptype_mapping(
-    ds: xr.Dataset,
-    parameters: CropTypeParameters = CropTypeParameters(),
-    mask: Optional[xr.DataArray] = None,
-) -> xr.Dataset:
-    """Run croptype mapping pipeline: embedding extraction + classification.
-
-    Parameters
-    ----------
-    ds : xr.Dataset
-        Input satellite dataset
-    parameters : CropTypeParameters, optional
-        Parameters for the croptype mapping pipeline. Default is CropTypeParameters().
-        URL to download the croptype classification model from. If None, uses
-        the default model provided by WorldCereal.
-    mask : xr.DataArray, optional
-        Optional cropland mask to apply during classification. Pixels with mask value
-        of 0 will be set to 254 (non-cropland) in the output classification.
-
-    Returns
-    -------
-    xr.Dataset
-        Croptype classification dataset
-    """
-    logger.info("Running croptype mapping workflow...")
-
-    # Get CRS and convert to xarray DataArray
-    epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
-    arr = ds.drop_vars("crs").fillna(NODATAVALUE).astype("uint16").to_array(dim="bands")
-
-    # Convert parameters to dict and add local run overrides
-    croptype_params = parameters.model_dump()
-    croptype_params["feature_parameters"].update({"ignore_dependencies": True})
-    croptype_params["classifier_parameters"].update({"ignore_dependencies": True})
-
-    # Run classification UDF
-    classification = run_single_workflow(
-        arr, epsg, parameters=croptype_params, mask=mask
+    result = engine.infer(
+        arr,
+        epsg=epsg,
+        season_windows=season_windows,
+        season_ids=season_ids,
+        enforce_cropland_gate=enforce_cropland_gate,
     )
 
-    # Reconstruct dataset with CRS attributes
-    classification = reconstruct_dataset(classification, ds)
+    if as_dataset and isinstance(result, xr.DataArray):
+        result = xr.Dataset(
+            {
+                str(b): result.sel(bands=b).drop_vars("bands")
+                for b in result.bands.values
+            }
+        )
 
-    return classification
+    return attach_crs_metadata(result, ds)
 
 
 def classification_to_geotiff(
     classification: xr.DataArray,
     epsg: int,
     out_path: Path,
+    class_map: Optional[Mapping[int, str]] = None,
 ) -> None:
     """Save classification DataArray as GeoTIFF.
     Parameters
@@ -323,12 +289,163 @@ def classification_to_geotiff(
     epsg : int
         EPSG code for the CRS.
     out_path : Path
-        Output path for the GeoTIFF file."""
+        Output path for the GeoTIFF file.
+    class_map : Optional[Mapping[int, str]]
+        Optional integer-to-class mapping (e.g. head_config["classes_list"]).
+        Stored as metadata tags on croptype classification bands."""
+
+    import json
+
+    import rasterio
 
     # ignore import error for rioxarray if not used
     import rioxarray  # noqa: F401
 
     logger.info(f"Saving classification to GeoTIFF at: {out_path}")
 
+    band_names = [str(b) for b in classification.bands.values]
     classification.rio.set_crs(f"epsg:{epsg}", inplace=True)
     classification.rio.to_raster(out_path)
+
+    class_map_json = None
+    if class_map:
+        class_map_json = json.dumps({int(k): str(v) for k, v in class_map.items()})
+
+    with rasterio.open(out_path, "r+") as dst:
+        dst.descriptions = tuple(band_names)
+        if class_map_json:
+            # Store globally and on croptype classification bands for GIS tools.
+            dst.update_tags(croptype_class_map=class_map_json)
+            for idx, name in enumerate(band_names, start=1):
+                if name.startswith("croptype_classification"):
+                    dst.update_tags(idx, class_map=class_map_json)
+
+    logger.info("Classification saved!")
+
+
+def _reproject_bands_from_raster(
+    src_path: Union[str, Path],
+    out_path: Union[str, Path],
+    band_list: list[int],
+    resampling: str = "nearest",
+    target_epsg: str = "EPSG:3857",
+) -> None:
+    """Reproject selected raster bands into a new GeoTIFF.
+
+    Parameters
+    ----------
+    src_path : Union[str, Path]
+        Source raster path.
+    out_path : Union[str, Path]
+        Output raster path.
+    band_list : list[int]
+        1-based band indices to extract and reproject in the given order.
+    resampling : str, optional
+        Resampling method name, by default "nearest".
+    target_epsg : str, optional
+        Target CRS (e.g. "EPSG:3857"), by default "EPSG:3857".
+    """
+
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.warp import calculate_default_transform, reproject
+
+    resampling_map = {
+        "nearest": Resampling.nearest,
+        "bilinear": Resampling.bilinear,
+        "cubic": Resampling.cubic,
+        "lanczos": Resampling.lanczos,
+    }
+    resampling_enum = resampling_map.get(resampling, Resampling.nearest)
+
+    src_path = Path(src_path)
+    out_path = Path(out_path)
+
+    with rasterio.open(src_path) as src:
+        if src.crs is None:
+            raise ValueError("Source raster is missing CRS metadata.")
+
+        dst_crs = target_epsg
+        transform, width, height = calculate_default_transform(
+            src.crs,
+            dst_crs,
+            src.width,
+            src.height,
+            *src.bounds,
+        )
+
+        meta = src.meta.copy()
+        meta.update(
+            {
+                "crs": dst_crs,
+                "transform": transform,
+                "width": width,
+                "height": height,
+                "count": len(band_list),
+            }
+        )
+
+        with rasterio.open(out_path, "w", **meta) as dst:
+            new_band = 1
+            for band_idx in band_list:
+                reproject(
+                    source=rasterio.band(src, band_idx),
+                    destination=rasterio.band(dst, new_band),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=resampling_enum,
+                )
+                new_band += 1
+
+    logger.info(f"Exported bands {band_list} to {target_epsg}: {out_path}")
+
+
+def isolate_cropland_croptype_products(
+    src_path: Union[str, Path],
+    cropland_included: bool,
+    resampling: str = "nearest",
+    target_epsg: str = "EPSG:3857",
+) -> dict:
+    """Extract cropland/croptype products from a multi-band inference raster.
+
+    When cropland is included, bands 1-2 are cropland (class + probability)
+    and bands 4-5 are croptype (class + probability). When cropland is
+    not included, bands 1-2 represent croptype instead.
+    """
+
+    src_path = Path(src_path)
+    outdir = src_path.parent
+
+    products = {}
+
+    # First two bands are either cropland or crop type product.
+    if cropland_included:
+        dst_path = outdir / f"{src_path.stem}_cropland.tif"
+        products["cropland"] = dst_path
+    else:
+        dst_path = outdir / f"{src_path.stem}_croptype.tif"
+        products["croptype"] = dst_path
+
+    _reproject_bands_from_raster(
+        src_path,
+        dst_path,
+        [1, 2],
+        resampling=resampling,
+        target_epsg=target_epsg,
+    )
+
+    # If there was a cropland product, export croptype from bands 4 and 5.
+    if cropland_included:
+        dst_path = outdir / f"{src_path.stem}_croptype.tif"
+        products["croptype"] = dst_path
+        _reproject_bands_from_raster(
+            src_path,
+            dst_path,
+            [4, 5],
+            resampling=resampling,
+            target_epsg=target_epsg,
+        )
+
+    return products

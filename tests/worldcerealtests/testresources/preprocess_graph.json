@@ -38,102 +38,23 @@
             ]
         }
     },
-    "loadcollection2": {
-        "process_id": "load_collection",
-        "arguments": {
-            "bands": [
-                "SCL"
-            ],
-            "id": "SENTINEL2_L2A",
-            "properties": {
-                "eo:cloud_cover": {
-                    "process_graph": {
-                        "lte2": {
-                            "process_id": "lte",
-                            "arguments": {
-                                "x": {
-                                    "from_parameter": "value"
-                                },
-                                "y": 95.0
-                            },
-                            "result": true
-                        }
-                    }
-                }
-            },
-            "spatial_extent": null,
-            "temporal_extent": [
-                "2020-06-01",
-                "2021-05-31"
-            ]
-        }
-    },
     "resamplespatial1": {
         "process_id": "resample_spatial",
         "arguments": {
             "align": "upper-left",
             "data": {
-                "from_node": "loadcollection2"
+                "from_node": "loadcollection1"
             },
             "method": "near",
             "projection": null,
             "resolution": 10
         }
     },
-    "toscldilationmask1": {
-        "process_id": "to_scl_dilation_mask",
-        "arguments": {
-            "data": {
-                "from_node": "resamplespatial1"
-            },
-            "erosion_kernel_size": 3,
-            "kernel1_size": 17,
-            "kernel2_size": 77,
-            "mask1_values": [
-                2,
-                4,
-                5,
-                6,
-                7
-            ],
-            "mask2_values": [
-                3,
-                8,
-                9,
-                10,
-                11
-            ],
-            "scl_band_name": "SCL"
-        }
-    },
     "renamelabels1": {
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "toscldilationmask1"
-            },
-            "dimension": "bands",
-            "target": [
-                "S2-L2A-SCL_DILATED_MASK"
-            ]
-        }
-    },
-    "mask1": {
-        "process_id": "mask",
-        "arguments": {
-            "data": {
-                "from_node": "loadcollection1"
-            },
-            "mask": {
-                "from_node": "renamelabels1"
-            }
-        }
-    },
-    "renamelabels2": {
-        "process_id": "rename_labels",
-        "arguments": {
-            "data": {
-                "from_node": "mask1"
+                "from_node": "resamplespatial1"
             },
             "dimension": "bands",
             "source": [
@@ -166,7 +87,7 @@
         "process_id": "apply",
         "arguments": {
             "data": {
-                "from_node": "renamelabels2"
+                "from_node": "renamelabels1"
             },
             "process": {
                 "process_graph": {
@@ -187,11 +108,102 @@
             }
         }
     },
+    "loadcollection2": {
+        "process_id": "load_collection",
+        "arguments": {
+            "bands": [
+                "SCL"
+            ],
+            "id": "SENTINEL2_L2A",
+            "properties": {
+                "eo:cloud_cover": {
+                    "process_graph": {
+                        "lte2": {
+                            "process_id": "lte",
+                            "arguments": {
+                                "x": {
+                                    "from_parameter": "value"
+                                },
+                                "y": 95.0
+                            },
+                            "result": true
+                        }
+                    }
+                }
+            },
+            "spatial_extent": null,
+            "temporal_extent": [
+                "2020-06-01",
+                "2021-05-31"
+            ]
+        }
+    },
+    "resamplespatial2": {
+        "process_id": "resample_spatial",
+        "arguments": {
+            "align": "upper-left",
+            "data": {
+                "from_node": "loadcollection2"
+            },
+            "method": "near",
+            "projection": null,
+            "resolution": 10
+        }
+    },
+    "toscldilationmask1": {
+        "process_id": "to_scl_dilation_mask",
+        "arguments": {
+            "data": {
+                "from_node": "resamplespatial2"
+            },
+            "erosion_kernel_size": 3,
+            "kernel1_size": 17,
+            "kernel2_size": 77,
+            "mask1_values": [
+                2,
+                4,
+                5,
+                6,
+                7
+            ],
+            "mask2_values": [
+                3,
+                8,
+                9,
+                10,
+                11
+            ],
+            "scl_band_name": "SCL"
+        }
+    },
+    "renamelabels2": {
+        "process_id": "rename_labels",
+        "arguments": {
+            "data": {
+                "from_node": "toscldilationmask1"
+            },
+            "dimension": "bands",
+            "target": [
+                "S2-L2A-SCL_DILATED_MASK"
+            ]
+        }
+    },
+    "mask1": {
+        "process_id": "mask",
+        "arguments": {
+            "data": {
+                "from_node": "apply1"
+            },
+            "mask": {
+                "from_node": "renamelabels2"
+            }
+        }
+    },
     "aggregatetemporalperiod1": {
         "process_id": "aggregate_temporal_period",
         "arguments": {
             "data": {
-                "from_node": "apply1"
+                "from_node": "mask1"
             },
             "dimension": "t",
             "period": "month",
@@ -295,7 +307,7 @@
             "noise_removal": true
         }
     },
-    "resamplespatial2": {
+    "resamplespatial3": {
         "process_id": "resample_spatial",
         "arguments": {
             "align": "upper-left",
@@ -311,7 +323,7 @@
         "process_id": "rename_labels",
         "arguments": {
             "data": {
-                "from_node": "resamplespatial2"
+                "from_node": "resamplespatial3"
             },
             "dimension": "bands",
             "source": [
@@ -568,6 +580,7 @@
                 "DEM"
             ],
             "id": "COPERNICUS_30",
+            "properties": {},
             "spatial_extent": null,
             "temporal_extent": null
         }
@@ -691,7 +704,7 @@
                 "2020-06-01",
                 "2021-05-31"
             ],
-            "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
         }
     },
     "renamelabels7": {
