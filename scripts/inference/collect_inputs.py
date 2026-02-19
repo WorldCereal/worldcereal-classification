@@ -10,6 +10,7 @@ from typing import Dict, Literal, Optional, Union
 import geopandas as gpd
 import openeo
 import pandas as pd
+from shapely import wkt as shapely_wkt
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
@@ -101,7 +102,8 @@ def create_worldcereal_inputsjob(
         The created batch job.
     """
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
-    spatial_extent = BoundingBoxExtent(*row.geometry.bounds, epsg=int(row["epsg"]))
+    utm_geom = shapely_wkt.loads(row["geometry_utm_wkt"])
+    spatial_extent = BoundingBoxExtent(*utm_geom.bounds, epsg=int(row["epsg_utm"]))
 
     preprocessed_inputs = create_inputs_process_graph(
         spatial_extent=spatial_extent,
@@ -174,9 +176,9 @@ def create_job_dataframe_from_grid(
     assert (
         "geometry" in production_gdf.columns
     ), "The grid file must contain a geometry column."
-    assert all(
-        production_gdf.geometry.type == "Polygon"
-    ), "All geometries in the grid file must be of type Polygon."
+    assert production_gdf.geometry.geom_type.isin(
+        ["Polygon", "MultiPolygon"]
+    ).all(), "All geometries in the grid file must be of type Polygon or MultiPolygon."
     assert production_gdf.crs is not None, "The grid file must have a defined CRS."
     assert (
         production_gdf.crs.to_epsg() is not None
