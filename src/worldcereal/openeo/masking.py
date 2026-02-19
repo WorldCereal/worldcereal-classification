@@ -1,5 +1,10 @@
+import numpy as np
 import openeo
-from skimage.morphology import footprints
+
+
+def disk_footprint(radius: int) -> np.ndarray:
+    y, x = np.ogrid[-radius:radius + 1, -radius:radius + 1]
+    return (x*x + y*y) <= radius*radius  # bool mask
 
 
 def convolve(img, radius):
@@ -8,7 +13,7 @@ def convolve(img, radius):
     NOTE: make sure the resolution of the image
     matches the expected radius in pixels!
     """
-    kernel = footprints.disk(radius)
+    kernel = disk_footprint(radius).astype(int)
     img = img.apply_kernel(kernel)
     return img
 
