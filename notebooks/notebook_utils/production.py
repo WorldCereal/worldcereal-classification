@@ -21,10 +21,10 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely.geometry import box
 
 from worldcereal.job import setup_inference_job_manager
-from worldcereal.utils.production_grid import create_production_grid
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import WorldCerealProductType
+from worldcereal.utils.production_grid import create_production_grid
 
 # Define the color mapping for job statuses
 JOB_STATUS_COLORS = {

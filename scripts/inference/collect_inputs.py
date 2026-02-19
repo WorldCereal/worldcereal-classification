@@ -10,12 +10,12 @@ from typing import Dict, Literal, Optional, Union
 import geopandas as gpd
 import openeo
 import pandas as pd
-from shapely import wkt as shapely_wkt
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import cdse_connection
+from shapely import wkt as shapely_wkt
 
 from worldcereal.job import create_inputs_process_graph
 from worldcereal.utils import parse_job_options_from_args
