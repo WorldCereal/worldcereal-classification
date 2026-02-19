@@ -589,7 +589,7 @@
                 "2020-01-01",
                 "2020-12-31"
             ],
-            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_terrascope"
+            "url": "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
         }
     },
     "resamplespatial1": {

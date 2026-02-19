@@ -1,3 +1,4 @@
+import threading
 from typing import List, Optional
 
 import ipywidgets as widgets
@@ -76,6 +77,8 @@ class CropTypePicker:
         sample_df: pd.DataFrame = None,
         count_threshold: int = 0,
         expand: bool = False,
+        display_ui: bool = True,
+        selection_modes: Optional[List[str]] = None,
     ):
         """
         Crop type picker widget for selecting crop types of interest.
@@ -96,6 +99,9 @@ class CropTypePicker:
         expand : bool, optional
             Whether to expand the widget by default.
             By default False.
+        selection_modes : list[str], optional
+            Available selection modes. Choose from ["Include", "Drop"].
+            By default both modes are available.
         """
 
         self.ewoc_codes = ewoc_codes
@@ -108,38 +114,59 @@ class CropTypePicker:
         self.count_threshold = count_threshold
         self.expand = expand
 
+        if selection_modes is None:
+            selection_modes = ["Include", "Drop"]
+        selection_modes = [
+            mode for mode in selection_modes if mode in ["Include", "Drop"]
+        ]
+        if not selection_modes:
+            raise ValueError(
+                "selection_modes must include at least one of 'Include' or 'Drop'."
+            )
+
         self.legend = None
         self.hierarchy = None
         self.widget = None
-        self.widgets_dict: dict[int, widgets.Checkbox] = {}
+        self.widgets_dict: dict[tuple, widgets.Checkbox] = {}
         self.croptypes = pd.DataFrame()
+        self.included_croptypes = pd.DataFrame()
+        self.dropped_croptypes = pd.DataFrame()
         self.output = widgets.Output()
+        self._selection_cache = {"Include": set(), "Drop": set()}
+        self._available_modes = selection_modes
+        self._current_mode = selection_modes[0]
+        self._mode_locked_paths = set()
+        self._node_meta = {}
+        self._root_paths = []
+        self._search_active = False
+        self._toggle_state_before_search = {}
 
         # Initialize the hierarchy and widget
         self._build_hierarchy()
         self._create_widget()
 
-        display(self.widget)
+        if display_ui:
+            display(self.widget)
 
     def _simplify_legend(self):
         """Simplify the legend filling missing values with lower levels of the hierarchy"""
 
         for i in range(4, 1, -1):
             self.legend[f"level_{i}"] = self.legend[f"level_{i}"].fillna(
-                self.legend[f"level_{i+1}"]
+                self.legend[f"level_{i + 1}"]
             )
 
         for i in range(2, 4):
             upper = f"level_{i}"
-            lower = f"level_{i+1}"
+            lower = f"level_{i + 1}"
             self.legend.loc[self.legend[upper] == self.legend[lower], lower] = (
-                self.legend[f"level_{i+2}"]
+                self.legend[f"level_{i + 2}"]
             )
 
         # set duplicates to NaN
         for i in range(5, 1, -1):
             self.legend.loc[
-                self.legend[f"level_{i}"] == self.legend[f"level_{i-1}"], f"level_{i}"
+                self.legend[f"level_{i}"] == self.legend[f"level_{i - 1}"], f"level_{i}"
             ] = np.nan
 
     def _legend_to_hierarchy(self):
@@ -149,6 +176,15 @@ class CropTypePicker:
         hierarchy = {}
         for i, row in self.legend.iterrows():
             hierarchy[i] = (tuple(row[levels].dropna().values), row["count"])
+
+        # Pre-build lookup dictionaries for O(1) access instead of O(n) searches
+        label_to_code = dict(
+            zip(self.full_legend["label_full"], self.full_legend.index)
+        )
+        level_lookups = {}
+        for i in range(1, 6):
+            level_series = self.full_legend[f"level_{i}"].dropna()
+            level_lookups[i] = dict(zip(level_series.values, level_series.index))
 
         nested_hierarchy = {}
 
@@ -160,18 +196,17 @@ class CropTypePicker:
                         code_to_assign = 0
                     if key == info[0][-1]:
                         code_to_assign = ewoc_code
-                    elif key in self.full_legend["label_full"].values:
-                        code_to_assign = self.full_legend.loc[
-                            self.full_legend["label_full"] == key
-                        ].index.values[0]
+                    elif key in label_to_code:
+                        code_to_assign = label_to_code[key]
                     else:
                         # rare case where the key is not in the legend
+                        code_to_assign = None
                         for i in range(1, 6):
-                            if key in self.full_legend[f"level_{i}"].values:
-                                code_to_assign = self.full_legend.loc[
-                                    self.full_legend[f"level_{i}"] == key
-                                ].index.values[0]
+                            if key in level_lookups[i]:
+                                code_to_assign = level_lookups[i][key]
                                 break
+                        if code_to_assign is None:
+                            code_to_assign = 0
 
                     node[key] = {
                         "__count__": info[1],
@@ -191,6 +226,15 @@ class CropTypePicker:
                 node = node[key]
 
         return nested_hierarchy
+
+    def _auto_expand_single_root(self) -> None:
+        """Expand the only root node when a single top-level item is available."""
+        if len(self._root_paths) != 1:
+            return
+        root_meta = self._node_meta.get(self._root_paths[0])
+        if root_meta is None or root_meta.get("toggle") is None:
+            return
+        root_meta["toggle"].value = True
 
     def _filter_low_counts(self, hierarchy) -> dict:
         """Filter out low counts from the hierarchy"""
@@ -213,12 +257,8 @@ class CropTypePicker:
 
     def _build_hierarchy(self):
 
-        # First get the legend
-        self.full_legend = get_legend()
-        self.full_legend["ewoc_code"] = (
-            self.full_legend["ewoc_code"].str.replace("-", "").astype(np.int64)
-        )
-        self.full_legend = self.full_legend.set_index("ewoc_code")
+        # First get the legend (make a copy to avoid modifying cached version)
+        self.full_legend = get_legend().copy()
 
         # Get rid of unknown class
         self.legend = self.full_legend.loc[self.full_legend.index != 0]
@@ -255,121 +295,265 @@ class CropTypePicker:
         self.hierarchy = hierarchy
 
     def _disable_descendants(self, widget):
-        widget.disabled = True
-        widget.value = False
-        if isinstance(widget, widgets.VBox):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = True
+            widget.value = True
+        if hasattr(widget, "children"):
             for child in widget.children:
                 self._disable_descendants(child)
 
     def _enable_descendants(self, widget):
-        widget.disabled = False
-        if isinstance(widget, widgets.VBox):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = False
+        if hasattr(widget, "children"):
             for child in widget.children:
                 self._enable_descendants(child)
 
+    def _clear_descendants(self, widget):
+        if isinstance(widget, widgets.Checkbox):
+            widget.disabled = False
+            widget.value = False
+        if hasattr(widget, "children"):
+            for child in widget.children:
+                self._clear_descendants(child)
+
+    def _set_toggle_state(self, toggle_button, enabled: bool) -> None:
+        toggle_button.disabled = not enabled
+        toggle_button.style.button_color = "#16a34a" if enabled else "#A9A9A9"
+
+    def _lock_descendants_async(
+        self, children_vbox, load_children=None, toggle_button=None
+    ):
+        if toggle_button is not None:
+            self._set_toggle_state(toggle_button, False)
+
+        def _worker():
+            if load_children is not None:
+                load_children()
+            self._disable_descendants(children_vbox)
+            if toggle_button is not None:
+                self._set_toggle_state(toggle_button, True)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _clear_descendants_async(self, children_vbox, toggle_button=None):
+        if toggle_button is not None:
+            self._set_toggle_state(toggle_button, False)
+
+        def _worker():
+            self._clear_descendants(children_vbox)
+            if toggle_button is not None:
+                self._set_toggle_state(toggle_button, True)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _is_blocked_by_parent(self, path):
+        if len(path) <= 1:
+            return False
+        for i in range(1, len(path)):
+            parent = path[:i]
+            if parent in self.widgets_dict and self.widgets_dict[parent].value:
+                return True
+        return False
+
+    def _update_mode_locks(self, current_mode: str):
+        if len(self._available_modes) < 2:
+            self._mode_locked_paths = set()
+            for path, checkbox in self.widgets_dict.items():
+                if not self._is_blocked_by_parent(path):
+                    checkbox.disabled = False
+            return
+
+        other_mode = "Drop" if current_mode == "Include" else "Include"
+        locked_paths = set(self._selection_cache.get(other_mode, set()))
+
+        for path, checkbox in self.widgets_dict.items():
+            if path in locked_paths:
+                checkbox.value = False
+                checkbox.disabled = True
+            else:
+                if path in self._mode_locked_paths and not self._is_blocked_by_parent(
+                    path
+                ):
+                    checkbox.disabled = False
+
+        self._mode_locked_paths = locked_paths
+
     def _create_widget(self):
-        def recursive_create_widgets(hierarchy, path=None, level=0):
-            if path is None:
-                path = []
+        indent_px = 16
 
-            items = []
-            for key, value in hierarchy.items():
-                if key in ["__count__", "ewoc_code", "children"]:
-                    continue
-                current_path = tuple(path + [key])
-                count = value.get("__count__", 0)
-                if self.df is not None:
-                    description = f"{key} ({count} samples)"
-                else:
-                    nchildren = len(value.get("children", []))
-                    description = f"{key} ({nchildren} subclasses)"
-                checkbox = widgets.Checkbox(
-                    value=False,
-                    description=description,
-                    layout=widgets.Layout(
-                        margin=f"0 0 0 {level * 20}px", width="auto", max_width="95%"
-                    ),
+        def build_node(node_key, node_value, path, level):
+            current_path = tuple(path + [node_key])
+            count = node_value.get("__count__", 0)
+            if self.df is not None:
+                description = f"{node_key} ({count} samples)"
+            else:
+                nchildren = len(node_value.get("children", []))
+                description = f"{node_key} ({nchildren} subclasses)"
+
+            if level > 0:
+                description = f"↳ {description}"
+
+            indent = widgets.HTML(
+                value=f"<div style='width:{level * indent_px}px'></div>",
+                layout=widgets.Layout(height="0px"),
+            )
+
+            checkbox = widgets.Checkbox(
+                value=False,
+                description=description,
+                layout=widgets.Layout(width="auto", max_width="95%"),
+            )
+            self.widgets_dict[current_path] = checkbox
+
+            child_keys = [
+                k
+                for k in node_value.keys()
+                if k not in ["__count__", "ewoc_code", "children"]
+            ]
+            if not child_keys:
+                leaf_container = widgets.HBox(
+                    [indent, checkbox],
+                    layout=widgets.Layout(width="100%", align_items="center"),
                 )
-                self.widgets_dict[current_path] = checkbox
+                self._node_meta[current_path] = {
+                    "container": leaf_container,
+                    "checkbox": checkbox,
+                    "children": [],
+                    "children_vbox": None,
+                    "toggle": None,
+                    "load_children": None,
+                    "loaded_flag": None,
+                    "label": str(node_key),
+                }
+                return leaf_container
 
-                # Process child items recursively
-                child_items = []
-                for child_key, child_value in value.items():
-                    if child_key not in ["__count__", "ewoc_code", "children"]:
-                        child_items.append(
-                            recursive_create_widgets(
-                                {child_key: child_value},
-                                list(current_path),
-                                level + 1,
-                            )
+            children_vbox = widgets.VBox(
+                [],
+                layout=widgets.Layout(width="100%", align_items="flex-start"),
+            )
+            children_vbox.layout.display = "none"
+
+            loaded = {"value": False}
+            parent_selected = {"value": False}
+
+            def load_children():
+                if loaded["value"]:
+                    return
+                child_widgets = []
+                for child_key in child_keys:
+                    child_widgets.append(
+                        build_node(
+                            child_key,
+                            node_value[child_key],
+                            list(current_path),
+                            level + 1,
+                        )
+                    )
+                children_vbox.children = child_widgets
+                loaded["value"] = True
+                if parent_selected["value"]:
+                    self._disable_descendants(children_vbox)
+
+            if self.expand:
+                load_children()
+                children_vbox.layout.display = "flex"
+                toggle_value = True
+                toggle_desc = "Collapse"
+                toggle_icon = "chevron-up"
+            else:
+                toggle_value = False
+                toggle_desc = "Expand"
+                toggle_icon = "chevron-down"
+
+            toggle_button = widgets.ToggleButton(
+                value=toggle_value,
+                description=toggle_desc,
+                icon=toggle_icon,
+                layout=widgets.Layout(width="150px", margin="0 5px 0 0"),
+                style={"button_color": "#A9A9A9"},
+            )
+            self._set_toggle_state(toggle_button, True)
+
+            def toggle_visibility(change):
+                if change["new"]:
+                    load_children()
+                    if parent_selected["value"]:
+                        self._disable_descendants(children_vbox)
+                    children_vbox.layout.display = "flex"
+                    toggle_button.description = "Collapse"
+                    toggle_button.icon = "chevron-up"
+                else:
+                    children_vbox.layout.display = "none"
+                    toggle_button.description = "Expand"
+                    toggle_button.icon = "chevron-down"
+
+            toggle_button.observe(toggle_visibility, names="value")
+
+            def on_parent_change(change):
+                parent_selected["value"] = change["new"]
+                if loaded["value"]:
+                    if change["new"]:
+                        children_vbox.layout.display = "none"
+                        toggle_button.value = False
+                        self._lock_descendants_async(
+                            children_vbox, toggle_button=toggle_button
+                        )
+                    else:
+                        children_vbox.layout.display = "none"
+                        toggle_button.value = False
+                        self._clear_descendants_async(
+                            children_vbox, toggle_button=toggle_button
+                        )
+                else:
+                    if change["new"]:
+                        children_vbox.layout.display = "none"
+                        toggle_button.value = False
+                        self._lock_descendants_async(
+                            children_vbox,
+                            load_children,
+                            toggle_button=toggle_button,
                         )
 
-                # Append children if they exist
-                if child_items:
-                    # Create a collapsible section with a toggle button
-                    children_vbox = widgets.VBox(
-                        child_items,
-                        layout=widgets.Layout(width="100%", align_items="flex-start"),
-                    )
-                    if self.expand:
-                        children_vbox.layout.display = "flex"
-                    else:
-                        children_vbox.layout.display = "none"  # Hide by default
+            checkbox.observe(on_parent_change, names="value")
 
-                    if self.expand:
-                        value = True
-                        description = "Collapse"
-                        icon = "chevron-up"
-                    else:
-                        value = False
-                        description = "Expand"
-                        icon = "chevron-down"
-
-                    toggle_button = widgets.ToggleButton(
-                        value=value,
-                        description=description,
-                        icon=icon,
-                        layout=widgets.Layout(
-                            width="150px", margin=f"0 5px 0 {level * 20}px"
-                        ),
-                        style={"button_color": "#A9A9A9"},
-                    )
-
-                    def toggle_visibility(
-                        change, target=children_vbox, button=toggle_button
-                    ):
-                        if change["new"]:
-                            target.layout.display = "flex"
-                            button.description = "Collapse"
-                            button.icon = "chevron-up"
-                        else:
-                            target.layout.display = "none"
-                            button.description = "Expand"
-                            button.icon = "chevron-down"
-
-                    toggle_button.observe(toggle_visibility, names="value")
-
-                    vbox = widgets.VBox(
-                        [checkbox, toggle_button, children_vbox],
-                        layout=widgets.Layout(width="100%", align_items="flex-start"),
-                    )
-
-                    # Define behavior for disabling all descendants when a parent is selected
-                    def on_parent_change(change, target_child_items=child_items):
-                        if change["new"]:
-                            for child in target_child_items:
-                                self._disable_descendants(child)
-                        else:
-                            for child in target_child_items:
-                                self._enable_descendants(child)
-
-                    checkbox.observe(on_parent_change, names="value")
-                    items.append(vbox)
-                else:
-                    items.append(checkbox)
-            return widgets.VBox(
-                items, layout=widgets.Layout(width="100%", align_items="flex-start")
+            node_stack = widgets.VBox(
+                [checkbox, toggle_button, children_vbox],
+                layout=widgets.Layout(width="100%", align_items="flex-start"),
             )
+
+            container = widgets.HBox(
+                [indent, node_stack],
+                layout=widgets.Layout(width="100%", align_items="flex-start"),
+            )
+
+            child_paths = [tuple(list(current_path) + [key]) for key in child_keys]
+            self._node_meta[current_path] = {
+                "container": container,
+                "checkbox": checkbox,
+                "children": child_paths,
+                "children_vbox": children_vbox,
+                "toggle": toggle_button,
+                "load_children": load_children,
+                "loaded_flag": loaded,
+                "label": str(node_key),
+            }
+
+            return container
+
+        items = []
+        for key, value in self.hierarchy.items():
+            if key in ["__count__", "ewoc_code", "children"]:
+                continue
+            node_widget = build_node(key, value, [], 0)
+            items.append(node_widget)
+            self._root_paths.append((key,))
+
+        tree = widgets.VBox(
+            items, layout=widgets.Layout(width="100%", align_items="flex-start")
+        )
+
+        self._auto_expand_single_root()
 
         submit_button = widgets.Button(description="Apply", button_style="success")
         submit_button.on_click(self.apply_selection)
@@ -388,10 +572,181 @@ class CropTypePicker:
             ),
         )
 
-        title = widgets.HTML("""<h2>Select your crop types of interest:</h2>""")
+        selection_title = widgets.HTML("<h2>First pick a selection mode:</h2>")
+
+        selection_mode = widgets.ToggleButtons(
+            options=self._available_modes,
+            value=self._current_mode,
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="100%"),
+        )
+        self.selection_mode = selection_mode
+
+        if len(self._available_modes) < 2:
+            selection_title.layout.display = "none"
+            selection_mode.layout.display = "none"
+
+        title = widgets.HTML()
+
+        def update_title(mode: str):
+            if mode == "Drop":
+                title.value = """<h2>Select classes to drop:</h2>"""
+            else:
+                title.value = """<h2>Select classes to include:</h2>"""
+
+        update_title(selection_mode.value)
+        self._current_mode = selection_mode.value
+        self._update_mode_locks(self._current_mode)
+
+        def get_selected_paths():
+            return {
+                path for path, checkbox in self.widgets_dict.items() if checkbox.value
+            }
+
+        def set_selected_paths(paths):
+            for path, checkbox in self.widgets_dict.items():
+                checkbox.value = path in paths
+
+        def reset_search_and_collapse():
+            search_box.value = ""
+            self._toggle_state_before_search = {}
+            self._search_active = False
+            for meta in self._node_meta.values():
+                meta["container"].layout.display = "flex"
+                if meta.get("toggle") is not None:
+                    meta["toggle"].value = False
+                if meta.get("children_vbox") is not None:
+                    meta["children_vbox"].layout.display = "none"
+            self._auto_expand_single_root()
+
+        def on_mode_change(change):
+            previous_mode = self._current_mode
+            self._selection_cache[previous_mode] = get_selected_paths()
+            self._current_mode = change["new"]
+            update_title(change["new"])
+            reset_search_and_collapse()
+            set_selected_paths(self._selection_cache[self._current_mode])
+            self._update_mode_locks(self._current_mode)
+
+        selection_mode.observe(on_mode_change, names="value")
+
+        search_box = widgets.Text(
+            description="Search:",
+            placeholder="Type to filter classes...",
+            continuous_update=False,
+            layout=widgets.Layout(width="60%"),
+        )
+
+        search_button = widgets.Button(
+            description="Search",
+            button_style="primary",
+            layout=widgets.Layout(width="120px"),
+        )
+
+        def apply_search(term: str):
+            term = term.strip().lower()
+            if term:
+                if not self._search_active:
+                    self._toggle_state_before_search = {
+                        path: meta["toggle"].value
+                        for path, meta in self._node_meta.items()
+                        if meta.get("toggle") is not None
+                    }
+                    self._search_active = True
+
+                def get_child_keys(node_value):
+                    return [
+                        key
+                        for key in node_value.keys()
+                        if key not in ["__count__", "ewoc_code", "children"]
+                    ]
+
+                show_set = set()
+                expand_set = set()
+
+                def recurse(node_value, path):
+                    label = str(path[-1]).lower()
+                    label_match = term in label
+                    child_match = False
+                    for child_key in get_child_keys(node_value):
+                        if recurse(node_value[child_key], path + (child_key,)):
+                            child_match = True
+                    match = label_match or child_match
+                    if match:
+                        show_set.add(path)
+                    if child_match:
+                        expand_set.add(path)
+                    return match
+
+                for root_key in self.hierarchy.keys():
+                    if root_key in ["__count__", "ewoc_code", "children"]:
+                        continue
+                    recurse(self.hierarchy[root_key], (root_key,))
+
+                def ensure_path_loaded(path):
+                    for i in range(1, len(path) + 1):
+                        prefix = path[:i]
+                        meta = self._node_meta.get(prefix)
+                        if not meta:
+                            return
+                        if meta.get("toggle") is not None:
+                            if not meta["loaded_flag"]["value"]:
+                                meta["load_children"]()
+                            meta["children_vbox"].layout.display = "flex"
+                            meta["toggle"].value = True
+
+                for path in sorted(expand_set, key=len):
+                    ensure_path_loaded(path)
+
+                for path, meta in self._node_meta.items():
+                    meta["container"].layout.display = (
+                        "flex" if path in show_set else "none"
+                    )
+                    if meta.get("children_vbox") is not None:
+                        if path in expand_set:
+                            meta["children_vbox"].layout.display = "flex"
+                        else:
+                            meta["children_vbox"].layout.display = "none"
+            else:
+                if self._search_active:
+                    for path, value in self._toggle_state_before_search.items():
+                        meta = self._node_meta.get(path)
+                        if meta and meta.get("toggle") is not None:
+                            meta["toggle"].value = value
+                    self._toggle_state_before_search = {}
+                    self._search_active = False
+
+                for meta in self._node_meta.values():
+                    meta["container"].layout.display = "flex"
+                    if meta.get("children_vbox") is not None and meta.get("toggle"):
+                        meta["children_vbox"].layout.display = (
+                            "flex" if meta["toggle"].value else "none"
+                        )
+
+        def on_search_click(_):
+            apply_search(search_box.value)
+
+        search_button.on_click(on_search_click)
+
+        search_row = widgets.HBox(
+            [search_box, search_button],
+            layout=widgets.Layout(
+                width="100%",
+                justify_content="flex-start",
+                align_items="center",
+            ),
+        )
 
         self.widget = widgets.VBox(
-            [title, recursive_create_widgets(self.hierarchy), buttons, self.output],
+            [
+                selection_title,
+                selection_mode,
+                title,
+                search_row,
+                tree,
+                buttons,
+                self.output,
+            ],
             layout=widgets.Layout(
                 overflow="hidden",
                 width="100%",
@@ -406,10 +761,96 @@ class CropTypePicker:
             path for path, checkbox in self.widgets_dict.items() if checkbox.value
         ]
 
-        if not selected_paths:
-            raise ValueError("No crop types selected.")
+        self._selection_cache[self.selection_mode.value] = set(selected_paths)
 
-        self._apply_hierarchy_on_selection(selected_paths)
+        if "Include" in self._available_modes:
+            include_paths = list(self._selection_cache.get("Include", set()))
+            if not include_paths:
+                raise ValueError("No crop types selected.")
+            self.included_croptypes = self._build_croptype_df(include_paths)
+            self.croptypes = self.included_croptypes
+        else:
+            self.included_croptypes = pd.DataFrame()
+            self.croptypes = pd.DataFrame()
+
+        if "Drop" in self._available_modes:
+            drop_paths = list(self._selection_cache.get("Drop", set()))
+            if drop_paths:
+                self.dropped_croptypes = self._build_croptype_df(drop_paths)
+            else:
+                self.dropped_croptypes = pd.DataFrame()
+        else:
+            self.dropped_croptypes = pd.DataFrame()
+
+        self._update_mode_locks(self.selection_mode.value)
+
+        final_include = (
+            np.unique(self.included_croptypes["new_label"].values)
+            if not self.included_croptypes.empty
+            else []
+        )
+        dropped_count = (
+            len(self.dropped_croptypes) if not self.dropped_croptypes.empty else 0
+        )
+
+        include_items = sorted(final_include) if len(final_include) > 0 else []
+        excluded_items = (
+            sorted(np.unique(self.dropped_croptypes["new_label"].values))
+            if dropped_count > 0
+            else []
+        )
+
+        include_list = (
+            "".join(f"<li>{ct}</li>" for ct in include_items)
+            if include_items
+            else "<li><em>None selected</em></li>"
+        )
+        excluded_list = (
+            "".join(f"<li>{ct}</li>" for ct in excluded_items)
+            if excluded_items
+            else "<li><em>None selected</em></li>"
+        )
+
+        included_leaf_count = len(self.included_croptypes)
+        excluded_leaf_count = len(self.dropped_croptypes)
+
+        include_block = ""
+        if "Include" in self._available_modes:
+            include_block = f"""
+            <div style=\"margin-bottom: 8px;\">
+                <div style=\"color: #16a34a; font-weight: 600;\">Included classes</div>
+                <div style=\"margin: 2px 0 0 0; font-size: 0.95em;\">
+                    Total lowest-level classes selected: <b>{included_leaf_count}</b>
+                </div>
+                <div style=\"margin: 4px 0 0 0; font-weight: 600;\">Final groups</div>
+                <ul style=\"margin: 4px 0 0 16px;\">{include_list}</ul>
+            </div>
+            """
+
+        exclude_block = ""
+        if "Drop" in self._available_modes:
+            exclude_block = f"""
+            <div>
+                <div style=\"color: #dc2626; font-weight: 600;\">Excluded classes</div>
+                <div style=\"margin: 2px 0 0 0; font-size: 0.95em;\">
+                    Total lowest-level classes excluded: <b>{excluded_leaf_count}</b>
+                </div>
+                <div style=\"margin: 4px 0 0 0; font-weight: 600;\">Final groups</div>
+                <ul style=\"margin: 4px 0 0 16px;\">{excluded_list}</ul>
+            </div>
+            """
+
+        summary_html = f"""
+        <div style="margin-top: 8px;">
+            <h3 style="margin: 0 0 8px 0;">Selection summary</h3>
+            {include_block}
+            {exclude_block}
+        </div>
+        """
+
+        with self.output:
+            self.output.clear_output()
+            display(widgets.HTML(summary_html))
 
     def clear_selection(self, change=None):
         """Clear the selection of crop types"""
@@ -417,11 +858,16 @@ class CropTypePicker:
         for path, checkbox in self.widgets_dict.items():
             checkbox.value = False
         self.croptypes = pd.DataFrame()
+        self.included_croptypes = pd.DataFrame()
+        self.dropped_croptypes = pd.DataFrame()
+        self._selection_cache = {"Include": set(), "Drop": set()}
+        self._mode_locked_paths = set()
+        self._update_mode_locks(self.selection_mode.value)
         with self.output:
             self.output.clear_output()
             print("Selection cleared.")
 
-    def _apply_hierarchy_on_selection(self, paths_to_search):
+    def _build_croptype_df(self, paths_to_search):
         """Apply the selected crop types on the hierarchy and return the extensive list of crop types
         as a Pandas DataFrame"""
 
@@ -470,17 +916,7 @@ class CropTypePicker:
         labels = ewoc_code_to_label(croptype_df.index.values)
         croptype_df["original_label"] = labels
 
-        self.croptypes = croptype_df
-
-        final_types = np.unique(self.croptypes["new_label"].values)
-
-        with self.output:
-            self.output.clear_output()
-            print(
-                f"Selected {len(self.croptypes)} crop types, aggregated to {len(final_types)} classes:"
-            )
-            for ct in final_types:
-                print(f"- {ct}")
+        return croptype_df
 
     def _simplify_hierarchy(self, hierarchy):
         """
@@ -521,12 +957,21 @@ class CropTypePicker:
         for i in range(3):
             hierarchy = recursive_simplify(hierarchy)
 
-        result = clean_hierarchy_keys(hierarchy)
+        result = clean_hierarchy_keys(hierarchy, self.full_legend)
 
         return result
 
 
-def clean_hierarchy_keys(hierarchy):
+def clean_hierarchy_keys(hierarchy, legend=None):
+    """Clean hierarchy keys using a pre-loaded legend to avoid repeated downloads.
+
+    Parameters
+    ----------
+    hierarchy : dict
+        The hierarchy dictionary to clean
+    legend : pd.DataFrame, optional
+        Pre-loaded legend DataFrame to avoid repeated get_legend() calls
+    """
 
     # Recursively check and update keys
     def recursive_update_key(node):
@@ -538,7 +983,9 @@ def clean_hierarchy_keys(hierarchy):
                 if isinstance(value, dict):
                     if value.get("ewoc_code", 0) != 0:
                         code = value["ewoc_code"]
-                        full_name = translate_ewoc_codes([code])["label_full"].values[0]
+                        full_name = translate_ewoc_codes([code], legend=legend)[
+                            "label_full"
+                        ].values[0]
                         if (key != full_name) and (len(value.get("children", [])) == 0):
                             # Replace key and update value recursively
                             updated_node[full_name] = recursive_update_key(value)
@@ -575,20 +1022,24 @@ def apply_croptypepicker_to_df(df, croptypepicker, other_label: str = "other"):
         DataFrame containing only the samples that belong to the selected crop types.
     """
 
-    if croptypepicker.croptypes.empty:
-        raise ValueError("No crop types selected, cannot proceed.")
+    if croptypepicker.included_croptypes.empty:
+        raise ValueError("No crop types selected for inclusion, cannot proceed.")
+
+    if not croptypepicker.dropped_croptypes.empty:
+        dropped = croptypepicker.dropped_croptypes.index.values
+        df = df.loc[~df["ewoc_code"].isin(dropped)].copy()
 
     # Isolate all samples that have NOT been selected
-    included = croptypepicker.croptypes.index.values
+    included = croptypepicker.included_croptypes.index.values
     excluded_sample_ids = df[~df["ewoc_code"].isin(included)]["sample_id"].to_list()
 
     # Prepare a mapping dictionary from original labels (index) to new labels
-    label_mapping = croptypepicker.croptypes["new_label"].to_dict()
+    label_mapping = croptypepicker.included_croptypes["new_label"].to_dict()
 
     # Apply the mapping to the ewoc_code column
     df["downstream_class"] = df["ewoc_code"].map(label_mapping)
 
     # Excluded samples are assigned to "other" class
-    df.loc[df["sample_id"].isin(excluded_sample_ids), "downstream_class"] = "other"
+    df.loc[df["sample_id"].isin(excluded_sample_ids), "downstream_class"] = other_label
 
     return df

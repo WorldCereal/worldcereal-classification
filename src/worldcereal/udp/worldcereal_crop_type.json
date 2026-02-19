@@ -696,7 +696,7 @@
         "temporal_extent": {
           "from_parameter": "temporal_extent"
         },
-        "url": "https://stac.openeo.vito.be/collections/agera5_monthly"
+        "url": "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
       }
     },
     "renamelabels7": {

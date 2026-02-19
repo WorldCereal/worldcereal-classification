@@ -3,15 +3,15 @@ import logging
 import random
 from pathlib import Path
 from typing import Optional
-from typing import Literal
 
+import geopandas as gpd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-from rasterio.mask import mask
-import geopandas as gpd
 from loguru import logger
+from rasterio.mask import mask
+from rasterio.warp import transform_bounds
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -27,18 +27,12 @@ def get_probability_cmap():
 NODATAVALUE = {
     "cropland": 255,
     "croptype": 255,
-    "cropland-raw": 255,
-    "croptype-raw": 255,
     "probability": 255,
 }
 
 
 COLORMAP = {
     "cropland": {
-        0: (186, 186, 186, 0),  # no cropland
-        1: (224, 24, 28, 200),  # cropland
-    },
-    "cropland-raw": {
         0: (186, 186, 186, 0),  # no cropland
         1: (224, 24, 28, 200),  # cropland
     },
@@ -98,99 +92,120 @@ def rgb_to_hex(r, g, b):
     return f"{r:02x}{g:02x}{b:02x}"
 
 
-def visualize_product(
-    path: Path,
-    product: Literal["cropland", "croptype", "cropland-raw", "croptype-raw"],
-    lut: Optional[dict] = None,
+def visualize_products(
+    paths: dict[str, Path],
+    luts: Optional[dict[str, dict]] = None,
     interactive_mode: bool = False,
     port: int = 8889,
 ):
-    """
-    Visualize a WorldCereal map product using matplotlib.
+    """Visualize WorldCereal map products.
 
     Parameters
     ----------
-    path : str or Path
-        Path to the raster file.
-    product : Literal["cropland", "croptype", "cropland-raw", "croptype-raw"]
-        Name of the product to visualize.
-    lut : dict, optional
-        Lookup table for product classes, if available.
-        If None, we assume the default cropland LUT.
+    paths : dict
+        Mapping of product name -> raster path.
+        The raster file should contain a classification band (1) and probability band (2).
+    luts : dict, optional
+        Mapping of product name (cropland/croptype) -> LUT.
     interactive_mode : bool, optional
-        If True, display the plot interactively using leafmap. Default is False.
+        If True, display interactively using leafmap. Default is False.
     port : int, optional
         Port number for leafmap interactive display. Default is 8889.
     """
 
-    if product not in ["cropland", "croptype", "cropland-raw", "croptype-raw"]:
-        raise ValueError(
-            f"Product {product} is not supported. Supported products are: "
-            "'cropland', 'croptype', 'cropland-raw', 'croptype-raw'."
-        )
-    if product not in ["cropland", "cropland-raw"]:
-        if lut is None:
-            raise ValueError(
-                f"Look-up table is required for product {product}. "
-                "Please provide a valid LUT."
-            )
-    else:
-        if lut is None:
-            logger.info(
-                f"No LUT provided for product {product}. "
-                "Using default LUT for cropland products."
-            )
-            lut = {
-                "no_cropland": 0,
-                "cropland": 1,
+    if not paths:
+        raise ValueError("No products provided for visualization.")
+
+    def _get_lut_for_product(product: str) -> dict:
+        default_cropland = {
+            "no_cropland": 0,
+            "cropland": 1,
+        }
+        if luts is None:
+            return default_cropland
+        if product.startswith("croptype"):
+            lut = luts.get("croptype")
+            if lut is None:
+                raise ValueError(
+                    f"Look-up table is required for product {product}. "
+                    "Please provide a valid LUT."
+                )
+            return dict(lut)
+        lut = luts.get("cropland")
+        return dict(lut) if lut is not None else default_cropland
+
+    rendered = []
+    for product, path in paths.items():
+        if product not in [
+            "cropland",
+            "croptype",
+        ]:
+            logger.warning("Skipping unsupported product: %s", product)
+            continue
+
+        lut = _get_lut_for_product(product)
+
+        with rasterio.open(path, "r") as src:
+            classification = src.read(1).astype(np.uint8)
+            probability = src.read(2).astype(np.uint8)
+            meta = src.meta
+
+        nodata = _get_nodata(product)
+
+        colormap = _get_colormap(product, lut)
+        # Adjust LUT and colormap for crop type product
+        if product.startswith("croptype"):
+            # add no cropland class
+            lut["no_cropland"] = 254
+            colormap[254] = (186, 186, 186, 255)  # no cropland color
+        # add no data color to lut and colormap
+        lut["no_data"] = nodata
+        colormap[nodata] = (255, 255, 255, 255)  # no data color
+
+        # Write the classification raster with colormap
+        meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
+        outpath = path.parent / f"{path.stem}_classification.tif"
+        bandnames = ["classification"]
+        with rasterio.open(outpath, "w", **meta) as dst:
+            dst.write(classification, indexes=1)
+            dst.write_colormap(1, colormap)
+            for i, b in enumerate(bandnames):
+                dst.update_tags(i + 1, band_name=b)
+                dst.update_tags(i + 1, lut=lut)
+        # Write the probability raster with colormap
+        meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
+        outpath_prob = path.parent / f"{path.stem}_probability.tif"
+        bandnames = ["probability"]
+        with rasterio.open(outpath_prob, "w", **meta) as dst:
+            dst.write(probability, indexes=1)
+            dst.write_colormap(1, _get_colormap("probability"))
+            for i, b in enumerate(bandnames):
+                dst.update_tags(i + 1, band_name=b)
+        logger.info(f"Visualization saved for product {product}")
+
+        # invert lut
+        lut_inverted = {v: k for k, v in lut.items()}
+
+        rendered.append(
+            {
+                "product": product,
+                "lut_inverted": lut_inverted,
+                "colormap": colormap,
+                "outpath": outpath,
+                "outpath_prob": outpath_prob,
+                "classification": classification,
             }
+        )
 
-    with rasterio.open(path, "r") as src:
-        classification = src.read(1).astype(np.uint8)
-        probability = src.read(2).astype(np.uint8)
-        meta = src.meta
-
-    nodata = _get_nodata(product)
-
-    colormap = _get_colormap(product, lut)
-    # Adjust LUT and colormap for crop type product
-    if product.startswith("croptype"):
-        # add no cropland class
-        lut["no_cropland"] = 254
-        colormap[254] = (186, 186, 186, 255)  # no cropland color
-    # add no data color to lut and colormap
-    lut["no_data"] = nodata
-    colormap[nodata] = (255, 255, 255, 255)  # no data color
-
-    # Write the classification raster with colormap
-    meta.update(count=1, dtype=rasterio.uint8, nodata=nodata)
-    outpath = path.parent / f"{path.stem}_classification.tif"
-    bandnames = ["classification"]
-    with rasterio.open(outpath, "w", **meta) as dst:
-        dst.write(classification, indexes=1)
-        dst.write_colormap(1, colormap)
-        for i, b in enumerate(bandnames):
-            dst.update_tags(i + 1, band_name=b)
-            dst.update_tags(i + 1, lut=lut)
-    # Write the probability raster with colormap
-    meta.update(count=1, dtype=rasterio.uint8, nodata=_get_nodata("probability"))
-    outpath_prob = path.parent / f"{path.stem}_probability.tif"
-    bandnames = ["probability"]
-    with rasterio.open(outpath_prob, "w", **meta) as dst:
-        dst.write(probability, indexes=1)
-        dst.write_colormap(1, _get_colormap("probability"))
-        for i, b in enumerate(bandnames):
-            dst.update_tags(i + 1, band_name=b)
-    logger.info("Visualization saved")
-
-    # invert lut
-    lut_inverted = {v: k for k, v in lut.items()}
+    if not rendered:
+        raise ValueError("No supported products found for visualization.")
 
     if interactive_mode:
 
         # We plot using leafmap in interactive mode
         # to allow for zooming and panning
         import os
+
         import leafmap
 
         if os.environ.get("JUPYTERHUB_SERVICE_PREFIX") is not None:
@@ -205,88 +220,105 @@ def visualize_product(
             )
 
         # Create the map
-        m = leafmap.Map(draw_control=False)
+        m = leafmap.Map(draw_control=False, toolbar_control=False)
         m.add_basemap("Esri.WorldImagery")
-        # Add classification product
-        m.add_raster(
-            str(outpath), indexes=[1], layer_name=f"{product}-classification", port=port
-        )
-        # Add probability product
-        m.add_raster(
-            str(outpath_prob),
-            indexes=[1],
-            layer_name=f"{product}-probability",
-            port=port,
-        )
 
-        # Plot legend separately
-        legend_dict = {lut_inverted[k]: rgb_to_hex(*v[:3]) for k, v in colormap.items()}
+        for item in rendered:
+            product = item["product"]
+            m.add_raster(
+                str(item["outpath_prob"]),
+                indexes=[1],
+                layer_name=f"{product}-probability",
+                port=port,
+            )
+            m.add_raster(
+                str(item["outpath"]),
+                indexes=[1],
+                layer_name=f"{product}-classification",
+                port=port,
+            )
+            if product in ["cropland", "croptype"]:
+                legend_dict = {
+                    item["lut_inverted"][k]: rgb_to_hex(*v[:3])
+                    for k, v in item["colormap"].items()
+                }
+                m.add_legend(
+                    title=f"{product} classification",
+                    legend_dict=legend_dict,
+                    bg_color="rgba(255, 255, 255, 0.5)",
+                    position="bottomright",
+                )
+        # Retrieve bounds from latest item
+        with rasterio.open(item["outpath"]) as src:
+            bounds = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
 
-        m.add_legend(
-            title="Classification",
-            legend_dict=legend_dict,
-            bg_color="rgba(255, 255, 255, 0.5)",
-            position="bottomright",
-        )
-
+        m.add_layer_control(position="topright")
+        m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
         # Return the map
         return m
 
     else:
         # We plot using matplotlib in non-interactive mode
-        fig, ax = plt.subplots()
+        for item in rendered:
+            product = item["product"]
+            colormap = item["colormap"]
+            lut_inverted = item["lut_inverted"]
+            classification = item["classification"]
 
-        # create a second axes for the colorbar
-        ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
+            fig, ax = plt.subplots()
 
-        # Colorbar preparation
-        # Apply RGB scaling
-        colormap = {key: scale_rgb(value) for key, value in colormap.items()}
+            # create a second axes for the colorbar
+            ax2 = fig.add_axes([0.95, 0.2, 0.03, 0.5])
 
-        # Sort colormap according to keys
-        colormap = {key: colormap[key] for key in sorted(colormap.keys())}
-        codes = list(colormap.keys())
+            # Colorbar preparation
+            # Apply RGB scaling
+            colormap = {key: scale_rgb(value) for key, value in colormap.items()}
 
-        # Create a custom ListedColormap
-        cmap = mpl.colors.ListedColormap([colormap[key] for key in codes])
+            # Sort colormap according to keys
+            colormap = {key: colormap[key] for key in sorted(colormap.keys())}
+            codes = list(colormap.keys())
 
-        # Get class labels and set colorbar boundaries
-        # define boundaries halfway between each code:
-        bounds = [(a + b) / 2 for a, b in zip(codes, codes[1:])]
-        # extend for under/overflow:
-        bounds = [codes[0] - 0.5] + bounds + [codes[-1] + 0.5]
+            # Create a custom ListedColormap
+            cmap = mpl.colors.ListedColormap([colormap[key] for key in codes])
 
-        # Define a norm for the colormap
-        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+            # Get class labels and set colorbar boundaries
+            # define boundaries halfway between each code:
+            bounds = [(a + b) / 2 for a, b in zip(codes, codes[1:])]
+            # extend for under/overflow:
+            bounds = [codes[0] - 0.5] + bounds + [codes[-1] + 0.5]
 
-        # Define tick positions and labels for the colorbar
-        tick_positions = np.arange(len(codes)) + 0.5
-        uniform_bounds = np.arange(len(codes) + 1)  # [0, 1, 2, ..., len(codes)]
-        norm_cb = mpl.colors.BoundaryNorm(uniform_bounds, cmap.N)  # norm for colorbar
-        classlabels = [str(lut_inverted.get(code, code)) for code in codes]
+            # Define a norm for the colormap
+            norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
 
-        # plot the raster
-        ax.imshow(classification, cmap=cmap, norm=norm)
+            # Define tick positions and labels for the colorbar
+            tick_positions = np.arange(len(codes)) + 0.5
+            uniform_bounds = np.arange(len(codes) + 1)  # [0, 1, 2, ..., len(codes)]
+            norm_cb = mpl.colors.BoundaryNorm(uniform_bounds, cmap.N)
+            classlabels = [str(lut_inverted.get(code, code)) for code in codes]
 
-        # Create a colorbar with class labels
-        cb = mpl.colorbar.ColorbarBase(
-            ax2,
-            cmap=cmap,
-            norm=norm_cb,
-            spacing="uniform",
-            boundaries=uniform_bounds,
-            ticks=tick_positions,
-            format="%1i",
-        )
+            # plot the raster
+            ax.imshow(classification, cmap=cmap, norm=norm)
+            ax.set_title(product)
 
-        # Set the colorbar labels
-        cb.set_ticklabels(classlabels)
+            # Create a colorbar with class labels
+            cb = mpl.colorbar.ColorbarBase(
+                ax2,
+                cmap=cmap,
+                norm=norm_cb,
+                spacing="uniform",
+                boundaries=uniform_bounds,
+                ticks=tick_positions,
+                format="%1i",
+            )
 
-        # Turn off axis
-        ax.axis("off")
+            # Set the colorbar labels
+            cb.set_ticklabels(classlabels)
 
-        # Display the plot
-        plt.show()
+            # Turn off axis
+            ax.axis("off")
+
+            # Display the plot
+            plt.show()
 
 
 def extract_zonal_stats(
@@ -321,12 +353,10 @@ def extract_zonal_stats(
         # Ensure fields are in same CRS as raster
         fields_reprojected = gdf.to_crs(src.crs)
 
-        for idx, row in fields_reprojected.iterrows():
+        for _, row in fields_reprojected.iterrows():
             try:
                 # Mask raster with field geometry
-                masked_data, masked_transform = mask(
-                    src, [row.geometry], crop=True, nodata=src.nodata
-                )
+                masked_data, _ = mask(src, [row.geometry], crop=True, nodata=src.nodata)
 
                 # Get the specific band
                 band_data = masked_data[band - 1]  # bands are 1-indexed

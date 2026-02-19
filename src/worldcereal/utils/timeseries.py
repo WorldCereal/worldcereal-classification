@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 
-from worldcereal.train.datasets import MIN_EDGE_BUFFER
+from worldcereal.train import MIN_EDGE_BUFFER
 
 STATIC_FEATURES = ["elevation", "slope", "lat", "lon"]
 REQUIRED_COLUMNS = ["sample_id", "timestamp"] + STATIC_FEATURES
@@ -1174,7 +1174,5 @@ def process_parquet(
 
     df_pivot["start_date"] = df_pivot["start_date"].dt.strftime("%Y-%m-%d")
     df_pivot["end_date"] = df_pivot["end_date"].dt.strftime("%Y-%m-%d")
-
-    df_pivot = df_pivot.set_index("sample_id")
 
     return df_pivot
