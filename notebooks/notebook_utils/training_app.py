@@ -42,7 +42,7 @@ from notebook_utils.extractions import (
     retrieve_extractions_extent,
     visualize_timeseries,
 )
-from notebook_utils.production import bbox_extent_to_gdf, merge_maps, run_map_production
+from notebook_utils.production import merge_maps, run_map_production
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
 from openeo_gfmap import TemporalContext
@@ -57,7 +57,7 @@ from worldcereal.utils.legend import (
     get_legend,
     translate_ewoc_codes,
 )
-from worldcereal.utils.map import ui_map
+from worldcereal.utils.map import gdf_to_boundingbox_extent, ui_map
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
 
@@ -838,7 +838,7 @@ class WorldCerealTrainingApp:
 
         bbox_poly = None
         try:
-            bbox_poly = self.tab1_widgets["aoi_map"].get_polygon_latlon()
+            bbox_poly = self.tab1_widgets["aoi_map"].get_poly()
         except Exception as exc:
             with query_output:
                 print(f"No AOI selected yet. Proceeding without AOI. ({exc})")
@@ -1472,7 +1472,7 @@ class WorldCerealTrainingApp:
                 if aoi_map is None:
                     print("No region of interest specified in Tab 1, cannot continue.")
                     return
-                spatial_extent = aoi_map.get_extent()
+                spatial_extent = aoi_map.get_bbox()
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
@@ -3330,18 +3330,15 @@ class WorldCerealTrainingApp:
             output.clear_output()
             name = name_input.value.strip()
             if not name:
-                print("Provide a name for your bounding box.")
-                return
-            bbox_dir = Path("./bbox")
-            bbox_dir.mkdir(exist_ok=True)
-            outfile = bbox_dir / f"{name}.gpkg"
-            try:
-                processing_extent = aoi_map.get_extent(projection="latlon")
-                if processing_extent is None:
-                    print("Draw an AOI on the map before saving.")
+                if aoi_map.mode == "single":
+                    name = None
+                else:
+                    print("Provide a name for your bounding box.")
                     return
-                bbox_extent_to_gdf(processing_extent, outfile)
-                print(f"AOI saved to {outfile}")
+            bbox_dir = Path("./bbox")
+            try:
+                outfile = aoi_map.save_gdf(bbox_dir, name=name)
+                print(f"AOI saved to: {outfile}")
             except Exception as exc:
                 print(f"Failed to save AOI: {exc}")
 
@@ -3491,8 +3488,9 @@ class WorldCerealTrainingApp:
                 return
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            processing_extent = aoi_map.get_extent(projection="latlon")
-            if processing_extent is None:
+            try:
+                processing_extent = aoi_map.get_bbox()
+            except Exception:
                 with log_out:
                     print("Draw an AOI on the map before generating a map.")
                 return

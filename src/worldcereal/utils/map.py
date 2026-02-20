@@ -3,7 +3,7 @@ import json
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -27,35 +27,68 @@ from shapely.geometry import Polygon, box, shape
 from worldcereal.utils.legend import translate_ewoc_codes
 
 
-def validate_area(bbox, area_limit: int, output: widgets.Output) -> bool:
+def validate_area(
+    bbox,
+    area_limit: int,
+    output: widgets.Output,
+    label: Optional[str] = None,
+    display_output: bool = True,
+    return_area: bool = False,
+):
     """
-    Validates the area of a bbox against a limit.
-    Displays feedback in the given output widget.
+    Validate bbox area against a limit.
 
-    Returns True if valid, False otherwise.
+    Parameters
+    ----------
+    bbox : tuple
+        Bounding box as (minx, miny, maxx, maxy) in lat/lon.
+    area_limit : int
+        Maximum area in km^2. None disables the limit.
+    output : widgets.Output
+        Output widget for status messages.
+    label : str, optional
+        Prefix label used in the output message.
+    display_output : bool, optional
+        When True, writes the extent and area to the output widget.
+    return_area : bool, optional
+        When True, returns a tuple (is_valid, area_km2).
+
+    Returns
+    -------
+    bool or tuple
+        True/False when return_area is False, otherwise (is_valid, area_km2).
     """
-    with output:
-        output.clear_output()
-        display(HTML(f"<b>Your extent:</b> {bbox}"))
+    bbox_utm, _ = _latlon_to_utm(bbox)
+    area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1_000_000
+    is_valid = area_limit is None or area <= area_limit
 
-        bbox_utm, epsg = _latlon_to_utm(bbox)
-        area = (bbox_utm[2] - bbox_utm[0]) * (bbox_utm[3] - bbox_utm[1]) / 1_000_000
-        display(HTML(f"<b>Area of extent:</b> {area:.2f} km²"))
+    if display_output:
+        with output:
+            output.clear_output()
+            label_prefix = f"{label} " if label else ""
+            display(HTML(f"<b>{label_prefix}extent:</b> {bbox}"))
+            display(HTML(f"<b>Area of extent:</b> {area:.2f} km²"))
 
-        if area_limit is not None and area > area_limit:
-            display(
-                HTML(
-                    f"<span style='color:red'><b>Area too large "
-                    f"(>{area_limit} km²). Please select a smaller area.</b></span>"
+            if not is_valid:
+                display(
+                    HTML(
+                        f"<span style='color:red'><b>Area too large "
+                        f"(>{area_limit} km²). Please select a smaller area.</b></span>"
+                    )
                 )
-            )
-            return False
 
-    return True
+    if return_area:
+        return is_valid, area
+    return is_valid
 
 
 class ui_map:
-    def __init__(self, area_limit: Optional[int] = None, display_ui: bool = True):
+    def __init__(
+        self,
+        area_limit: Optional[int] = None,
+        display_ui: bool = True,
+        mode: Literal["single", "multi"] = "single",
+    ):
         """
         Initializes an ipyleaflet map with a draw control and file upload functionality
         to select an extent.
@@ -70,8 +103,11 @@ class ui_map:
         """
 
         self.area_limit = area_limit
-        self.spatial_extent = None
-        self.poly = None
+        self.mode = mode
+        self.gdf: Optional[gpd.GeoDataFrame] = None
+        self._last_drawn_geometry: Optional[Polygon] = None
+        self._pending_source: Optional[str] = None
+        self._pending_gdf: Optional[gpd.GeoDataFrame] = None
 
         self.output = widgets.Output(
             layout={
@@ -86,7 +122,11 @@ class ui_map:
         self._wire_events()
 
         if display_ui:
-            display(widgets.VBox([self.map, self.output]))
+            controls = [self.map]
+            if hasattr(self, "input"):
+                controls.append(self.input)
+            controls.append(self.output)
+            display(widgets.VBox(controls))
 
     def _build_map(self):
 
@@ -111,32 +151,64 @@ class ui_map:
             )
         )
 
-        self.draw_control = DrawControl(
-            rectangle={
-                "shapeOptions": {
-                    "fillColor": "#6be5c3",
-                    "color": "#00F",
-                    "fillOpacity": 0.3,
-                },
-                "allowIntersection": False,
-                "metric": ["km"],
+        rectangle_options = {
+            "shapeOptions": {
+                "fillColor": "#6be5c3",
+                "color": "#00F",
+                "fillOpacity": 0.3,
             },
+            "allowIntersection": False,
+            "metric": ["km"],
+        }
+
+        polygon_options = {
+            "shapeOptions": {
+                "fillColor": "#6be5c3",
+                "color": "#00F",
+                "fillOpacity": 0.3,
+            },
+            "allowIntersection": False,
+            "metric": ["km"],
+        }
+
+        self.draw_control = DrawControl(
+            rectangle=rectangle_options,
+            polygon=polygon_options if self.mode == "multi" else {},
             circle={},
             circlemarker={},
             polyline={},
-            polygon={},
+            remove=True,
             edit=False,
         )
         self.map.add_control(self.draw_control)
 
     def _add_controls(self):
         self.uploader = widgets.FileUpload(
-            description="Upload (.zip/.gpkg)",
-            accept=".zip,.gpkg",
+            description="Upload (.zip/.gpkg/.parquet)",
+            accept=".zip,.gpkg,.parquet",
             multiple=False,
             layout=widgets.Layout(width="200px"),
         )
         self.map.add_control(WidgetControl(widget=self.uploader, position="topright"))
+
+        self.id_input = widgets.Text(
+            placeholder="Enter an ID",
+            description="AOI ID",
+            layout=widgets.Layout(width="260px"),
+        )
+        self.id_field_input = widgets.Dropdown(
+            options=[],
+            description="Upload ID",
+            layout=widgets.Layout(width="260px"),
+        )
+        self.submit_button = widgets.Button(
+            description="Submit", button_style="success"
+        )
+        self.submit_button.on_click(self._handle_submit)
+        self.input = widgets.VBox(
+            [self.id_input, self.id_field_input, self.submit_button]
+        )
+        self._hide_inputs()
 
     def _wire_events(self):
         self.draw_control.on_draw(self._handle_draw)
@@ -144,19 +216,77 @@ class ui_map:
 
     def _handle_draw(self, _, action, geo_json):
         if action == "created":
-            self._clear_extent()  # delete previous rectangle & layer
             poly = Polygon(shape(geo_json["geometry"]))
             bbox = poly.bounds
             if validate_area(bbox, self.area_limit, self.output):
-                self._set_extent_from_bbox(bbox)
+                self._pending_source = "draw"
+                self._pending_gdf = None
+                self._last_drawn_geometry = poly
+                self._show_draw_inputs()
+                with self.output:
+                    display(
+                        HTML(
+                            "<i>Geometry captured. Provide an AOI ID and click Submit.</i>"
+                        )
+                    )
             else:
                 self.draw_control.clear()
                 self.draw_control.last_draw = {"type": "Feature", "geometry": None}
+                if self.mode == "multi" and self.gdf is not None and not self.gdf.empty:
+                    self._set_geojson_layer_from_gdf(self.gdf)
         elif action == "deleted":
-            self._clear_extent()
-            with self.output:
-                self.output.clear_output()
-                display(HTML("<i>Extent removed.</i>"))
+            if self.mode == "single":
+                self._clear_extent()
+                with self.output:
+                    self.output.clear_output()
+                    display(HTML("<i>Extent removed.</i>"))
+                return
+
+            deleted_geom = None
+            if geo_json and geo_json.get("geometry"):
+                deleted_geom = Polygon(shape(geo_json["geometry"]))
+
+            if deleted_geom is None:
+                with self.output:
+                    self.output.clear_output()
+                    display(HTML("<i>Geometry removed.</i>"))
+                return
+
+            if (
+                self._last_drawn_geometry is not None
+                and self._last_drawn_geometry.equals_exact(deleted_geom, tolerance=1e-6)
+            ):
+                self._last_drawn_geometry = None
+                self._pending_source = None
+                self._pending_gdf = None
+                self._hide_inputs()
+
+            if self.gdf is None or self.gdf.empty:
+                with self.output:
+                    self.output.clear_output()
+                    display(HTML("<i>Geometry removed.</i>"))
+                return
+
+            mask = self.gdf.geometry.apply(
+                lambda geom: geom.equals_exact(deleted_geom, tolerance=1e-6)
+            )
+            if mask.any():
+                self.gdf = self.gdf.loc[~mask].reset_index(drop=True)
+                if self.gdf.empty:
+                    self._remove_geojson_layer()
+                else:
+                    self._set_geojson_layer_from_gdf(self.gdf)
+                with self.output:
+                    self.output.clear_output()
+                    display(HTML("<i>AOI removed.</i>"))
+            else:
+                with self.output:
+                    self.output.clear_output()
+                    display(
+                        HTML(
+                            "<i>Geometry removed. No saved AOI matched that shape.</i>"
+                        )
+                    )
         else:
             raise ValueError(f"Unknown action: {action}")
 
@@ -180,11 +310,43 @@ class ui_map:
 
         try:
             # we are uploading a new file, so we clear the previous extent
-            self._clear_extent()
+            if self.mode == "single":
+                self._clear_extent()
+            else:
+                self._clear_pending_state()
             gdf = self._load_vector_file(name, content)
-            bbox = gdf.total_bounds  # (minx, miny, maxx, maxy)
-            if validate_area(bbox, self.area_limit, self.output):
-                self._set_extent_from_bbox(bbox)
+            if self.mode == "single":
+                bbox = gdf.total_bounds  # (minx, miny, maxx, maxy)
+                if not validate_area(bbox, self.area_limit, self.output):
+                    return
+
+            else:
+                if self.area_limit is not None:
+                    for idx, geom in enumerate(gdf.geometry, start=1):
+                        is_valid, area_km2 = validate_area(
+                            geom.bounds,
+                            self.area_limit,
+                            self.output,
+                            display_output=False,
+                            return_area=True,
+                        )
+                        if not is_valid:
+                            raise ValueError(
+                                f"Geometry {idx} exceeds {self.area_limit} km^2 "
+                                f"({area_km2:.2f} km^2)."
+                            )
+            # display the resulting geometries on the map
+            self._set_geojson_layer_from_gdf(gdf)
+            self._pending_source = "upload"
+            self._pending_gdf = gdf
+            self._update_upload_id_options(gdf)
+            self._show_upload_inputs()
+            with self.output:
+                display(
+                    HTML(
+                        f"<i>Upload captured ({len(gdf)} geometries). Select the ID column and click Submit.</i>"
+                    )
+                )
         except Exception as e:
             with self.output:
                 self.output.clear_output()
@@ -199,20 +361,99 @@ class ui_map:
         else:
             self.uploader.value = ()
 
-    def _set_extent_from_bbox(self, bbox):
-        # Remove any previously drawn/uploaded geometry
-        self._clear_extent()
+    def _handle_submit(self, _):
+        with self.output:
+            self.output.clear_output()
 
-        # Create a new polygon from the bounding box
-        self.poly = box(*bbox)  # shapely polygon
-        self.get_extent("latlon")  # sets self.spatial_extent
+        if self._pending_source is None:
+            with self.output:
+                display(HTML("<i>Draw or upload an AOI first.</i>"))
+            return
+
+        if self._pending_source == "draw":
+            if self._last_drawn_geometry is None:
+                with self.output:
+                    display(HTML("<i>Draw an AOI first.</i>"))
+                return
+
+            object_id = self.id_input.value.strip()
+            if not object_id:
+                with self.output:
+                    display(HTML("<i>Please enter an AOI ID before submitting.</i>"))
+                return
+            if (
+                self.mode == "multi"
+                and self.gdf is not None
+                and not self.gdf.empty
+                and object_id in set(self.gdf["id"])
+            ):
+                with self.output:
+                    display(HTML("<i>AOI ID already exists. Choose a unique ID.</i>"))
+                return
+
+            self._set_gdf_from_polygon(
+                self._last_drawn_geometry,
+                object_id,
+                replace=self.mode == "single",
+            )
+            self._last_drawn_geometry = None
+            self.id_input.value = ""
+
+        elif self._pending_source == "upload":
+            if self._pending_gdf is None:
+                with self.output:
+                    display(HTML("<i>Upload an AOI first.</i>"))
+                return
+
+            id_field = self.id_field_input.value
+            if not id_field:
+                with self.output:
+                    display(
+                        HTML("<i>Please select the ID column before submitting.</i>")
+                    )
+                return
+
+            try:
+                self._set_gdf_from_upload(self._pending_gdf, id_field)
+            except Exception as exc:
+                with self.output:
+                    display(
+                        HTML(
+                            f"<span style='color:red'><b>Upload failed:</b> {exc}</span>"
+                        )
+                    )
+                return
+
+            self.id_field_input.value = None
+            self._pending_gdf = None
+        else:
+            with self.output:
+                display(HTML("<i>Unknown submit action.</i>"))
+            return
+
+        self._pending_source = None
+        self._hide_inputs()
+        if self.mode == "single":
+            bbox = self.gdf.total_bounds
+            validate_area(bbox, self.area_limit, self.output)
+        self._set_geojson_layer_from_gdf(self.gdf)
+        with self.output:
+            if self.mode == "multi":
+                display(
+                    HTML("<i>AOI saved. You can add more polygons if you want.</i>")
+                )
+            else:
+                display(HTML("<i>AOI saved.</i>"))
+
+    def _set_geojson_layer_from_gdf(self, gdf: gpd.GeoDataFrame) -> None:
+        if gdf is None or gdf.empty:
+            return
         self._remove_geojson_layer()
+        geojson = json.loads(gdf.to_json())
+        self.draw_control.data = geojson.get("features", [])
 
-        geojson_layer = GeoJSON(data=json.loads(gpd.GeoSeries([self.poly]).to_json()))
-        self.map.add_layer(geojson_layer)
-        self._last_geojson_layer = geojson_layer
-
-        self.map.fit_bounds([[bbox[1], bbox[0]], [bbox[3], bbox[2]]])
+        bounds = gdf.total_bounds
+        self.map.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
     def _remove_geojson_layer(self):
         # remove previously added polygon layer if it exists
@@ -221,12 +462,22 @@ class ui_map:
                 self.map.remove_layer(self._last_geojson_layer)
             except Exception:
                 pass
+        self.draw_control.data = []
 
     def _clear_extent(self):
         self._remove_geojson_layer()
         self.draw_control.clear()
-        self.poly = None
-        self.spatial_extent = None
+        self._last_drawn_geometry = None
+        self.gdf = None
+        self._pending_source = None
+        self._pending_gdf = None
+        self._hide_inputs()
+
+    def _clear_pending_state(self):
+        self._last_drawn_geometry = None
+        self._pending_source = None
+        self._pending_gdf = None
+        self._hide_inputs()
 
     def _load_vector_file(self, name, raw_bytes):
         tmpdir = tempfile.mkdtemp()
@@ -240,6 +491,8 @@ class ui_map:
             gdf = gpd.read_file(shp)
         elif name.endswith(".gpkg"):
             gdf = gpd.read_file(str(path))
+        elif name.endswith(".parquet"):
+            gdf = gpd.read_parquet(str(path))
         else:
             raise ValueError("Unsupported file format.")
 
@@ -257,40 +510,131 @@ class ui_map:
 
         return gdf
 
-    def get_extent(self, projection="utm") -> "BoundingBoxExtent":
-        """Get extent from last drawn rectangle on the map.
+    def get_gdf(self) -> gpd.GeoDataFrame:
+        if self.gdf is None or self.gdf.empty:
+            raise ValueError("No geometries available; draw or upload first.")
+        return self.gdf.copy()
 
-        Parameters
-        ----------
-        projection : str, optional
-            The projection to use for the extent.
-            You can either request "latlon" or "utm". In case of the latter, the
-            local utm projection is automatically derived.
+    def get_poly(self) -> Polygon:
+        if self.mode != "single":
+            raise ValueError("get_poly is only available in single mode.")
+        gdf = self.get_gdf()
+        if len(gdf) != 1:
+            raise ValueError("Expected exactly one geometry in single mode.")
+        return gdf.geometry.iloc[0]
 
-        Returns
-        -------
-        BoundingBoxExtent
-            The extent as a bounding box in the requested projection.
+    def get_bbox(self) -> BoundingBoxExtent:
+        if self.mode != "single":
+            raise ValueError("get_bbox is only available in single mode.")
+        gdf = self.get_gdf()
+        return gdf_to_bbox_extent(gdf)
 
-        Raises
-        ------
-        ValueError
-            If no rectangle has been drawn on the map or no file has been uploaded.
-        """
+    def save_gdf(self, output_dir: Path, outputname: Optional[str] = None) -> Path:
+        """Save the current GeoDataFrame to a GeoPackage file."""
+        gdf = self.get_gdf()
+        if outputname is None:
+            if self.mode == "single":
+                outputname = gdf.iloc[0]["id"]
+            else:
+                raise ValueError("You must provide an output name for your file.")
+        output_path = output_dir / f"{outputname}.gpkg"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        gdf.to_file(output_path, driver="GPKG")
+        return output_path
 
-        if self.poly is None:
-            raise ValueError("No extent selected; draw or upload first.")
-        bbox = self.poly.bounds
-        if projection == "utm":
-            bbox, epsg = _latlon_to_utm(bbox)
-            self.spatial_extent = BoundingBoxExtent(*bbox, epsg)
+    def _set_gdf_from_polygon(
+        self, geometry_obj: Polygon, object_id: str, replace: bool
+    ) -> None:
+        new_entry = gpd.GeoDataFrame(
+            [{"id": object_id, "geometry": geometry_obj}],
+            geometry="geometry",
+            crs="EPSG:4326",
+        )
+        if replace or self.gdf is None:
+            self.gdf = new_entry
         else:
-            self.spatial_extent = BoundingBoxExtent(*bbox)
-        return self.spatial_extent
+            self.gdf = gpd.pd.concat([self.gdf, new_entry], ignore_index=True)
 
-    def get_polygon_latlon(self):
-        self.get_extent()
-        return self.poly
+    def _set_gdf_from_upload(self, gdf: gpd.GeoDataFrame, id_field: str) -> None:
+        gdf = gdf.copy()
+        if gdf.crs and gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(epsg=4326)
+
+        if "geometry" not in gdf.columns:
+            raise ValueError("Uploaded file must contain a geometry column.")
+
+        if id_field not in gdf.columns:
+            raise ValueError(f"ID column '{id_field}' not found in upload.")
+
+        if not gdf[id_field].is_unique:
+            raise ValueError("ID column must contain unique values.")
+
+        gdf = gdf[[id_field, "geometry"]].copy()
+        gdf = gdf.rename(columns={id_field: "id"})
+
+        if self.mode == "single" and len(gdf) != 1:
+            raise ValueError("Single mode requires exactly one geometry.")
+
+        if self.mode == "multi" and self.gdf is not None and not self.gdf.empty:
+            # check for ID conflicts with existing geometries
+            existing_ids = set(self.gdf["id"])
+            new_ids = set(gdf["id"])
+            overlap = existing_ids.intersection(new_ids)
+            if overlap:
+                raise ValueError(
+                    "Uploaded IDs already exist: "
+                    + ", ".join(sorted(str(v) for v in overlap))
+                )
+            # Add uploaded geometries to existing ones
+            self.gdf = gpd.pd.concat([self.gdf, gdf], ignore_index=True)
+        else:
+            self.gdf = gdf
+
+    def _show_draw_inputs(self) -> None:
+        self.id_input.layout.display = ""
+        self.id_field_input.layout.display = "none"
+        self.submit_button.layout.display = ""
+
+    def _show_upload_inputs(self) -> None:
+        self.id_input.layout.display = "none"
+        self.id_field_input.layout.display = ""
+        self.submit_button.layout.display = ""
+
+    def _hide_inputs(self) -> None:
+        self.id_input.layout.display = "none"
+        self.id_field_input.layout.display = "none"
+        self.submit_button.layout.display = "none"
+
+    def _update_upload_id_options(self, gdf: gpd.GeoDataFrame) -> None:
+        cols = [c for c in gdf.columns if c != "geometry"]
+        options = ["", *cols]
+        self.id_field_input.options = options
+        self.id_field_input.value = None
+
+
+def gdf_to_bbox_extent(gdf: gpd.GeoDataFrame) -> BoundingBoxExtent:
+    """Convert a single-row GeoDataFrame to a BoundingBoxExtent.
+
+    The extent is returned in the GeoDataFrame CRS.
+    """
+    if gdf is None or gdf.empty:
+        raise ValueError("GeoDataFrame is empty.")
+    if len(gdf) != 1:
+        raise ValueError("GeoDataFrame must contain exactly one geometry.")
+    if gdf.crs is None:
+        raise ValueError("GeoDataFrame must have a defined CRS.")
+
+    bounds = gdf.total_bounds
+    epsg = gdf.crs.to_epsg()
+    if epsg is None:
+        raise ValueError("GeoDataFrame CRS does not define an EPSG code.")
+    return BoundingBoxExtent(
+        west=bounds[0],
+        south=bounds[1],
+        east=bounds[2],
+        north=bounds[3],
+        epsg=epsg,
+    )
 
 
 def _latlon_to_utm(bbox):
