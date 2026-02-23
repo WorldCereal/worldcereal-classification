@@ -8,12 +8,11 @@ pythonPipeline {
   package_name = 'worldcereal-classification'
   test_module_name = 'worldcereal'
   wipeout_workspace = true
-  python_version = ["3.10"]
+  python_version = ["3.11"]
   extras_require = "dev,train,notebooks"
   upload_dev_wheels = false
   pipeline_triggers = [cron('H H(0-6) * * *')]
   pep440 = true
-  pre_test_script = 'pre_test_script.sh'
   pre_install_script = 'jenkins_pre_install_script.sh'
   extra_env_variables = [
     "OPENEO_AUTH_METHOD=client_credentials",
