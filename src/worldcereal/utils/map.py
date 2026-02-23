@@ -22,7 +22,7 @@ from ipywidgets import HTML, Layout, VBox, widgets
 from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
-from shapely.geometry import Polygon, box, shape
+from shapely.geometry import Polygon, shape
 
 from worldcereal.utils.legend import translate_ewoc_codes
 

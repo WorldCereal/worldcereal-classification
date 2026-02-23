@@ -57,7 +57,7 @@ from worldcereal.utils.legend import (
     get_legend,
     translate_ewoc_codes,
 )
-from worldcereal.utils.map import gdf_to_boundingbox_extent, ui_map
+from worldcereal.utils.map import ui_map
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
 
