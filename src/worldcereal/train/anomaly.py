@@ -10,10 +10,11 @@ Grouping:
 - group_cols defaults to [] (i.e., global per (h3, label) slices)
 
 Adaptive H3 resolution:
-- When ``h3_level`` is a list (e.g. ``[3, 2, 1]``), each point is assigned
-  the finest H3 level whose slice meets ``min_slice_size``.  Dense regions
-  (Europe) stay at the finest level while sparse regions (Africa) are
-  automatically promoted to coarser levels.
+- When ``h3_level`` is a list (e.g. ``[1, 2, 3]``), levels are tried
+  coarsest → finest.  A slice is resolved at the coarsest level where its
+  size is within [min_slice_size, max_slice_size].  Dense regions (Europe)
+  with oversized coarse-level slices are pushed to finer cells; sparse
+  regions (Africa) are resolved at a coarser level.
 
 Module layout
 ~~~~~~~~~~~~~
@@ -436,18 +437,21 @@ def run_pipeline(
 
         - **Single int** (e.g. ``3``): use a fixed H3 level for all points
           (original behaviour).
-        - **List of ints** (e.g. ``[3, 2, 1]``): *adaptive* mode.  Points
-          are assigned to the finest H3 level whose slice size ≥
-          *min_slice_size*.  Levels are tried finest → coarsest.
-          Remaining unresolved points fall back to the coarsest level.
-          This prevents sparse regions (e.g. Africa) from having too-small
-          slices at high resolution while dense regions (e.g. Europe) avoid
-          excessively large slices at low resolution.
+        - **List of ints** (e.g. ``[1, 2, 3]``): *adaptive* mode.  Levels
+          are tried **coarsest → finest** (ascending by H3 number).
+          A slice is resolved at the coarsest level where its size is both
+          ≥ *min_slice_size* and ≤ *max_slice_size*.  Slices that are too
+          large at a coarse level are pushed to finer levels where the
+          geographic cell is smaller.  Slices that are too small are also
+          pushed finer; any still-unresolved points after the finest level
+          are assigned there unconditionally and handled later by
+          ``merge_small_slices``.
     max_slice_size
-        (Adaptive mode only.)  Upper cap on slice size.  Slices that already
-        exceed this at the current H3 level are locked in to prevent them
-        growing even larger at coarser resolutions.  Ignored when *h3_level*
-        is a single int.
+        (Adaptive mode only.)  Upper cap on slice size per level.  If a
+        slice at the current (coarse) H3 level exceeds this, those points
+        are pushed to the next finer level.  At the finest level the cap is
+        not enforced — all remaining points are resolved unconditionally.
+        Ignored when *h3_level* is a single int.
     norm_percentiles
         Percentiles used for per-slice min-max normalization of
         cosine_distance and knn_distance.  Default ``(5, 95)``
