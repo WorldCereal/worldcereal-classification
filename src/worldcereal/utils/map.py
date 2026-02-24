@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import geopandas as gpd
+from loguru import logger
 import matplotlib.pyplot as plt
 import pandas as pd
 from ipyleaflet import (
@@ -540,6 +541,7 @@ class ui_map:
         output_path = output_dir / f"{outputname}.gpkg"
         output_dir.mkdir(parents=True, exist_ok=True)
         gdf.to_file(output_path, driver="GPKG")
+        logger.info(f"Saved AOI GeoDataFrame to {output_path}")
         return output_path
 
     def _set_gdf_from_polygon(
