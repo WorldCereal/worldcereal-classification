@@ -1,13 +1,13 @@
 import copy
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import geopandas as gpd
 import openeo
 import pandas as pd
 import pystac_client
 from loguru import logger
-from openeo.processes import ProcessBuilder, eq, if_
+from openeo.processes import ProcessBuilder, eq, if_, not_, or_
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.preprocessing.compositing import mean_compositing, median_compositing
 from openeo_gfmap.preprocessing.sar import (
@@ -20,6 +20,7 @@ from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
+from worldcereal.openeo.masking import scl_mask_erode_dilate
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
@@ -75,6 +76,7 @@ S2_BANDS_SELECTED = [
     "S2-L2A-B8A",
     "S2-L2A-B11",
     "S2-L2A-B12",
+    "S2-L2A-SCL",
     "S2-L2A-SCL_DILATED_MASK",
 ]
 
@@ -277,7 +279,16 @@ def create_job_dataframe_patch_to_point_worldcereal(
     logger.info("Looking for unique EPSG codes in STAC collection ...")
     epsg_codes = {}
     for item in search.items():
-        epsg = int(item.properties["proj:epsg"])
+        try:
+            epsg = int(item.properties["proj:epsg"])
+        except KeyError:
+            try:
+                epsg = int(item.properties["proj:code"].split(":")[-1])
+            except KeyError:
+                logger.warning(
+                    f"Item {item.id} does not have neither 'proj:epsg' nor 'proj:code' property, skipping ..."
+                )
+                continue
 
         if epsg not in epsg_codes and epsg != 4038:
             logger.debug(f"Found EPSG: {epsg}")
@@ -428,6 +439,11 @@ def create_job_patch_to_point_worldcereal(
     connection_provider,
     job_options: dict,
     period="month",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -452,6 +468,9 @@ def create_job_patch_to_point_worldcereal(
         epsg=int(row["epsg"]),
         s1_orbit_state=s1_orbit_state,
         period=period,
+        optical_mask_method=optical_mask_method,
+        erode_r=erode_r,
+        dilate_r=dilate_r,
     )
 
     # Do spatial aggregation
@@ -564,6 +583,11 @@ def worldcereal_preprocessed_inputs_from_patches(
     epsg: int,
     s1_orbit_state: Optional[str] = None,
     period: Optional[str] = "month",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
+    erode_r: int = 3,
+    dilate_r: int = 21,
 ):
     assert period in ["month", "dekad"], "period must be either 'month' or 'dekad'"
 
@@ -600,7 +624,7 @@ def worldcereal_preprocessed_inputs_from_patches(
         bands=S2_BANDS,
     ).filter_bands(S2_BANDS_SELECTED)
 
-    def optimized_mask(input: ProcessBuilder):
+    def optimized_mask_precomputed(input: ProcessBuilder):
         """
         To be used as a callback to apply_dimension on the band dimension.
         It's an optimized way of masking, if the mask is already present in the cube.
@@ -608,9 +632,47 @@ def worldcereal_preprocessed_inputs_from_patches(
         mask_band = input.array_element(label="S2-L2A-SCL_DILATED_MASK")
         return if_(mask_band != 1, input)
 
-    s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask)
+    def optimized_mask_raw_scl_values(input: ProcessBuilder):
+        """
+        Using raw SCL values to mask invalid pixels and get less aggressive masking compared to precomputed masks with large erode/dilate radius.
+        Valid pixels are those with SCL values not in [0,1,3,8,9,10,11].
+        0: No data
+        1: Saturated or defective
+        3: Cloud shadows
+        8: Medium probability cloud
+        9: High probability cloud
+        10: Thin cirrus
+        11: Snow or ice
+        """
+        mask_band = input.array_element(label="S2-L2A-SCL")
+        invalid = or_(mask_band == 0, mask_band == 1)
+        invalid = or_(invalid, mask_band == 3)
+        invalid = or_(invalid, mask_band == 8)
+        invalid = or_(invalid, mask_band == 9)
+        invalid = or_(invalid, mask_band == 10)
+        invalid = or_(invalid, mask_band == 11)
+        return if_(not_(invalid), input)
+
+    if optical_mask_method == "mask_scl_dilation":
+        s2 = s2_raw.apply_dimension(
+            dimension="bands", process=optimized_mask_precomputed
+        )
+    elif optical_mask_method == "mask_scl_raw_values":
+        s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_raw_scl_values)
+    elif optical_mask_method == "satio":
+        # Compute satio-based mask
+        scl_dilated_mask = scl_mask_erode_dilate(
+            s2_raw.filter_bands(["S2-L2A-SCL"]), erode_r=erode_r, dilate_r=dilate_r
+        )
+        s2 = s2_raw.mask(scl_dilated_mask)
+    else:
+        raise ValueError(
+            f"Unknown optical_mask_method: {optical_mask_method}. "
+            f"Supported methods are 'mask_scl_dilation', 'mask_scl_raw_values', and 'satio'."
+        )
+
     s2 = median_compositing(s2, period=period)
-    s2 = s2.filter_bands(S2_BANDS_SELECTED[:-1])
+    s2 = s2.filter_bands(S2_BANDS_SELECTED[:-2])
     s2 = s2.linear_scale_range(0, 65534, 0, 65534)
 
     dem_raw = connection.load_collection("COPERNICUS_30", bands=["DEM"])

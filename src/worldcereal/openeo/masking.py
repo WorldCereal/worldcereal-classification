@@ -1,32 +1,34 @@
-from skimage.morphology import footprints
+import numpy as np
+import openeo
+from openeo.processes import or_
 
 
-def convolve(img, radius):
+def disk_footprint(radius: int) -> np.ndarray:
+    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return (x * x + y * y) <= radius * radius  # bool mask
+
+
+def convolve(img: openeo.DataCube, radius: int) -> openeo.DataCube:
     """OpenEO method to apply convolution
     with a circular kernel of `radius` pixels.
     NOTE: make sure the resolution of the image
     matches the expected radius in pixels!
     """
-    kernel = footprints.disk(radius)
+    kernel = disk_footprint(radius).astype(int)
     img = img.apply_kernel(kernel)
     return img
 
 
 def scl_mask_erode_dilate(
-    session,
-    bbox,
-    scl_layer_band="TERRASCOPE_S2_TOC_V2:SCL",
-    erode_r=3,
-    dilate_r=21,
-    target_crs=None,
+    scl_cube: openeo.DataCube,
+    erode_r: int = 3,
+    dilate_r: int = 13,
 ):
     """OpenEO method to construct a Sentinel-2 mask based on SCL.
     It involves an erosion step followed by a dilation step.
 
     Args:
-        session (openeo.Session): the connection openeo session
-        scl_layer_band (str, optional): Which SCL band to use.
-                Defaults to "TERRASCOPE_S2_TOC_V2:SCL".
+        ...
         erode_r (int, optional): Erosion radius (pixels). Defaults to 3.
         dilate_r (int, optional): Dilation radius (pixels). Defaults to 13.
 
@@ -34,21 +36,9 @@ def scl_mask_erode_dilate(
         DataCube: DataCube containing the resulting mask
     """
 
-    layer_band = scl_layer_band.split(":")
-    s2_sceneclassification = session.load_collection(
-        layer_band[0], bands=[layer_band[1]], spatial_extent=bbox
-    )
-
-    classification = s2_sceneclassification.band(layer_band[1])
-
-    # Force to go to 10m resolution for controlled erosion/dilation
-    classification = classification.resample_spatial(
-        projection=target_crs, resolution=10.0
-    )
-
-    first_mask = classification == 0
+    first_mask = scl_cube == 0
     for mask_value in [1, 3, 8, 9, 10, 11]:
-        first_mask = (first_mask == 1) | (classification == mask_value)
+        first_mask = (first_mask == 1) | (scl_cube == mask_value)
 
     # Invert mask for erosion
     first_mask = first_mask.apply(lambda x: (x == 1).not_())
@@ -68,3 +58,24 @@ def scl_mask_erode_dilate(
     dilate_cube = dilate_cube > 0.1
 
     return dilate_cube
+
+
+def scl_mask_raw_values(scl_cube: openeo.DataCube):
+    """
+    Using raw SCL values to mask invalid pixels and get less aggressive masking compared to precomputed masks with large erode/dilate radius.
+    Valid pixels are those with SCL values not in [0,1,3,8,9,10,11].
+    0: No data
+    1: Saturated or defective
+    3: Cloud shadows
+    8: Medium probability cloud
+    9: High probability cloud
+    10: Thin cirrus
+    11: Snow or ice
+    """
+    invalid = or_(scl_cube == 0, scl_cube == 1)
+    invalid = or_(invalid, scl_cube == 3)
+    invalid = or_(invalid, scl_cube == 8)
+    invalid = or_(invalid, scl_cube == 9)
+    invalid = or_(invalid, scl_cube == 10)
+    invalid = or_(invalid, scl_cube == 11)
+    return invalid

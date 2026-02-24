@@ -25,6 +25,10 @@ from worldcereal.openeo.preprocessing import (
 basedir = Path(os.path.dirname(os.path.realpath(__file__)))
 
 
+def _get_process_ids(flat_graph):
+    return {node["process_id"] for node in flat_graph.values()}
+
+
 def test_temporal_context_validation():
     """Test the validation of temporal context."""
 
@@ -154,3 +158,62 @@ def test_worldcereal_preprocessed_inputs_from_patches_no_s1_graph():
     with open(ref_graph, "r") as f:
         expected = json.load(f)
         assert expected == cube.flat_graph()
+
+
+@pytest.mark.parametrize(
+    "optical_mask_method, expected_band_label, expected_process_id",
+    [
+        ("mask_scl_raw_values", "S2-L2A-SCL_DILATED_MASK", "or"),
+        ("satio", "S2-L2A-SCL_DILATED_MASK", "apply_kernel"),
+    ],
+)
+def test_worldcereal_preprocessed_inputs_graph_non_default_optical_mask_options(
+    SpatialExtent, optical_mask_method, expected_band_label, expected_process_id
+):
+    """Ensure non-default optical mask methods build valid and method-specific graphs."""
+
+    temporal_extent = TemporalContext("2020-06-01", "2021-05-31")
+
+    cube = worldcereal_preprocessed_inputs(
+        connection=cdse_connection(),
+        backend_context=BackendContext(Backend.CDSE),
+        spatial_extent=SpatialExtent,
+        temporal_extent=temporal_extent,
+        fetch_type=FetchType.POLYGON,
+        optical_mask_method=optical_mask_method,
+    )
+    flat_graph = cube.flat_graph()
+    process_ids = _get_process_ids(flat_graph)
+    flat_graph_json = json.dumps(flat_graph)
+
+    assert expected_band_label in flat_graph_json
+    assert expected_process_id in process_ids
+    assert "to_scl_dilation_mask" not in process_ids
+
+
+@pytest.mark.parametrize(
+    "optical_mask_method, expected_process_id",
+    [
+        ("mask_scl_raw_values", "apply_dimension"),
+        ("satio", "apply_kernel"),
+    ],
+)
+def test_worldcereal_preprocessed_inputs_from_patches_graph_non_default_optical_mask_options(
+    optical_mask_method, expected_process_id
+):
+    """Ensure non-default optical mask methods are usable in patch-to-point preprocessing."""
+
+    temporal_extent = TemporalContext("2020-01-01", "2020-12-31")
+
+    cube = worldcereal_preprocessed_inputs_from_patches(
+        connection=vito_connection(),
+        temporal_extent=temporal_extent,
+        ref_id="test_ref_id",
+        s1_orbit_state="DESCENDING",
+        epsg=32631,
+        optical_mask_method=optical_mask_method,
+    )
+    process_ids = _get_process_ids(cube.flat_graph())
+
+    # Non-default branches in this pipeline explicitly apply a mask to S2.
+    assert expected_process_id in process_ids
