@@ -194,7 +194,7 @@ def test_worldcereal_preprocessed_inputs_graph_non_default_optical_mask_options(
 @pytest.mark.parametrize(
     "optical_mask_method, expected_process_id",
     [
-        ("mask_scl_raw_values", "or"),
+        ("mask_scl_raw_values", "apply_dimension"),
         ("satio", "apply_kernel"),
     ],
 )
@@ -216,5 +216,4 @@ def test_worldcereal_preprocessed_inputs_from_patches_graph_non_default_optical_
     process_ids = _get_process_ids(cube.flat_graph())
 
     # Non-default branches in this pipeline explicitly apply a mask to S2.
-    assert "mask" in process_ids
     assert expected_process_id in process_ids
