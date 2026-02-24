@@ -36,6 +36,7 @@ SEASONAL_WORKFLOW_PRESETS: SeasonalWorkflowPresets = {
             "seasonal_model_zip": DEFAULT_SEASONAL_MODEL_URL,
             "landcover_head_zip": None,
             "croptype_head_zip": None,
+            "export_embeddings": False,
         },
         "runtime": {
             "cache_root": None,
