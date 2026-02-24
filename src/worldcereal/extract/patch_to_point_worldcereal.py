@@ -654,8 +654,7 @@ def worldcereal_preprocessed_inputs_from_patches(
             dimension="bands", process=optimized_mask_precomputed
         )
     elif optical_mask_method == "mask_scl_raw_values":
-        scl_raw_values_mask = scl_mask_raw_values(s2_raw.filter_bands(["S2-L2A-SCL"]))
-        s2 = s2_raw.mask(scl_raw_values_mask)
+        s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_raw_scl_values)
     elif optical_mask_method == "satio":
         # Compute satio-based mask
         scl_dilated_mask = scl_mask_erode_dilate(
