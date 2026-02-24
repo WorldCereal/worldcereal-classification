@@ -232,19 +232,29 @@ def assign_adaptive_h3_level(
 ) -> pd.DataFrame:
     """Assign each point an effective H3 cell based on point density.
 
-    Iterates from **finest** to **coarsest** H3 resolution.  For each
-    ``(group_cols, label, h3_cell)`` slice:
+    Iterates from **coarsest** to **finest** H3 resolution.  For each
+    ``(group_cols, label, h3_cell)`` slice at the current level:
 
-    - If the slice has **≥ min_slice_size** points → keep those points at
-      this resolution (they are "resolved").
-    - If *max_slice_size* is set and the slice already exceeds it at this
-      level, the points are also kept at this level to avoid creating even
-      larger groups at coarser resolutions.
-    - Remaining unresolved points are promoted to the next coarser level and
-      re-evaluated.
+    - If the slice has **≥ min_slice_size** AND **≤ max_slice_size** points
+      (or *max_slice_size* is None) → resolve those points at this level.
+    - If the slice **exceeds max_slice_size** → leave those points unresolved
+      and push them to the next finer level where the geographic cell is
+      smaller and the slice will naturally shrink.
+    - Slices that are too small (< min_slice_size) are also left unresolved
+      and pushed finer; at the finest level they will be resolved
+      unconditionally (every point must end up somewhere).
 
-    After the loop, any still-unresolved points are assigned the coarsest
-    requested level.
+    After the loop, any still-unresolved points are assigned the finest
+    requested level unconditionally.
+
+    Example with h3_levels=[1, 2, 3], min_slice_size=100, max_slice_size=4000
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    - Dense Europe cell at L1 with 12 000 points in a slice → too big,
+      pushed to L2.
+    - At L2 the cell splits; each sub-cell has ~1 500 points → resolved ✓
+    - Sparse Africa cell at L1 with 200 points → within bounds, resolved ✓
+    - Very sparse cell: only 40 points even at L3 → resolved at L3
+      unconditionally (handled later by merge_small_slices as undersized).
 
     New columns added
     ~~~~~~~~~~~~~~~~~
@@ -254,19 +264,23 @@ def assign_adaptive_h3_level(
     Parameters
     ----------
     h3_levels
-        H3 resolutions sorted **finest → coarsest**, e.g. ``[3, 2, 1]``.
+        H3 resolutions to try, e.g. ``[1, 2, 3]`` or ``[3, 2, 1]``.
+        Internally always sorted **coarsest → finest** (ascending by H3
+        resolution number, i.e. smallest number first).
     min_slice_size
-        Minimum number of points in a slice before it is considered
-        adequately populated.
+        Minimum number of points required to resolve a slice at a given level.
+        Slices below this are pushed to a finer level.
     max_slice_size
-        Optional upper bound.  Slices already exceeding this at the current
-        resolution are *not* promoted further (prevents runaway merging in
-        dense areas).
+        Maximum number of points allowed in a slice at a given level.  Slices
+        exceeding this are pushed to a finer level.  At the finest level this
+        cap is not applied — every remaining point is resolved unconditionally.
+        If None, no upper cap is applied and all slices >= min_slice_size are
+        resolved at the coarsest level where they first meet the minimum.
     """
     import h3 as _h3
 
-    # Ensure finest → coarsest ordering
-    h3_levels = sorted(h3_levels, reverse=True)
+    # Ensure coarsest → finest ordering (lowest H3 number = coarsest)
+    h3_levels = sorted(h3_levels, reverse=False)
 
     df = df.copy()
     group_cols = list(group_cols or [])
@@ -292,6 +306,8 @@ def assign_adaptive_h3_level(
     effective_cell = np.empty(len(df), dtype=object)
     effective_level = np.full(len(df), -1, dtype=np.int8)
 
+    finest_level = h3_levels[-1]  # last in coarsest→finest order
+
     for lvl in h3_levels:
         if resolved.all():
             break
@@ -301,29 +317,33 @@ def assign_adaptive_h3_level(
         if len(unresolved_idx) == 0:
             break
 
+        is_finest = (lvl == finest_level)
+
         # Build slice keys for unresolved rows at this level
         sub = df.iloc[unresolved_idx]
         key_cols = [*group_cols, label_col, h3_col]
         counts = sub.groupby(key_cols).size()
 
-        # Identify slices that meet min_slice_size at this level
-        adequate_keys = set(
-            counts[counts >= min_slice_size].index.tolist()
-        )
-
-        # Also respect max_slice_size: if a slice is already huge at this
-        # level, lock it in rather than promoting to an even coarser level
-        # where it would be even bigger.
-        if max_slice_size is not None:
-            # Points in oversized slices should also be resolved here
-            # (prevents runaway aggregation in dense regions)
-            extra_keys = set(
-                counts[counts > max_slice_size].index.tolist()
-            )
+        if is_finest:
+            # At the finest level: resolve ALL remaining points unconditionally.
+            # No max_slice_size cap — every point must be assigned somewhere.
+            resolve_keys = set(counts.index.tolist())
         else:
-            extra_keys = set()
+            # Resolve slices that satisfy BOTH bounds:
+            #   >= min_slice_size  (enough points to score meaningfully)
+            #   <= max_slice_size  (not so large that scoring is expensive/noisy)
+            # Slices outside these bounds are left unresolved and pushed finer.
+            if max_slice_size is not None:
+                resolve_keys = set(
+                    counts[
+                        (counts >= min_slice_size) & (counts <= max_slice_size)
+                    ].index.tolist()
+                )
+            else:
+                resolve_keys = set(
+                    counts[counts >= min_slice_size].index.tolist()
+                )
 
-        resolve_keys = adequate_keys | extra_keys
         if not resolve_keys:
             continue
 
@@ -336,15 +356,15 @@ def assign_adaptive_h3_level(
         effective_cell[matched_positions] = df.iloc[matched_positions][h3_col].to_numpy()
         effective_level[matched_positions] = np.int8(lvl)
 
-    # Assign remaining unresolved points to the coarsest level
-    coarsest = h3_levels[-1]
+    # Safety: assign any still-unresolved points to the finest level
+    # (should only happen if h3_levels has a single entry)
     still_unresolved = ~resolved
     if still_unresolved.any():
-        coarsest_col = h3_col_map[coarsest]
+        finest_col = h3_col_map[finest_level]
         effective_cell[still_unresolved] = (
-            df.loc[still_unresolved, coarsest_col].to_numpy()
+            df.loc[still_unresolved, finest_col].to_numpy()
         )
-        effective_level[still_unresolved] = np.int8(coarsest)
+        effective_level[still_unresolved] = np.int8(finest_level)
 
     df["effective_h3_cell"] = effective_cell
     df["h3_effective_level"] = effective_level
@@ -353,7 +373,7 @@ def assign_adaptive_h3_level(
     for col in h3_col_map.values():
         df = df.drop(columns=[col], errors="ignore")
 
-    # Summary stats
+    # Summary stats (printed coarsest → finest)
     for lvl in h3_levels:
         n_at_lvl = int((effective_level == lvl).sum())
         print(f"[adaptive_h3] Level {lvl}: {n_at_lvl:,} points")
