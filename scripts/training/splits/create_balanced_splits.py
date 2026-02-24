@@ -12,25 +12,25 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
+                    Tuple)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from training.splits.get_mappings_from_legend import (
-    SharePointConfig,
-    build_class_mappings,
-    get_excel_from_sharepoint,
-)
+from worldcereal.utils.sharepoint import (build_class_mappings,
+                                          get_excel_from_sharepoint)
 
-DEFAULT_WORLD_BOUNDS_PATH = Path(
-    "/home/cbutsko/Desktop/worldcereal-classification/src/worldcereal/data/world-"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+DEFAULT_WORLD_BOUNDS_PATH = (
+    REPO_ROOT / "src/worldcereal/data/world-" \
     "administrative-boundaries/world-administrative-boundaries.geoparquet"
 )
 DEFAULT_EXTRACTS_GLOB = (
-    "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/"
+    REPO_ROOT / "data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/"
     "worldcereal_all_extractions.parquet/**/*.parquet"
 )
 DEFAULT_LEGEND_URL = (
@@ -38,7 +38,7 @@ DEFAULT_LEGEND_URL = (
     "WorldCereal_LC_CT_legend_latest.csv"
 )
 DEFAULT_UNIFIED_SPLITS_PATH = Path(
-    "/home/cbutsko/Private/cbutsko_experiments/unified_train_splits.parquet"
+    "./unified_train_splits.parquet"
 )
 
 TRAIN_ONLY_REF_IDS: Tuple[str, ...] = (
@@ -135,7 +135,8 @@ def load_mappings(
     class_mappings: Optional[dict] = None,
     lc_name: str = "LANDCOVER10",
     ct_name: str = "CROPTYPE27",
-    sharepoint_config: Optional[SharePointConfig] = None,
+    sharepoint_site_url: Optional[str] = None,
+    sharepoint_file_url: Optional[str] = None,
 ) -> Tuple[Dict[str, str], Dict[str, str]]:
     """Load CROPTYPE and LANDCOVER mappings.
 
@@ -143,9 +144,11 @@ def load_mappings(
     ----------
     class_mappings : dict, optional
         Dictionary containing class mappings. If not provided, it is loaded
-        from SharePoint using :func:`get_legend_with_mappings_df`.
-    sharepoint_config : SharePointConfig, optional
-        Optional SharePoint configuration to override environment-based config.
+        from SharePoint using :func:`get_excel_from_sharepoint`.
+    sharepoint_site_url : str, optional
+        SharePoint site URL to fetch the legend/mappings Excel.
+    sharepoint_file_url : str, optional
+        Server-relative path to the Excel file.
 
     Returns
     -------
@@ -153,7 +156,15 @@ def load_mappings(
         CROPTYPE mapping and LANDCOVER mapping.
     """
     if class_mappings is None:
-        legend = get_excel_from_sharepoint(config=sharepoint_config, sheet_name=0)
+        if not sharepoint_site_url or not sharepoint_file_url:
+            raise ValueError(
+                "sharepoint_site_url and sharepoint_file_url are required when class_mappings is None."
+            )
+        legend = get_excel_from_sharepoint(
+            site_url=sharepoint_site_url,
+            file_server_relative_url=sharepoint_file_url,
+            sheet_name=0,
+        )
         legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
         class_mappings = build_class_mappings(legend)
     return class_mappings[ct_name], class_mappings[lc_name]
@@ -1289,7 +1300,8 @@ def main(
     world_bounds_path: Path = DEFAULT_WORLD_BOUNDS_PATH,
     output_path: Path = DEFAULT_UNIFIED_SPLITS_PATH,
     train_only_ref_ids: Sequence[str] = TRAIN_ONLY_REF_IDS,
-    sharepoint_config: Optional[SharePointConfig] = None,
+    sharepoint_site_url: Optional[str] = None,
+    sharepoint_file_url: Optional[str] = None,
 ) -> None:
     """Build unified H3-based splits for CROPTYPE27 and LANDCOVER10 datasets."""
     if not logging.getLogger().handlers:
@@ -1299,7 +1311,8 @@ def main(
         class_mappings,
         lc_name,
         ct_name,
-        sharepoint_config=sharepoint_config,
+        sharepoint_site_url=sharepoint_site_url,
+        sharepoint_file_url=sharepoint_file_url,
     )
     extraction_paths = load_extraction_paths(extractions_glob)
 
