@@ -20,7 +20,7 @@ from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
-from worldcereal.openeo.masking import scl_mask_erode_dilate, scl_mask_raw_values
+from worldcereal.openeo.masking import scl_mask_erode_dilate
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
