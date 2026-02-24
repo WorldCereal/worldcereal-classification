@@ -45,14 +45,19 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 
 If you prefer to install the package locally, you can create the environment using **Conda** or **pip**.
 
+- **Conda**<br>
 First clone the repository:
 ```bash
 git clone https://github.com/WorldCereal/worldcereal-classification.git
 cd worldcereal-classification
 ```
 Next, install the package locally:
-- for Conda: `conda env create -f environment.yml`
-- for Pip: `pip install .[train,notebooks]`
+`conda env create -f environment.yml`
+
+- **Pip**<br>
+`pip install "worldcereal[train,notebooks] @ git+https://github.com/worldcereal/worldcereal-classification.git"`
+
+WorldCereal requires Python 3.10 or newer.
 
 ## Usage Example
 In its most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
@@ -60,6 +65,7 @@ In its most simple form, a cropland mask can be generated with just few lines of
 ```python
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from worldcereal.job import generate_map
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 
 # Specify the spatial extent
 spatial_extent = BoundingBoxExtent(
@@ -75,6 +81,44 @@ temporal_extent = TemporalContext('2022-11-01', '2023-10-31')
 
 # Launch processing job (result will automatically be downloaded)
 results = generate_map(spatial_extent, temporal_extent, output_dir='.')
+
+# Optional: tweak workflow overrides
+from worldcereal.openeo.workflow_config import (
+    WorldCerealWorkflowConfig,
+    SeasonSection,
+    ModelSection,
+)
+
+workflow_cfg = WorldCerealWorkflowConfig(
+    model=ModelSection(
+        croptype_head_zip="abfs://path/to/custom_croptype_head.zip",  # replace with your asset URI
+        enable_croptype_head=True,
+    ),
+    season=SeasonSection(
+        export_class_probabilities=True,
+        season_ids=["tc-s1", "tc-s2"],
+        season_windows={
+            "tc-s1": ("2020-12-01", "2021-07-31"),
+            "tc-s2": ("2021-04-01", "2021-10-31"),
+        },
+    ),
+    postprocess={
+        "cropland": {"enabled": True, "method": "majority_vote", "kernel_size": 5},
+        "croptype": {
+            "enabled": True,
+            "method": "smooth_probabilities",
+        },
+    },
+)
+
+prob_results = generate_map(
+    spatial_extent,
+    temporal_extent,
+    output_dir='.',
+    workflow_config=workflow_cfg,
+)
+
+# Prefer chained setters? WorldCerealWorkflowConfig.builder() offers the same knobs.
 ```
 
 ## Documentation

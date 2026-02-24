@@ -49,7 +49,8 @@ class AWSSTSCredentials:
     AWS_SECRET_ACCESS_KEY: str
     AWS_SESSION_TOKEN: str
     subject_from_web_identity_token: str
-    STS_ENDPOINT = "https://sts.prod.warsaw.openeo.dataspace.copernicus.eu"
+    STS_ENDPOINT = "https://sts.waw3-1.openeo.v1.dataspace.copernicus.eu"
+    ROLE_ARN = "arn:openeo:iam:::role/openeo-artifacts-waw3-1"
 
     @classmethod
     def _from_assume_role_response(cls, resp: dict) -> AWSSTSCredentials:
@@ -85,7 +86,7 @@ class AWSSTSCredentials:
         sts = boto3.client("sts")
         return AWSSTSCredentials._from_assume_role_response(
             sts.assume_role_with_web_identity(
-                RoleArn="arn:aws:iam::000000000000:role/S3Access",
+                RoleArn=cls.ROLE_ARN,
                 RoleSessionName=auth_token[1],
                 WebIdentityToken=auth_token[2],
                 DurationSeconds=43200,
@@ -106,7 +107,7 @@ class AWSSTSCredentials:
         sts = boto3.client("sts")
         return AWSSTSCredentials._from_assume_role_response(
             sts.assume_role_with_web_identity(
-                RoleArn="arn:aws:iam::000000000000:role/S3Access",
+                RoleArn=cls.ROLE_ARN,
                 RoleSessionName=auth_token[1],
                 WebIdentityToken=auth_token[2],
                 DurationSeconds=43200,
@@ -119,8 +120,8 @@ class AWSSTSCredentials:
 
 
 class OpenEOArtifactHelper:
-    BUCKET_NAME = "OpenEO-artifacts"
-    S3_ENDPOINT = "https://s3.prod.warsaw.openeo.dataspace.copernicus.eu"
+    BUCKET_NAME = "openeo-artifacts-waw3-1"
+    S3_ENDPOINT = "https://s3.waw3-1.openeo.v1.dataspace.copernicus.eu"
     # From what size will we switch to multi-part-upload
     MULTIPART_THRESHOLD_IN_MB = 50
 
@@ -232,6 +233,10 @@ def deploy_model(
 
         logger.info("Deploying model ...")
 
+        # TODO: once openeo-python-client >= 0.45.0 replace the following 2 lines and remove all classes above
+        # from openeo.extra.artifacts import build_artifact_helper
+        # artifact_helper = build_artifact_helper(connection)
+        # storage_uri = artifact_helper.upload_file(model_file_path, targetpath)
         artifact_helper = OpenEOArtifactHelper.from_openeo_connection(conn)
         normal_s3_uri = artifact_helper.upload_file(targetpath, model_file_path)
         presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)

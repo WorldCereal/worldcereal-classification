@@ -25,7 +25,7 @@ def main(
     max_executors: Optional[int] = None,
     parallel_jobs: int = 2,
     restart_failed: bool = False,
-    extract_value: int = 1,
+    extract_value: int = 0,
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
@@ -70,7 +70,8 @@ def main(
     restart_failed : bool, optional
         Restart the jobs that previously failed, by default False
     extract_value : int, optional
-        All samples with an "extract" value equal or larger than this one, will be extracted, by default 1
+        All samples with an "extract" value equal or larger than this one, will be extracted, by default 0
+        so all samples will be extracted
     backend : openeo_gfmap.Backend, optional
         cloud backend where to run the extractions, by default Backend.CDSE
     write_stac_api : bool, optional
@@ -93,7 +94,7 @@ def main(
     job_options: Optional[Dict[str, Union[str, int]]] = {
         key: value
         for key, value in {
-            "python-memory" : python_memory,
+            "python-memory": python_memory,
             "executor-memory": executor_memory,
             "driver-memory": driver_memory,
             "executor-memoryOverhead": executor_memory_overhead,
@@ -113,7 +114,7 @@ def main(
         )
 
     # Fire up extractions
-    run_extractions(
+    _ = run_extractions(
         collection,
         output_folder,
         samples_df_path,
@@ -128,7 +129,7 @@ def main(
         check_existing_extractions=check_existing_extractions,
     )
 
-    return
+    return None
 
 
 if __name__ == "__main__":
@@ -206,7 +207,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--extract_value",
         type=int,
-        default=1,
+        default=0,
         help="The value of the `extract` flag to use in the dataframe.",
     )
     parser.add_argument(
