@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import geopandas as gpd
-from loguru import logger
 import matplotlib.pyplot as plt
 import pandas as pd
 from ipyleaflet import (
@@ -20,6 +19,7 @@ from ipyleaflet import (
 )
 from IPython.display import display
 from ipywidgets import HTML, Layout, VBox, widgets
+from loguru import logger
 from matplotlib.colors import to_hex
 from openeo_gfmap import BoundingBoxExtent
 from shapely import geometry
