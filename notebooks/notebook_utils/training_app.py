@@ -18,10 +18,9 @@ This module provides an interactive widget-based interface for:
 
 import json
 import platform
-import threading
+import time
 from datetime import datetime
 from pathlib import Path
-import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -47,7 +46,6 @@ from notebook_utils.production import merge_maps, run_map_production
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
 from openeo_gfmap import TemporalContext
-from openeo_gfmap.backend import cdse_connection
 from tabulate import tabulate
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
