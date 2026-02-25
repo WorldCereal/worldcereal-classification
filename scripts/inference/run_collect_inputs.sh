@@ -3,32 +3,46 @@ set -euo pipefail
 
 export OPENEO_AUTH_METHOD=""
 
-# Python and extraction command
-PYTHONPATH="/.conda/envs/worldcereal-classification/bin/python"
-PROCESS_CMD="/worldcereal-classification/scripts/inference/collect_inputs.py"
+# Make sure your current work directory is the root of the worldcereal repository
+# ("worldcereal-classification")
+# The next line should not be touched in principle.
+PROCESS_CMD="scripts/inference/collect_inputs.py"
 
-# Parameters
+# Make sure you select the path to your WorldCereal Python environment
+PYTHONPATH="/home/jeroendegerickx/miniconda3/envs/worldcereal-py311/bin/python"
+
+# Parameters for spatial extent.
+# Make sure to provide a valid path to a vector file containing the grid cells 
+# for which you want to collect inputs.
+GRID_PATH="./bbox/test.gpkg"
+GRID_SIZE="20"
+
+# Parameter specifying output folder
+OUTPUT_FOLDER="./preprocessed_inputs"
+
+# Parameters for temporal extent
+# For using OPTION 2, provide start and end date
+# START_DATE="2024-01-01"
+# END_DATE="2024-04-30"
+
+# For using OPTION 3, provide a year
+YEAR="2024"
+
+# Optional parameters
+S1_ORBIT_STATE="ASCENDING"
 PERIOD="month"
-
-GRID_PATH="collect_inputs_test_belgium_good.parquet"
-OUTPUT_FOLDER="inference_patches"
-
-TILE_NAME_COL="tile_name"
-
-EXTRACTIONS_START_DATE="2024-01-01"
-EXTRACTIONS_END_DATE="2024-04-30"
-
 PARALLEL_JOBS="2"
+# note below we set restart_failed and randomize_jobs to True
+
 
 # Run extraction
 "${PYTHONPATH}" "${PROCESS_CMD}" \
 --grid_path "${GRID_PATH}" \
+--grid_size "${GRID_SIZE}" \
 --output_folder "${OUTPUT_FOLDER}" \
---tile_name_col "${TILE_NAME_COL}" \
 --compositing_window "${PERIOD}" \
---extractions_start_date "${EXTRACTIONS_START_DATE}" \
---extractions_end_date "${EXTRACTIONS_END_DATE}" \
+--s1_orbit_state "${S1_ORBIT_STATE}" \
+--year "${YEAR}" \
 --parallel_jobs "${PARALLEL_JOBS}" \
---restart_failed
-# --overwrite_job_df
-
+--restart_failed \
+--randomize_jobs
