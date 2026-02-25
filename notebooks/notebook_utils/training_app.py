@@ -3489,7 +3489,7 @@ class WorldCerealTrainingApp:
             output_dir.mkdir(parents=True, exist_ok=True)
 
             try:
-                processing_extent = aoi_map.get_bbox()
+                aoi_gdf = aoi_map.get_gdf()
             except Exception:
                 with log_out:
                     print("Draw an AOI on the map before generating a map.")
@@ -3549,13 +3549,12 @@ class WorldCerealTrainingApp:
                 generate_button.disabled = True
 
             _ = run_map_production(
-                spatial_extent=processing_extent,
+                aoi_gdf=aoi_gdf,
                 temporal_extent=self.tab8_processing_period,
                 output_dir=output_dir,
                 tile_resolution=tile_resolution,
                 product_type=WorldCerealProductType.CROPTYPE,
                 workflow_config=workflow_config,
-                stop_event=None,
                 plot_out=plot_out,
                 log_out=log_out,
                 display_outputs=True,
