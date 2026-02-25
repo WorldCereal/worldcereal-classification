@@ -197,6 +197,8 @@ def run_extractions_notebook(
         logging.getLogger("openeo.extra.job_management._manager").setLevel(
             logging.WARNING
         )
+        pipeline_logger = logging.getLogger("extraction_pipeline")
+        pipeline_logger.propagate = False
 
     def status_callback(status_df: pd.DataFrame) -> None:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
