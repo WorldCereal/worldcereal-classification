@@ -97,7 +97,7 @@ def _probability_dataset_with_engine(
     )
     dataset = engine._format_outputs(
         arr=arr,
-        outputs=(landcover_logits, croptype_logits),
+        outputs=(landcover_logits, croptype_logits, None),
         season_ids=["tc-s1", "tc-s2"],
         enforce_cropland_gate=True,
     )
@@ -283,6 +283,58 @@ def test_apply_udf_data_wraps_engine_output(monkeypatch):
     assert list(stacked.bands.values) == [
         "cropland_classification",
         "croptype_classification:S1",
+    ]
+
+
+def test_apply_udf_data_exports_embeddings_from_workflow_config(monkeypatch):
+    arr = _create_sample_array()
+    context = {
+        "workflow_config": {
+            "model": {
+                "seasonal_model_zip": "fake.zip",
+                "export_embeddings": True,
+            },
+            "runtime": {},
+            "season": {},
+        }
+    }
+    udf = _make_udf_data(arr, context)
+
+    monkeypatch.setattr(inference, "_require_openeo_runtime", lambda: None)
+    monkeypatch.setattr(inference, "_infer_udf_epsg", lambda udf_data: 32631)
+    monkeypatch.setattr(inference, "XarrayDataCube", DummyCube)
+
+    captured = {}
+
+    def fake_run(arr, epsg, **config):
+        captured["config"] = config
+        assert epsg == 32631
+        dataset = xr.Dataset(
+            {
+                "cropland_classification": xr.DataArray(
+                    np.zeros((2, 2), dtype=np.uint16), dims=("y", "x")
+                ),
+                "global_embedding:dim_0": xr.DataArray(
+                    np.ones((2, 2), dtype=np.float32), dims=("y", "x")
+                ),
+                "global_embedding:dim_1": xr.DataArray(
+                    np.ones((2, 2), dtype=np.float32) * 2, dims=("y", "x")
+                ),
+            }
+        )
+        return inference._dataset_to_multiband_array(dataset)
+
+    monkeypatch.setattr(inference, "run_seasonal_workflow", fake_run)
+
+    result = inference.apply_udf_data(udf)
+
+    assert captured["config"]["export_embeddings"] is True
+    out_cube = result.datacube_list[0]
+    stacked = out_cube.get_array()
+    assert list(stacked.bands.values) == [
+        "cropland_classification",
+        "global_embedding:dim_0",
+        "global_embedding:dim_1",
     ]
 
 
