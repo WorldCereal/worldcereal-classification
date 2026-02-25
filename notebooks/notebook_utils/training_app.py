@@ -499,13 +499,30 @@ class WorldCerealTrainingApp:
             "If no AOI is selected, the query will consider all available data globally.<br>"
             "       ⚠️ WARNING: This will result in a very large query and may take a long time to complete.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
+            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
         )
 
         aoi_map = ui_map(display_ui=False)
+
+        aoi_save_button = widgets.Button(
+            description="Save AOI",
+            button_style="info",
+            icon="save",
+            layout=widgets.Layout(width="220px"),
+        )
+        aoi_save_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="60px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
 
         buffer_explanation = self._info_callout(
             "By default we apply a 250 km buffer around your selected AOI to ensure sufficient reference data is retrieved.<br>"
@@ -650,6 +667,8 @@ class WorldCerealTrainingApp:
         self.tab1_widgets = {
             "extent_output": extent_output,
             "aoi_map": aoi_map,
+            "aoi_save_button": aoi_save_button,
+            "aoi_save_output": aoi_save_output,
             "buffer_input": buffer_input,
             "include_public_checkbox": include_public_checkbox,
             "include_private_checkbox": include_private_checkbox,
@@ -678,6 +697,7 @@ class WorldCerealTrainingApp:
         private_path_button.on_click(self._on_private_edit_click)
         crop_only_checkbox.observe(self._on_crop_only_toggle, names="value")
         select_crops_button.on_click(self._on_select_crops_click)
+        aoi_save_button.on_click(self._on_tab1_save_aoi_click)
 
         return widgets.VBox(
             [
@@ -698,6 +718,8 @@ class WorldCerealTrainingApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
+                widgets.HBox([aoi_save_button]),
+                aoi_save_output,
                 buffer_explanation,
                 buffer_input,
                 widgets.HTML("<b>2) Data sources selection:</b>"),
@@ -925,6 +947,22 @@ class WorldCerealTrainingApp:
 
         self.tab1_widgets["save_add_button"].disabled = False
         self.tab1_widgets["discard_button"].disabled = False
+
+    def _save_aoi_to_bbox(self, aoi_map, output: widgets.Output) -> None:
+        if aoi_map is None or output is None:
+            return
+        with output:
+            output.clear_output()
+            try:
+                bbox_dir = Path("./bbox")
+                _ = aoi_map.save_gdf(bbox_dir)
+            except Exception as exc:
+                print(f"Failed to save AOI: {exc}")
+
+    def _on_tab1_save_aoi_click(self, _=None) -> None:
+        aoi_map = self.tab1_widgets.get("aoi_map")
+        output = self.tab1_widgets.get("aoi_save_output")
+        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_save_continue_click(self, button):
         """Save extractions and continue to next step."""
@@ -3073,10 +3111,12 @@ class WorldCerealTrainingApp:
             "Large AOIs are automatically split into tiles for processing.<br>"
             "You can manually alter the <b>tile size</b> if you want to experiment with smaller or larger tiles, but keep in mind that this will also impact processing time and the required computational resources.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
+            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
         )
         tile_resolution_input = widgets.IntText(
             value=50,
@@ -3085,29 +3125,16 @@ class WorldCerealTrainingApp:
         )
         aoi_map = ui_map(display_ui=False)
 
-        bbox_info = self._info_callout(
-            "After drawing your AOI on the map, you can save the bounding box coordinates to the local `./bbox` folder for later reuse.<br>"
-            "The name you provide in the input field will be used as the filename (without extension).<br>"
-            "For example, if you enter 'my_aoi' and click the save button, the AOI coordinates will be saved to `./bbox/my_aoi.gpkg`.<br><br>"
-            "This is especially useful when you want to run multiple experiments with the same AOI or want to keep a record of the AOI coordinates that were used for processing.<br>"
-            "You can also load the saved bounding box files later to visualize the AOI on the map again or to use the coordinates for other purposes."
-        )
-        bbox_name_input = widgets.Text(
-            value="",
-            description="Save AOI as:",
-            placeholder="name without extension",
-            layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
-        )
-        bbox_save_button = widgets.Button(
-            description="Save AOI to ./bbox",
+        aoi_save_button = widgets.Button(
+            description="Save AOI",
             button_style="info",
             icon="save",
             layout=widgets.Layout(width="220px"),
         )
-        bbox_output = widgets.Output(
+        aoi_save_output = widgets.Output(
             layout=widgets.Layout(
                 width="100%",
-                min_height="80px",
+                min_height="60px",
                 border="1px solid #ccc",
                 padding="10px",
             )
@@ -3240,9 +3267,8 @@ class WorldCerealTrainingApp:
         self.tab8_widgets = {
             "status_message": status_message,
             "aoi_map": aoi_map,
-            "bbox_name_input": bbox_name_input,
-            "bbox_save_button": bbox_save_button,
-            "bbox_output": bbox_output,
+            "aoi_save_button": aoi_save_button,
+            "aoi_save_output": aoi_save_output,
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_hint": season_hint,
@@ -3263,8 +3289,8 @@ class WorldCerealTrainingApp:
             "output": output,
         }
 
-        bbox_save_button.on_click(self._on_tab8_save_bbox)
         generate_button.on_click(self._on_generate_map_click)
+        aoi_save_button.on_click(self._on_tab8_save_aoi_click)
 
         return widgets.VBox(
             [
@@ -3280,9 +3306,8 @@ class WorldCerealTrainingApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
-                bbox_info,
-                widgets.HBox([bbox_name_input, bbox_save_button]),
-                bbox_output,
+                widgets.HBox([aoi_save_button]),
+                aoi_save_output,
                 widgets.HTML("<h3>2) Select season</h3>"),
                 season_message,
                 season_info,
@@ -3319,29 +3344,10 @@ class WorldCerealTrainingApp:
             ]
         )
 
-    def _on_tab8_save_bbox(self, _=None) -> None:
-        """Save the current AOI to ./bbox as a GeoPackage."""
-        output = self.tab8_widgets.get("bbox_output")
-        name_input = self.tab8_widgets.get("bbox_name_input")
+    def _on_tab8_save_aoi_click(self, _=None) -> None:
         aoi_map = self.tab8_widgets.get("aoi_map")
-        if output is None or name_input is None or aoi_map is None:
-            return
-
-        with output:
-            output.clear_output()
-            name = name_input.value.strip()
-            if not name:
-                if aoi_map.mode == "single":
-                    name = None
-                else:
-                    print("Provide a name for your bounding box.")
-                    return
-            bbox_dir = Path("./bbox")
-            try:
-                outfile = aoi_map.save_gdf(bbox_dir, name=name)
-                print(f"AOI saved to: {outfile}")
-            except Exception as exc:
-                print(f"Failed to save AOI: {exc}")
+        output = self.tab8_widgets.get("aoi_save_output")
+        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
