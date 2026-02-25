@@ -833,6 +833,7 @@ def retrieve_extractions_extent(
 
     # Visualization of the map with hover functionality using ipyleaflet
     extent_gdf = gdf.to_crs(epsg=4326)
+    extent_gdf = extent_gdf.loc[extent_gdf.geometry.notna()].copy()
     info = widgets.HTML(value="<b>ref_id:</b> hover over a dataset")
     info_control = WidgetControl(widget=info, position="topright")
 
@@ -842,6 +843,13 @@ def retrieve_extractions_extent(
         zoom=1,
         scroll_wheel_zoom=True,
     )
+
+    if extent_gdf.empty or any(pd.isna(value) for value in extent_gdf.total_bounds):
+        logger.warning(
+            "Public extractions extent is empty or invalid; skipping layer rendering."
+        )
+        extent_map.add_control(info_control)
+        return extent_gdf, extent_map
 
     geojson = GeoJSON(
         data=extent_gdf.__geo_interface__,
