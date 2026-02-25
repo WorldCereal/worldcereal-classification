@@ -21,6 +21,7 @@ import platform
 import threading
 from datetime import datetime
 from pathlib import Path
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -2940,10 +2941,10 @@ class WorldCerealTrainingApp:
                 load_output,
                 widgets.HTML("<h3>Model to be deployed:</h3>"),
                 model_path_output,
-                # widgets.HTML("<h3>CDSE authentication</h3>"),
-                # auth_info,
-                # widgets.HBox([authenticate_button, reset_auth_button]),
-                # auth_output,
+                widgets.HTML("<h3>CDSE authentication</h3>"),
+                auth_info,
+                widgets.HBox([authenticate_button, reset_auth_button]),
+                auth_output,
                 widgets.HTML("<h3>Deployment</h3>"),
                 widgets.HBox(
                     [deploy_button],
@@ -4028,38 +4029,22 @@ class WorldCerealTrainingApp:
             load_button.layout.display = "block"
             load_output.layout.display = "block"
 
-        has_connection = self.cdse_connection is not None
-        needs_auth = self._needs_cdse_authentication() and not has_connection
+        needs_auth = self._needs_cdse_authentication()
         if not self.cdse_auth_failed and not self.cdse_auth_in_progress:
             with auth_output:
                 auth_output.clear_output()
-                if has_connection:
-                    print("CDSE authentication ready. You can deploy your model.")
-                elif needs_auth:
-                    print(
-                        "No CDSE refresh token found. Use the Authenticate button to sign in."
-                    )
+                if needs_auth:
+                    print("No CDSE refresh token found. Click Authenticate to sign in.")
                 else:
                     print(
-                        "CDSE refresh token found on this machine. Click the reset button if you want to login with another account."
+                        "CDSE refresh token found. Click Reset authentication to switch accounts."
                     )
-        if needs_auth:
-            self.cdse_connection = None
-        elif self.cdse_connection is None:
-            try:
-                self.cdse_connection = cdse_connection()
-            except Exception as exc:
-                self.cdse_connection = None
-                with auth_output:
-                    print(
-                        "Failed to initialize CDSE connection.\n"
-                        f"Error: {exc}\n\n"
-                        "Use the Authenticate button to sign in."
-                    )
+
         if reset_auth_button is not None:
-            reset_auth_button.layout.display = "none" if needs_auth else "block"
+            reset_auth_button.layout.display = "block" if not needs_auth else "none"
         if authenticate_button is not None:
-            authenticate_button.disabled = has_connection or self.cdse_auth_in_progress
+            authenticate_button.layout.display = "block" if needs_auth else "none"
+            authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
     def _update_tab8_state(self):
@@ -4169,46 +4154,48 @@ class WorldCerealTrainingApp:
                 self.cdse_auth_in_progress = False
                 self.cdse_connection = None
                 print(
-                    "CDSE authentication cache cleared. Use Authenticate to sign in again."
+                    "✅ CDSE authentication cache cleared. Use Authenticate to sign in again."
                 )
+                print("Please click the 'Authenticate' button to log in again.")
             except Exception as exc:
-                print(f"Failed to clear CDSE authentication cache: {exc}")
+                print(f"❌ Failed to clear CDSE authentication cache: {exc}")
 
         self._update_tab7_state()
 
     def _on_authenticate_cdse_click(self, _=None) -> None:
         output = self.tab7_widgets.get("auth_output")
-        authenticate_button = self.tab7_widgets.get("authenticate_button")
-        reset_auth_button = self.tab7_widgets.get("reset_auth_button")
+
         if output is None:
             return
         if self.cdse_auth_in_progress:
             return
         self.cdse_auth_in_progress = True
         output.clear_output()
+
+        connection = trigger_cdse_authentication(output)
+
+        output.clear_output()
         with output:
-            print("🔐 Authenticating with CDSE...")
+            if connection is not None:
+                print("✅ CDSE authentication successful!")
+                token_path = Path.home() / (
+                    "AppData/Roaming/openeo-python-client/refresh-tokens.json"
+                    if "windows" in platform.system().lower()
+                    else ".local/share/openeo-python-client/refresh-tokens.json"
+                )
+                for _ in range(10):
+                    if token_path.exists():
+                        break
+                    time.sleep(0.5)
 
-        def _run_auth() -> None:
-            connection = trigger_cdse_authentication(output)
-            self.cdse_connection = connection
-            self.cdse_auth_in_progress = False
-            if connection is None:
-                self.cdse_auth_failed = True
-                with output:
-                    print("❌ Authentication failed. Please try again.")
-            else:
+                self.cdse_auth_in_progress = False
                 self.cdse_auth_cleared = False
-                self.cdse_auth_failed = False
-                with output:
-                    print("CDSE authentication ready. You can deploy your model.")
-                if authenticate_button is not None:
-                    authenticate_button.disabled = True
-                if reset_auth_button is not None:
-                    reset_auth_button.layout.display = "block"
-            self._update_tab7_state()
+                self.cdse_connection = connection
+            else:
+                print("❌ CDSE authentication failed or was cancelled.")
+                print("Please try authenticating again.")
 
-        threading.Thread(target=_run_auth, daemon=True).start()
+        self._update_tab7_state()
 
     def _is_valid_url(self, value: str) -> bool:
         try:
