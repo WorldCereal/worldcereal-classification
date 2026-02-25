@@ -441,10 +441,10 @@ class ui_map:
         with self.output:
             if self.mode == "multi":
                 display(
-                    HTML("<i>AOI saved. You can add more polygons if you want.</i>")
+                    HTML("<i>AOI stored. You can add more polygons if you want.</i>")
                 )
             else:
-                display(HTML("<i>AOI saved.</i>"))
+                display(HTML("<i>AOI stored.</i>"))
 
     def _set_geojson_layer_from_gdf(self, gdf: gpd.GeoDataFrame) -> None:
         if gdf is None or gdf.empty:
