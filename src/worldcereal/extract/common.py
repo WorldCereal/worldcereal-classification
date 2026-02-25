@@ -469,7 +469,7 @@ def _read_job_tracking_csv(job_db: CsvJobDatabase) -> pd.DataFrame:
     Parameters
     ----------
     job_db : CsvJobDatabase
-        folder where extractions are stored
+        Job database keeping track of extraction jobs.
 
     Returns
     -------
@@ -846,7 +846,7 @@ def _prepare_extraction_jobs(
         root_dir=output_folder,
         output_path_generator=path_fn,
         post_job_action=post_job_fn,
-        poll_sleep=60,
+        poll_sleep=30,
     )
 
     job_manager.add_backend(
@@ -869,10 +869,15 @@ def _run_extraction_jobs(
     job_manager: ExtractionJobManager,
     job_db: CsvJobDatabase,
     datacube_fn: Callable,
+    status_callback: Optional[Callable[[pd.DataFrame], None]] = None,
 ) -> None:
     # Run the extraction jobs
     pipeline_log.info("Running the extraction jobs.")
-    job_manager.run_jobs(start_job=datacube_fn, job_db=job_db)
+    job_manager.run_jobs(
+        start_job=datacube_fn,
+        job_db=job_db,
+        status_callback=status_callback,
+    )
     pipeline_log.info("Extraction jobs completed.")
 
 
@@ -910,6 +915,7 @@ def run_extractions(
     backend=Backend.CDSE,
     write_stac_api: bool = False,
     check_existing_extractions: bool = False,
+    status_callback: Optional[Callable[[pd.DataFrame], None]] = None,
 ) -> CsvJobDatabase:
     """Main function responsible for launching point and patch extractions.
 
@@ -973,7 +979,12 @@ def run_extractions(
     )
 
     # Run the extraction jobs
-    _run_extraction_jobs(job_manager, job_db, datacube_fn)
+    _run_extraction_jobs(
+        job_manager,
+        job_db,
+        datacube_fn,
+        status_callback=status_callback,
+    )
 
     # Merge the extraction jobs (for point extractions)
     if collection == ExtractionCollection.POINT_WORLDCEREAL:

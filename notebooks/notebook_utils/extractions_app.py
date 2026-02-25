@@ -11,11 +11,8 @@ This module provides an interactive widget-based interface for:
 import platform
 import shutil
 import tempfile
-import threading
 import time
 import traceback
-import warnings
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,18 +24,13 @@ from notebook_utils.auth_utils import trigger_cdse_authentication
 from notebook_utils.extractions import (
     get_band_statistics,
     load_point_extractions,
+    run_extractions_notebook,
     validate_required_attributes,
     visualize_timeseries,
 )
-from openeo.extra.job_management import CsvJobDatabase
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from tabulate import tabulate
 
-from worldcereal.extract.common import (
-    check_job_status,
-    get_succeeded_job_details,
-    run_extractions,
-)
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.stac.constants import ExtractionCollection
@@ -1307,16 +1299,16 @@ class WorldCerealExtractionsApp:
         )
 
         # CDSE authentication section
-        # auth_header = widgets.HTML("<h4>CDSE Authentication</h4>")
+        auth_header = widgets.HTML("<h4>CDSE Authentication</h4>")
         auth_status = widgets.HTML(
             value="<i>Checking CDSE authentication status...</i>"
         )
-        # authentication_explanation = self._info_callout(
-        #     "To run extractions, you need to authenticate with a valid <a href='https://dataspace.copernicus.eu/' target='_blank' rel='noopener'>CDSE</a> account.<br>"
-        #     "Your account credentials are automatically stored on your computer in a secure manner and used for extraction requests.<br>"
-        #     "For your first time authentication, click the 'Authenticate' button below.<br>"
-        #     "If you wish to switch accounts, use the 'Reset CDSE Authentication' button."
-        # )
+        authentication_explanation = self._info_callout(
+            "To run extractions, you need to authenticate with a valid <a href='https://dataspace.copernicus.eu/' target='_blank' rel='noopener'>CDSE</a> account.<br>"
+            "Your account credentials are automatically stored on your computer in a secure manner and used for extraction requests.<br>"
+            "For your first time authentication, click the 'Authenticate' button below.<br>"
+            "If you wish to switch accounts, use the 'Reset CDSE Authentication' button."
+        )
 
         authenticate_button = widgets.Button(
             description="Authenticate",
@@ -1368,11 +1360,11 @@ class WorldCerealExtractionsApp:
             "Samples to be extracted are now automatically split into one or several OpenEO extraction jobs.<br>"
             "The OpenEO job manager automatically handles the execution of these jobs on the CDSE platform.<br><br>"
             "<b>Want to stop extractions?</b><br>"
-            "Kill this app by restarting the kernel.<br>"
-            "Important: visit the <a href='https://openeo.dataspace.copernicus.eu/' target='_blank' rel='noopener'>OpenEO web editor</a> to check for any running jobs and stop them if needed to avoid unnecessary credit consumption.<br>"
+            "Use the notebook stop (square) button to interrupt execution or restart your kernel.<br>"
+            "! Important: visit the <a href='https://openeo.dataspace.copernicus.eu/' target='_blank' rel='noopener'>OpenEO web editor</a> to check for any running jobs and stop them if needed to avoid unnecessary credit consumption.<br>"
             "Make sure to enable the 'Restart Failed Jobs' option if you want to continue with existing extractions later on.<br><br>"
             "Execution of an OpenEO job will consume credits from your CDSE account.<br>"
-            "Average credit consumption of one job amounts to 30 credits, but can vary up to 300 credits depending on local data density.<br><br"
+            "Average credit consumption of one job amounts to 30 credits, but can vary up to 300 credits depending on local data density.<br><br>"
             "<b>Extractions done?</b><br>"
             "Upon finalization of all extraction jobs, the extracted data will be saved automatically to your output directory.<br>"
             "The output directory is called <code>extractions_output</code> and is created in the same folder where this notebook is located.<br>"
@@ -1437,16 +1429,16 @@ class WorldCerealExtractionsApp:
                 general_info,
                 status_message,
                 warning_output,
-                # auth_header,
-                # authentication_explanation,
-                # auth_status,
-                # widgets.HBox(
-                #     [authenticate_button, reset_auth_button],
-                #     layout=widgets.Layout(
-                #         justify_content="flex-start", margin="10px 0"
-                #     ),
-                # ),
-                # auth_output,
+                auth_header,
+                authentication_explanation,
+                auth_status,
+                widgets.HBox(
+                    [authenticate_button, reset_auth_button],
+                    layout=widgets.Layout(
+                        justify_content="flex-start", margin="10px 0"
+                    ),
+                ),
+                auth_output,
                 settings_header,
                 restart_failed_explanation,
                 restart_failed_checkbox,
@@ -1595,10 +1587,8 @@ class WorldCerealExtractionsApp:
                     return
 
                 # Setup output folder
-                print(f"\n📁 Output folder: {output_folder}")
                 outfolder_col = output_folder / self.collection_id
                 outfolder_col.mkdir(parents=True, exist_ok=True)
-                print(f"✓ Collection folder: {outfolder_col}")
 
                 # Save samples dataframe to file
                 print("\n💾 Saving samples to file...")
@@ -1642,95 +1632,21 @@ class WorldCerealExtractionsApp:
                 # Display extraction info
                 n_samples = len(samples_df)
                 print(f"\n📊 Total samples to extract: {n_samples:,}")
-                print(f"   Collection ID: {self.collection_id}")
-                print(f"   Restart failed jobs: {restart_failed}")
                 if self.append_existing:
                     print("   Append mode: enabled (existing samples skipped)")
 
                 # Run extractions
-                print("\n" + "=" * 60)
-                print("🚀 STARTING EXTRACTIONS")
-                print("=" * 60)
-                print("\nNote: This may take a while depending on dataset size.")
-                print("You can monitor progress below...\n")
-                print(
-                    "Visit the OpenEO web editor for a more detailed view on your processing jobs:"
+                _ = run_extractions_notebook(
+                    output_folder=outfolder_col,
+                    samples_df_path=samples_df_path,
+                    ref_id=self.collection_id,
+                    collection=ExtractionCollection.POINT_WORLDCEREAL,
+                    extract_value=1,
+                    restart_failed=restart_failed,
+                    status_out=status_output,
+                    log_out=progress_output,
+                    display_outputs=True,
                 )
-                print("https://openeo.dataspace.copernicus.eu/")
-
-                # Start status summary thread to show job tracking overview
-                status_active = {"running": True}
-                status_interval = 30  # seconds
-
-                def render_status_summary():
-                    """Render a summary of job statuses to the dedicated output widget."""
-                    tracking_path = outfolder_col / "job_tracking.csv"
-                    job_db = CsvJobDatabase(tracking_path)
-
-                    with status_output:
-                        clear_output(wait=True)
-                        print("🧭 Extraction status summary")
-                        print(
-                            f"Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
-
-                        if not tracking_path.exists():
-                            print("Waiting for job tracking file to be created...")
-                            return
-
-                        try:
-                            with warnings.catch_warnings():
-                                warnings.filterwarnings(
-                                    "ignore",
-                                    category=FutureWarning,
-                                    message=".*WKTReadingError is deprecated.*",
-                                )
-                                check_job_status(job_db)
-                        except Exception as exc:
-                            print(f"⚠️  Could not read job status: {exc}")
-
-                def status_updater():
-                    """Periodically update extraction status summary."""
-                    while status_active["running"]:
-                        render_status_summary()
-                        time.sleep(status_interval)
-
-                status_thread = threading.Thread(target=status_updater, daemon=True)
-                status_thread.start()
-
-                try:
-                    # Run the extraction workflow
-                    job_db = run_extractions(
-                        ExtractionCollection.POINT_WORLDCEREAL,
-                        outfolder_col,
-                        samples_df_path,
-                        self.collection_id,
-                        extract_value=1,  # Fixed value - only extract samples with extract=1
-                        restart_failed=restart_failed,
-                    )
-                except KeyboardInterrupt:
-                    print("\n🛑 Extractions interrupted by user")
-                finally:
-                    # Stop status update thread
-                    status_active["running"] = False
-                    status_thread.join(timeout=1)
-                    render_status_summary()
-
-                print("\n" + "=" * 60)
-                print("✅ EXTRACTIONS COMPLETED")
-                print("=" * 60)
-
-                # Reset append mode state so existing extractions are re-evaluated
-                self.append_existing = False
-                self.append_samples_df = None
-
-                # Check job status
-                print("\n📈 Checking job status...")
-                check_job_status(job_db)
-
-                # Get details of succeeded jobs
-                get_succeeded_job_details(job_db)
-
                 print("\n✅ You can now proceed to Tab 4 to visualize results.")
 
             except Exception as e:
@@ -1750,15 +1666,10 @@ class WorldCerealExtractionsApp:
                 self.cdse_auth_cleared = True
                 self.cdse_auth_in_progress = False
                 print("✅ CDSE authentication token has been cleared.")
-                print(
-                    "Click the link below to authenticate with your CDSE credentials ⬇️"
-                )
+                print("Please click the 'Authenticate' button to log in again.")
             except Exception as e:
-                print(f"❌ Error clearing authentication token: {e}")
-                return
-            trigger_cdse_authentication(auth_output)
-
-        self.cdse_auth_cleared = False
+                print(f"❌ Error clearing CDSE authentication: {str(e)}")
+                traceback.print_exc()
         self._update_cdse_auth_ui()
 
     def _on_authenticate_cdse_click(self, button):
@@ -1768,17 +1679,30 @@ class WorldCerealExtractionsApp:
             return
         self.cdse_auth_in_progress = True
         auth_output.clear_output()
+
+        connection = trigger_cdse_authentication(auth_output)
+
+        if connection is not None:
+            token_path = Path.home() / (
+                "AppData/Roaming/openeo-python-client/refresh-tokens.json"
+                if "windows" in platform.system().lower()
+                else ".local/share/openeo-python-client/refresh-tokens.json"
+            )
+            for _ in range(10):
+                if token_path.exists():
+                    break
+                time.sleep(0.5)
+
+        self.cdse_auth_in_progress = False
+        self.cdse_auth_cleared = False
+        auth_output.clear_output()
         with auth_output:
-            print("🔐 Authenticating with CDSE...")
-            print("Click the link below to authenticate with your CDSE credentials ⬇️")
-
-        def _run_auth() -> None:
-            trigger_cdse_authentication(auth_output)
-            self.cdse_auth_in_progress = False
-            self.cdse_auth_cleared = False
-            self._update_cdse_auth_ui()
-
-        threading.Thread(target=_run_auth, daemon=True).start()
+            if connection is not None:
+                print("✅ CDSE authentication successful!")
+            else:
+                print("❌ CDSE authentication failed or was cancelled.")
+                print("Please try authenticating again.")
+        self._update_cdse_auth_ui()
 
     def _needs_cdse_authentication(self) -> bool:
         if self.cdse_auth_cleared:
