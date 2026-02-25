@@ -622,7 +622,11 @@ def run_pipeline(
     # 6. Merge small slices
     # ------------------------------------------------------------------
     if merge_small_slice:
-        print(f"[anomaly] Merging small slices (min_size={min_slice_size})...")
+        _n_slices_before_merge = df.groupby(slice_keys).ngroups
+        print(
+            f"[anomaly] Merging small slices (min_size={min_slice_size})... "
+            f"[{_n_slices_before_merge:,} slices before merge]"
+        )
         df = merge_small_slices(
             df,
             min_size=min_slice_size,
@@ -630,6 +634,8 @@ def run_pipeline(
             h3_level_name=h3_level_name,
             group_cols=group_cols,
         )
+        _n_slices_after_merge = df.groupby(slice_keys).ngroups
+        print(f"[anomaly] After merge: {_n_slices_after_merge:,} slices")
     else:
         print("[anomaly] Skipping merge_small_slices for coarse H3 level")
 
@@ -726,9 +732,14 @@ def run_pipeline(
         from tqdm import tqdm
 
         tqdm.pandas()
+        # Add slice size information to tqdm progress bar
+        def _progress_apply_with_slice_size(group):
+            tqdm.tqdm.set_description(f"Processing slice of size {len(group)}")
+            return _score_group(group)
+
         scored_df = (
             df_with_centroid.groupby(slice_keys, group_keys=False)
-            .progress_apply(_score_group)
+            .progress_apply(_progress_apply_with_slice_size)
             .reset_index(drop=True)
         )
 
