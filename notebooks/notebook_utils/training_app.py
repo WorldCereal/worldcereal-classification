@@ -4172,28 +4172,33 @@ class WorldCerealTrainingApp:
         self.cdse_auth_in_progress = True
         output.clear_output()
 
-        connection = trigger_cdse_authentication(output)
+        connection = None
+        try:
+            connection = trigger_cdse_authentication(output)
+        finally:
+            output.clear_output()
+            with output:
+                if connection is not None:
+                    print("✅ CDSE authentication successful!")
+                    token_path = Path.home() / (
+                        "AppData/Roaming/openeo-python-client/refresh-tokens.json"
+                        if "windows" in platform.system().lower()
+                        else ".local/share/openeo-python-client/refresh-tokens.json"
+                    )
+                    for _ in range(10):
+                        if token_path.exists():
+                            break
+                        time.sleep(0.5)
 
-        output.clear_output()
-        with output:
-            if connection is not None:
-                print("✅ CDSE authentication successful!")
-                token_path = Path.home() / (
-                    "AppData/Roaming/openeo-python-client/refresh-tokens.json"
-                    if "windows" in platform.system().lower()
-                    else ".local/share/openeo-python-client/refresh-tokens.json"
-                )
-                for _ in range(10):
-                    if token_path.exists():
-                        break
-                    time.sleep(0.5)
-
-                self.cdse_auth_in_progress = False
-                self.cdse_auth_cleared = False
-                self.cdse_connection = connection
-            else:
-                print("❌ CDSE authentication failed or was cancelled.")
-                print("Please try authenticating again.")
+                    self.cdse_auth_failed = False
+                    self.cdse_auth_cleared = False
+                    self.cdse_connection = connection
+                else:
+                    print("❌ CDSE authentication failed or was cancelled.")
+                    print("Please try authenticating again.")
+                    self.cdse_auth_failed = True
+                    self.cdse_connection = None
+            self.cdse_auth_in_progress = False
 
         self._update_tab7_state()
 
