@@ -73,7 +73,7 @@ def run_map_production(
         The type of product to produce, by default WorldCerealProductType.CROPLAND
     target_epsg : Optional[int], optional
         The target EPSG code for the output, by default None.
-        If None, the output will be in the CRS as defined by the tiling grid.
+        If None, the output will be in the CRS as defined by the tiling grid (local UTM projection).
     backend_context : BackendContext, optional
         The backend context to use for the production, by default BackendContext(Backend.CDSE)
     s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
