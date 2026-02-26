@@ -150,7 +150,7 @@ def _apply_class_mapping(
     df: pd.DataFrame,
     *,
     map_to_finetune: bool,
-    mapping_file: Optional[str],
+    mapping_file: Optional[Union[str, dict]],
     label_cols: list[str],
     class_mappings_name: str,
     con: duckdb.DuckDBPyConnection,
@@ -348,7 +348,7 @@ def _write_outputs(
 
         # Cross-tabulation: long form
         cross_long = (
-            flagged_gdf.groupby([*slice_keys, S_anomaly, combined_anomaly])
+            flagged_gdf.groupby([*slice_keys, S_anomaly, combined_anomaly]), dropna=False
             .size()
             .reset_index(name="n")
         )
@@ -404,12 +404,13 @@ def run_pipeline(
     label_domain: Union[str, Sequence[str]] = "ewoc_code",
     map_to_finetune: bool = False,
     class_mappings_name: str = "LANDCOVER10",
-    mapping_file: Optional[str] = None,
+    mapping_file: Optional[Union[str, dict]] = None,
     h3_level: Union[int, Sequence[int]] = 3,
     group_cols: Optional[Sequence[str]] = None,
     min_slice_size: int = 100,
     max_slice_size: Optional[int] = None,
     merge_small_slice: bool = True,
+    max_merge_iterations=10,
     threshold_mode: str = "percentile",
     percentile_q: float = 0.96,
     mad_k: float = 3.0,
@@ -422,6 +423,7 @@ def run_pipeline(
     output_samples_path: Optional[str] = None,
     output_summary_path: Optional[str] = None,
     skip_existing_samples: bool = False,
+    skip_classes: Optional[Sequence[str]] = None,
     debug: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Run anomaly detection using only cached embeddings.
@@ -461,6 +463,12 @@ def run_pipeline(
         skips already-processed sample_id rows, computes only missing ones,
         then appends old + new and writes back.  This does **not** recompute
         outlier scores for existing sample_ids.
+    skip_classes
+        Optional list of label values (in the *label_domain* column) that
+        are excluded from all scoring, flagging, and confidence steps.
+        Their rows are held aside and re-joined to the output at the end
+        with all score / outlier columns set to NaN.  Pass e.g.
+        ``skip_classes=["built-up", "ignore"]``.
     """
     group_cols = list(group_cols or [])
     label_cols = _as_label_levels(label_domain)
@@ -479,7 +487,7 @@ def run_pipeline(
         if isinstance(label_domain, (list, tuple)):
             raise ValueError(
                 "Hierarchical label_domain requires mapping_file "
-                "(labels provided by Excel or JSON)."
+                "(labels provided by Excel or JSON, or an in-memory CLASS_MAPPINGS dict)."
             )
         if label_domain not in {"ewoc_code", "finetune_class", "balancing_class"}:
             raise ValueError("label_domain must be 'ewoc_code' or 'finetune_class'")
@@ -572,6 +580,20 @@ def run_pipeline(
     )
 
     # ------------------------------------------------------------------
+    # 4b. Split out skip_classes rows — they bypass all scoring
+    # ------------------------------------------------------------------
+    skip_classes = list(skip_classes or [])
+    df_skipped: pd.DataFrame = pd.DataFrame()
+    if skip_classes:
+        skip_mask = df[label_col].astype(str).isin([str(c) for c in skip_classes])
+        df_skipped = df[skip_mask].copy()
+        df = df[~skip_mask].copy()
+        print(
+            f"[anomaly] skip_classes {skip_classes}: held aside "
+            f"{len(df_skipped):,} rows, processing {len(df):,} rows."
+        )
+
+    # ------------------------------------------------------------------
     # 5. Prepare embedding vectors & drop NaN labels
     # ------------------------------------------------------------------
     print("[anomaly] Preparing embeddings array...")
@@ -633,6 +655,7 @@ def run_pipeline(
             label_col=label_col,
             h3_level_name=h3_level_name,
             group_cols=group_cols,
+            max_iterations=max_merge_iterations,
         )
         _n_slices_after_merge = df.groupby(slice_keys).ngroups
         print(f"[anomaly] After merge: {_n_slices_after_merge:,} slices")
@@ -729,19 +752,19 @@ def run_pipeline(
                 knn_k=10,
             )
 
-        from tqdm import tqdm
+        from tqdm import tqdm as tqdm_cls
 
-        tqdm.pandas()
-        # Add slice size information to tqdm progress bar
-        def _progress_apply_with_slice_size(group):
-            tqdm.tqdm.set_description(f"Processing slice of size {len(group)}")
-            return _score_group(group)
+        groups = list(df_with_centroid.groupby(slice_keys, group_keys=False))
+        results = []
+        with tqdm_cls(groups, desc="Scoring slices", unit="slice") as pbar:
+            for key, group in pbar:
+                # key is a tuple matching slice_keys; last element is the label
+                label_val = key[-1] if isinstance(key, tuple) else key
+                n_pts = len(group)
+                pbar.set_postfix_str(f"{n_pts:,} pts | {label_val}", refresh=False)
+                results.append(_score_group(group))
 
-        scored_df = (
-            df_with_centroid.groupby(slice_keys, group_keys=False)
-            .progress_apply(_progress_apply_with_slice_size)
-            .reset_index(drop=True)
-        )
+        scored_df = pd.concat(results, ignore_index=True)
 
     # Drop embedding columns to save memory
     scored_df = scored_df.drop(columns=embed_cols, errors="ignore")
@@ -807,6 +830,27 @@ def run_pipeline(
     # ------------------------------------------------------------------
     # 13. Final cleanup & output
     # ------------------------------------------------------------------
+    # Re-attach skipped-class rows with NaN for all score/outlier columns
+    if not df_skipped.empty:
+        # Drop raw embedding columns from skipped rows (not needed in output)
+        df_skipped = df_skipped.drop(columns=embed_cols, errors="ignore")
+        df_skipped = df_skipped.drop(columns=["embedding", "base_embedding"], errors="ignore")
+        score_outlier_cols = [
+            *_SCORE_COLS,
+            "flagged", "flag_threshold", "slice_n", "undersized_slice",
+            "ref_outlier_class", "ref_outlier_level", "ref_group_n",
+            "self_centroid_dist_ctx", "alt_centroid_dist_ctx",
+            "knn_same_label_frac_ctx", "knn_majority_frac_ctx",
+            "p_margin", "p_purity",
+            "confidence", "confidence_alt",
+            "S_anomaly", "combined_anomaly",
+        ]
+        for col in score_outlier_cols:
+            if col not in df_skipped.columns:
+                df_skipped[col] = np.nan
+        flagged_df = pd.concat([flagged_df, df_skipped], axis=0, ignore_index=True)
+        print(f"[anomaly] Re-attached {len(df_skipped):,} skipped-class rows with NaN scores.")
+
     # Convert float64 → float32 to reduce output size
     for c in flagged_df.select_dtypes(include=["float64"]).columns:
         flagged_df[c] = flagged_df[c].astype(np.float32)
@@ -845,7 +889,7 @@ def run_pipeline(
     # Incremental merge (if resuming from existing output)
     if skip_existing_samples and existing_df_full is not None:
         flagged_gdf = _merge_with_existing(flagged_gdf, existing_df_full)
-
+    flagged_gdf.rename(columns={'confidence': 'confidence_nonoutlier', 'combined_anomaly' : 'anomaly_flag'}, inplace=True)
     # Write to disk
     _write_outputs(
         flagged_gdf, summary_df, slice_keys,
@@ -853,13 +897,13 @@ def run_pipeline(
     )
 
     con.close()
-    return flagged_df, summary_df
+    return flagged_gdf, summary_df
 
 
 # ===================================================================
 # CLI
 # ===================================================================
-
+# class_mappings_name answers "how to map", while label_domain answers "what to slice on after mapping"
 
 if __name__ == "__main__":
     out_folder = Path(
