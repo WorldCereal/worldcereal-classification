@@ -140,17 +140,17 @@ from worldcereal.utils import parse_job_options_from_args
 
 
 def main(
-    output_folder: Path,
     aoi_gdf: gpd.GeoDataFrame,
+    output_folder: Path,
     grid_size: Optional[int] = None,
     temporal_extent: Optional[TemporalContext] = None,
     year: Optional[int] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
-    restart_failed: bool = False,
     randomize_jobs: bool = False,
+    restart_failed: bool = False,
     job_options: Optional[Dict[str, Union[str, int, None]]] = None,
-    compositing_window: Literal["month", "dekad"] = "month",
     poll_sleep: int = 60,
     simplify_logging: bool = False,
     max_retries: int = DEFAULT_MAX_RETRIES,
@@ -161,28 +161,28 @@ def main(
 
     Parameters
     ----------
-    output_folder : Path
-        The folder where to store the extracted data.
     aoi_gdf : gpd.GeoDataFrame
         Areas of interest to process.
+    output_folder : Path
+        The folder where to store the extracted data.
     grid_size : Optional[int]
         Tile size in kilometers for splitting AOIs.
     temporal_extent : TemporalContext
         Temporal extent to use when creating the job database.
     year : Optional[int]
         Year used for crop calendar inference when temporal_extent is missing.
+    compositing_window : Literal['month', 'dekad'], optional
+        The compositing window to use for the inputs, by default "month".
     s1_orbit_state : Literal['ASCENDING', 'DESCENDING'], optional
         If specified, only Sentinel-1 data from the given orbit state will be used.
     parallel_jobs : int, optional
         The maximum number of parallel jobs to run at the same time, by default 10.
-    restart_failed : bool, optional
-        Restart the jobs that previously failed, by default False.
     randomize_jobs : bool, optional
         Randomize the order of jobs before submitting them, by default False.
+    restart_failed : bool, optional
+        Restart the jobs that previously failed, by default False.
     job_options : dict, optional
         A dictionary of job options to customize the jobs.
-    compositing_window : Literal['month', 'dekad'], optional
-        The compositing window to use for the inputs, by default "month".
     poll_sleep : int, optional
         Seconds to wait between job status updates, by default 60.
     simplify_logging : bool, optional

@@ -29,14 +29,14 @@ from .job_manager import (
 def collect_worldcereal_embeddings(
     aoi_gdf: gpd.GeoDataFrame,
     output_folder: Path,
+    grid_size: int = 20,
     temporal_extent: Optional[TemporalContext] = None,
     year: Optional[int] = None,
     embeddings_parameters: Optional[EmbeddingsParameters] = None,
     scale_uint16: bool = True,
-    grid_size: int = 20,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     parallel_jobs: int = 2,
     randomize_jobs: bool = False,
-    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     restart_failed: bool = True,
     job_options: Optional[Dict[str, Union[str, int, None]]] = None,
     plot_out: Optional[Output] = None,
@@ -53,6 +53,8 @@ def collect_worldcereal_embeddings(
         GeoDataFrame containing the AOI geometries for which to collect embeddings.
     output_folder : Path
         Path to the folder where the collected embeddings will be stored.
+    grid_size : int, optional
+        Grid size in kilometers for tiling the AOI during job processing. Default is 20 km
     temporal_extent : Optional[TemporalContext], optional
         Temporal context defining the time range for which to collect embeddings.
         If provided together with `year`, temporal_extent will take precedence and override the year.
@@ -66,15 +68,13 @@ def collect_worldcereal_embeddings(
         Whether to apply the empirically determined scaling for Presto-based WorldCereal embeddings
         when reading the results. Reduces memory usage while still allowing to recover the original float values.
         Default is True.
-    grid_size : int, optional
-        Grid size in kilometers for tiling the AOI during job processing. Default is 20 km.
+    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
+        If specified, only collect embeddings for Sentinel-1 data from the given orbit state.
+        If not specified, the best orbit state will be automatically selected for each tile.
     parallel_jobs : int, optional
         Number of parallel jobs to run. Default is 2.
     randomize_jobs : bool, optional
         Whether to randomize the order of job submissions. Default is False.
-    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
-        If specified, only collect embeddings for Sentinel-1 data from the given orbit state.
-        If not specified, the best orbit state will be automatically selected for each tile.
     restart_failed : bool, optional
         Whether to automatically restart failed jobs. Default is True.
     job_options : Optional[Dict[str, Union[str, int, None]]], optional
