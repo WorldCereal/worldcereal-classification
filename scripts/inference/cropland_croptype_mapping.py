@@ -1,9 +1,10 @@
 """Cropland mapping inference script using the unified job manager.
 
 Usage example:
-    python scripts/inference/cropland_mapping.py \
-        3 50 4 51 2024-01-01 2024-12-31 cropland ./outputs/maps \
-        --tile-resolution 20 \
+    python scripts/inference/cropland_croptype_mapping.py \
+        --grid_path ./bbox/test.gpkg \
+        --grid_size 20 \
+        2024-01-01 2024-12-31 cropland ./outputs/maps \
         --season-specifications-json '{"s1": ["2024-03-01", "2024-08-31"], "s2": {"start_date": "2024-09-01", "end_date": "2025-02-28"}}' \
         --parallel-jobs 4
 """
@@ -18,7 +19,6 @@ import geopandas as gpd
 from loguru import logger
 from openeo_gfmap import TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
-from shapely.geometry import box
 
 from worldcereal.job import WorldCerealTask
 from worldcereal.jobmanager import (
@@ -88,10 +88,10 @@ def _parse_season_specifications(
 
 def main(
     aoi_gdf: gpd.GeoDataFrame,
-    temporal_extent: TemporalContext,
-    output_dir: Path,
+    output_folder: Path,
     product: WorldCerealProductType,
     grid_size: int = 20,
+    temporal_extent: Optional[TemporalContext] = None,
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
     s1_orbit_state: Optional[str] = None,
@@ -100,6 +100,7 @@ def main(
     parallel_jobs: int = 2,
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
+    restart_failed: bool = False,
     randomize_jobs: bool = False,
     job_options: Optional[dict] = None,
     poll_sleep: int = 60,
@@ -122,10 +123,10 @@ def main(
         temporal_extent_str = "None"
 
     params = {
-        "output_dir": str(output_dir),
-        "product": product,
         "number of AOI features": len(aoi_gdf),
         "grid_size": grid_size,
+        "output_folder": str(output_folder),
+        "product": product,
         "temporal_extent": temporal_extent_str,
         "year": year,
         "season_specifications": season_specifications,
@@ -135,6 +136,7 @@ def main(
         "target_epsg": target_epsg,
         "s1_orbit_state": s1_orbit_state,
         "parallel_jobs": parallel_jobs,
+        "restart_failed": restart_failed,
         "randomize_jobs": randomize_jobs,
         "job_options": job_options,
         "poll_sleep": poll_sleep,
@@ -149,7 +151,7 @@ def main(
 
     logger.info("Initializing job manager...")
     manager = WorldCerealJobManager(
-        output_dir=output_dir,
+        output_dir=output_folder,
         task=WorldCerealTask.INFERENCE,
         backend_context=backend_context,
         aoi_gdf=aoi_gdf,
@@ -185,6 +187,7 @@ def main(
             parallel_jobs=parallel_jobs,
             seasonal_preset=seasonal_preset,
             workflow_config=workflow_config,
+            restart_failed=restart_failed,
             job_options=job_options,
             randomize_jobs=randomize_jobs,
             status_callback=status_callback,
@@ -199,7 +202,7 @@ def main(
         raise
 
     logger.success("All done!")
-    logger.info(f"Results stored in {output_dir}")
+    logger.info(f"Results stored in {output_folder}")
 
 
 if __name__ == "__main__":
@@ -208,14 +211,34 @@ if __name__ == "__main__":
         description="Crop mapping inference using the WorldCereal job manager",
     )
 
-    parser.add_argument("minx", type=float, help="Minimum X coordinate (west)")
-    parser.add_argument("miny", type=float, help="Minimum Y coordinate (south)")
-    parser.add_argument("maxx", type=float, help="Maximum X coordinate (east)")
-    parser.add_argument("maxy", type=float, help="Maximum Y coordinate (north)")
     parser.add_argument(
-        "start_date", type=str, help="Starting date for data extraction."
+        "--grid_path",
+        type=Path,
+        required=True,
+        help="Path to the grid file (.parquet, .geoparquet, .gpkg, .shp) defining the locations to extract.",
     )
-    parser.add_argument("end_date", type=str, help="Ending date for data extraction.")
+    parser.add_argument(
+        "--grid_size",
+        type=int,
+        default=None,
+        help="Tile size in kilometers for splitting AOIs. If not specified, the original AOI geometries will be used.",
+    )
+    parser.add_argument(
+        "start_date",
+        type=str,
+        help="Starting date for processing in 'YYYY-MM-DD' format.",
+    )
+    parser.add_argument(
+        "end_date",
+        type=str,
+        help="Ending date for processing in 'YYYY-MM-DD' format.",
+    )
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Year used for crop calendar inference when dates are missing.",
+    )
     parser.add_argument(
         "product",
         type=str,
@@ -223,44 +246,14 @@ if __name__ == "__main__":
         help="Product to generate.",
     )
     parser.add_argument(
-        "output_path",
+        "output_folder",
         type=Path,
-        help="Path to folder where to save the resulting GeoTiff.",
-    )
-    parser.add_argument(
-        "--epsg",
-        type=int,
-        default=4326,
-        help="EPSG code of the input coordinates.",
+        help="Path to folder where to save the resulting products.",
     )
     parser.add_argument(
         "--class-probabilities",
         action="store_true",
         help="Output per-class probabilities in the resulting product",
-    )
-    parser.add_argument(
-        "--tile-resolution",
-        type=int,
-        default=20,
-        help="Tile resolution in kilometers for grid generation.",
-    )
-    parser.add_argument(
-        "--parallel-jobs",
-        type=int,
-        default=2,
-        help="The maximum number of parallel jobs to run at the same time.",
-    )
-    parser.add_argument(
-        "--randomize-jobs",
-        action="store_true",
-        help="Randomize the order of jobs before submitting them.",
-    )
-    parser.add_argument(
-        "--s1_orbit_state",
-        type=str,
-        choices=["ASCENDING", "DESCENDING"],
-        default=None,
-        help="Specify the S1 orbit state to use for the jobs.",
     )
     parser.add_argument(
         "--seasonal-preset",
@@ -289,10 +282,27 @@ if __name__ == "__main__":
         help="EPSG code for output reprojection.",
     )
     parser.add_argument(
-        "--year",
-        type=int,
+        "--s1_orbit_state",
+        type=str,
+        choices=["ASCENDING", "DESCENDING"],
         default=None,
-        help="Year used for crop calendar inference when dates are missing.",
+        help="Specify the S1 orbit state to use for the jobs.",
+    )
+    parser.add_argument(
+        "--parallel-jobs",
+        type=int,
+        default=2,
+        help="The maximum number of parallel jobs to run at the same time.",
+    )
+    parser.add_argument(
+        "--restart_failed",
+        action="store_true",
+        help="Restart the jobs that previously failed.",
+    )
+    parser.add_argument(
+        "--randomize-jobs",
+        action="store_true",
+        help="Randomize the order of jobs before submitting them.",
     )
     parser.add_argument(
         "--poll_sleep",
@@ -325,7 +335,12 @@ if __name__ == "__main__":
         default=DEFAULT_MAX_DELAY,
         help="Maximum retry delay in seconds.",
     )
-    parser.add_argument("--driver_memory", type=str, default=None, help="Driver memory")
+    parser.add_argument(
+        "--driver_memory",
+        type=str,
+        default=None,
+        help="Driver memory",
+    )
     parser.add_argument(
         "--driver_memoryOverhead",
         type=str,
@@ -359,37 +374,45 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    geom = box(args.minx, args.miny, args.maxx, args.maxy)
-    aoi_gdf = gpd.GeoDataFrame(
-        {"id": ["aoi_1"]},
-        geometry=[geom],
-        crs=f"EPSG:{args.epsg}",
-    )
-    temporal_extent = TemporalContext(args.start_date, args.end_date)
+    aoi_gdf = None
+    if args.grid_path.suffix.lower() in [".parquet", ".geoparquet"]:
+        aoi_gdf = gpd.read_parquet(args.grid_path)
+    else:
+        aoi_gdf = gpd.read_file(args.grid_path)
+
+    temporal_extent = None
+    if args.start_date and args.end_date:
+        temporal_extent = TemporalContext(
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
 
     workflow_config = _build_workflow_config(args.class_probabilities)
+
     try:
         season_specifications = _parse_season_specifications(
             args.season_specifications_json, args.season_specifications_file
         )
     except ValueError as exc:
         parser.error(str(exc))
+
     job_options = parse_job_options_from_args(args)
 
     main(
         aoi_gdf=aoi_gdf,
-        temporal_extent=temporal_extent,
-        output_dir=args.output_path,
+        output_folder=args.output_folder,
         product=WorldCerealProductType(args.product),
-        grid_size=args.tile_resolution,
+        grid_size=args.grid_size,
+        temporal_extent=temporal_extent,
+        season_specifications=season_specifications,
+        year=args.year,
+        seasonal_preset=args.seasonal_preset,
+        workflow_config=workflow_config,
         backend_context=BackendContext(Backend.CDSE),
         target_epsg=args.target_epsg,
         s1_orbit_state=args.s1_orbit_state,
-        year=args.year,
-        season_specifications=season_specifications,
         parallel_jobs=args.parallel_jobs,
-        seasonal_preset=args.seasonal_preset,
-        workflow_config=workflow_config,
+        restart_failed=args.restart_failed,
         randomize_jobs=args.randomize_jobs,
         job_options=job_options,
         poll_sleep=args.poll_sleep,
