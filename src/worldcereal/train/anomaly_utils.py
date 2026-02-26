@@ -138,16 +138,21 @@ def _require_label_columns(df: pd.DataFrame, label_cols: Sequence[str]) -> None:
 
 
 def _load_mapping_df(
-    mapping_file: str,
+    mapping_file: Union[str, dict],
     *,
     label_cols: Sequence[str],
     class_mappings_name: str,
 ) -> pd.DataFrame:
-    """Load a mapping file (Excel or JSON) into a DataFrame with columns:
-    ``ewoc_code`` + *label_cols*.
+    """Load a mapping into a DataFrame with columns: ``ewoc_code`` + *label_cols*.
 
-    JSON formats supported
-    ~~~~~~~~~~~~~~~~~~~~~~
+    *mapping_file* can be:
+
+    * A **dict** (in-memory CLASS_MAPPINGS, e.g. from SharePoint) — processed
+      directly without any file I/O.
+    * A **file path string** pointing to an Excel or JSON file (legacy).
+
+    JSON / dict formats supported
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     1) ``{"LANDCOVER10": {"110...": "temporary_crops", ...}, "CROPTYPE25": {...}}``
        — uses *class_mappings_name* to select the inner mapping.
     2) ``{"110...": "label", ...}``  — single label column.
@@ -155,20 +160,29 @@ def _load_mapping_df(
     4) ``{"110...": ["lvl0", "lvl1", ...], ...}``  — hierarchical by position.
     5) ``[{"ewoc_code": "110...", "lvl0": "...", ...}, ...]``  — table.
     """
-    p = Path(mapping_file)
-    suf = p.suffix.lower()
+    # ------------------------------------------------------------------
+    # In-memory dict path (e.g. CLASS_MAPPINGS built from SharePoint)
+    # ------------------------------------------------------------------
+    if isinstance(mapping_file, dict):
+        data: Union[dict, list] = mapping_file
+    else:
+        # ------------------------------------------------------------------
+        # File path path (legacy)
+        # ------------------------------------------------------------------
+        p = Path(mapping_file)
+        suf = p.suffix.lower()
 
-    if suf in _EXCEL_SUFFIXES:
-        return pd.read_excel(mapping_file)
+        if suf in _EXCEL_SUFFIXES:
+            return pd.read_excel(mapping_file)
 
-    if suf != ".json":
-        raise ValueError(
-            f"Unsupported mapping_file type '{suf}'. "
-            f"Use an Excel file ({sorted(_EXCEL_SUFFIXES)}) or a .json file."
-        )
+        if suf != ".json":
+            raise ValueError(
+                f"Unsupported mapping_file type '{suf}'. "
+                f"Use an Excel file ({sorted(_EXCEL_SUFFIXES)}) or a .json file."
+            )
 
-    with open(mapping_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+        with open(mapping_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
     # Table-like JSON
     if isinstance(data, list):
@@ -426,12 +440,23 @@ def merge_small_slices(
     h3_level_name: str = "h3_l3_cell",
     group_cols: Optional[Sequence[str]] = None,
     max_iterations: int = 25,
-    min_improvement: float = 0.05,
     mark_undersized: bool = True,
 ) -> pd.DataFrame:
     """Merge small slices with neighbouring H3 cells until they exceed *min_size*.
 
     A "slice" is defined by: ``group_cols + [label_col] + [h3_level_name]``.
+
+    Fixes applied vs. original
+    --------------------------
+    1. ``neighbour_map`` is extended at the start of every iteration to cover
+       any new cell values introduced by previous merge steps (previously,
+       merged cells had no neighbours and silently stopped propagating).
+    2. Neighbour count lookup uses ``counts.loc[key]`` with a ``try/except``
+       instead of ``counts.get(tuple, 0)``, which is unreliable on a
+       MultiIndex Series when ``group_cols`` is non-empty.
+    3. Early-exit criterion changed from "< 5% improvement" to "zero progress"
+       (``small`` set size and total unchanged).  ``max_iterations`` is
+       the sole iteration budget.
     """
     import h3 as _h3
 
@@ -439,26 +464,36 @@ def merge_small_slices(
     group_cols = list(group_cols or [])
     key_cols = [*group_cols, label_col, h3_level_name]
 
-    # Pre-compute H3 neighbours for all cells present
-    unique_cells = df[h3_level_name].unique().tolist()
-    neighbour_map = {
-        cell: list(set(_h3.grid_disk(cell, 1)) - {cell}) for cell in unique_cells
+    # Pre-compute H3 neighbours for all cells currently present.
+    # This map is extended lazily inside the loop whenever merging introduces
+    # new cell values (cells that were neighbours, not originals).
+    neighbour_map: dict = {
+        cell: list(set(_h3.grid_disk(cell, 1)) - {cell})
+        for cell in df[h3_level_name].unique().tolist()
     }
 
-    # Iterative bulk merge
     counts = df.groupby(key_cols).size()
-    for _ in range(max_iterations):
+
+    for iteration in range(max_iterations):
         small = counts[counts < min_size]
         if small.empty:
             break
 
+        before_n_small = len(small)
         before_total_small = int(small.sum())
 
-        # Build candidate merges: each small key with its best neighbour
+        # --- Fix 1: extend neighbour_map for cells introduced by prior merges ---
+        current_cells = set(df[h3_level_name].unique().tolist())
+        new_cells = current_cells - set(neighbour_map.keys())
+        for cell in new_cells:
+            neighbour_map[cell] = list(set(_h3.grid_disk(cell, 1)) - {cell})
+
+        # Build candidate merges: each small key → best (largest) neighbour slice
         merge_rows: List[Tuple] = []
         for key, _ in small.items():
             if not isinstance(key, tuple):
                 key = (key,)
+            # key layout: (*group_vals, label_value, cell)
             group_vals = key[:-2]
             label_value = key[-2]
             cell = key[-1]
@@ -469,11 +504,16 @@ def merge_small_slices(
 
             best_target = None
             best_count = 0
-            for n in neighbours:
-                c = int(counts.get((*group_vals, label_value, n), 0))
+            for n_cell in neighbours:
+                lookup_key = (*group_vals, label_value, n_cell)
+                # --- Fix 2: safe MultiIndex lookup ---
+                try:
+                    c = int(counts.loc[lookup_key] if lookup_key in counts.index else 0)
+                except (KeyError, TypeError):
+                    c = 0
                 if c > best_count:
                     best_count = c
-                    best_target = n
+                    best_target = n_cell
 
             if best_target is not None and best_count > 0:
                 merge_rows.append((*group_vals, label_value, cell, best_target))
@@ -491,16 +531,14 @@ def merge_small_slices(
             df.loc[mask, h3_level_name] = df.loc[mask, "target_cell"].astype(str)
         df = df.drop(columns=["target_cell"], errors="ignore")
 
-        # Recompute counts and check improvement
         counts = df.groupby(key_cols).size()
         small_after = counts[counts < min_size]
+        after_n_small = len(small_after)
         after_total_small = int(small_after.sum())
-        improvement = (
-            (before_total_small - after_total_small) / before_total_small
-            if before_total_small > 0
-            else 0.0
-        )
-        if improvement < min_improvement:
+
+        # --- Fix 3: exit only on true zero-progress (not a 5% threshold) ---
+        if after_n_small == before_n_small and after_total_small == before_total_small:
+            # Fully stuck — no merge moved any points; further iterations useless
             break
 
     if mark_undersized:
