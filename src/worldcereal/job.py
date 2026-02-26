@@ -61,7 +61,7 @@ from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 
 FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip"
 PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
-WORLDCEREAL_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/worldcereal-2.5.0-py3-none-any.whl"
+WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/worldcereal/worldcereal-2.5.0-py3-none-any.whl"
 INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
@@ -1277,9 +1277,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
+            assert attr in production_gdf.columns, (
+                f"The production grid must contain a '{attr}' column."
+            )
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 
