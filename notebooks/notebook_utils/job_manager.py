@@ -156,6 +156,9 @@ def build_notebook_status_callback(
                 fig.show(renderer="notebook")
                 counts = status_df["status"].value_counts().to_string()
                 print(f"[{timestamp}] {status_title}:\n{counts}")
+                print(
+                    "Detailed job tracking through: https://openeo.dataspace.copernicus.eu/"
+                )
 
         status_callback = _status_callback
 
