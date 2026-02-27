@@ -493,11 +493,15 @@ def create_production_grid(
         raise ValueError("AOI 'id' values must be unique.")
 
     # Checking which attributes need to be preserved
-    preserve_cols = (
-        ["start_date", "end_date"]
-        if "start_date" in gdf.columns and "end_date" in gdf.columns
-        else []
-    )
+    candidates = [
+        "start_date",
+        "end_date",
+        "seasonal_model_zip",
+        "landcover_head_zip",
+        "croptype_head_zip",
+    ]
+    preserve_cols = [col for col in candidates if col in gdf.columns]
+
     # any season specifications also need to be preserved
     season_cols = [
         col

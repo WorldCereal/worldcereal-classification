@@ -252,6 +252,7 @@ def _apply_row_overrides(
     if row is None:
         return
     season_cfg = workflow_cfg.setdefault("season", {})
+    model_cfg = workflow_cfg.setdefault("model", {})
     row_ids = _deduplicate_preserve_order(_season_ids_from_row(row))
     if row_ids:
         season_cfg["season_ids"] = row_ids
@@ -260,6 +261,10 @@ def _apply_row_overrides(
         merged_windows = dict(season_cfg.get("season_windows") or {})
         merged_windows.update(row_windows)
         season_cfg["season_windows"] = merged_windows
+
+    for key in ("seasonal_model_zip", "landcover_head_zip", "croptype_head_zip"):
+        if key in row and pd.notna(row[key]):
+            model_cfg[key] = row[key]
 
 
 def _compose_workflow_sections(
