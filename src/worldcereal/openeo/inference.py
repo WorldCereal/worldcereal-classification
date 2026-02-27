@@ -1075,6 +1075,7 @@ class SeasonalInferenceEngine:
         season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
         season_masks: Optional[np.ndarray] = None,
         season_ids: Optional[Sequence[str]] = None,
+        export_embeddings: bool = False,
     ) -> xr.Dataset:
         dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
         logger.info(
@@ -1118,6 +1119,7 @@ class SeasonalInferenceEngine:
             outputs=outputs,
             season_ids=active_season_ids,
             enforce_cropland_gate=enforce_cropland_gate,
+            export_embeddings=export_embeddings,
         )
 
         return _dataset_to_multiband_array(dataset)
@@ -1271,12 +1273,13 @@ class SeasonalInferenceEngine:
 
     def _run_batches(
         self, predictors: "Predictors", season_masks: np.ndarray
-    ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor]]:
+    ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]]:
         torch = _lazy_import_torch()
         from prometheo.predictors import Predictors, to_torchtensor
 
         landcover_logits: List[TorchTensor] = []
         croptype_logits: List[TorchTensor] = []
+        global_embeddings: List[TorchTensor] = []
 
         total_samples = getattr(predictors, "B", 0)
         estimated_batches = (
@@ -1318,30 +1321,36 @@ class SeasonalInferenceEngine:
                 landcover_logits.append(output.global_logits.detach().cpu())
             if output.season_logits is not None:
                 croptype_logits.append(output.season_logits.detach().cpu())
+            global_embeddings.append(output.global_embedding.detach().cpu())
 
         logger.info(
             f"Finished running {processed_batches} predictor batches (landcover={len(landcover_logits)}, "
-            f"croptype={len(croptype_logits)})"
+            f"croptype={len(croptype_logits)}, embeddings={len(global_embeddings)})"
         )
 
         lc_pieces = [t for t in landcover_logits if t.numel() > 0]
         ct_pieces = [t for t in croptype_logits if t.numel() > 0]
+        ge_pieces = [t for t in global_embeddings if t.numel() > 0]
         lc_tensor = torch.cat(lc_pieces, dim=0) if lc_pieces else None
         ct_tensor = torch.cat(ct_pieces, dim=0) if ct_pieces else None
-        return lc_tensor, ct_tensor
+        ge_tensor = torch.cat(ge_pieces, dim=0) if ge_pieces else None
+        return lc_tensor, ct_tensor, ge_tensor
 
     def _format_outputs(
         self,
         *,
         arr: xr.DataArray,
-        outputs: Tuple[Optional[TorchTensor], Optional[TorchTensor]],
+        outputs: Tuple[
+            Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]
+        ],
         season_ids: Sequence[str],
         enforce_cropland_gate: bool,
+        export_embeddings: bool = False,
     ) -> xr.Dataset:
         torch = _lazy_import_torch()
         height = arr.sizes["y"]
         width = arr.sizes["x"]
-        landcover_logits, croptype_logits = outputs
+        landcover_logits, croptype_logits, global_embeddings = outputs
 
         band_layers: List[Tuple[str, np.ndarray]] = []
         cropland_mask_bool: Optional[np.ndarray] = None
@@ -1351,7 +1360,7 @@ class SeasonalInferenceEngine:
                 raise ValueError(
                     f"Band '{name}' has incompatible shape {values.shape}; expected {(height, width)}."
                 )
-            band_layers.append((name, values.astype(np.uint8, copy=False)))
+            band_layers.append((name, values))
 
         if landcover_logits is not None and landcover_logits.numel() > 0:
             probs = torch.softmax(landcover_logits, dim=-1)
@@ -1556,6 +1565,32 @@ class SeasonalInferenceEngine:
                 "Croptype outputs skipped because the croptype head is disabled."
             )
 
+        if (
+            global_embeddings is not None
+            and global_embeddings.numel() > 0
+            and export_embeddings
+        ):
+            logger.info("Exporting global embeddings as separate bands")
+            embedding_np = (
+                global_embeddings.detach().cpu().numpy().reshape(height, width, -1)
+            )
+            embedding_cube = np.transpose(embedding_np, (2, 0, 1))
+
+            # Perform embedding quantization
+            embedding_quantized, embedding_scale = _quantize_embedding_cube(
+                embedding_cube
+            )
+
+            num_embedding_dims = embedding_quantized.shape[0]
+            for idx in range(num_embedding_dims):
+                band_name = f"global_embedding:dim_{idx}"
+                _register_band(
+                    band_name, embedding_quantized[idx].astype(np.int8, copy=False)
+                )
+            _register_band(
+                "global_embedding:scale", embedding_scale.astype(np.float32, copy=False)
+            )
+
         ordered_vars: OrderedDict[str, xr.DataArray] = OrderedDict()
         for name, values in band_layers:
             ordered_vars[name] = xr.DataArray(
@@ -1591,6 +1626,7 @@ def run_seasonal_workflow(
     enable_cropland_head: bool = True,
     cropland_postprocess: Optional[Mapping[str, Any]] = None,
     croptype_postprocess: Optional[Mapping[str, Any]] = None,
+    export_embeddings: bool = False,
 ) -> xr.DataArray:
     """Run the full seasonal workflow and return a multi-band array."""
 
@@ -1617,6 +1653,7 @@ def run_seasonal_workflow(
         season_ids=season_ids,
         season_windows=season_windows,
         season_masks=season_masks,
+        export_embeddings=export_embeddings,
     )
     return datacube
 
@@ -1830,6 +1867,17 @@ def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
         )
 
 
+def _quantize_embedding_cube(cube: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    # Quantize embeddings to int8 with per-pixel scaling based on 99th percentile
+    emb_scale = np.repeat(
+        np.maximum(np.percentile(abs(cube), 99, axis=0) / 127.0, 1e-6)[np.newaxis, ...],
+        cube.shape[0],
+        axis=0,
+    )
+    emb_q = np.clip(np.round(cube / emb_scale), -127, 127).astype(np.int8)
+    return emb_q, emb_scale
+
+
 def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
     if not dataset.data_vars:
         raise ValueError("Seasonal workflow produced an empty dataset")
@@ -1840,14 +1888,10 @@ def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
             raise ValueError(
                 f"Band '{band_name}' must expose ('y', 'x') dimensions; got {data_array.dims}."
             )
-        layer = (
-            data_array.astype(np.uint8, copy=False)
-            .expand_dims("bands")
-            .assign_coords(bands=[band_name])
-        )
+        layer = data_array.expand_dims("bands").assign_coords(bands=[band_name])
         band_arrays.append(layer)
 
-    stacked = xr.concat(band_arrays, dim="bands").astype(np.uint8, copy=False)
+    stacked = xr.concat(band_arrays, dim="bands")
     return stacked.transpose("bands", "y", "x")
 
 
@@ -1976,6 +2020,8 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
 
     export_probs_value = season_cfg.get("export_class_probabilities")
     export_class_probabilities = _as_bool(export_probs_value, False)
+    export_embeddings_value = model_cfg.get("export_embeddings")
+    export_embeddings = _as_bool(export_embeddings_value, False)
     enable_croptype_head_value = model_cfg.get("enable_croptype_head")
     enable_croptype_head = _as_bool(enable_croptype_head_value, True)
     enable_cropland_head_value = model_cfg.get("enable_cropland_head")
@@ -2019,6 +2065,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "seasonal_model_zip": model_source,
         "landcover_head_zip": model_cfg.get("landcover_head_zip"),
         "croptype_head_zip": model_cfg.get("croptype_head_zip"),
+        "export_embeddings": export_embeddings,
         "enforce_cropland_gate": enforce_gate,
         "cache_root": cache_root,
         "device": device,
@@ -2125,6 +2172,7 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         workflow_cfg["season"]["enforce_cropland_gate"] = _as_bool(
             context.get("enforce_cropland_gate"), True
         )
+
     if "disable_cropland_gate" in context:
         disable_flag = _as_bool(context.get("disable_cropland_gate"), False)
         if disable_flag:
@@ -2133,6 +2181,11 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     if "export_class_probabilities" in context:
         workflow_cfg["season"]["export_class_probabilities"] = context.get(
             "export_class_probabilities"
+        )
+
+    if "export_embeddings" in context:
+        workflow_cfg["model"]["export_embeddings"] = _as_bool(
+            context.get("export_embeddings"), False
         )
 
     return _finalize_workflow_config(workflow_cfg)

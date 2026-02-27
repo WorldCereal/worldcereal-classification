@@ -275,6 +275,7 @@ def main() -> None:
         enforce_cropland_gate=not args.disable_gating,
         season_windows=season_windows or None,
         season_ids=season_ids,
+        export_embeddings=True,
     )
     result = attach_crs_metadata(result, template)
 
