@@ -1575,12 +1575,21 @@ class SeasonalInferenceEngine:
                 global_embeddings.detach().cpu().numpy().reshape(height, width, -1)
             )
             embedding_cube = np.transpose(embedding_np, (2, 0, 1))
-            num_embedding_dims = embedding_cube.shape[0]
+
+            # Perform embedding quantization
+            embedding_quantized, embedding_scale = _quantize_embedding_cube(
+                embedding_cube
+            )
+
+            num_embedding_dims = embedding_quantized.shape[0]
             for idx in range(num_embedding_dims):
                 band_name = f"global_embedding:dim_{idx}"
                 _register_band(
-                    band_name, embedding_cube[idx].astype(np.float32)
-                )  # TODO: rescale??
+                    band_name, embedding_quantized[idx].astype(np.int8, copy=False)
+                )
+            _register_band(
+                "global_embedding:scale", embedding_scale.astype(np.float32, copy=False)
+            )
 
         ordered_vars: OrderedDict[str, xr.DataArray] = OrderedDict()
         for name, values in band_layers:
@@ -1856,6 +1865,17 @@ def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
         raise ValueError(
             f"{name} contains values outside the uint8 range (min={min_val}, max={max_val})."
         )
+
+
+def _quantize_embedding_cube(cube: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    # Quantize embeddings to int8 with per-pixel scaling based on 99th percentile
+    emb_scale = np.repeat(
+        np.maximum(np.percentile(abs(cube), 99, axis=0) / 127.0, 1e-6)[np.newaxis, ...],
+        cube.shape[0],
+        axis=0,
+    )
+    emb_q = np.clip(np.round(cube / emb_scale), -127, 127).astype(np.int8)
+    return emb_q, emb_scale
 
 
 def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
