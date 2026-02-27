@@ -1,89 +1,230 @@
-"""Cropland mapping inference script using the unified job manager.
+"""Run WorldCereal cropland/croptype map production using the unified job manager.
 
-Usage example:
+This script prepares and submits openEO batch jobs that run the end-to-end
+WorldCereal inference workflow for each grid tile. It creates (or reuses) a
+production grid, resolves temporal and season specifications, then submits one
+job per tile and downloads the resulting maps.
+
+WORKFLOW DEMO
+--------------
+See the notebook workflow in worldcereal-classification/notebooks/worldcereal_custom_croptype.ipynb
+for an interactive version that uses the same underlying job manager logic.
+
+PROCESSING CHAIN SUMMARY
+------------------------
+1) Read AOI grid from ``--grid_path``.
+2) Optionally tile AOIs into a production grid using ``--grid_size``.
+3) Enrich tiles with per-tile UTM geometry and EPSG codes.
+4) Resolve temporal extent and seasonal windows (see "Temporal and seasons").
+5) Initialize or resume a job database in ``output_folder``.
+6) Submit openEO jobs (one per tile), track status, and download results.
+
+REQUIRED PARAMETERS
+-------------------
+* ``--grid_path``: AOI file (.parquet, .geoparquet, .gpkg, .shp).
+* ``product``: ``cropland`` or ``croptype``.
+    -- the cropland workflow only generates a cropland product
+    -- the croptype workflow generates both cropland and croptype products.
+* ``output_folder``: output folder for the job DB and results.
+
+SPATIAL EXTENT OPTIONS
+----------------------
+* OPTION 1: Use an existing production grid.
+    - Provide a grid file with polygons and a unique ``tile_name`` column.
+    - Do not specify ``--grid_size``; polygons are used as-is.
+
+    Note that we highly recommend your individual grid tiles to be smaller
+    than 50x50 km to avoid memory issues and long runtimes.
+    In case of larger/irregular AOI's, we recommend OPTION 2.
+    
+* OPTION 2: Create a production grid from larger AOIs.
+    - Provide a geometry file with polygons and a unique "id" column as --grid_path.
+    - Set ``--grid_size`` (km) to tile each AOI into smaller patches.
+
+TEMPORAL AND SEASONS
+--------------------
+This workflow requires a temporal extent and season specifications, which can
+be resolved from multiple sources.
+
+* OPTION 1: Use tile-specific temporal and season specifications in the grid file.
+    - Include "start_date" and "end_date" columns in the grid file for per-tile temporal extents.
+    - Include season-specific start and end dates as columns in the grid file.
+        (e.g. "season_start_s1", "season_end_s1", "season_start_s2", "season_end_s2")
+        You cannot specify more than 2 seasons per tile to be processed.
+        In the case of the example above, the two seasons would be "s1" and "s2" with their respective start and end dates.
+    Both str and datetime formats are accepted for date columns.
+    
+    If these columns are present in your grid file, they will take precedence over any global temporal/season specifications.
+
+* OPTION 2: Provide explicit temporal and season specifications to be used for each tile.
+    - Provide a global temporal extent using ``--start_date`` and ``--end_date`` arguments.
+    - Provide season specifications using ``--season-specifications-json``.
+        e.g. '{"s1": ["2024-03-01", "2024-08-31"], "s2": ["2024-09-01", "2025-02-28"]}'
+
+* OPTION 3: Rely on crop calendar inference for temporal and season specifications.
+    This is the default fallback when OPTIONS 1 and 2 are not applicable.
+    We automatically infer for each tile the two dominant crop seasons from the global WorldCereal 
+    crop calendars based on the tile location and the provided ``--year``.
+    Then we derive a 12 month temporal extent per tile that covers both seasons and set it as the tile's temporal extent.
+    
+    
+OPTIONAL PARAMETERS
+-------------------
+* ``--target-epsg``: Output reprojection EPSG code (projection of the output maps).
+
+* ``--s1_orbit_state``: Force Sentinel-1 orbit state (ASCENDING/DESCENDING).
+    By default, the workflow automatically determines the most appropriate orbit state per tile
+    based on data availability.
+
+* ``--seasonal-preset``: Seasonal workflow preset name.
+    ONLY CHANGE THIS IF YOU KNOW WHAT YOU ARE DOING.
+    This determines the set of default settings for the inference workflow and should
+    be parameterized in worldcereal.openeo.parameters.py.
+
+* ``--seasonal-model-zip``: Override seasonal model artifact.
+    Should be public URL to a .zip file containing a seasonal Presto model.
+
+* ``--enable/disable-cropland-head``: Override cropland head enablement.
+    Determines whether the seasonal model's landcover head will be activated for cropland product generation.
+    By default, this follows the settings of the seasonal preset (activated by default).
+
+* ``--enable/disable-croptype-head``: Override croptype head enablement.
+    Determines whether the seasonal model's croptype head will be activated for croptype product generation.
+    By default, this follows the settings of the seasonal preset
+    --> activated for croptype product and deactivated for cropland product.
+    
+* ``--landcover-head-zip`` / ``--croptype-head-zip``: Override head artifacts.
+        Possibility to supply custom head models for the seasonal workflow. 
+        Should be public URLs to .zip files containing the respective head models.
+        
+* ``--enforce/disable-cropland-gate``: Override cropland gate for croptype.
+        Determines whether the crop type output will be masked using the cropland product.
+        If enabled, non-cropland areas will be masked out in the croptype outputs.
+        By default, this follows the settings of the seasonal preset
+        --> enabled for croptype product and disabled for cropland product.
+        
+* ``--class-probabilities``: Export per-class probabilities.
+    Whether or not to also export the per-class probabilities in addition to the class predictions.
+    This will create additional probability layers in the output products and significantly increase the output file sizes.
+
+Postprocessing options:
+    Here you have the possibility to specify post-processing settings for cropland and crop type products separately.
+    By default, post-processing is disabled for both products, but it can be enabled and configured using the following parameters:
+    
+    * ``--enable-cropland-postprocess``: Enable postprocessing for cropland products.
+    * ``--cropland-postprocess-method``: Cropland postprocess method override.
+        Supported methods are "majority_vote" and "smooth_probabilities".
+        The first applies a majority vote filter to the cropland predictions,
+        while the second smooths the probability maps, resulting in a less severe cleaning.
+    * ``--cropland-postprocess-kernel-size``: Kernel size override for cropland postprocessing methods.
+        This determines the size of the neighborhood considered for postprocessing.
+         For majority vote, this is the size of the moving window to determine the majority class.
+         Not used for smooth_probabilities, which uses a fixed smoothing kernel.
+         Default is 5, which corresponds to a 5x5 pixel neighborhood.
+         Increasing this will result in stronger smoothing/cleaning.
+    * ``--enable-croptype-postprocess``: Enable postprocessing for croptype products.
+    * ``--croptype-postprocess-method``: Croptype postprocess method override.
+        See higher for supported methods.
+    * ``--croptype-postprocess-kernel-size``: Croptype postprocess kernel size override.
+        See higher for details.
+
+* ``--parallel_jobs``: Max number of concurrent openEO jobs to submit.
+    Note that on CDSE free tier, the maximum number of concurrent batch jobs is liimited to 2.
+    
+* ``--restart_failed``: Restart jobs with ``error`` or ``start_failed`` status.
+    Only relevant if you are reusing an existing job database. By default, failed jobs are not restarted.
+    
+* ``--randomize_jobs``: Shuffle job order before submission.
+
+* ``--poll_sleep``: Seconds to wait between status updates.
+
+* ``--simplify_logging``: Use a compact CLI status callback and suppress openEO logs.
+        
+Retrying options for processing job submission and execution:
+    * ``--max_retries``: Max number of submission retries.
+    * ``--base_delay``: Initial retry delay in seconds.
+    * ``--max_delay``: Maximum retry delay in seconds.
+
+Custom OpenEO job options.
+    Only change these if you know what you are doing and need to deviate from the default CDSE batch job configuration:
+    * ``--driver_memory``: Driver memory setting passed as job option.
+    * ``--driver_memoryOverhead``: Driver memory overhead passed as job option.
+    * ``--executor_cores``: Executor cores passed as job option.
+    * ``--executor_memory``: Executor memory passed as job option.
+    * ``--executor_memoryOverhead``: Executor memory overhead passed as job option.
+    * ``--max_executors``: Max executors passed as job option.
+    * ``--image_name``: openEO image name override passed as job option.
+    * ``--organization_id``: Organization id passed as job option.
+
+USAGE EXAMPLE
+-------------
     python scripts/inference/cropland_croptype_mapping.py \
         --grid_path ./bbox/test.gpkg \
         --grid_size 20 \
-        2024-01-01 2024-12-31 cropland ./outputs/maps \
+        --output_folder ./outputs/maps \
+        --product croptype \
+        --start_date 2024-01-01 \
+        --end_date 2024-12-31 \
         --season-specifications-json '{"s1": ["2024-03-01", "2024-08-31"], "s2": {"start_date": "2024-09-01", "end_date": "2025-02-28"}}' \
-        --parallel-jobs 4
+
+See also run_cropland_croptype_mapping.sh located in the same folder for an example 
+of a bash script that runs this Python script with a specific set of parameters.
 """
 
 import argparse
 import json
-import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import geopandas as gpd
-from loguru import logger
 from openeo_gfmap import TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext
 
-from worldcereal.job import WorldCerealTask
 from worldcereal.jobmanager import (
     DEFAULT_BASE_DELAY,
     DEFAULT_MAX_DELAY,
     DEFAULT_MAX_RETRIES,
-    WorldCerealJobManager,
+    run_map_production,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
-from worldcereal.openeo.workflow_config import SeasonSection, WorldCerealWorkflowConfig
 from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils import parse_job_options_from_args
 
 
-def _build_workflow_config(
-    export_class_probabilities: bool,
-) -> Optional[WorldCerealWorkflowConfig]:
-    if not export_class_probabilities:
-        return None
-    return WorldCerealWorkflowConfig(
-        season=SeasonSection(export_class_probabilities=True)
-    )
-
-
 def _parse_season_specifications(
-    season_json: Optional[str], season_file: Optional[Path]
-) -> Optional[Dict[str, TemporalContext]]:
-    if season_json and season_file:
-        raise ValueError(
-            "Provide only one of --season-specifications-json or --season-specifications-file."
-        )
-    if not season_json and not season_file:
-        return None
-
-    if season_file:
-        season_json = season_file.read_text()
-
-    try:
-        raw = json.loads(season_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Season specifications must be valid JSON.") from exc
-
-    if not isinstance(raw, dict):
-        raise ValueError("Season specifications JSON must be an object.")
-
-    parsed: Dict[str, TemporalContext] = {}
-    for season_id, value in raw.items():
-        if isinstance(value, (list, tuple)) and len(value) == 2:
-            start_date, end_date = value
-        elif isinstance(value, dict):
-            start_date = value.get("start_date")
-            end_date = value.get("end_date")
+    specs: Dict[str, Any],
+) -> Dict[str, TemporalContext]:
+    season_specifications: Dict[str, TemporalContext] = {}
+    for season_id, window in specs.items():
+        if isinstance(window, list) and len(window) == 2:
+            start_date, end_date = window
+        elif isinstance(window, dict):
+            start_date = window.get("start_date")
+            end_date = window.get("end_date")
         else:
             raise ValueError(
-                "Season specifications values must be [start_date, end_date] or a dict with start_date/end_date."
+                "Season specifications must be [start_date, end_date] or {start_date, end_date}."
             )
         if not start_date or not end_date:
             raise ValueError(
-                f"Season '{season_id}' must include start_date and end_date."
+                "Season specifications must include both start_date and end_date."
             )
-        parsed[str(season_id)] = TemporalContext(
-            start_date=str(start_date), end_date=str(end_date)
+        season_specifications[season_id] = TemporalContext(
+            start_date=str(start_date),
+            end_date=str(end_date),
         )
+    return season_specifications
 
-    return parsed
+
+def _load_season_specifications(
+    args: argparse.Namespace,
+) -> Optional[Dict[str, TemporalContext]]:
+    if not args.season_specifications_json:
+        return None
+    raw_specs = json.loads(args.season_specifications_json)
+    if not isinstance(raw_specs, dict):
+        raise ValueError("Season specifications must be a JSON object.")
+    return _parse_season_specifications(raw_specs)
 
 
 def main(
@@ -99,7 +240,6 @@ def main(
     season_specifications: Optional[Dict[str, TemporalContext]] = None,
     parallel_jobs: int = 2,
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
-    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     restart_failed: bool = False,
     randomize_jobs: bool = False,
     job_options: Optional[dict] = None,
@@ -108,101 +248,55 @@ def main(
     max_retries: int = DEFAULT_MAX_RETRIES,
     base_delay: float = DEFAULT_BASE_DELAY,
     max_delay: float = DEFAULT_MAX_DELAY,
+    export_class_probs: Optional[bool] = None,
+    seasonal_model_zip: Optional[str] = None,
+    enable_cropland_head: Optional[bool] = None,
+    landcover_head_zip: Optional[str] = None,
+    enable_croptype_head: Optional[bool] = None,
+    croptype_head_zip: Optional[str] = None,
+    enforce_cropland_gate: Optional[bool] = None,
+    enable_cropland_postprocess: Optional[bool] = None,
+    cropland_postprocess_method: Optional[str] = None,
+    cropland_postprocess_kernel_size: Optional[int] = None,
+    enable_croptype_postprocess: Optional[bool] = None,
+    croptype_postprocess_method: Optional[str] = None,
+    croptype_postprocess_kernel_size: Optional[int] = None,
 ) -> None:
-
-    logger.info("------------------------------------")
-    logger.info("STARTING WORKFLOW: Crop mapping")
-    logger.info("------------------------------------")
-    logger.info("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "output_folder": str(output_folder),
-        "product": product,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "season_specifications": season_specifications,
-        "seasonal_preset": seasonal_preset,
-        "workflow_config": workflow_config,
-        "backend_context": backend_context.backend.value,
-        "target_epsg": target_epsg,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-    for key, value in params.items():
-        logger.info(f"{key}: {value}")
-    logger.info("----------------------------------")
-
-    logger.info("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.INFERENCE,
-        backend_context=backend_context,
+    run_map_production(
         aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
         grid_size=grid_size,
         temporal_extent=temporal_extent,
-        year=year,
         season_specifications=season_specifications,
+        year=year,
+        product_type=product,
+        seasonal_preset=seasonal_preset,
+        export_class_probs=export_class_probs,
+        seasonal_model_zip=seasonal_model_zip,
+        enable_cropland_head=enable_cropland_head,
+        landcover_head_zip=landcover_head_zip,
+        enable_croptype_head=enable_croptype_head,
+        croptype_head_zip=croptype_head_zip,
+        enforce_cropland_gate=enforce_cropland_gate,
+        enable_cropland_postprocess=enable_cropland_postprocess,
+        cropland_postprocess_method=cropland_postprocess_method,
+        cropland_postprocess_kernel_size=cropland_postprocess_kernel_size,
+        enable_croptype_postprocess=enable_croptype_postprocess,
+        croptype_postprocess_method=croptype_postprocess_method,
+        croptype_postprocess_kernel_size=croptype_postprocess_kernel_size,
+        target_epsg=target_epsg,
+        backend_context=backend_context,
+        s1_orbit_state=s1_orbit_state,
+        restart_failed=restart_failed,
+        job_options=job_options,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
         poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
     )
-    logger.info("Job manager initialized!")
-
-    status_callback = WorldCerealJobManager.cli_status_callback(
-        title="Inference job status"
-    )
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    logger.info("Starting job submissions...")
-    break_msg = (
-        "Stopping crop mapping...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    try:
-        manager.run_jobs(
-            product_type=product,
-            target_epsg=target_epsg,
-            s1_orbit_state=s1_orbit_state,
-            parallel_jobs=parallel_jobs,
-            seasonal_preset=seasonal_preset,
-            workflow_config=workflow_config,
-            restart_failed=restart_failed,
-            job_options=job_options,
-            randomize_jobs=randomize_jobs,
-            status_callback=status_callback,
-            max_retries=max_retries,
-            base_delay=base_delay,
-            max_delay=max_delay,
-        )
-    except KeyboardInterrupt:
-        logger.info(break_msg)
-        manager.stop_job_thread()
-        logger.info("Crop mapping has stopped.")
-        raise
-
-    logger.success("All done!")
-    logger.info(f"Results stored in {output_folder}")
 
 
 if __name__ == "__main__":
@@ -224,13 +318,15 @@ if __name__ == "__main__":
         help="Tile size in kilometers for splitting AOIs. If not specified, the original AOI geometries will be used.",
     )
     parser.add_argument(
-        "start_date",
+        "--start_date",
         type=str,
+        default=None,
         help="Starting date for processing in 'YYYY-MM-DD' format.",
     )
     parser.add_argument(
-        "end_date",
+        "--end_date",
         type=str,
+        default=None,
         help="Ending date for processing in 'YYYY-MM-DD' format.",
     )
     parser.add_argument(
@@ -256,6 +352,90 @@ if __name__ == "__main__":
         help="Output per-class probabilities in the resulting product",
     )
     parser.add_argument(
+        "--seasonal-model-zip",
+        type=str,
+        default=None,
+        help="Path to .zip file of a seasonal Presto model override.",
+    )
+    parser.add_argument(
+        "--enable-cropland-head",
+        action="store_true",
+        help="Force enable the cropland (landcover) head.",
+    )
+    parser.add_argument(
+        "--disable-cropland-head",
+        action="store_true",
+        help="Force disable the cropland (landcover) head.",
+    )
+    parser.add_argument(
+        "--landcover-head-zip",
+        type=str,
+        default=None,
+        help="Path to .zip file of a cropland/landcover head override.",
+    )
+    parser.add_argument(
+        "--enable-croptype-head",
+        action="store_true",
+        help="Force enable the croptype head.",
+    )
+    parser.add_argument(
+        "--disable-croptype-head",
+        action="store_true",
+        help="Force disable the croptype head.",
+    )
+    parser.add_argument(
+        "--croptype-head-zip",
+        type=str,
+        default=None,
+        help="Path to .zip file of a croptype head override.",
+    )
+    parser.add_argument(
+        "--enforce-cropland-gate",
+        action="store_true",
+        help="Force enable the cropland gate for croptype outputs.",
+    )
+    parser.add_argument(
+        "--disable-cropland-gate",
+        action="store_true",
+        help="Force disable the cropland gate for croptype outputs.",
+    )
+    parser.add_argument(
+        "--enable-cropland-postprocess",
+        action="store_true",
+        help="Enable cropland postprocessing.",
+    )
+    parser.add_argument(
+        "--cropland-postprocess-method",
+        type=str,
+        choices=["majority_vote", "smooth_probabilities"],
+        default=None,
+        help="Cropland postprocess method override.",
+    )
+    parser.add_argument(
+        "--cropland-postprocess-kernel-size",
+        type=int,
+        default=None,
+        help="Cropland postprocess kernel size override.",
+    )
+    parser.add_argument(
+        "--enable-croptype-postprocess",
+        action="store_true",
+        help="Enable croptype postprocessing.",
+    )
+    parser.add_argument(
+        "--croptype-postprocess-method",
+        type=str,
+        choices=["majority_vote", "smooth_probabilities"],
+        default=None,
+        help="Croptype postprocess method override.",
+    )
+    parser.add_argument(
+        "--croptype-postprocess-kernel-size",
+        type=int,
+        default=None,
+        help="Croptype postprocess kernel size override.",
+    )
+    parser.add_argument(
         "--seasonal-preset",
         type=str,
         default=DEFAULT_SEASONAL_WORKFLOW_PRESET,
@@ -268,12 +448,6 @@ if __name__ == "__main__":
         help=(
             "JSON string mapping season ids to [start_date, end_date] or {start_date, end_date}."
         ),
-    )
-    parser.add_argument(
-        "--season-specifications-file",
-        type=Path,
-        default=None,
-        help="Path to a JSON file with season specifications.",
     )
     parser.add_argument(
         "--target-epsg",
@@ -387,14 +561,36 @@ if __name__ == "__main__":
             end_date=args.end_date,
         )
 
-    workflow_config = _build_workflow_config(args.class_probabilities)
-
-    try:
-        season_specifications = _parse_season_specifications(
-            args.season_specifications_json, args.season_specifications_file
+    if args.enable_cropland_head and args.disable_cropland_head:
+        raise ValueError(
+            "Choose only one of --enable-cropland-head or --disable-cropland-head."
         )
-    except ValueError as exc:
-        parser.error(str(exc))
+    if args.enable_croptype_head and args.disable_croptype_head:
+        raise ValueError(
+            "Choose only one of --enable-croptype-head or --disable-croptype-head."
+        )
+    if args.enforce_cropland_gate and args.disable_cropland_gate:
+        raise ValueError(
+            "Choose only one of --enforce-cropland-gate or --disable-cropland-gate."
+        )
+
+    enable_cropland_head = (
+        True
+        if args.enable_cropland_head
+        else False if args.disable_cropland_head else None
+    )
+    enable_croptype_head = (
+        True
+        if args.enable_croptype_head
+        else False if args.disable_croptype_head else None
+    )
+    enforce_cropland_gate = (
+        True
+        if args.enforce_cropland_gate
+        else False if args.disable_cropland_gate else None
+    )
+
+    season_specifications = _load_season_specifications(args)
 
     job_options = parse_job_options_from_args(args)
 
@@ -407,7 +603,12 @@ if __name__ == "__main__":
         season_specifications=season_specifications,
         year=args.year,
         seasonal_preset=args.seasonal_preset,
-        workflow_config=workflow_config,
+        seasonal_model_zip=args.seasonal_model_zip,
+        enable_cropland_head=enable_cropland_head,
+        landcover_head_zip=args.landcover_head_zip,
+        enable_croptype_head=enable_croptype_head,
+        croptype_head_zip=args.croptype_head_zip,
+        enforce_cropland_gate=enforce_cropland_gate,
         backend_context=BackendContext(Backend.CDSE),
         target_epsg=args.target_epsg,
         s1_orbit_state=args.s1_orbit_state,
@@ -420,4 +621,11 @@ if __name__ == "__main__":
         max_retries=args.max_retries,
         base_delay=args.base_delay,
         max_delay=args.max_delay,
+        export_class_probs=args.class_probabilities,
+        enable_cropland_postprocess=args.enable_cropland_postprocess,
+        cropland_postprocess_method=args.cropland_postprocess_method,
+        cropland_postprocess_kernel_size=args.cropland_postprocess_kernel_size,
+        enable_croptype_postprocess=args.enable_croptype_postprocess,
+        croptype_postprocess_method=args.croptype_postprocess_method,
+        croptype_postprocess_kernel_size=args.croptype_postprocess_kernel_size,
     )

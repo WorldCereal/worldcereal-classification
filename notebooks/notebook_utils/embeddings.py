@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional, Union
 
@@ -10,13 +9,7 @@ from ipywidgets import Output
 from openeo_gfmap import Backend, BackendContext, TemporalContext
 from sklearn.decomposition import IncrementalPCA
 
-from worldcereal.job import WorldCerealTask
-from worldcereal.jobmanager import (
-    DEFAULT_BASE_DELAY,
-    DEFAULT_MAX_DELAY,
-    DEFAULT_MAX_RETRIES,
-    WorldCerealJobManager,
-)
+from worldcereal.jobmanager import WorldCerealJobManager, compute_worldcereal_embeddings
 from worldcereal.parameters import EmbeddingsParameters
 
 from .job_manager import (
@@ -26,7 +19,7 @@ from .job_manager import (
 )
 
 
-def collect_worldcereal_embeddings(
+def compute_worldcereal_embeddings_notebook(
     aoi_gdf: gpd.GeoDataFrame,
     output_folder: Path,
     grid_size: int = 20,
@@ -45,7 +38,7 @@ def collect_worldcereal_embeddings(
     poll_sleep: int = 60,
     simplify_logging: bool = True,
 ) -> WorldCerealJobManager:
-    """Collect WorldCereal embeddings using WorldCerealJobManager.
+    """Compute WorldCereal embeddings using WorldCerealJobManager.
 
     Parameters
     ----------
@@ -100,104 +93,38 @@ def collect_worldcereal_embeddings(
         Can be used to further inspect the job status and results.
     """
 
-    # Set up logging and plotting outputs for the notebook
+    # Set up logging and plotting outputs
     plot_out, log_out, _log = notebook_logger(
         plot_out=plot_out,
         log_out=log_out,
         display_outputs=display_outputs,
     )
 
-    # Ensure embeddings parameters are initialized
-    if embeddings_parameters is None:
-        embeddings_parameters = EmbeddingsParameters()
-
-    _log("------------------------------------")
-    _log("STARTING WORKFLOW: Embeddings computation")
-    _log("------------------------------------")
-    _log("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_folder),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "embeddings_parameters": embeddings_parameters,
-        "scale_uint16": scale_uint16,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-    }
-    for key, value in params.items():
-        _log(f"{key}: {value}")
-    _log("----------------------------------")
-
-    _log("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.EMBEDDINGS,
-        backend_context=BackendContext(Backend.CDSE),
+    return compute_worldcereal_embeddings(
         aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
         grid_size=grid_size,
         temporal_extent=temporal_extent,
         year=year,
+        embeddings_parameters=embeddings_parameters,
+        scale_uint16=scale_uint16,
+        s1_orbit_state=s1_orbit_state,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        restart_failed=restart_failed,
+        job_options=job_options,
         poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        backend_context=BackendContext(Backend.CDSE),
+        log_fn=_log,
+        runner=run_notebook_job_manager,
+        runner_kwargs={
+            "plot_out": plot_out,
+            "log_out": log_out,
+            "display_outputs": display_outputs,
+            "status_title": "Embeddings job status",
+        },
     )
-
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    _log("Starting job submissions...")
-    break_msg = (
-        "Stopping embeddings computation...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    try:
-        run_notebook_job_manager(
-            manager,
-            run_kwargs={
-                "restart_failed": restart_failed,
-                "randomize_jobs": randomize_jobs,
-                "parallel_jobs": parallel_jobs,
-                "s1_orbit_state": s1_orbit_state,
-                "embeddings_parameters": embeddings_parameters,
-                "scale_uint16": scale_uint16,
-                "job_options": job_options,
-                "max_retries": DEFAULT_MAX_RETRIES,
-                "base_delay": DEFAULT_BASE_DELAY,
-                "max_delay": DEFAULT_MAX_DELAY,
-            },
-            plot_out=plot_out,
-            log_out=log_out,
-            display_outputs=display_outputs,
-            status_title="Embeddings job status",
-        )
-    except KeyboardInterrupt:
-        _log(break_msg)
-        manager.stop_job_thread()
-        _log("Embeddings computation has stopped.")
-        raise
-
-    _log("All done!")
-    _log(f"Results stored in {output_folder}")
-
-    return manager
 
 
 # ---------------------------------------------------------------------------

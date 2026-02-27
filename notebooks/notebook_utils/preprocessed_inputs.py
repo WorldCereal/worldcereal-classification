@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional, Union
 
@@ -12,13 +11,7 @@ from loguru import logger
 from openeo_gfmap import Backend, BackendContext, TemporalContext
 from tabulate import tabulate
 
-from worldcereal.job import WorldCerealTask
-from worldcereal.jobmanager import (
-    DEFAULT_BASE_DELAY,
-    DEFAULT_MAX_DELAY,
-    DEFAULT_MAX_RETRIES,
-    WorldCerealJobManager,
-)
+from worldcereal.jobmanager import WorldCerealJobManager, collect_worldcereal_inputs
 
 from .extractions import (
     NODATAVALUE,
@@ -32,12 +25,13 @@ from .job_manager import (
 )
 
 
-def collect_worldcereal_inputs_patches(
+def collect_worldcereal_inputs_notebook(
     aoi_gdf: gpd.GeoDataFrame,
     output_folder: Path,
     grid_size: int = 20,
     temporal_extent: Optional[TemporalContext] = None,
     year: Optional[int] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
     parallel_jobs: int = 2,
     randomize_jobs: bool = False,
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
@@ -65,6 +59,8 @@ def collect_worldcereal_inputs_patches(
     year : Optional[int], optional
         Specific year to collect input data patches for.
         If provided, it will be used only if temporal_extent is not provided.
+    compositing_window : Literal["month", "dekad"], optional
+        Temporal compositing window for inputs, by default "month".
     parallel_jobs : int, optional
         Number of parallel jobs to run. Default is 2.
     randomize_jobs : bool, optional
@@ -97,96 +93,36 @@ def collect_worldcereal_inputs_patches(
         Can be used to further inspect the job status and results.
     """
 
-    # Set up logging and plotting outputs for the notebook
     plot_out, log_out, _log = notebook_logger(
         plot_out=plot_out,
         log_out=log_out,
         display_outputs=display_outputs,
     )
 
-    _log("------------------------------------")
-    _log("STARTING WORKFLOW: Input data collection")
-    _log("------------------------------------")
-    _log("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_folder),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-    }
-    for key, value in params.items():
-        _log(f"{key}: {value}")
-    _log("----------------------------------")
-
-    _log("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.INPUTS,
-        backend_context=BackendContext(Backend.CDSE),
+    return collect_worldcereal_inputs(
         aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
         grid_size=grid_size,
         temporal_extent=temporal_extent,
         year=year,
+        compositing_window=compositing_window,
+        s1_orbit_state=s1_orbit_state,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        restart_failed=restart_failed,
+        job_options=job_options,
         poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        backend_context=BackendContext(Backend.CDSE),
+        log_fn=_log,
+        runner=run_notebook_job_manager,
+        runner_kwargs={
+            "plot_out": plot_out,
+            "log_out": log_out,
+            "display_outputs": display_outputs,
+            "status_title": "Inputs job status",
+        },
     )
-
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    _log("Starting job submissions...")
-    break_msg = (
-        "Stopping input data collection...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    try:
-        run_notebook_job_manager(
-            manager,
-            run_kwargs={
-                "restart_failed": restart_failed,
-                "randomize_jobs": randomize_jobs,
-                "parallel_jobs": parallel_jobs,
-                "s1_orbit_state": s1_orbit_state,
-                "job_options": job_options,
-                "max_retries": DEFAULT_MAX_RETRIES,
-                "base_delay": DEFAULT_BASE_DELAY,
-                "max_delay": DEFAULT_MAX_DELAY,
-            },
-            plot_out=plot_out,
-            log_out=log_out,
-            display_outputs=display_outputs,
-            status_title="Inputs job status",
-        )
-    except KeyboardInterrupt:
-        _log(break_msg)
-        manager.stop_job_thread()
-        _log("Input data collection has stopped.")
-        raise
-
-    _log("All done!")
-    _log(f"Results stored in {output_folder}")
-
-    return manager
 
 
 # ---------------------------------------------------------------------------

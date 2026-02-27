@@ -36,8 +36,7 @@ SPATIAL EXTENT OPTIONS
     In case of larger/irregular AOI's, we recommend OPTION 2.
     
 * OPTION 2: Create a production grid from larger AOIs.
-    - Provide the path to your AOI geometry file in (``--grid_path``). 
-        This file must contain polygons (one or many) and a unique "id" column.
+    - - Provide a geometry file with polygons and a unique "id" column as --grid_path.
     - Set ``--grid_size`` (km) to tile each of your AOIs into smaller patches. 
         The tiling aligns with Sentinel-2 MGRS tiles and UTM.
         The script adds a "tile_name" column with unique identifiers for each tile
@@ -50,6 +49,7 @@ Choose exactly one of the following approaches:
 * OPTION 1: Use tile-specific start/end dates specified in your grid file.
     This requires your grid file to contain pre-defined ``start_date`` and ``end_date`` columns.
     Both str and datetime formats are supported. The script will use these per-tile dates as-is.
+    
     Note that in case start/end dates are present in the grid file, OPTIONS 2 and 3 are ignored,
     even if ``--start_date``/``--end_date`` or ``--year`` are provided as input parameters.
 
@@ -61,6 +61,7 @@ Choose exactly one of the following approaches:
     We automatically infer for each tile the relevant crop seasons from the global WorldCereal 
     crop calendars based on the tile location and the provided ``--year``.
     Then we derive a 12 month temporal extent per tile that covers the relevant crop seasons.
+    
     This approach is recommended to ensure that the extracted time series contain the relevant
     phenological stages of the crops in each tile, which can improve the performance of downstream embedding and inference tasks.
    
@@ -91,21 +92,21 @@ OPTIONAL PARAMETERS
 
 * ``--simplify_logging``: Use a compact CLI status callback and suppress openEO logs.
 
-Retrying options:
-* ``--max_retries``: Max number of submission retries.
-* ``--base_delay``: Initial retry delay in seconds.
-* ``--max_delay``: Maximum retry delay in seconds.
+Retrying options for processing job submission and execution:
+    * ``--max_retries``: Max number of submission retries.
+    * ``--base_delay``: Initial retry delay in seconds.
+    * ``--max_delay``: Maximum retry delay in seconds.
 
 Custom OpenEO job options. 
-Only change these if you know what you are doing and need to deviate from the default CDSE batch job configuration:
-* ``--driver_memory``: Driver memory setting passed as job option.
-* ``--driver_memoryOverhead``: Driver memory overhead passed as job option.
-* ``--executor_cores``: Executor cores passed as job option.
-* ``--executor_memory``: Executor memory passed as job option.
-* ``--executor_memoryOverhead``: Executor memory overhead passed as job option.
-* ``--max_executors``: Max executors passed as job option.
-* ``--image_name``: openEO image name override passed as job option.
-* ``--organization_id``: Organization id passed as job option.
+    Only change these if you know what you are doing and need to deviate from the default CDSE batch job configuration:
+    * ``--driver_memory``: Driver memory setting passed as job option.
+    * ``--driver_memoryOverhead``: Driver memory overhead passed as job option.
+    * ``--executor_cores``: Executor cores passed as job option.
+    * ``--executor_memory``: Executor memory passed as job option.
+    * ``--executor_memoryOverhead``: Executor memory overhead passed as job option.
+    * ``--max_executors``: Max executors passed as job option.
+    * ``--image_name``: openEO image name override passed as job option.
+    * ``--organization_id``: Organization id passed as job option.
 
 USAGE EXAMPLE
 -------------
@@ -121,20 +122,17 @@ of a bash script that runs this Python script with a specific set of parameters.
 """
 
 import argparse
-import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional, Union
 
 import geopandas as gpd
-from loguru import logger
 from openeo_gfmap import Backend, BackendContext, TemporalContext
 
-from worldcereal.job import WorldCerealTask
 from worldcereal.jobmanager import (
     DEFAULT_BASE_DELAY,
     DEFAULT_MAX_DELAY,
     DEFAULT_MAX_RETRIES,
-    WorldCerealJobManager,
+    collect_worldcereal_inputs,
 )
 from worldcereal.utils import parse_job_options_from_args
 
@@ -195,92 +193,25 @@ def main(
         Maximum retry delay in seconds, by default DEFAULT_MAX_DELAY.
     """
 
-    logger.info("------------------------------------")
-    logger.info("STARTING WORKFLOW: Inputs collection")
-    logger.info("------------------------------------")
-    logger.info("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_folder),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "compositing_window": compositing_window,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-
-    for key, value in params.items():
-        logger.info(f"{key}: {value}")
-    logger.info("------------------------------------")
-
-    logger.info("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.INPUTS,
-        backend_context=BackendContext(Backend.CDSE),
+    collect_worldcereal_inputs(
         aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
         grid_size=grid_size,
         temporal_extent=temporal_extent,
         year=year,
+        compositing_window=compositing_window,
+        s1_orbit_state=s1_orbit_state,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        restart_failed=restart_failed,
+        job_options=job_options,
         poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        backend_context=BackendContext(Backend.CDSE),
     )
-    logger.info("Job manager initialized!")
-
-    status_callback = None
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-        status_callback = WorldCerealJobManager.cli_status_callback(
-            title="Inputs job status"
-        )
-
-    logger.info("Starting job submissions...")
-    break_msg = (
-        "Stopping inputs collection...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    try:
-        manager.run_jobs(
-            restart_failed=restart_failed,
-            randomize_jobs=randomize_jobs,
-            parallel_jobs=parallel_jobs,
-            s1_orbit_state=s1_orbit_state,
-            job_options=job_options,
-            compositing_window=compositing_window,
-            status_callback=status_callback,
-            max_retries=max_retries,
-            base_delay=base_delay,
-            max_delay=max_delay,
-        )
-    except KeyboardInterrupt:
-        logger.info(break_msg)
-        manager.stop_job_thread()
-        logger.info("Inputs collection has stopped.")
-        raise
-
-    logger.success("All done!")
-    logger.info(f"Results stored in {output_folder}")
 
 
 if __name__ == "__main__":

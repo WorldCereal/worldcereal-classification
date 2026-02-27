@@ -12,10 +12,14 @@ PROCESS_CMD="scripts/inference/cropland_croptype_mapping.py"
 PYTHONPATH="/home/jeroendegerickx/miniconda3/envs/worldcereal-py311/bin/python"
 
 # Parameters for spatial extent (grid file)
+# Make sure to provide a valid path to a vector file containing the grid cells 
+# for which you want to collect inputs.
 GRID_PATH="./bbox/test.gpkg"
-# Leave empty to use AOI geometries as-is
 GRID_SIZE="20"
-# TARGET_EPSG="3857"
+TARGET_EPSG="3857"
+
+# Parameter specifying output folder
+OUTPUT_FOLDER="./outputs/maps"
 
 # Parameters for temporal extent
 # For using OPTION 2, provide start and end date
@@ -26,9 +30,6 @@ END_DATE="2024-12-31"
 
 # Product to generate: cropland or croptype
 PRODUCT="cropland"
-
-# Parameter specifying output folder
-OUTPUT_FOLDER="./outputs/maps"
 
 # Optional parameters
 PARALLEL_JOBS="2"

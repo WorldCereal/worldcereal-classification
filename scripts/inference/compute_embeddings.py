@@ -22,8 +22,8 @@ PROCESSING CHAIN SUMMARY
 
 REQUIRED PARAMETERS
 -------------------
-* ``--grid_path`` (required): AOI file (.parquet, .geoparquet, .gpkg, .shp).
-* ``--output_folder`` (required): output folder for the job DB and results.
+* ``--grid_path``: AOI file (.parquet, .geoparquet, .gpkg, .shp).
+* ``--output_folder``: output folder for the job DB and results.
 
 SPATIAL EXTENT OPTIONS
 ----------------------
@@ -93,21 +93,21 @@ OPTIONAL PARAMETERS
 
 * ``--simplify_logging``: Use a compact CLI status callback and suppress openEO logs.
 
-Retrying options:
-* ``--max_retries``: Max number of submission retries.
-* ``--base_delay``: Initial retry delay in seconds.
-* ``--max_delay``: Maximum retry delay in seconds.
+Retrying options for processing job submission and execution:
+    * ``--max_retries``: Max number of submission retries.
+    * ``--base_delay``: Initial retry delay in seconds.
+    * ``--max_delay``: Maximum retry delay in seconds.
 
 Custom OpenEO job options.
-Only change these if you know what you are doing and need to deviate from the default CDSE batch job configuration:
-* ``--driver_memory``: Driver memory setting passed as job option.
-* ``--driver_memoryOverhead``: Driver memory overhead passed as job option.
-* ``--executor_cores``: Executor cores passed as job option.
-* ``--executor_memory``: Executor memory passed as job option.
-* ``--executor_memoryOverhead``: Executor memory overhead passed as job option.
-* ``--max_executors``: Max executors passed as job option.
-* ``--image_name``: openEO image name override passed as job option.
-* ``--organization_id``: Organization id passed as job option.
+    Only change these if you know what you are doing and need to deviate from the default CDSE batch job configuration:
+    * ``--driver_memory``: Driver memory setting passed as job option.
+    * ``--driver_memoryOverhead``: Driver memory overhead passed as job option.
+    * ``--executor_cores``: Executor cores passed as job option.
+    * ``--executor_memory``: Executor memory passed as job option.
+    * ``--executor_memoryOverhead``: Executor memory overhead passed as job option.
+    * ``--max_executors``: Max executors passed as job option.
+    * ``--image_name``: openEO image name override passed as job option.
+    * ``--organization_id``: Organization id passed as job option.
 
 USAGE EXAMPLE
 -------------
@@ -123,20 +123,17 @@ of a bash script that runs this Python script with a specific set of parameters.
 """
 
 import argparse
-import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional, Union
 
 import geopandas as gpd
-from loguru import logger
 from openeo_gfmap import Backend, BackendContext, TemporalContext
 
-from worldcereal.job import WorldCerealTask
 from worldcereal.jobmanager import (
     DEFAULT_BASE_DELAY,
     DEFAULT_MAX_DELAY,
     DEFAULT_MAX_RETRIES,
-    WorldCerealJobManager,
+    compute_worldcereal_embeddings,
 )
 from worldcereal.parameters import EmbeddingsParameters
 from worldcereal.utils import parse_job_options_from_args
@@ -163,94 +160,26 @@ def main(
 ) -> None:
     """Run large-scale embeddings jobs using the unified job manager."""
 
-    logger.info("------------------------------------")
-    logger.info("STARTING WORKFLOW: Embeddings computation")
-    logger.info("------------------------------------")
-    logger.info("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_folder),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "embeddings_parameters": embeddings_parameters,
-        "scale_uint16": scale_uint16,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-
-    for key, value in params.items():
-        logger.info(f"{key}: {value}")
-    logger.info("------------------------------------")
-
-    logger.info("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.EMBEDDINGS,
-        backend_context=BackendContext(Backend.CDSE),
+    compute_worldcereal_embeddings(
         aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
         grid_size=grid_size,
         temporal_extent=temporal_extent,
         year=year,
+        embeddings_parameters=embeddings_parameters,
+        scale_uint16=scale_uint16,
+        s1_orbit_state=s1_orbit_state,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        restart_failed=restart_failed,
+        job_options=job_options,
         poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        backend_context=BackendContext(Backend.CDSE),
     )
-    logger.info("Job manager initialized!")
-
-    status_callback = None
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-        status_callback = WorldCerealJobManager.cli_status_callback(
-            title="Embeddings job status"
-        )
-
-    logger.info("Starting job submissions...")
-    break_msg = (
-        "Stopping embeddings computation...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    try:
-        manager.run_jobs(
-            restart_failed=restart_failed,
-            randomize_jobs=randomize_jobs,
-            parallel_jobs=parallel_jobs,
-            s1_orbit_state=s1_orbit_state,
-            job_options=job_options,
-            embeddings_parameters=embeddings_parameters,
-            scale_uint16=scale_uint16,
-            status_callback=status_callback,
-            max_retries=max_retries,
-            base_delay=base_delay,
-            max_delay=max_delay,
-        )
-    except KeyboardInterrupt:
-        logger.info(break_msg)
-        manager.stop_job_thread()
-        logger.info("Embeddings computation has stopped.")
-        raise
-
-    logger.success("All done!")
-    logger.info(f"Results stored in {output_folder}")
 
 
 if __name__ == "__main__":

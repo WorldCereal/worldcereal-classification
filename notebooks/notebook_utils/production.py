@@ -1,6 +1,4 @@
 import glob
-import json
-import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional
 
@@ -12,30 +10,44 @@ from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 
-from worldcereal.job import WorldCerealTask
 from worldcereal.jobmanager import (
     DEFAULT_BASE_DELAY,
     DEFAULT_MAX_DELAY,
     DEFAULT_MAX_RETRIES,
     WorldCerealJobManager,
+    run_map_production,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
-from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
-from worldcereal.parameters import WorldCerealProductType
 
 from .job_manager import notebook_logger, run_notebook_job_manager
 
 
-def run_map_production(
+def run_map_production_notebook(
     aoi_gdf: gpd.GeoDataFrame,
     output_folder: Path,
     grid_size: int = 20,
     temporal_extent: Optional[TemporalContext] = None,
     season_specifications: Optional[Dict[str, TemporalContext]] = None,
     year: Optional[int] = None,
+    product_type: Literal["cropland", "croptype"] = "cropland",
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
-    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
-    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
+    seasonal_model_zip: Optional[str] = None,
+    enable_cropland_head: Optional[bool] = None,
+    landcover_head_zip: Optional[str] = None,
+    enable_croptype_head: Optional[bool] = None,
+    croptype_head_zip: Optional[str] = None,
+    enforce_cropland_gate: Optional[bool] = None,
+    export_class_probs: Optional[bool] = None,
+    enable_cropland_postprocess: Optional[bool] = None,
+    cropland_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
+    cropland_postprocess_kernel_size: Optional[int] = None,
+    enable_croptype_postprocess: Optional[bool] = None,
+    croptype_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
+    croptype_postprocess_kernel_size: Optional[int] = None,
     target_epsg: Optional[int] = None,
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
@@ -65,12 +77,50 @@ def run_map_production(
         Per-season temporal windows used for inference, by default None.
     year : Optional[int], optional
         Year used for crop calendar inference when dates are missing, by default None.
-    seasonal_preset : str, optional
-        Name of the seasonal workflow preset to use when building the inference context.
-    workflow_config : Optional[WorldCerealWorkflowConfig], optional
-        Structured overrides applied on top of the preset to tweak model/runtime/season settings.
     product_type : WorldCerealProductType, optional
         The type of product to produce, by default WorldCerealProductType.CROPLAND
+    seasonal_preset : str, optional
+        Name of the seasonal workflow preset to use when building the inference context.
+        This determines the default configuration settings of the inference workflow.
+        By default we use the "phase_ii_multitask" preset, which corresponds to the Phase II multitask seasonal backbone with dual landcover/croptype heads.
+    seasonal_model_zip : Optional[str], optional
+        Path to .zip file of a seasonal Presto model to be used for overriding the default seasonal model.
+        By default None, which means the seasonal model embedded in the preset will be used.
+    enable_cropland_head : Optional[bool], optional
+        Override whether the cropland (landcover) head is enabled. If None, defaults to
+        preset behavior unless `product_type` forces cropland-only execution.
+    landcover_head_zip : Optional[str], optional
+        Path to .zip file of a cropland/landcover head artifact to be used for overriding the default head.
+        If None, the head embedded in the preset seasonal model will be used.
+    enable_croptype_head : Optional[bool], optional
+        Override whether the croptype head is enabled. If None, defaults to preset behavior
+        unless `product_type` forces cropland-only execution.
+    croptype_head_zip : Optional[str], optional
+        Path to .zip file of a croptype head artifact to be used for overriding the default head.
+        If None, the head embedded in the preset seasonal model will be used.
+    enforce_cropland_gate : Optional[bool], optional
+        Whether or not to mask the crop type product with the cropland product.
+        If None, use the preset default (True).
+    export_class_probs : Optional[bool], optional
+        Export per-class probabilities in all products.
+        If None, use the preset default (True).
+    enable_cropland_postprocess : Optional[bool], optional
+        Enable cropland postprocessing. If None, use the preset default (False).
+    cropland_postprocess_method : Optional[str], optional
+        If None and postprocess is enabled, the preset default is used ("majority_vote").
+        Available options are "majority_vote" and "smooth_probabilities".
+    cropland_postprocess_kernel_size : Optional[int], optional
+        Cropland postprocess kernel size override.
+        If None and postprocess is enabled, the preset default is used (5).
+    enable_croptype_postprocess : Optional[bool], optional
+        Enable croptype postprocessing. If None, use the preset default (False).
+    croptype_postprocess_method : Optional[str], optional
+        Croptype postprocess method override.
+        If None and postprocess is enabled, the preset default is used ("majority_vote").
+        Available options are "majority_vote" and "smooth_probabilities".
+    croptype_postprocess_kernel_size : Optional[int], optional
+        Croptype postprocess kernel size override.
+        If None and postprocess is enabled, the preset default is used (5).
     target_epsg : Optional[int], optional
         The target EPSG code for the output, by default None.
         If None, the output will be in the CRS as defined by the tiling grid (local UTM projection).
@@ -116,109 +166,55 @@ def run_map_production(
         display_outputs=display_outputs,
     )
 
-    _log("------------------------------------")
-    _log("STARTING WORKFLOW: Map production")
-    _log("------------------------------------")
-    _log("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_folder),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "season_specifications": season_specifications,
-        "year": year,
-        "seasonal_preset": seasonal_preset,
-        "product_type": product_type,
-        "target_epsg": target_epsg,
-        "s1_orbit_state": s1_orbit_state,
-        "restart_failed": restart_failed,
-        "parallel_jobs": parallel_jobs,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-    }
-    for key, value in params.items():
-        _log(f"{key}: {value}")
-
-    _log("Detailed workflow configuration:")
-    _log(json.dumps(workflow_config.to_dict(), indent=2))
-    _log("----------------------------------")
-
-    # Prepare the job manager and job database
-    _log("Setting up job manager to handle map production...")
-    job_manager = WorldCerealJobManager(
-        output_dir=output_folder,
-        task=WorldCerealTask.INFERENCE,
-        aoi_gdf=aoi_gdf,
-        backend_context=backend_context,
-        temporal_extent=temporal_extent,
-        grid_size=grid_size,
-        year=year,
-        season_specifications=season_specifications,
-        poll_sleep=poll_sleep,
-    )
-
-    if simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    # Start a threaded job manager with optional live status updates
-    _log("Starting map production...")
     if display_outputs:
         _log("Job status will be displayed in the output widget below.")
         _log(
             "For individual job tracking, we refer to: https://openeo.dataspace.copernicus.eu/"
         )
 
-    break_msg = (
-        "Stopping map production...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
+    return run_map_production(
+        aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
+        grid_size=grid_size,
+        temporal_extent=temporal_extent,
+        season_specifications=season_specifications,
+        year=year,
+        product_type=product_type,
+        seasonal_preset=seasonal_preset,
+        seasonal_model_zip=seasonal_model_zip,
+        enable_cropland_head=enable_cropland_head,
+        landcover_head_zip=landcover_head_zip,
+        enable_croptype_head=enable_croptype_head,
+        croptype_head_zip=croptype_head_zip,
+        enforce_cropland_gate=enforce_cropland_gate,
+        export_class_probs=export_class_probs,
+        enable_cropland_postprocess=enable_cropland_postprocess,
+        cropland_postprocess_method=cropland_postprocess_method,
+        cropland_postprocess_kernel_size=cropland_postprocess_kernel_size,
+        enable_croptype_postprocess=enable_croptype_postprocess,
+        croptype_postprocess_method=croptype_postprocess_method,
+        croptype_postprocess_kernel_size=croptype_postprocess_kernel_size,
+        target_epsg=target_epsg,
+        backend_context=backend_context,
+        s1_orbit_state=s1_orbit_state,
+        restart_failed=restart_failed,
+        job_options=job_options,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        max_retries=DEFAULT_MAX_RETRIES,
+        base_delay=DEFAULT_BASE_DELAY,
+        max_delay=DEFAULT_MAX_DELAY,
+        log_fn=_log,
+        runner=run_notebook_job_manager,
+        runner_kwargs={
+            "plot_out": plot_out,
+            "log_out": log_out,
+            "display_outputs": display_outputs,
+            "status_title": "Inference job status",
+        },
     )
-
-    try:
-        run_notebook_job_manager(
-            job_manager,
-            run_kwargs={
-                "restart_failed": restart_failed,
-                "randomize_jobs": randomize_jobs,
-                "product_type": product_type,
-                "s1_orbit_state": s1_orbit_state,
-                "job_options": job_options,
-                "target_epsg": target_epsg,
-                "parallel_jobs": parallel_jobs,
-                "seasonal_preset": seasonal_preset,
-                "workflow_config": workflow_config,
-                "max_retries": DEFAULT_MAX_RETRIES,
-                "base_delay": DEFAULT_BASE_DELAY,
-                "max_delay": DEFAULT_MAX_DELAY,
-            },
-            plot_out=plot_out,
-            log_out=log_out,
-            display_outputs=display_outputs,
-            status_title="Inference job status",
-        )
-    except KeyboardInterrupt:
-        _log(break_msg)
-        job_manager.stop_job_thread()
-        _log("Map production has stopped.")
-        raise
-
-    _log("All done!")
-    _log(f"Results stored in {output_folder}")
-
-    return job_manager
 
 
 def merge_maps(outdir: Path) -> dict[str, Path]:
