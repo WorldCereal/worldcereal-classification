@@ -66,7 +66,22 @@ be resolved from multiple sources.
     We automatically infer for each tile the two dominant crop seasons from the global WorldCereal 
     crop calendars based on the tile location and the provided ``--year``.
     Then we derive a 12 month temporal extent per tile that covers both seasons and set it as the tile's temporal extent.
+
+MODEL SELECTION
+---------------
+The workflow uses a seasonal Presto model for inference, with optionally a customized cropland/landcover head and/or crop type head.
+By default, the latest available models are used from the WorldCereal model registry, but you can also specify custom model artifacts.
+
+This can be done in two ways:
+
+    * OPTION 1: Use the same models for all tiles of the production grid
+        --> just make sure to specify the desired model override parameters
+            (--seasonal-model-zip, --landcover-head-zip, --croptype-head-zip) when running the script.
     
+    * OPTION 2: Specify different models per tile in the grid file
+        --> include columns in the grid file with the URLs to the desired model artifacts for each tile.
+            For example, you could include a "seasonal_model_zip" column with the URL to the seasonal model 
+            .zip file to use for each tile, and the workflow will use those instead of the default or globally overridden models.
     
 OPTIONAL PARAMETERS
 -------------------
