@@ -189,7 +189,7 @@ of a bash script that runs this Python script with a specific set of parameters.
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import geopandas as gpd
 from openeo_gfmap import TemporalContext
@@ -250,7 +250,7 @@ def main(
     temporal_extent: Optional[TemporalContext] = None,
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     target_epsg: Optional[int] = None,
-    s1_orbit_state: Optional[str] = None,
+    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
     year: Optional[int] = None,
     season_specifications: Optional[Dict[str, TemporalContext]] = None,
     parallel_jobs: int = 2,
@@ -271,10 +271,14 @@ def main(
     croptype_head_zip: Optional[str] = None,
     enforce_cropland_gate: Optional[bool] = None,
     enable_cropland_postprocess: Optional[bool] = None,
-    cropland_postprocess_method: Optional[str] = None,
+    cropland_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
     cropland_postprocess_kernel_size: Optional[int] = None,
     enable_croptype_postprocess: Optional[bool] = None,
-    croptype_postprocess_method: Optional[str] = None,
+    croptype_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
     croptype_postprocess_kernel_size: Optional[int] = None,
 ) -> None:
     run_map_production(
