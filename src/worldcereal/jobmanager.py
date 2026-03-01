@@ -37,7 +37,7 @@ import shutil
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Literal, Optional, Sequence, Union, cast
 
 import geopandas as gpd
 import openeo
@@ -1540,7 +1540,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             status_callback=status_callback,
         )
 
-    def run_jobs(self, **kwargs: object) -> Optional[CsvJobDatabase]:
+    def run_jobs(self, **kwargs: Any) -> Optional[CsvJobDatabase]:
         """Dispatch to the task-specific run method."""
         if self.task == WorldCerealTask.INPUTS:
             return self._run_inputs_jobs(**kwargs)
@@ -1565,15 +1565,18 @@ class WorldCerealJobManager(MultiBackendJobManager):
         temporal_extent = self._row_temporal_extent(row)
         spatial_extent = self._row_spatial_extent(row)
 
-        inputs = create_worldcereal_process_graph(
-            task=WorldCerealTask.INPUTS,
-            spatial_extent=spatial_extent,
-            temporal_extent=temporal_extent,
-            s1_orbit_state=s1_orbit_state,
-            target_epsg=int(row["epsg_utm"]),
-            compositing_window=compositing_window,
-            tile_size=tile_size,
-            connection=connection,
+        inputs = cast(
+            openeo.DataCube,
+            create_worldcereal_process_graph(
+                task=WorldCerealTask.INPUTS,
+                spatial_extent=spatial_extent,
+                temporal_extent=temporal_extent,
+                s1_orbit_state=s1_orbit_state,
+                target_epsg=int(row["epsg_utm"]),
+                compositing_window=compositing_window,
+                tile_size=tile_size,
+                connection=connection,
+            ),
         )
 
         resolved_options = dict(DEFAULT_INPUTS_JOB_OPTIONS)
@@ -1600,15 +1603,18 @@ class WorldCerealJobManager(MultiBackendJobManager):
         temporal_extent = self._row_temporal_extent(row)
         spatial_extent = self._row_spatial_extent(row)
 
-        embeddings = create_worldcereal_process_graph(
-            task=WorldCerealTask.EMBEDDINGS,
-            spatial_extent=spatial_extent,
-            temporal_extent=temporal_extent,
-            s1_orbit_state=s1_orbit_state,
-            target_epsg=int(row["epsg_utm"]),
-            embeddings_parameters=embeddings_parameters,
-            scale_uint16=scale_uint16,
-            connection=connection,
+        embeddings = cast(
+            openeo.DataCube,
+            create_worldcereal_process_graph(
+                task=WorldCerealTask.EMBEDDINGS,
+                spatial_extent=spatial_extent,
+                temporal_extent=temporal_extent,
+                s1_orbit_state=s1_orbit_state,
+                target_epsg=int(row["epsg_utm"]),
+                embeddings_parameters=embeddings_parameters,
+                scale_uint16=scale_uint16,
+                connection=connection,
+            ),
         )
 
         resolved_options = dict(DEFAULT_INFERENCE_JOB_OPTIONS)

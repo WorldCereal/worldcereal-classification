@@ -701,7 +701,7 @@ def _build_inputs_cube(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
-    compositing_window: Optional[Literal["month", "dekad"]] = "month",
+    compositing_window: Literal["month", "dekad"] = "month",
     connection: Optional[openeo.Connection] = None,
 ) -> openeo.DataCube:
     if connection is None:
