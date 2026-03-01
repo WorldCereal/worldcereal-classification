@@ -40,8 +40,8 @@ from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 
 FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip"
 PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
-WORLDCEREAL_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/worldcereal-2.5.0-py3-none-any.whl"
-DEFAULT_INFERENCE_JOB_OPTIONS = {
+WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/worldcereal/worldcereal-2.5.0-py3-none-any.whl"
+INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
     "executor-memoryOverhead": "3g",
