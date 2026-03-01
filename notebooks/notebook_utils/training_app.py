@@ -18,7 +18,7 @@ This module provides an interactive widget-based interface for:
 
 import json
 import platform
-import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,16 +42,13 @@ from notebook_utils.extractions import (
     retrieve_extractions_extent,
     visualize_timeseries,
 )
-from notebook_utils.production import bbox_extent_to_gdf, merge_maps, run_map_production
+from notebook_utils.production import merge_maps, run_map_production_notebook
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
 from openeo_gfmap import TemporalContext
-from openeo_gfmap.backend import cdse_connection
 from tabulate import tabulate
 
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
-from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
-from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
     get_legend,
@@ -500,13 +497,30 @@ class WorldCerealTrainingApp:
             "If no AOI is selected, the query will consider all available data globally.<br>"
             "       ⚠️ WARNING: This will result in a very large query and may take a long time to complete.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
+            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
         )
 
         aoi_map = ui_map(display_ui=False)
+
+        aoi_save_button = widgets.Button(
+            description="Save AOI",
+            button_style="info",
+            icon="save",
+            layout=widgets.Layout(width="220px"),
+        )
+        aoi_save_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="60px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
 
         buffer_explanation = self._info_callout(
             "By default we apply a 250 km buffer around your selected AOI to ensure sufficient reference data is retrieved.<br>"
@@ -651,6 +665,8 @@ class WorldCerealTrainingApp:
         self.tab1_widgets = {
             "extent_output": extent_output,
             "aoi_map": aoi_map,
+            "aoi_save_button": aoi_save_button,
+            "aoi_save_output": aoi_save_output,
             "buffer_input": buffer_input,
             "include_public_checkbox": include_public_checkbox,
             "include_private_checkbox": include_private_checkbox,
@@ -679,6 +695,7 @@ class WorldCerealTrainingApp:
         private_path_button.on_click(self._on_private_edit_click)
         crop_only_checkbox.observe(self._on_crop_only_toggle, names="value")
         select_crops_button.on_click(self._on_select_crops_click)
+        aoi_save_button.on_click(self._on_tab1_save_aoi_click)
 
         return widgets.VBox(
             [
@@ -697,7 +714,10 @@ class WorldCerealTrainingApp:
                 aoi_message,
                 aoi_explanation,
                 aoi_map.map,
+                aoi_map.input,
                 aoi_map.output,
+                widgets.HBox([aoi_save_button]),
+                aoi_save_output,
                 buffer_explanation,
                 buffer_input,
                 widgets.HTML("<b>2) Data sources selection:</b>"),
@@ -838,7 +858,7 @@ class WorldCerealTrainingApp:
 
         bbox_poly = None
         try:
-            bbox_poly = self.tab1_widgets["aoi_map"].get_polygon_latlon()
+            bbox_poly = self.tab1_widgets["aoi_map"].get_poly()
         except Exception as exc:
             with query_output:
                 print(f"No AOI selected yet. Proceeding without AOI. ({exc})")
@@ -925,6 +945,22 @@ class WorldCerealTrainingApp:
 
         self.tab1_widgets["save_add_button"].disabled = False
         self.tab1_widgets["discard_button"].disabled = False
+
+    def _save_aoi_to_bbox(self, aoi_map, output: widgets.Output) -> None:
+        if aoi_map is None or output is None:
+            return
+        with output:
+            output.clear_output()
+            try:
+                bbox_dir = Path("./bbox")
+                _ = aoi_map.save_gdf(bbox_dir)
+            except Exception as exc:
+                print(f"Failed to save AOI: {exc}")
+
+    def _on_tab1_save_aoi_click(self, _=None) -> None:
+        aoi_map = self.tab1_widgets.get("aoi_map")
+        output = self.tab1_widgets.get("aoi_save_output")
+        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_save_continue_click(self, button):
         """Save extractions and continue to next step."""
@@ -1472,7 +1508,7 @@ class WorldCerealTrainingApp:
                 if aoi_map is None:
                     print("No region of interest specified in Tab 1, cannot continue.")
                     return
-                spatial_extent = aoi_map.get_extent()
+                spatial_extent = aoi_map.get_bbox()
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
@@ -2940,10 +2976,10 @@ class WorldCerealTrainingApp:
                 load_output,
                 widgets.HTML("<h3>Model to be deployed:</h3>"),
                 model_path_output,
-                # widgets.HTML("<h3>CDSE authentication</h3>"),
-                # auth_info,
-                # widgets.HBox([authenticate_button, reset_auth_button]),
-                # auth_output,
+                widgets.HTML("<h3>CDSE authentication</h3>"),
+                auth_info,
+                widgets.HBox([authenticate_button, reset_auth_button]),
+                auth_output,
                 widgets.HTML("<h3>Deployment</h3>"),
                 widgets.HBox(
                     [deploy_button],
@@ -3053,7 +3089,9 @@ class WorldCerealTrainingApp:
         header = widgets.HTML(value="<h2>Generate Map</h2>")
 
         status_message = widgets.HTML(
-            value="<i>Configure and deploy a model in previous steps first.</i>"
+            value=(
+                "<i>You can generate a map here using your deployed model or the default WorldCereal models.</i>"
+            )
         )
 
         upscaling_short = widgets.HTML(
@@ -3073,10 +3111,12 @@ class WorldCerealTrainingApp:
             "Large AOIs are automatically split into tiles for processing.<br>"
             "You can manually alter the <b>tile size</b> if you want to experiment with smaller or larger tiles, but keep in mind that this will also impact processing time and the required computational resources.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
+            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
         )
         tile_resolution_input = widgets.IntText(
             value=50,
@@ -3085,29 +3125,16 @@ class WorldCerealTrainingApp:
         )
         aoi_map = ui_map(display_ui=False)
 
-        bbox_info = self._info_callout(
-            "After drawing your AOI on the map, you can save the bounding box coordinates to the local `./bbox` folder for later reuse.<br>"
-            "The name you provide in the input field will be used as the filename (without extension).<br>"
-            "For example, if you enter 'my_aoi' and click the save button, the AOI coordinates will be saved to `./bbox/my_aoi.gpkg`.<br><br>"
-            "This is especially useful when you want to run multiple experiments with the same AOI or want to keep a record of the AOI coordinates that were used for processing.<br>"
-            "You can also load the saved bounding box files later to visualize the AOI on the map again or to use the coordinates for other purposes."
-        )
-        bbox_name_input = widgets.Text(
-            value="",
-            description="Save AOI as:",
-            placeholder="name without extension",
-            layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
-        )
-        bbox_save_button = widgets.Button(
-            description="Save AOI to ./bbox",
+        aoi_save_button = widgets.Button(
+            description="Save AOI",
             button_style="info",
             icon="save",
             layout=widgets.Layout(width="220px"),
         )
-        bbox_output = widgets.Output(
+        aoi_save_output = widgets.Output(
             layout=widgets.Layout(
                 width="100%",
-                min_height="80px",
+                min_height="60px",
                 border="1px solid #ccc",
                 padding="10px",
             )
@@ -3140,10 +3167,15 @@ class WorldCerealTrainingApp:
         )
         processing_params_info = self._info_callout(
             "The following parameters are available to configure the map generation process:<br><br>"
+            "<b>Product type</b>:<br>"
+            "   - Select whether to generate a <b>cropland</b> or <b>croptype</b> product.<br>"
+            "     Cropland outputs a binary cropland mask; croptype produces a multi-class crop map.<br><br>"
             "<b>Land cover mapping</b>:<br>"
-            "   - Generate cropland product: By default enabled to export the cropland head predictions as a separate layer in the output map. Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
-            "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output. Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
-            "   - Custom seasonal model URL: Optionally override the default seasonal model used for cropland masking and product generation. Needs to point to a .zip file deployed in the cloud (e.g. CDSE bucket).<br><br>"
+            "   - Generate cropland product:<br>"
+            "     In case you selected croptype product, you can choose here whether to also export the cropland product as a separate layer in the output map.<br>"
+            "     Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
+            "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output.<br>"
+            "     Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
             "<b>Postprocessing:</b> By default enabled to run a majority vote postprocessing step on the predicted classes to smooth the results.<br>"
             "       Depending on your use case, you may want to disable postprocessing to get the raw model predictions without any smoothing.<br>"
             "       Postprocessing can be enabled/disabled separately for the crop type and cropland predictions.<br>"
@@ -3161,17 +3193,12 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
             tooltip="Required. Keep it short and avoid spaces and special characters.",
         )
-        custom_seasonal_model_value = ""
-        if self.presto_model_package is not None:
-            custom_seasonal_model_value = (
-                self.presto_model_package.get("seasonal_model_path") or ""
-            )
-        custom_seasonal_model_input = widgets.Text(
-            value=custom_seasonal_model_value,
-            description="Custom seasonal model URL:",
-            placeholder="https://... .zip",
-            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
-            description_width="250px",
+
+        product_type_dropdown = widgets.Dropdown(
+            options=[("Cropland", "cropland"), ("Croptype", "croptype")],
+            value="cropland",
+            description="Product type:",
+            layout=widgets.Layout(width="240px"),
         )
 
         enable_cropland_head_checkbox = widgets.Checkbox(
@@ -3200,7 +3227,7 @@ class WorldCerealTrainingApp:
             layout=widgets.Layout(width="260px"),
         )
         croptype_postprocess_kernel = widgets.IntText(
-            value=5,
+            value=3,
             description="Kernel:",
             layout=widgets.Layout(width="220px"),
         )
@@ -3240,15 +3267,14 @@ class WorldCerealTrainingApp:
         self.tab8_widgets = {
             "status_message": status_message,
             "aoi_map": aoi_map,
-            "bbox_name_input": bbox_name_input,
-            "bbox_save_button": bbox_save_button,
-            "bbox_output": bbox_output,
+            "aoi_save_button": aoi_save_button,
+            "aoi_save_output": aoi_save_output,
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_hint": season_hint,
             "season_id_input": season_id_input,
+            "product_type_dropdown": product_type_dropdown,
             "output_name_input": output_name_input,
-            "custom_seasonal_model_input": custom_seasonal_model_input,
             "mask_cropland_checkbox": mask_cropland_checkbox,
             "enable_cropland_head_checkbox": enable_cropland_head_checkbox,
             "export_probs_checkbox": export_probs_checkbox,
@@ -3263,8 +3289,8 @@ class WorldCerealTrainingApp:
             "output": output,
         }
 
-        bbox_save_button.on_click(self._on_tab8_save_bbox)
         generate_button.on_click(self._on_generate_map_click)
+        aoi_save_button.on_click(self._on_tab8_save_aoi_click)
 
         return widgets.VBox(
             [
@@ -3278,10 +3304,10 @@ class WorldCerealTrainingApp:
                 aoi_info,
                 widgets.HBox([tile_resolution_input]),
                 aoi_map.map,
+                aoi_map.input,
                 aoi_map.output,
-                bbox_info,
-                widgets.HBox([bbox_name_input, bbox_save_button]),
-                bbox_output,
+                widgets.HBox([aoi_save_button]),
+                aoi_save_output,
                 widgets.HTML("<h3>2) Select season</h3>"),
                 season_message,
                 season_info,
@@ -3291,10 +3317,11 @@ class WorldCerealTrainingApp:
                 widgets.HTML("<h3>3) Processing parameters</h3>"),
                 processing_params_message,
                 processing_params_info,
+                widgets.HTML("<h4>Product</h4>"),
+                widgets.HBox([product_type_dropdown]),
                 widgets.HTML("<h4>Land cover mapping</h4>"),
                 widgets.HBox([enable_cropland_head_checkbox]),
                 widgets.HBox([mask_cropland_checkbox]),
-                widgets.HBox([custom_seasonal_model_input]),
                 widgets.HTML("<h4>Postprocessing</h4>"),
                 widgets.HBox([croptype_postprocess_enabled]),
                 widgets.HBox(
@@ -3318,32 +3345,10 @@ class WorldCerealTrainingApp:
             ]
         )
 
-    def _on_tab8_save_bbox(self, _=None) -> None:
-        """Save the current AOI to ./bbox as a GeoPackage."""
-        output = self.tab8_widgets.get("bbox_output")
-        name_input = self.tab8_widgets.get("bbox_name_input")
+    def _on_tab8_save_aoi_click(self, _=None) -> None:
         aoi_map = self.tab8_widgets.get("aoi_map")
-        if output is None or name_input is None or aoi_map is None:
-            return
-
-        with output:
-            output.clear_output()
-            name = name_input.value.strip()
-            if not name:
-                print("Provide a name for your bounding box.")
-                return
-            bbox_dir = Path("./bbox")
-            bbox_dir.mkdir(exist_ok=True)
-            outfile = bbox_dir / f"{name}.gpkg"
-            try:
-                processing_extent = aoi_map.get_extent(projection="latlon")
-                if processing_extent is None:
-                    print("Draw an AOI on the map before saving.")
-                    return
-                bbox_extent_to_gdf(processing_extent, outfile)
-                print(f"AOI saved to {outfile}")
-            except Exception as exc:
-                print(f"Failed to save AOI: {exc}")
+        output = self.tab8_widgets.get("aoi_save_output")
+        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
@@ -3356,9 +3361,6 @@ class WorldCerealTrainingApp:
             "enable_cropland_head_checkbox"
         )
         export_probs_checkbox = self.tab8_widgets.get("export_probs_checkbox")
-        custom_seasonal_model_input = self.tab8_widgets.get(
-            "custom_seasonal_model_input"
-        )
         croptype_postprocess_enabled = self.tab8_widgets.get(
             "croptype_postprocess_enabled"
         )
@@ -3377,6 +3379,7 @@ class WorldCerealTrainingApp:
         cropland_postprocess_kernel = self.tab8_widgets.get(
             "cropland_postprocess_kernel"
         )
+        product_type_dropdown = self.tab8_widgets.get("product_type_dropdown")
         tile_resolution_input = self.tab8_widgets.get("tile_resolution_input")
         output_name_input = self.tab8_widgets.get("output_name_input")
         season_id_input = self.tab8_widgets.get("season_id_input")
@@ -3396,10 +3399,6 @@ class WorldCerealTrainingApp:
             display(plot_out)
 
         # Validate inputs and show messages in log_out
-        if self.tab7_model_url is None:
-            with log_out:
-                print("Model URL not available. Deploy a model in Tab 7 first.")
-            return
         if aoi_map is None:
             with log_out:
                 print("AOI map not initialized.")
@@ -3408,14 +3407,29 @@ class WorldCerealTrainingApp:
             with log_out:
                 print("Season slider not initialized.")
             return
-        try:
-            selection = season_slider_obj.get_selection()
-            self.tab8_processing_period = selection.processing_period
-            self.tab8_season_window = selection.season_window
-        except Exception as exc:
+
+        # Get seasons and processing period
+        selection = season_slider_obj.get_selection()
+        self.tab8_processing_period = selection.processing_period
+        self.tab8_season_window = selection.season_window
+        season_start = pd.Timestamp(self.tab8_season_window.start_date)
+        season_end = pd.Timestamp(self.tab8_season_window.end_date)
+        season_extent = (
+            f"{season_start.strftime('%Y%m%d')}-{season_end.strftime('%Y%m%d')}"
+        )
+        season_id = season_id_input.value.strip() if season_id_input is not None else ""
+        if not season_id or season_id == "":
             with log_out:
-                print(f"Failed to read season selection: {exc}")
+                print("Provide a season ID before generating a map.")
             return
+        if not season_id.isalnum():
+            with log_out:
+                print(
+                    "Season ID must be alphanumeric (no spaces or special characters)."
+                )
+            return
+
+        season_specifications = {season_id: self.tab8_season_window}
 
         # Extract parameters
         mask_cropland = (
@@ -3428,11 +3442,6 @@ class WorldCerealTrainingApp:
         )
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
-        )
-        custom_seasonal_model_url = (
-            custom_seasonal_model_input.value.strip()
-            if custom_seasonal_model_input is not None
-            else ""
         )
         croptype_pp_enabled = (
             croptype_postprocess_enabled.value
@@ -3447,7 +3456,7 @@ class WorldCerealTrainingApp:
         croptype_pp_kernel = (
             croptype_postprocess_kernel.value
             if croptype_postprocess_kernel is not None
-            else 5
+            else 3
         )
         cropland_pp_enabled = (
             cropland_postprocess_enabled.value
@@ -3467,82 +3476,72 @@ class WorldCerealTrainingApp:
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 50
         )
+        product_type = (
+            product_type_dropdown.value
+            if product_type_dropdown is not None
+            else "cropland"
+        )
+
+        # model selection
+        custom_seasonal_model_url = (
+            self.presto_model_package.get("seasonal_model_path")
+            if self.presto_model_package
+            else None
+        )
+        if product_type == "cropland":
+            landcover_head_zip = self.tab7_model_url
+            croptype_head_zip = None
+            enable_croptype_head = False
+        elif product_type == "croptype":
+            landcover_head_zip = None
+            croptype_head_zip = self.tab7_model_url
+            enable_croptype_head = True
+        else:
+            raise ValueError(
+                f"Invalid product type: {product_type}. Must be 'cropland' or 'croptype'."
+            )
+        with log_out:
+            print("Using the following models:")
+            print(
+                f"- Seasonal model: {custom_seasonal_model_url or 'Default WorldCereal seasonal model'}"
+            )
+            if enable_cropland_head:
+                print(f"- Cropland head: {landcover_head_zip}")
+            else:
+                print("- Cropland head: Not used")
+            if enable_croptype_head:
+                print(f"- Crop type head: {croptype_head_zip}")
+            else:
+                print("- Crop type head: Not used")
+
+        # Set output directory
+        run_suffix = output_name_input.value.strip() if output_name_input else ""
+        if not run_suffix:
+            with log_out:
+                print("Provide an output suffix before generating a map.")
+            return
+        model_name = (
+            self.head_package_path.stem
+            if self.head_package_path is not None
+            else "default-model"
+        )
+
+        output_dir = Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
+
+        if output_dir.exists():
+            with log_out:
+                print(
+                    f"Output directory {output_dir} already exists. Choose a different output suffix to avoid overwriting."
+                )
+            return
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get processing spatial extent
+        aoi_gdf = aoi_map.get_gdf()
 
         # Run processing on main thread to keep logs visible in output widgets.
         try:
-            run_suffix = output_name_input.value.strip() if output_name_input else ""
-            if not run_suffix:
-                with log_out:
-                    print("Provide an output suffix before generating a map.")
-                return
-            model_name = self.head_package_path.stem
-            season_start = pd.Timestamp(self.tab8_season_window.start_date)
-            season_end = pd.Timestamp(self.tab8_season_window.end_date)
-            season_extent = (
-                f"{season_start.strftime('%Y%m%d')}-{season_end.strftime('%Y%m%d')}"
-            )
-            output_dir = Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
 
-            if output_dir.exists():
-                with log_out:
-                    print(
-                        f"Output directory {output_dir} already exists. Choose a different output suffix to avoid overwriting."
-                    )
-                return
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            processing_extent = aoi_map.get_extent(projection="latlon")
-            if processing_extent is None:
-                with log_out:
-                    print("Draw an AOI on the map before generating a map.")
-                return
-
-            season_id = (
-                season_id_input.value.strip() if season_id_input is not None else ""
-            )
-            if not season_id or season_id == "":
-                with log_out:
-                    print("Provide a season ID before generating a map.")
-                return
-            if not season_id.isalnum():
-                with log_out:
-                    print(
-                        "Season ID must be alphanumeric (no spaces or special characters)."
-                    )
-                return
-
-            season_windows = {
-                season_id: (
-                    season_start.strftime("%Y-%m-%d"),
-                    season_end.strftime("%Y-%m-%d"),
-                )
-            }
-
-            workflow_builder = (
-                WorldCerealWorkflowConfig.builder()
-                .season_ids([season_id])
-                .season_windows(season_windows)
-                .croptype_head_zip(self.tab7_model_url)
-                .enable_croptype_head(True)
-                .enable_cropland_head(enable_cropland_head)
-                .enforce_cropland_gate(mask_cropland)
-                .export_class_probabilities(export_class_probs)
-            )
-            if custom_seasonal_model_url:
-                workflow_builder = workflow_builder.seasonal_model_zip(
-                    custom_seasonal_model_url
-                )
-            workflow_builder = workflow_builder.cropland_postprocess(
-                enabled=cropland_pp_enabled,
-                method=cropland_pp_method,
-                kernel_size=cropland_pp_kernel,
-            )
-            workflow_builder = workflow_builder.croptype_postprocess(
-                enabled=croptype_pp_enabled,
-                method=croptype_pp_method,
-                kernel_size=croptype_pp_kernel,
-            )
-            workflow_config = workflow_builder.build()
             if status_message is not None:
                 status_message.value = (
                     "<i>Processing started... this may take a while.</i>"
@@ -3550,18 +3549,33 @@ class WorldCerealTrainingApp:
             if generate_button is not None:
                 generate_button.disabled = True
 
-            _ = run_map_production(
-                spatial_extent=processing_extent,
+            _ = run_map_production_notebook(
+                aoi_gdf=aoi_gdf,
+                output_folder=output_dir,
+                grid_size=tile_resolution,
                 temporal_extent=self.tab8_processing_period,
-                output_dir=output_dir,
-                tile_resolution=tile_resolution,
-                product_type=WorldCerealProductType.CROPTYPE,
-                workflow_config=workflow_config,
-                stop_event=None,
+                season_specifications=season_specifications,
+                product_type=product_type,
+                seasonal_model_zip=custom_seasonal_model_url,
+                enable_cropland_head=enable_cropland_head,
+                landcover_head_zip=landcover_head_zip,
+                enable_croptype_head=enable_croptype_head,
+                croptype_head_zip=croptype_head_zip,
+                enforce_cropland_gate=mask_cropland,
+                export_class_probs=export_class_probs,
+                enable_cropland_postprocess=cropland_pp_enabled,
+                cropland_postprocess_method=cropland_pp_method,
+                cropland_postprocess_kernel_size=cropland_pp_kernel,
+                enable_croptype_postprocess=croptype_pp_enabled,
+                croptype_postprocess_method=croptype_pp_method,
+                croptype_postprocess_kernel_size=croptype_pp_kernel,
+                target_epsg=4326,
                 plot_out=plot_out,
                 log_out=log_out,
                 display_outputs=True,
+                simplify_logging=True,
             )
+
             self.tab8_results = output_dir
             if status_message is not None:
                 status_message.value = "<i>Processing finished.</i>"
@@ -4031,38 +4045,22 @@ class WorldCerealTrainingApp:
             load_button.layout.display = "block"
             load_output.layout.display = "block"
 
-        has_connection = self.cdse_connection is not None
-        needs_auth = self._needs_cdse_authentication() and not has_connection
+        needs_auth = self._needs_cdse_authentication()
         if not self.cdse_auth_failed and not self.cdse_auth_in_progress:
             with auth_output:
                 auth_output.clear_output()
-                if has_connection:
-                    print("CDSE authentication ready. You can deploy your model.")
-                elif needs_auth:
-                    print(
-                        "No CDSE refresh token found. Use the Authenticate button to sign in."
-                    )
+                if needs_auth:
+                    print("No CDSE refresh token found. Click Authenticate to sign in.")
                 else:
                     print(
-                        "CDSE refresh token found on this machine. Click the reset button if you want to login with another account."
+                        "CDSE refresh token found. Click Reset authentication to switch accounts."
                     )
-        if needs_auth:
-            self.cdse_connection = None
-        elif self.cdse_connection is None:
-            try:
-                self.cdse_connection = cdse_connection()
-            except Exception as exc:
-                self.cdse_connection = None
-                with auth_output:
-                    print(
-                        "Failed to initialize CDSE connection.\n"
-                        f"Error: {exc}\n\n"
-                        "Use the Authenticate button to sign in."
-                    )
+
         if reset_auth_button is not None:
-            reset_auth_button.layout.display = "none" if needs_auth else "block"
+            reset_auth_button.layout.display = "block" if not needs_auth else "none"
         if authenticate_button is not None:
-            authenticate_button.disabled = has_connection or self.cdse_auth_in_progress
+            authenticate_button.layout.display = "block" if needs_auth else "none"
+            authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
     def _update_tab8_state(self):
@@ -4088,26 +4086,13 @@ class WorldCerealTrainingApp:
                 )
             season_hint.value = hint
         if generate_button and status_message:
-            if self.workflow_mode == "inference-only":
-                is_ready = self.tab7_model_url is not None
-                generate_button.disabled = not is_ready
-                if is_ready:
-                    status_message.value = (
-                        "<i>Ready to generate map (inference-only mode).</i>"
-                    )
-                else:
-                    status_message.value = (
-                        "<i>Get a model URL by deploying your model in Tab 7 first.</i>"
-                    )
-                return
-            is_ready = self.tab7_model_url is not None
-            generate_button.disabled = not is_ready
-            if is_ready:
-                status_message.value = "<i>Ready to generate map.</i>"
-            else:
+            generate_button.disabled = False
+            if self.tab7_model_url is not None:
                 status_message.value = (
-                    "<i>Deploy a model in Tab 7 before generating a map.</i>"
+                    "<i>Ready to generate map with a deployed model.</i>"
                 )
+            else:
+                status_message.value = "<i>Ready to generate map with default preset configuration (no custom model deployed).</i>"
 
     def _update_tab9_state(self):
         """Enable/disable Tab 9 (visualize) depending on map output availability."""
@@ -4172,46 +4157,53 @@ class WorldCerealTrainingApp:
                 self.cdse_auth_in_progress = False
                 self.cdse_connection = None
                 print(
-                    "CDSE authentication cache cleared. Use Authenticate to sign in again."
+                    "✅ CDSE authentication cache cleared. Use Authenticate to sign in again."
                 )
+                print("Please click the 'Authenticate' button to log in again.")
             except Exception as exc:
-                print(f"Failed to clear CDSE authentication cache: {exc}")
+                print(f"❌ Failed to clear CDSE authentication cache: {exc}")
 
         self._update_tab7_state()
 
     def _on_authenticate_cdse_click(self, _=None) -> None:
         output = self.tab7_widgets.get("auth_output")
-        authenticate_button = self.tab7_widgets.get("authenticate_button")
-        reset_auth_button = self.tab7_widgets.get("reset_auth_button")
+
         if output is None:
             return
         if self.cdse_auth_in_progress:
             return
         self.cdse_auth_in_progress = True
         output.clear_output()
-        with output:
-            print("🔐 Authenticating with CDSE...")
 
-        def _run_auth() -> None:
+        connection = None
+        try:
             connection = trigger_cdse_authentication(output)
-            self.cdse_connection = connection
-            self.cdse_auth_in_progress = False
-            if connection is None:
-                self.cdse_auth_failed = True
-                with output:
-                    print("❌ Authentication failed. Please try again.")
-            else:
-                self.cdse_auth_cleared = False
-                self.cdse_auth_failed = False
-                with output:
-                    print("CDSE authentication ready. You can deploy your model.")
-                if authenticate_button is not None:
-                    authenticate_button.disabled = True
-                if reset_auth_button is not None:
-                    reset_auth_button.layout.display = "block"
-            self._update_tab7_state()
+        finally:
+            output.clear_output()
+            with output:
+                if connection is not None:
+                    print("✅ CDSE authentication successful!")
+                    token_path = Path.home() / (
+                        "AppData/Roaming/openeo-python-client/refresh-tokens.json"
+                        if "windows" in platform.system().lower()
+                        else ".local/share/openeo-python-client/refresh-tokens.json"
+                    )
+                    for _ in range(10):
+                        if token_path.exists():
+                            break
+                        time.sleep(0.5)
 
-        threading.Thread(target=_run_auth, daemon=True).start()
+                    self.cdse_auth_failed = False
+                    self.cdse_auth_cleared = False
+                    self.cdse_connection = connection
+                else:
+                    print("❌ CDSE authentication failed or was cancelled.")
+                    print("Please try authenticating again.")
+                    self.cdse_auth_failed = True
+                    self.cdse_connection = None
+            self.cdse_auth_in_progress = False
+
+        self._update_tab7_state()
 
     def _is_valid_url(self, value: str) -> bool:
         try:

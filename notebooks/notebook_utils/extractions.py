@@ -1,5 +1,6 @@
 import logging
 import textwrap
+import time
 import urllib.request
 from pathlib import Path
 from typing import List, Optional, Union
@@ -11,20 +12,29 @@ import numpy as np
 import pandas as pd
 from ipyleaflet import GeoJSON, Map, WidgetControl, basemaps
 from loguru import logger
+from openeo.extra.job_management import CsvJobDatabase
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from prometheo.utils import DEFAULT_SEED
 from shapely.geometry import Polygon, box
 from tabulate import tabulate
 from tqdm import tqdm
 
+from worldcereal.extract.common import (
+    check_job_status,
+    get_succeeded_job_details,
+    run_extractions,
+)
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
+from worldcereal.stac.constants import ExtractionCollection
 from worldcereal.utils.legend import ewoc_code_to_label
 from worldcereal.utils.refdata import (
     gdf_to_points,
     query_private_extractions,
     query_public_extractions,
 )
+
+from .job_manager import notebook_logger
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -143,6 +153,111 @@ def prepare_samples_dataframe(
     gdf = gdf.drop(columns=["tile"])
 
     return gdf
+
+
+def run_extractions_notebook(
+    output_folder: Path,
+    samples_df_path: Path,
+    ref_id: str,
+    collection: ExtractionCollection = ExtractionCollection.POINT_WORLDCEREAL,
+    extract_value: int = 1,
+    restart_failed: bool = False,
+    status_out: Optional[widgets.Output] = None,
+    log_out: Optional[widgets.Output] = None,
+    display_outputs: bool = True,
+    simplify_logging: bool = True,
+) -> CsvJobDatabase:
+    """Run extractions with notebook-friendly logging and status output."""
+
+    # Setup loggers and output widgets for the notebook environment
+    status_out, log_out, _log = notebook_logger(
+        plot_out=status_out,
+        log_out=log_out,
+        display_outputs=display_outputs,
+    )
+
+    _log("------------------------------------")
+    _log("STARTING WORKFLOW: Extractions")
+    _log("------------------------------------")
+    _log("----- Workflow configuration -----")
+
+    params = {
+        "output_folder": str(output_folder),
+        "samples_df_path": str(samples_df_path),
+        "ref_id": ref_id,
+        "collection": collection.value,
+        "restart_failed": restart_failed,
+    }
+    for key, value in params.items():
+        _log(f"{key}: {value}")
+    _log("----------------------------------")
+
+    if simplify_logging:
+        logging.getLogger("openeo").setLevel(logging.WARNING)
+        logging.getLogger("openeo.extra.job_management._manager").setLevel(
+            logging.WARNING
+        )
+        pipeline_logger = logging.getLogger("extraction_pipeline")
+        pipeline_logger.propagate = False
+
+    def status_callback(status_df: pd.DataFrame) -> None:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with status_out:
+            status_out.clear_output(wait=True)
+            print("🧭 Extraction status summary")
+            print(f"Last update: {timestamp}")
+            if status_df.empty:
+                print("Waiting for job tracking file to be created...")
+                return
+            if "status" not in status_df.columns:
+                print("⚠️  No status column found in job tracking data.")
+                return
+            status_counts = status_df["status"].value_counts()
+            status_table = [[status, count] for status, count in status_counts.items()]
+            print(
+                tabulate(
+                    status_table,
+                    headers=["status", "count"],
+                    tablefmt="psql",
+                )
+            )
+            print(
+                "For individual job tracking, visit: https://openeo.dataspace.copernicus.eu/"
+            )
+
+    _log("🚀 Starting extractions...")
+
+    break_msg = (
+        "Stopping extractions...\n"
+        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
+        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
+    )
+
+    try:
+        job_db = run_extractions(
+            collection=collection,
+            output_folder=output_folder,
+            samples_df_path=samples_df_path,
+            ref_id=ref_id,
+            extract_value=extract_value,
+            restart_failed=restart_failed,
+            status_callback=status_callback,
+        )
+    except KeyboardInterrupt:
+        _log(break_msg)
+        raise
+
+    _log("Extractions completed. Checking job status...")
+    try:
+        check_job_status(job_db)
+        get_succeeded_job_details(job_db)
+    except Exception as exc:
+        _log(f"Status summary failed: {exc}")
+
+    _log("All done!")
+    _log(f"Results stored in {output_folder}")
+
+    return job_db
 
 
 def _apply_band_scaling(array: np.array, bandname: str) -> np.array:
@@ -718,6 +833,7 @@ def retrieve_extractions_extent(
 
     # Visualization of the map with hover functionality using ipyleaflet
     extent_gdf = gdf.to_crs(epsg=4326)
+    extent_gdf = extent_gdf.loc[extent_gdf.geometry.notna()].copy()
     info = widgets.HTML(value="<b>ref_id:</b> hover over a dataset")
     info_control = WidgetControl(widget=info, position="topright")
 
@@ -727,6 +843,13 @@ def retrieve_extractions_extent(
         zoom=1,
         scroll_wheel_zoom=True,
     )
+
+    if extent_gdf.empty or any(pd.isna(value) for value in extent_gdf.total_bounds):
+        logger.warning(
+            "Public extractions extent is empty or invalid; skipping layer rendering."
+        )
+        extent_map.add_control(info_control)
+        return extent_gdf, extent_map
 
     geojson = GeoJSON(
         data=extent_gdf.__geo_interface__,

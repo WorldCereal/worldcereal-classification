@@ -1,370 +1,143 @@
-import copy
 import glob
-import json
-import sys
-import time
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Dict, Literal, Optional
 
 import geopandas as gpd
-import numpy as np
-import pandas as pd
-import plotly.express as px
 import rasterio
-from IPython.display import display
 from ipywidgets import Output
-from loguru import logger
-from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
-from pandas.errors import EmptyDataError
+from openeo_gfmap import Backend, BackendContext, TemporalContext
 from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.warp import Resampling, calculate_default_transform, reproject
-from shapely.geometry import box
 
-from worldcereal.job import setup_inference_job_manager
+from worldcereal.jobmanager import (
+    DEFAULT_BASE_DELAY,
+    DEFAULT_MAX_DELAY,
+    DEFAULT_MAX_RETRIES,
+    WorldCerealJobManager,
+    run_map_production,
+)
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
-from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
-from worldcereal.parameters import WorldCerealProductType
 
-# Define the color mapping for job statuses
-JOB_STATUS_COLORS = {
-    "not_started": "grey",
-    "created": "gold",
-    "queued": "lightsteelblue",
-    "queued_for_start": "lightsteelblue",
-    "running": "navy",
-    "finished": "lime",
-    "error": "darkred",
-    "skipped": "darkorange",
-    "start_failed": "red",
-    None: "black",  # Default color for any undefined status
-}
+from .job_manager import notebook_logger, run_notebook_job_manager
 
 
-def plot_job_status(status_df, color_dict, center, zoom=10):
-    """Plot the job status on a map using Plotly Express.
-
-    Parameters
-    ----------
-    status_df : pd.DataFrame
-        DataFrame containing job status information with a 'geometry' column in WKT format.
-        The 'status' column should contain the job status values.
-        Each row should represent a job with its status and geometry.
-    color_dict : dict
-        Dictionary mapping job statuses to colors for visualization.
-        Keys should be the job status values, and values should be the corresponding colors.
-        If a status is not in the dictionary, it will default to the color for `None`.
-    center : dict
-        Dictionary with 'lat' and 'lon' keys to specify the center of the map.
-        Example: {'lat': 52.5, 'lon': 13.4}
-        This will be used to center the map view.
-    zoom : int, optional
-        Plot zoom level, by default 12
-
-    Returns
-    -------
-    fig : plotly.graph_objects.Figure
-        A Plotly figure object containing the choropleth map of job statuses.
-    """
-    status_plot = copy.deepcopy(status_df)
-    status_plot.crs = "EPSG:4326"
-    status_plot["color"] = (
-        status_plot["status"].map(color_dict).fillna(color_dict[None])
-    )
-
-    # Convert the entire GeoDataFrame to a FeatureCollection
-    geojson = status_plot.set_index("tile_name").__geo_interface__
-
-    fig = px.choropleth_mapbox(
-        status_plot,
-        geojson=geojson,
-        locations="tile_name",
-        color="status",
-        color_discrete_map=color_dict,
-        mapbox_style="carto-positron",
-        center=center,
-        zoom=zoom,
-        title="Job Status Overview",
-    )
-    fig.update_geos(fitbounds="locations")
-    fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0})
-
-    return fig
-
-
-def lon_to_utm_zone(lon: float) -> int:
-    return int((lon + 180) / 6) + 1
-
-
-def utm_zone_bounds(zone: int):
-    min_lon = (zone - 1) * 6 - 180
-    max_lon = min_lon + 6
-    return min_lon, max_lon
-
-
-def split_bbox_by_utm_and_hemisphere(west, south, east, north) -> list:
-    """
-    Splits a bounding box into UTM zones and hemispheres.
-    Coordinates must be in WGS84 (EPSG:4326) format.
-
-    Returns
-    -------
-    list
-        A list of dictionaries, each containing the bounding box for a UTM zone and hemisphere.
-        Each dictionary has keys: 'west', 'south', 'east', 'north', 'crs', 'zone', 'hemisphere'.
-    """
-    zone_start = lon_to_utm_zone(west)
-    zone_end = lon_to_utm_zone(east)
-    hemi_splits = []
-
-    if south < 0 and north > 0:
-        lat_splits = [("S", south, 0), ("N", 0, north)]
-    else:
-        hemisphere = "N" if south >= 0 else "S"
-        lat_splits = [(hemisphere, south, north)]
-
-    for zone in range(zone_start, zone_end + 1):
-        zmin_lon, zmax_lon = utm_zone_bounds(zone)
-        lon_min_clipped = max(west, zmin_lon)
-        lon_max_clipped = min(east, zmax_lon)
-
-        if lon_min_clipped >= lon_max_clipped:
-            continue
-
-        for hemisphere, hemi_min_lat, hemi_max_lat in lat_splits:
-            hemi_min_clipped = max(south, hemi_min_lat)
-            hemi_max_clipped = min(north, hemi_max_lat)
-
-            if hemi_min_clipped < hemi_max_clipped:
-                hemi_splits.append(
-                    {
-                        "west": lon_min_clipped,
-                        "south": hemi_min_clipped,
-                        "east": lon_max_clipped,
-                        "north": hemi_max_clipped,
-                        "crs": "EPSG:4326",
-                        "zone": zone,
-                        "hemisphere": hemisphere,
-                    }
-                )
-
-    return hemi_splits
-
-
-def create_tiling_grid(
-    bbox: dict,
-    basename: str = "tile",
-    output_crs: str = "EPSG:4326",
-    grid_size_m: float = 20000,
-    tiling_crs: Optional[str] = None,
-) -> gpd.GeoDataFrame:
-    """
-    Create a grid of square tiles over a bounding box (with CRS).
-    Tiles in `tiling_crs`, output in `output_crs`.
-
-    Parameters
-    ----------
-    bbox : dict
-        Dict with 'west', 'south', 'east', 'north', 'crs' keys.
-    basename : str
-        Base name for the tile identifiers.
-    output_crs : str
-        Output CRS for the geometry column in the grid (e.g., WGS84 for OpenEO).
-    grid_size_m : float
-        Side length of each square tile in meters.
-    tiling_crs : Optional[str]
-        CRS to use for tiling. If None (default), the best local UTM CRS is derived
-
-    Returns
-    -------
-    GeoDataFrame
-        Grid tiles as polygons, with 'tile_name', 'epsg', and 'bounds_epsg' columns.
-    """
-    # Validate input bbox
-    if not {"west", "south", "east", "north", "crs"}.issubset(bbox):
-        raise ValueError("bbox must include 'west', 'south', 'east', 'north', 'crs'.")
-
-    # Build bounding box geometry and project to tiling CRS
-    bbox_geom = box(bbox["west"], bbox["south"], bbox["east"], bbox["north"])
-    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=bbox["crs"])
-    if tiling_crs is None:
-        # Derive best local UTM CRS for tiling
-        crs = bbox_gdf.estimate_utm_crs()
-        epsg = int(crs.to_epsg())
-        tiling_crs = f"EPSG:{epsg}"
-    bbox_gdf = bbox_gdf.to_crs(tiling_crs)
-
-    # Create grid tiles
-    minx, miny, maxx, maxy = bbox_gdf.total_bounds
-    x_coords = np.arange(minx, maxx, grid_size_m)
-    y_coords = np.arange(miny, maxy, grid_size_m)
-    coordinates = [
-        (x, y, min(x + grid_size_m, maxx), min(y + grid_size_m, maxy))
-        for x in x_coords
-        for y in y_coords
-    ]
-    # convert coordinates to string for writing to GeoDataFrame
-    bounds_tiling = [repr(coords) for coords in coordinates]
-
-    # Create geometries for each tile
-    geometries_tiling = [box(*coords) for coords in coordinates]
-
-    # Create GeoDataFrame with the geometries
-    grid = gpd.GeoDataFrame(geometry=geometries_tiling, crs=tiling_crs).to_crs(
-        output_crs
-    )
-    grid["tile_name"] = [f"{basename}_{i}" for i in range(len(grid))]
-    grid["epsg"] = (
-        int(tiling_crs.split(":")[1]) if tiling_crs.startswith("EPSG:") else None
-    )
-    grid["bounds_epsg"] = bounds_tiling
-
-    return grid
-
-
-def create_production_grid(
-    spatial_extent: BoundingBoxExtent,
-    temporal_extent: TemporalContext,
-    resolution: int = 20,
-    tiling_crs: Optional[str] = None,
-) -> gpd.GeoDataFrame:
-    """Create a production grid for the given extent.
-
-    Parameters
-    ----------
-    spatial_extent : BoundingBoxExtent
-        The extent for which to create the production grid.
-        Must be in WGS84 (EPSG:4326) coordinate reference system.
-    temporal_extent : TemporalContext
-        The temporal extent for the production grid.
-        Must have 'start_date' and 'end_date' attributes.
-        These will be added to the grid as metadata.
-    resolution : int, optional
-        The resolution of the grid in meters, by default 20.
-    tiling_crs : Optional[str], optional
-        The coordinate reference system to use for tiling.
-        If None, the best local UTM CRS will be derived.
-
-    Returns
-    -------
-    GeoDataFrame
-        A GeoDataFrame containing the production grid.
-    """
-
-    # TODO: make sure the tiling grid is in line with the Sentinel 20 m grid
-
-    # Ensure the spatial extent is in WGS84 (EPSG:4326)
-    if not spatial_extent.epsg == 4326:
-        logger.info(
-            '"Spatial extent is not in WGS84 (EPSG:4326). Reprojecting to WGS84.")'
-        )
-        # Convert to geometry and reproject to WGS84
-        bbox_geom = box(
-            spatial_extent.west,
-            spatial_extent.south,
-            spatial_extent.east,
-            spatial_extent.north,
-        )
-        bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=spatial_extent.epsg)
-        bbox_gdf = bbox_gdf.to_crs("EPSG:4326")
-        spatial_extent = BoundingBoxExtent(
-            west=bbox_gdf.total_bounds[0],
-            south=bbox_gdf.total_bounds[1],
-            east=bbox_gdf.total_bounds[2],
-            north=bbox_gdf.total_bounds[3],
-            epsg=4326,
-        )
-
-    # We first split the bounding box by UTM zones
-    bbox_splits = split_bbox_by_utm_and_hemisphere(
-        spatial_extent.west,
-        spatial_extent.south,
-        spatial_extent.east,
-        spatial_extent.north,
-    )
-
-    logger.info(f"Splitted bounding box into {len(bbox_splits)} UTM zone splits.")
-    grid_dfs = []
-    for split in bbox_splits:
-        # Splitting bbox into smaller tiles, specified by the resolution
-        tile_name = f"tile_{split['zone']}{split['hemisphere']}"
-        grid_dfs.append(
-            create_tiling_grid(
-                split,
-                basename=tile_name,
-                grid_size_m=resolution * 1000,
-                tiling_crs=tiling_crs,
-            )
-        )
-
-    # Concatenate all the grids into a single GeoDataFrame
-    grid = gpd.GeoDataFrame(pd.concat(grid_dfs, ignore_index=True))
-    # Add metadata columns
-    grid["start_date"] = temporal_extent.start_date
-    grid["end_date"] = temporal_extent.end_date
-
-    logger.info(f"Created production grid with {len(grid)} tiles.")
-
-    return grid
-
-
-def run_map_production(
-    spatial_extent: BoundingBoxExtent,
-    temporal_extent: TemporalContext,
-    output_dir: Path,
-    tile_resolution: int = 20,
-    tiling_crs: Optional[str] = None,
-    product_type: WorldCerealProductType = WorldCerealProductType.CROPLAND,
-    backend_context: BackendContext = BackendContext(Backend.CDSE),
+def run_map_production_notebook(
+    aoi_gdf: gpd.GeoDataFrame,
+    output_folder: Path,
+    grid_size: int = 20,
+    temporal_extent: Optional[TemporalContext] = None,
+    season_specifications: Optional[Dict[str, TemporalContext]] = None,
+    year: Optional[int] = None,
+    product_type: Literal["cropland", "croptype"] = "cropland",
+    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+    seasonal_model_zip: Optional[str] = None,
+    enable_cropland_head: Optional[bool] = None,
+    landcover_head_zip: Optional[str] = None,
+    enable_croptype_head: Optional[bool] = None,
+    croptype_head_zip: Optional[str] = None,
+    enforce_cropland_gate: Optional[bool] = None,
+    export_class_probs: Optional[bool] = None,
+    enable_cropland_postprocess: Optional[bool] = None,
+    cropland_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
+    cropland_postprocess_kernel_size: Optional[int] = None,
+    enable_croptype_postprocess: Optional[bool] = None,
+    croptype_postprocess_method: Optional[
+        Literal["majority_vote", "smooth_probabilities"]
+    ] = None,
+    croptype_postprocess_kernel_size: Optional[int] = None,
     target_epsg: Optional[int] = None,
+    backend_context: BackendContext = BackendContext(Backend.CDSE),
     s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+    restart_failed: bool = True,
     job_options: Optional[dict] = None,
     parallel_jobs: int = 2,
-    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
-    workflow_config: Optional[WorldCerealWorkflowConfig] = None,
-    stop_event=None,
+    randomize_jobs: bool = True,
     plot_out: Optional[Output] = None,
     log_out: Optional[Output] = None,
     display_outputs: bool = True,
     poll_sleep: int = 60,
-) -> pd.DataFrame:
-    """Run a WorldCereal map production for the given spatial and temporal extent.
+    simplify_logging: bool = True,
+) -> WorldCerealJobManager:
+    """Run a WorldCereal map production for the given AOI and temporal extent.
     Parameters
     ----------
-    spatial_extent : BoundingBoxExtent
-        The spatial extent for the production grid.
-        Must be in WGS84 (EPSG:4326) coordinate reference system.
-    temporal_extent : TemporalContext
-        The temporal extent for the production grid.
-        Must have 'start_date' and 'end_date' attributes.
-    output_dir : Path
+    aoi_gdf : gpd.GeoDataFrame
+        Areas of interest to process. Must have a CRS.
+    output_folder : Path
         The directory where the output files will be saved.
-    tile_resolution : int, optional
+    grid_size : int, optional
         The resolution of the tiles in kilometers, by default 20.
-    tiling_crs : Optional[str], optional
-        The coordinate reference system to use for tiling.
-        If None, the best local UTM CRS will be derived.
+    temporal_extent : Optional[TemporalContext], optional
+        Temporal context defining the time range for which to collect input data patches.
+        If provided together with `year`, temporal_extent will take precedence and override the year.
+    season_specifications : Optional[Dict[str, TemporalContext]], optional
+        Per-season temporal windows used for inference, by default None.
+    year : Optional[int], optional
+        Year used for crop calendar inference when dates are missing, by default None.
     product_type : WorldCerealProductType, optional
         The type of product to produce, by default WorldCerealProductType.CROPLAND
-    backend_context : BackendContext, optional
-        The backend context to use for the production, by default BackendContext(Backend.CDSE)
+    seasonal_preset : str, optional
+        Name of the seasonal workflow preset to use when building the inference context.
+        This determines the default configuration settings of the inference workflow.
+        By default we use the "phase_ii_multitask" preset, which corresponds to the Phase II multitask seasonal backbone with dual landcover/croptype heads.
+    seasonal_model_zip : Optional[str], optional
+        Path to .zip file of a seasonal Presto model to be used for overriding the default seasonal model.
+        By default None, which means the seasonal model embedded in the preset will be used.
+    enable_cropland_head : Optional[bool], optional
+        Override whether the cropland (landcover) head is enabled. If None, defaults to
+        preset behavior unless `product_type` forces cropland-only execution.
+    landcover_head_zip : Optional[str], optional
+        Path to .zip file of a cropland/landcover head artifact to be used for overriding the default head.
+        If None, the head embedded in the preset seasonal model will be used.
+    enable_croptype_head : Optional[bool], optional
+        Override whether the croptype head is enabled. If None, defaults to preset behavior
+        unless `product_type` forces cropland-only execution.
+    croptype_head_zip : Optional[str], optional
+        Path to .zip file of a croptype head artifact to be used for overriding the default head.
+        If None, the head embedded in the preset seasonal model will be used.
+    enforce_cropland_gate : Optional[bool], optional
+        Whether or not to mask the crop type product with the cropland product.
+        If None, use the preset default (True).
+    export_class_probs : Optional[bool], optional
+        Export per-class probabilities in all products.
+        If None, use the preset default (True).
+    enable_cropland_postprocess : Optional[bool], optional
+        Enable cropland postprocessing. If None, use the preset default (False).
+    cropland_postprocess_method : Optional[str], optional
+        If None and postprocess is enabled, the preset default is used ("majority_vote").
+        Available options are "majority_vote" and "smooth_probabilities".
+    cropland_postprocess_kernel_size : Optional[int], optional
+        Cropland postprocess kernel size override.
+        If None and postprocess is enabled, the preset default is used (5).
+    enable_croptype_postprocess : Optional[bool], optional
+        Enable croptype postprocessing. If None, use the preset default (False).
+    croptype_postprocess_method : Optional[str], optional
+        Croptype postprocess method override.
+        If None and postprocess is enabled, the preset default is used ("majority_vote").
+        Available options are "majority_vote" and "smooth_probabilities".
+    croptype_postprocess_kernel_size : Optional[int], optional
+        Croptype postprocess kernel size override.
+        If None and postprocess is enabled, the preset default is used (5).
     target_epsg : Optional[int], optional
         The target EPSG code for the output, by default None.
-        If None, the output will be in the CRS as defined by the tiling grid.
+        If None, the output will be in the CRS as defined by the tiling grid (local UTM projection).
+    backend_context : BackendContext, optional
+        The backend context to use for the production, by default BackendContext(Backend.CDSE)
     s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
         The Sentinel-1 orbit state to use for the production, by default None.
-        If None, the default orbit state will be used.
+        If None, the  orbit state will be automatically determined.
+    restart_failed : bool, optional
+        Whether to automatically restart failed jobs, by default True.
     job_options : Optional[dict], optional
         Additional options for the job, by default None.
         If None, default options will be used.
     parallel_jobs : int, optional
         The number of parallel jobs to run, by default 2.
-    seasonal_preset : str, optional
-        Name of the seasonal workflow preset to use when building the inference context.
-    workflow_config : Optional[WorldCerealWorkflowConfig], optional
-        Structured overrides applied on top of the preset to tweak model/runtime/season settings.
-    stop_event : Optional[threading.Event], optional
-        An optional threading event to stop the job manager gracefully, by default None.
+    randomize_jobs : bool, optional
+        Whether to randomize the order of job execution, by default True.
     plot_out : Optional[Output], optional
         An optional ipywidgets Output widget to use for plotting the job status.
         If None, a new Output widget will be created, by default None.
@@ -374,156 +147,74 @@ def run_map_production(
     display_outputs : bool, optional
         Whether to display the output widgets in the notebook, by default True.
     poll_sleep : int, optional
-        The number of seconds to wait between polling the job status, by default 60.
+        The number of seconds to wait between polling the job status, by default 60
+    simplify_logging : bool, optional
+        Whether to simplify logging output for better readability in the notebook, by default True.
+        If True, openeo job manager logs will be simplified to show only essential information and errors, instead of the full verbose logs.
+
     Returns
     -------
-    pd.DataFrame
-        A DataFrame containing the final job status.
-    Raises
-    ------
-    ValueError
-        If the spatial extent is not in WGS84 (EPSG:4326) coordinate reference system.
+    WorldCerealJobManager
+        The job manager instance that was used to run the production.
+        You can use this instance to inspect job statuses and load results after the production has finished.
     """
-    # Configure logger of job manager to output to stdout
-    logger.remove()  # Remove default handler
-    logger.add(sys.stdout, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
-    # Create output widgets (if not provided) and track if we created them
-    plot_out_created = plot_out is None
-    log_out_created = log_out is None
-
-    if plot_out is None:
-        plot_out = Output()
-    if log_out is None:
-        log_out = Output()
-
-    # Only display widgets if we created them internally
-    if display_outputs and (plot_out_created or log_out_created):
-        if log_out_created:
-            display(log_out)
-        if plot_out_created:
-            display(plot_out)
-
-    # Helper function to log messages either to widget or logger
-    def _log(message: str):
-        if display_outputs:
-            with log_out:
-                print(message)
-        else:
-            print(message)
-
-    # Create output directory if it does not exist
-    output_dir.mkdir(exist_ok=True, parents=True)
-    _log(f"Output directory set to: {output_dir.resolve()}")
-
-    # Some additional logs about the processing parameters
-    _log(
-        f"Full processing period: {temporal_extent.start_date} to {temporal_extent.end_date}"
+    # Set up logging and plotting outputs for the notebook
+    plot_out, log_out, _log = notebook_logger(
+        plot_out=plot_out,
+        log_out=log_out,
+        display_outputs=display_outputs,
     )
 
-    _log("Detailed processing parameters:")
-    _log(json.dumps(workflow_config.to_dict(), indent=2))
-    _log("----------------------------------")
-
-    # Create production grid according to tile resolution and spatial extent
-    grid_file = output_dir / "production_grid.gpkg"
-    if grid_file.exists():
-        _log(f"Loading existing production grid from {grid_file}")
-        production_grid = gpd.read_file(grid_file)
-    else:
-        _log(f"Creating new production grid with resolution {tile_resolution} km.")
-        production_grid = create_production_grid(
-            spatial_extent,
-            temporal_extent,
-            resolution=tile_resolution,
-            tiling_crs=tiling_crs,
-        )
-        production_grid.to_file(grid_file, driver="GPKG")
-
-    # Prepare the job manager and job database
-    _log("Setting up job manager to handle map production...")
-    job_manager, job_db, start_job = setup_inference_job_manager(
-        production_grid,
-        output_dir,
-        product_type=product_type,
-        backend_context=backend_context,
-        target_epsg=target_epsg,
-        s1_orbit_state=s1_orbit_state,
-        job_options=job_options,
-        parallel_jobs=parallel_jobs,
-        seasonal_preset=seasonal_preset,
-        workflow_config=workflow_config,
-    )
-
-    # Start a threaded job manager
-    _log("Starting map production...")
     if display_outputs:
         _log("Job status will be displayed in the output widget below.")
         _log(
             "For individual job tracking, we refer to: https://openeo.dataspace.copernicus.eu/"
         )
-    job_manager.start_job_thread(start_job=start_job, job_db=job_db)
 
-    # Compute center of total bounding box (used for map centering)
-    minx, miny, maxx, maxy = production_grid.total_bounds
-    center = {"lat": (miny + maxy) / 2, "lon": (minx + maxx) / 2}
-
-    # Initialize status_df to None
-    status_df = None
-
-    break_msg = (
-        "Stopping map production...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
+    return run_map_production(
+        aoi_gdf=aoi_gdf,
+        output_dir=output_folder,
+        grid_size=grid_size,
+        temporal_extent=temporal_extent,
+        season_specifications=season_specifications,
+        year=year,
+        product_type=product_type,
+        seasonal_preset=seasonal_preset,
+        seasonal_model_zip=seasonal_model_zip,
+        enable_cropland_head=enable_cropland_head,
+        landcover_head_zip=landcover_head_zip,
+        enable_croptype_head=enable_croptype_head,
+        croptype_head_zip=croptype_head_zip,
+        enforce_cropland_gate=enforce_cropland_gate,
+        export_class_probs=export_class_probs,
+        enable_cropland_postprocess=enable_cropland_postprocess,
+        cropland_postprocess_method=cropland_postprocess_method,
+        cropland_postprocess_kernel_size=cropland_postprocess_kernel_size,
+        enable_croptype_postprocess=enable_croptype_postprocess,
+        croptype_postprocess_method=croptype_postprocess_method,
+        croptype_postprocess_kernel_size=croptype_postprocess_kernel_size,
+        target_epsg=target_epsg,
+        backend_context=backend_context,
+        s1_orbit_state=s1_orbit_state,
+        restart_failed=restart_failed,
+        job_options=job_options,
+        parallel_jobs=parallel_jobs,
+        randomize_jobs=randomize_jobs,
+        poll_sleep=poll_sleep,
+        simplify_logging=simplify_logging,
+        max_retries=DEFAULT_MAX_RETRIES,
+        base_delay=DEFAULT_BASE_DELAY,
+        max_delay=DEFAULT_MAX_DELAY,
+        log_fn=_log,
+        runner=run_notebook_job_manager,
+        runner_kwargs={
+            "plot_out": plot_out,
+            "log_out": log_out,
+            "display_outputs": display_outputs,
+            "status_title": "Inference job status",
+        },
     )
-
-    try:
-        # Monitor while the job manager thread is alive
-        while job_manager._thread and job_manager._thread.is_alive():
-            # Check if external stop event was triggered
-            if stop_event is not None and stop_event.is_set():
-                _log(break_msg)
-                job_manager.stop_job_thread()
-                break
-
-            try:
-                status_df = job_db.read()
-
-                # Update plot and job status table with current status
-                if display_outputs:
-                    fig = plot_job_status(
-                        status_df=status_df, color_dict=JOB_STATUS_COLORS, center=center
-                    )
-                    status_msg = f"[{time.strftime('%H:%M:%S')}] Job status:\n{status_df['status'].value_counts().to_string()}\n"
-                    with plot_out:
-                        plot_out.clear_output(wait=True)
-                        fig.show(renderer="notebook")
-                        print(status_msg)
-
-                time.sleep(poll_sleep)
-
-            except (EmptyDataError, pd.errors.EmptyDataError):
-                _log(
-                    f"[{time.strftime('%H:%M:%S')}] Job database is empty, waiting for jobs to start..."
-                )
-                time.sleep(10)
-                continue
-
-    except KeyboardInterrupt:
-        _log(break_msg)
-        job_manager.stop_job_thread()
-
-    _log("Map production has stopped.")
-
-    # Get final status
-    try:
-        status_df = job_db.read()
-    except Exception as e:
-        _log(f"Warning: Could not read final job status: {e}")
-        if status_df is None:
-            status_df = pd.DataFrame()  # Return empty DataFrame if we never got data
-
-    return status_df
 
 
 def merge_maps(outdir: Path) -> dict[str, Path]:
@@ -613,65 +304,3 @@ def merge_maps(outdir: Path) -> dict[str, Path]:
         merged_outputs[product_name] = _merge_tifs(product_name, product_tifs)
 
     return merged_outputs
-
-
-def bbox_extent_to_gdf(extent: BoundingBoxExtent, outfile: Path) -> gpd.GeoDataFrame:
-    """Save drawn bounding box to a geodataframe and save it."""
-
-    # create output directory if it does not exist
-    outfile.parent.mkdir(exist_ok=True, parents=True)
-
-    # convert to a GeoDataFrame
-    bbox_geom = box(
-        extent.west,
-        extent.south,
-        extent.east,
-        extent.north,
-    )
-    bbox_gdf = gpd.GeoDataFrame(geometry=[bbox_geom], crs=extent.epsg)
-    bbox_gdf.to_file(outfile, driver="GPKG")
-
-
-def gdf_to_bbox_extent(gdf: Union[gpd.GeoDataFrame, Path]) -> BoundingBoxExtent:
-    """Convert a GeoDataFrame with a single geometry to a BoundingBoxExtent.
-    Parameters
-    ----------
-    gdf : gpd.GeoDataFrame or Path
-        A GeoDataFrame with a single geometry or a file path to a GeoDataFrame.
-        The GeoDataFrame must have a defined CRS and contain exactly one geometry.
-    Returns
-    -------
-    BoundingBoxExtent
-        An instance of BoundingBoxExtent with the bounds of the geometry and its EPSG code.
-    Raises
-    ------
-    TypeError
-        If the input is not a GeoDataFrame or a file path to a GeoDataFrame.
-    ValueError
-        If the GeoDataFrame does not have a defined CRS or contains more than one geometry.
-    """
-
-    if isinstance(gdf, Path):
-        gdf = gpd.read_file(gdf)
-    if not isinstance(gdf, gpd.GeoDataFrame):
-        raise TypeError(
-            "Input must be a GeoDataFrame or a file path to a GeoDataFrame."
-        )
-    if len(gdf) != 1:
-        raise ValueError("GeoDataFrame must contain exactly one geometry.")
-
-    if gdf.crs is None:
-        raise ValueError("GeoDataFrame must have a defined CRS.")
-
-    geom = gdf.geometry.iloc[0]
-    if not geom.is_valid:
-        raise ValueError("Geometry is not valid.")
-
-    bounds = geom.bounds
-    return BoundingBoxExtent(
-        west=bounds[0],
-        south=bounds[1],
-        east=bounds[2],
-        north=bounds[3],
-        epsg=gdf.crs.to_epsg(),
-    )
