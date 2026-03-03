@@ -9,7 +9,7 @@ export OPENEO_AUTH_METHOD=""
 PROCESS_CMD="scripts/inference/cropland_croptype_mapping.py"
 
 # Make sure you select the path to your WorldCereal Python environment
-PYTHONPATH="/home/jeroendegerickx/miniconda3/envs/worldcereal-py311/bin/python"
+PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
 
 # Parameters for spatial extent (grid file)
 # Make sure to provide a valid path to a vector file containing the grid cells 
