@@ -3196,16 +3196,17 @@ class WorldCerealTrainingApp:
             "<b>Land cover mapping</b>:<br>"
             "   - Generate cropland product:<br>"
             "     In case you selected croptype product, you can choose here whether to also export the cropland product as a separate layer in the output map.<br>"
-            "     Disable if you are not interested in the cropland results to save processing time and output storage space.<br>"
+            "     Disable if you are not interested in the cropland results to save processing time and output storage space.<br><br>"
             "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output.<br>"
-            "     Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
+            "     Depending on your use case, you may want to disable this to get predictions for all land cover types.<br><br>"
             "<b>Postprocessing:</b> By default enabled to run a majority vote postprocessing step on the predicted classes to smooth the results.<br>"
             "       Depending on your use case, you may want to disable postprocessing to get the raw model predictions without any smoothing.<br>"
             "       Postprocessing can be enabled/disabled separately for the crop type and cropland predictions.<br>"
             "       For the majority vote method, you can adjust the <b>kernel size</b> of the majority vote filter to make it more or less aggressive.<br>"
             "       You can also opt for the simpler and less aggressive <b>'smooth_probabilities'</b> method.<br><br>"
             "<b>Export</b>:<br>"
-            "   - Export class probabilities: By default enabled to export the predicted class probabilities as separate layers in the output map. Disable if you are not interested in the probabilities to save processing time and output storage space.<br>"
+            "   - Export class probabilities: By default enabled to export the predicted class probabilities as separate layers in the output map.<br>"
+            "     Disable if you are not interested in the probabilities to save processing time and output storage space.<br><br>"
             "   - Output suffix: A required label that will be appended to the output folder name to help you identify different runs or configurations.<br>"
             "      Keep it short and without special characters."
         )
@@ -4157,18 +4158,20 @@ class WorldCerealTrainingApp:
         season_hint = self.tab8_widgets.get("season_hint")
         if season_hint is not None:
             hint = None
-            if self.season_window is not None:
+            if self.workflow_mode == "apply-default-model":
+                hint = "<i>The default WorldCereal model was trained on a calendar year.</i>"
+            elif self.season_window is not None:
                 window_dt = self.season_window.to_datetime()
                 hint_start = window_dt[0].strftime("%d %b")
                 hint_end = window_dt[1].strftime("%d %b")
                 hint = (
-                    "<i>Growing season for which your model was trained:</i> "
+                    "<i>Growing season for which your model was trained:</i><br>"
                     f"<b>{hint_start}</b> → "
                     f"<b>{hint_end}</b>"
                 )
             else:
                 hint = (
-                    "<i>Growing season for which your model was trained:</i>"
+                    "<i>Growing season for which your model was trained:</i><br>"
                     "<b>No season found yet.</b>"
                 )
             season_hint.value = hint
