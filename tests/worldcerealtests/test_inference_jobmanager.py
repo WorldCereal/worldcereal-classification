@@ -19,7 +19,7 @@ from worldcereal.jobmanager import WorldCerealJobManager
 from worldcereal.parameters import EmbeddingsParameters
 
 
-def test_run_inference_jobs_with_geodataframe():
+def test_run_inference_jobs_with_geodataframe(tmp_path: Path):
     """Ensure inference jobs are dispatched via the unified job manager."""
     # Create a dummy GeoDataFrame
     utm_geom = box(500000, 0, 501000, 1000)
@@ -33,7 +33,7 @@ def test_run_inference_jobs_with_geodataframe():
     }
     production_gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
 
-    output_dir = Path(".")
+    output_dir = tmp_path
     mock_job_db = MagicMock()
     mock_job_db.read.return_value = pd.DataFrame(
         [{"status": "not_started", "tile_name": "tile_1"}]
@@ -64,7 +64,7 @@ def test_run_inference_jobs_with_geodataframe():
     mock_run_jobs.assert_called_once()
 
 
-def test_run_inputs_jobs_with_geodataframe():
+def test_run_inputs_jobs_with_geodataframe(tmp_path: Path):
     """Ensure inputs jobs are dispatched via the unified job manager."""
     utm_geom = box(500000, 0, 501000, 1000)
     data = {
@@ -77,7 +77,7 @@ def test_run_inputs_jobs_with_geodataframe():
     }
     production_gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
 
-    output_dir = Path(".")
+    output_dir = tmp_path
     mock_job_db = MagicMock()
     mock_job_db.read.return_value = pd.DataFrame(
         [{"status": "not_started", "tile_name": "tile_1"}]
@@ -107,7 +107,7 @@ def test_run_inputs_jobs_with_geodataframe():
     mock_run_jobs.assert_called_once()
 
 
-def test_run_embeddings_jobs_with_geodataframe():
+def test_run_embeddings_jobs_with_geodataframe(tmp_path: Path):
     """Ensure embeddings jobs are dispatched via the unified job manager."""
     utm_geom = box(500000, 0, 501000, 1000)
     data = {
@@ -120,7 +120,7 @@ def test_run_embeddings_jobs_with_geodataframe():
     }
     production_gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
 
-    output_dir = Path(".")
+    output_dir = tmp_path
     mock_job_db = MagicMock()
     mock_job_db.read.return_value = pd.DataFrame(
         [{"status": "not_started", "tile_name": "tile_1"}]
@@ -150,7 +150,7 @@ def test_run_embeddings_jobs_with_geodataframe():
     mock_run_jobs.assert_called_once()
 
 
-def test_create_inference_job_logic():
+def test_create_inference_job_logic(tmp_path: Path):
     """Test the job manager inference job builder without backend calls."""
     # Create a dummy row with required fields
     utm_geom = box(500000, 0, 501000, 1000)
@@ -173,7 +173,7 @@ def test_create_inference_job_logic():
 
     # Mock the process graph creation
     manager = WorldCerealJobManager(
-        output_dir=Path("."),
+        output_dir=tmp_path,
         task=WorldCerealTask.CLASSIFICATION,
         backend_context=BackendContext(Backend.CDSE),
         aoi_gdf=gpd.GeoDataFrame(
@@ -234,7 +234,7 @@ def test_create_inference_job_logic():
         assert kwargs["additional"] == DEFAULT_INFERENCE_JOB_OPTIONS
 
 
-def test_create_inputs_job_logic():
+def test_create_inputs_job_logic(tmp_path: Path):
     """Test the job manager inputs job builder without backend calls."""
     utm_geom = box(500000, 0, 501000, 1000)
     row = pd.Series(
@@ -253,7 +253,7 @@ def test_create_inputs_job_logic():
     mock_inputs.create_job = MagicMock()
 
     manager = WorldCerealJobManager(
-        output_dir=Path("."),
+        output_dir=tmp_path,
         task=WorldCerealTask.INPUTS,
         backend_context=BackendContext(Backend.CDSE),
         aoi_gdf=gpd.GeoDataFrame(
@@ -297,7 +297,7 @@ def test_create_inputs_job_logic():
         assert kwargs["job_options"] == DEFAULT_INPUTS_JOB_OPTIONS
 
 
-def test_create_embeddings_job_logic():
+def test_create_embeddings_job_logic(tmp_path: Path):
     """Test the job manager embeddings job builder without backend calls."""
     utm_geom = box(500000, 0, 501000, 1000)
     row = pd.Series(
@@ -316,7 +316,7 @@ def test_create_embeddings_job_logic():
     mock_embeddings.create_job = MagicMock()
 
     manager = WorldCerealJobManager(
-        output_dir=Path("."),
+        output_dir=tmp_path,
         task=WorldCerealTask.EMBEDDINGS,
         backend_context=BackendContext(Backend.CDSE),
         aoi_gdf=gpd.GeoDataFrame(
