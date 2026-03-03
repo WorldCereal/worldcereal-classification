@@ -3,13 +3,13 @@
 Guide
 -----
 This module coordinates production grid preparation, job tracking, and
-batch submission for three tasks: inputs, embeddings, and inference.
+batch submission for three tasks: inputs, embeddings, and classification.
 
 Tasks
 ~~~~~
 * inputs: collect preprocessed inputs for each tile.
 * embeddings: compute tile embeddings from the input stack.
-* inference: run the end-to-end crop mapping workflow.
+* classification: run the end-to-end crop mapping workflow.
 
 Temporal and season handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -863,7 +863,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         self,
         *,
         restart_failed: bool = False,
-        randomize_jobs: bool = False,
+        randomize_jobs: bool = True,
         parallel_jobs: int = 2,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
         target_epsg: Optional[int] = None,
@@ -899,7 +899,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         self,
         *,
         restart_failed: bool = False,
-        randomize_jobs: bool = False,
+        randomize_jobs: bool = True,
         parallel_jobs: int = 2,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
         target_epsg: Optional[int] = None,
@@ -945,7 +945,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
         workflow_config: Optional[WorldCerealWorkflowConfig] = None,
         restart_failed: bool = False,
-        randomize_jobs: bool = False,
+        randomize_jobs: bool = True,
         status_callback: Optional[Callable[[pd.DataFrame], None]] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         base_delay: float = DEFAULT_BASE_DELAY,

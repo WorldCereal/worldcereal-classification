@@ -28,7 +28,8 @@ class WorldCerealJobParams(TypedDict, total=False):
     output_dir : Path or str
         Output directory used for job tracking and results.
     grid_size : Optional[int]
-        Tile size in kilometers. If None, AOI geometries are used as-is.
+        Tile size in kilometers. Defaults to 20.
+        If None, AOI geometries are used as-is.
     temporal_extent : Optional[TemporalContext]
         Temporal window for all tiles. If None, per-tile dates or crop calendars
         are used when supported by the workflow.
@@ -41,18 +42,18 @@ class WorldCerealJobParams(TypedDict, total=False):
     compositing_window : Literal["month", "dekad"]
         Temporal compositing window for inputs. Defaults to "month".
     parallel_jobs : int
-        Maximum number of concurrent jobs to submit. Defaults vary by workflow.
+        Maximum number of concurrent jobs to submit. Defaults to 2.
     randomize_jobs : bool
-        Shuffle job order before submission. Defaults vary by workflow.
+        Shuffle job order before submission. Defaults to True.
     restart_failed : bool
-        Restart failed jobs when reusing a job database. Defaults vary by workflow.
+        Restart failed jobs when reusing a job database. Defaults to False.
     job_options : Optional[Dict[str, Union[str, int, None]]]
         Backend-specific job options.
     poll_sleep : int
-        Seconds to wait between status updates.
+        Seconds to wait between status updates. Defaults to 60.
     simplify_logging : bool
         Reduce verbose OpenEO logging. When enabled and no runner is supplied,
-        a compact CLI status callback is used.
+        a compact CLI status callback is used. Defaults to True.
     max_retries : int
         Maximum number of job submission retries.
     base_delay : float
@@ -117,6 +118,7 @@ class WorldCerealMapProductionParams(WorldCerealJobParams, total=False):
         Product to generate. Defaults to "cropland".
     seasonal_preset : str
         Seasonal workflow preset name.
+        Defaults to standard seasonal WorldCereal configuration.
     seasonal_model_zip : Optional[str]
         Optional override for the seasonal model .zip artifact.
     enable_cropland_head : Optional[bool]
@@ -264,10 +266,14 @@ def resolve_job_params(
     aoi_gdf = _require_param(params, "aoi_gdf")
     output_dir = _require_param(params, "output_dir")
 
-    grid_size_default = 20 if task == WorldCerealTask.CLASSIFICATION else None
-    randomize_default = True if task == WorldCerealTask.CLASSIFICATION else False
-    restart_default = True if task == WorldCerealTask.CLASSIFICATION else False
-    simplify_logging_default = True if task == WorldCerealTask.CLASSIFICATION else False
+    grid_size_default = 20
+    randomize_default = True
+    restart_default = False
+    simplify_logging_default = True
+    compositing_window_default = "month"
+    parallel_jobs_default = 2
+    poll_sleep_default = 60
+    backend_context_default = BackendContext(Backend.CDSE)
 
     resolved: Dict[str, Any] = {
         "aoi_gdf": aoi_gdf,
@@ -277,37 +283,53 @@ def resolve_job_params(
         "year": params.get("year"),
         "s1_orbit_state": params.get("s1_orbit_state"),
         "target_epsg": params.get("target_epsg"),
-        "compositing_window": _with_default(params.get("compositing_window"), "month"),
-        "parallel_jobs": _with_default(params.get("parallel_jobs"), 2),
+        "compositing_window": _with_default(
+            params.get("compositing_window"), compositing_window_default
+        ),
+        "parallel_jobs": _with_default(
+            params.get("parallel_jobs"), parallel_jobs_default
+        ),
         "randomize_jobs": _with_default(
             params.get("randomize_jobs"), randomize_default
         ),
         "restart_failed": _with_default(params.get("restart_failed"), restart_default),
         "job_options": params.get("job_options"),
-        "poll_sleep": _with_default(params.get("poll_sleep"), 60),
+        "poll_sleep": _with_default(params.get("poll_sleep"), poll_sleep_default),
         "simplify_logging": _with_default(
             params.get("simplify_logging"), simplify_logging_default
         ),
         "max_retries": _with_default(params.get("max_retries"), DEFAULT_MAX_RETRIES),
         "base_delay": _with_default(params.get("base_delay"), DEFAULT_BASE_DELAY),
         "max_delay": _with_default(params.get("max_delay"), DEFAULT_MAX_DELAY),
-        "backend_context": params.get("backend_context")
-        or BackendContext(Backend.CDSE),
+        "backend_context": _with_default(
+            params.get("backend_context"), backend_context_default
+        ),
     }
 
     if task == WorldCerealTask.INPUTS:
         return resolved
 
     if task == WorldCerealTask.EMBEDDINGS:
+
+        scale_uint16_default = True
+
         resolved["embeddings_parameters"] = params.get("embeddings_parameters")
-        resolved["scale_uint16"] = _with_default(params.get("scale_uint16"), True)
+        resolved["scale_uint16"] = _with_default(
+            params.get("scale_uint16"), scale_uint16_default
+        )
         return resolved
 
     if task == WorldCerealTask.CLASSIFICATION:
+
+        product_type_default = "cropland"
+        seasonal_preset_default = DEFAULT_SEASONAL_WORKFLOW_PRESET
+
         resolved["season_specifications"] = params.get("season_specifications")
-        resolved["product_type"] = _with_default(params.get("product_type"), "cropland")
+        resolved["product_type"] = _with_default(
+            params.get("product_type"), product_type_default
+        )
         resolved["seasonal_preset"] = _with_default(
-            params.get("seasonal_preset"), DEFAULT_SEASONAL_WORKFLOW_PRESET
+            params.get("seasonal_preset"), seasonal_preset_default
         )
         resolved["seasonal_model_zip"] = params.get("seasonal_model_zip")
         resolved["enable_cropland_head"] = params.get("enable_cropland_head")
@@ -448,7 +470,7 @@ def build_job_params_from_args(
         "max_retries": args.max_retries,
         "base_delay": args.base_delay,
         "max_delay": args.max_delay,
-        "backend_context": backend_context or BackendContext(Backend.CDSE),
+        "backend_context": backend_context,
     }
 
     if task == WorldCerealTask.INPUTS:
