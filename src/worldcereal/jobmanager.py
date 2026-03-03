@@ -106,6 +106,8 @@ def run_worldcereal_task(
     for key, value in log_context.items():
         log_fn(f"{key}: {value}")
 
+    log_fn("------------------------------------")
+
     if task == WorldCerealTask.CLASSIFICATION:
         workflow_config = build_workflow_config_from_params(resolved)
         log_fn("Detailed workflow configuration:")
@@ -116,7 +118,7 @@ def run_worldcereal_task(
             "workflow_config": workflow_config,
         }
 
-    log_fn("Initializing job manager...")
+    log_fn("----- Initializing job manager -----")
     manager = WorldCerealJobManager(
         task=task,
         **manager_init,
@@ -134,8 +136,9 @@ def run_worldcereal_task(
                 title="Job status"
             )
 
-    log_fn("Starting job submissions...")
+    log_fn("----- Starting job submissions -----")
     break_msg = (
+        "----------------------------------\n"
         "Stopping job manager...\n"
         "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
         "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
@@ -161,7 +164,8 @@ def run_worldcereal_task(
         log_fn(f"{workflow_title} has stopped.")
         raise
 
-    log_fn("All done!")
+    log_fn("----------------------------------")
+    log_fn("ALL DONE!")
     log_fn(f"Results stored in {output_dir}")
     return manager
 
