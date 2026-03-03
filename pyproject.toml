@@ -81,10 +81,13 @@ train = [
   "torch>=2.3.0",
   "pystac==1.10.1",
   "pystac-client==0.8.3",
-  "seaborn",
+  "seaborn"
+]
+finetune = [
   "office365-rest-python-client",
   "openpyxl"
 ]
+
 notebooks = [
   "folium>=0.12",
   "ipykernel",
