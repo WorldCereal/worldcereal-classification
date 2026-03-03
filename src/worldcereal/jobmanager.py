@@ -37,7 +37,16 @@ import shutil
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Literal,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 import geopandas as gpd
 import openeo
@@ -55,669 +64,86 @@ from worldcereal.job import (
     WorldCerealTask,
     create_worldcereal_process_graph,
 )
-from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
-from worldcereal.openeo.workflow_config import (
-    WorldCerealWorkflowConfig,
-    build_config_from_params,
+from worldcereal.job_params import (
+    DEFAULT_BASE_DELAY,
+    DEFAULT_MAX_DELAY,
+    DEFAULT_MAX_RETRIES,
+    build_workflow_config_from_params,
+    resolve_job_params,
+    split_job_params,
 )
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
+from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 from worldcereal.seasons import get_season_dates_for_extent
 from worldcereal.utils.production_grid import create_production_grid, ensure_utm_grid
 
-DEFAULT_MAX_RETRIES = 50
-DEFAULT_BASE_DELAY = 0.1
-DEFAULT_MAX_DELAY = 10.0
 
-
-def compute_worldcereal_embeddings(
+def run_worldcereal_task(
+    task: WorldCerealTask,
+    params: Dict[str, Any],
     *,
-    aoi_gdf: gpd.GeoDataFrame,
-    output_dir: Union[Path, str],
-    grid_size: Optional[int] = None,
-    temporal_extent: Optional[TemporalContext] = None,
-    year: Optional[int] = None,
-    embeddings_parameters: Optional[EmbeddingsParameters] = None,
-    scale_uint16: bool = True,
-    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    parallel_jobs: int = 2,
-    randomize_jobs: bool = False,
-    restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
-    poll_sleep: int = 60,
-    simplify_logging: bool = False,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    base_delay: float = DEFAULT_BASE_DELAY,
-    max_delay: float = DEFAULT_MAX_DELAY,
-    backend_context: BackendContext = BackendContext(Backend.CDSE),
     log_fn: Optional[Callable[[str], None]] = None,
     runner: Optional[Callable[..., Any]] = None,
     runner_kwargs: Optional[Dict[str, Any]] = None,
 ) -> "WorldCerealJobManager":
-    """Run embeddings jobs with optional injected logging/runner hooks.
-
-    Parameters
-    ----------
-    aoi_gdf : gpd.GeoDataFrame
-        AOI geometries to process. Must have a CRS.
-    output_dir : Union[Path, str]
-        Output directory used for job tracking and results.
-    grid_size : Optional[int], optional
-        Tile size in kilometers. If None, the AOI geometries are used as-is.
-    temporal_extent : Optional[TemporalContext], optional
-        Common temporal window for all tiles. If None, the workflow will fall back
-        to per-tile start/end dates or to crop-calendar inference using `year`.
-    year : Optional[int], optional
-        Year used to infer crop-calendar windows when temporal_extent is missing.
-    embeddings_parameters : Optional[EmbeddingsParameters], optional
-        Embeddings model configuration. If None, defaults to the standard Presto model.
-    scale_uint16 : bool, optional
-        Whether embeddings are scaled to uint16 for storage/transfer efficiency.
-    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
-        Force Sentinel-1 orbit state. If None, the backend selects the best option.
-    parallel_jobs : int, optional
-        Maximum number of concurrent jobs to submit.
-    randomize_jobs : bool, optional
-        Shuffle job order before submission.
-    restart_failed : bool, optional
-        Restart jobs that previously failed in the job database.
-    job_options : Optional[Dict[str, Union[str, int, None]]], optional
-        Backend-specific job options (driver/executor settings, image name, etc.).
-    poll_sleep : int, optional
-        Seconds to wait between status updates.
-    simplify_logging : bool, optional
-        Reduce verbose OpenEO logging. If `runner` is None, a CLI status callback
-        is also attached.
-    max_retries : int, optional
-        Maximum number of job submission retries.
-    base_delay : float, optional
-        Initial delay (seconds) between retries.
-    max_delay : float, optional
-        Maximum delay (seconds) between retries.
-    backend_context : BackendContext, optional
-        Backend configuration (CDSE by default).
-    log_fn : Optional[Callable[[str], None]], optional
-        Logger function used for progress output. Defaults to loguru `logger.info`.
-    runner : Optional[Callable[..., Any]], optional
-        Optional runner hook for notebook workflows. When provided, it is called
-        as `runner(manager, run_kwargs=..., **runner_kwargs)`.
-    runner_kwargs : Optional[Dict[str, Any]], optional
-        Extra arguments forwarded to `runner` (e.g., notebook widgets).
-
-    Returns
-    -------
-    WorldCerealJobManager
-        The job manager used to submit and track embeddings jobs.
-    """
+    """Run a WorldCereal task using the unified job manager."""
     if log_fn is None:
         log_fn = logger.info
 
+    resolved = resolve_job_params(task, dict(params))
+    manager_init, run_kwargs, log_context = split_job_params(task, resolved)
+    output_dir = manager_init["output_dir"]
+    simplify_logging = resolved["simplify_logging"]
+
+    workflow_title = task.value.upper()
+
     log_fn("------------------------------------")
-    log_fn("STARTING WORKFLOW: Embeddings computation")
+    log_fn(f"STARTING WORKFLOW: {workflow_title}")
     log_fn("------------------------------------")
     log_fn("----- Workflow configuration -----")
 
-    resolved_parameters = embeddings_parameters or EmbeddingsParameters()
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_dir),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "embeddings_parameters": resolved_parameters,
-        "scale_uint16": scale_uint16,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-    for key, value in params.items():
+    for key, value in log_context.items():
         log_fn(f"{key}: {value}")
-    log_fn("------------------------------------")
 
-    log_fn("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_dir,
-        task=WorldCerealTask.EMBEDDINGS,
-        backend_context=backend_context,
-        aoi_gdf=aoi_gdf,
-        grid_size=grid_size,
-        temporal_extent=temporal_extent,
-        year=year,
-        poll_sleep=poll_sleep,
-    )
-    log_fn("Job manager initialized!")
-
-    status_callback = None
-    if simplify_logging and runner is None:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-        status_callback = WorldCerealJobManager.cli_status_callback(
-            title="Embeddings job status"
-        )
-    elif simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    log_fn("Starting job submissions...")
-    break_msg = (
-        "Stopping embeddings computation...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    run_kwargs = {
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "parallel_jobs": parallel_jobs,
-        "s1_orbit_state": s1_orbit_state,
-        "embeddings_parameters": resolved_parameters,
-        "scale_uint16": scale_uint16,
-        "job_options": job_options,
-        "status_callback": status_callback,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-
-    try:
-        if runner is not None:
-            runner(
-                manager,
-                run_kwargs=run_kwargs,
-                **(runner_kwargs or {}),
-            )
-        else:
-            manager.run_jobs(**run_kwargs)
-    except KeyboardInterrupt:
-        log_fn(break_msg)
-        manager.stop_job_thread()
-        log_fn("Embeddings computation has stopped.")
-        raise
-
-    log_fn("All done!")
-    log_fn(f"Results stored in {output_dir}")
-    return manager
-
-
-def collect_worldcereal_inputs(
-    *,
-    aoi_gdf: gpd.GeoDataFrame,
-    output_dir: Union[Path, str],
-    grid_size: Optional[int] = None,
-    temporal_extent: Optional[TemporalContext] = None,
-    year: Optional[int] = None,
-    compositing_window: Literal["month", "dekad"] = "month",
-    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    parallel_jobs: int = 2,
-    randomize_jobs: bool = False,
-    restart_failed: bool = False,
-    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
-    poll_sleep: int = 60,
-    simplify_logging: bool = False,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    base_delay: float = DEFAULT_BASE_DELAY,
-    max_delay: float = DEFAULT_MAX_DELAY,
-    backend_context: BackendContext = BackendContext(Backend.CDSE),
-    log_fn: Optional[Callable[[str], None]] = None,
-    runner: Optional[Callable[..., Any]] = None,
-    runner_kwargs: Optional[Dict[str, Any]] = None,
-) -> "WorldCerealJobManager":
-    """Run inputs jobs with optional injected logging/runner hooks.
-
-    Parameters
-    ----------
-    aoi_gdf : gpd.GeoDataFrame
-        AOI geometries to process. Must have a CRS.
-    output_dir : Union[Path, str]
-        Output directory used for job tracking and results.
-    grid_size : Optional[int], optional
-        Tile size in kilometers. If None, the AOI geometries are used as-is.
-    temporal_extent : Optional[TemporalContext], optional
-        Common temporal window for all tiles. If None, the workflow will fall back
-        to per-tile start/end dates or to crop-calendar inference using `year`.
-    year : Optional[int], optional
-        Year used to infer crop-calendar windows when temporal_extent is missing.
-    compositing_window : Literal["month", "dekad"], optional
-        Temporal compositing window for inputs, by default "month".
-    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
-        Force Sentinel-1 orbit state. If None, the backend selects the best option.
-    parallel_jobs : int, optional
-        Maximum number of concurrent jobs to submit.
-    randomize_jobs : bool, optional
-        Shuffle job order before submission.
-    restart_failed : bool, optional
-        Restart jobs that previously failed in the job database.
-    job_options : Optional[Dict[str, Union[str, int, None]]], optional
-        Backend-specific job options (driver/executor settings, image name, etc.).
-    poll_sleep : int, optional
-        Seconds to wait between status updates.
-    simplify_logging : bool, optional
-        Reduce verbose OpenEO logging. If `runner` is None, a CLI status callback
-        is also attached.
-    max_retries : int, optional
-        Maximum number of job submission retries.
-    base_delay : float, optional
-        Initial delay (seconds) between retries.
-    max_delay : float, optional
-        Maximum delay (seconds) between retries.
-    backend_context : BackendContext, optional
-        Backend configuration (CDSE by default).
-    log_fn : Optional[Callable[[str], None]], optional
-        Logger function used for progress output. Defaults to loguru `logger.info`.
-    runner : Optional[Callable[..., Any]], optional
-        Optional runner hook for notebook workflows. When provided, it is called
-        as `runner(manager, run_kwargs=..., **runner_kwargs)`.
-    runner_kwargs : Optional[Dict[str, Any]], optional
-        Extra arguments forwarded to `runner` (e.g., notebook widgets).
-
-    Returns
-    -------
-    WorldCerealJobManager
-        The job manager used to submit and track inputs jobs.
-    """
-    if log_fn is None:
-        log_fn = logger.info
-
-    log_fn("------------------------------------")
-    log_fn("STARTING WORKFLOW: Inputs collection")
-    log_fn("------------------------------------")
-    log_fn("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_dir),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "year": year,
-        "compositing_window": compositing_window,
-        "s1_orbit_state": s1_orbit_state,
-        "parallel_jobs": parallel_jobs,
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-    for key, value in params.items():
-        log_fn(f"{key}: {value}")
-    log_fn("------------------------------------")
-
-    log_fn("Initializing job manager...")
-    manager = WorldCerealJobManager(
-        output_dir=output_dir,
-        task=WorldCerealTask.INPUTS,
-        backend_context=backend_context,
-        aoi_gdf=aoi_gdf,
-        grid_size=grid_size,
-        temporal_extent=temporal_extent,
-        year=year,
-        poll_sleep=poll_sleep,
-    )
-    log_fn("Job manager initialized!")
-
-    status_callback = None
-    if simplify_logging and runner is None:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-        status_callback = WorldCerealJobManager.cli_status_callback(
-            title="Inputs job status"
-        )
-    elif simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
-
-    log_fn("Starting job submissions...")
-    break_msg = (
-        "Stopping inputs collection...\n"
-        "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
-        "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
-    )
-
-    run_kwargs = {
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "parallel_jobs": parallel_jobs,
-        "s1_orbit_state": s1_orbit_state,
-        "job_options": job_options,
-        "compositing_window": compositing_window,
-        "status_callback": status_callback,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-
-    try:
-        if runner is not None:
-            runner(
-                manager,
-                run_kwargs=run_kwargs,
-                **(runner_kwargs or {}),
-            )
-        else:
-            manager.run_jobs(**run_kwargs)
-    except KeyboardInterrupt:
-        log_fn(break_msg)
-        manager.stop_job_thread()
-        log_fn("Inputs collection has stopped.")
-        raise
-
-    log_fn("All done!")
-    log_fn(f"Results stored in {output_dir}")
-    return manager
-
-
-def run_map_production(
-    *,
-    aoi_gdf: gpd.GeoDataFrame,
-    output_dir: Union[Path, str],
-    grid_size: int = 20,
-    temporal_extent: Optional[TemporalContext] = None,
-    season_specifications: Optional[Dict[str, TemporalContext]] = None,
-    year: Optional[int] = None,
-    product_type: Union[WorldCerealProductType, Literal["cropland", "croptype"]] = (
-        "cropland"
-    ),
-    seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
-    seasonal_model_zip: Optional[str] = None,
-    enable_cropland_head: Optional[bool] = None,
-    landcover_head_zip: Optional[str] = None,
-    enable_croptype_head: Optional[bool] = None,
-    croptype_head_zip: Optional[str] = None,
-    enforce_cropland_gate: Optional[bool] = None,
-    export_class_probs: Optional[bool] = None,
-    enable_cropland_postprocess: Optional[bool] = None,
-    cropland_postprocess_method: Optional[
-        Literal["majority_vote", "smooth_probabilities"]
-    ] = None,
-    cropland_postprocess_kernel_size: Optional[int] = None,
-    enable_croptype_postprocess: Optional[bool] = None,
-    croptype_postprocess_method: Optional[
-        Literal["majority_vote", "smooth_probabilities"]
-    ] = None,
-    croptype_postprocess_kernel_size: Optional[int] = None,
-    target_epsg: Optional[int] = None,
-    backend_context: BackendContext = BackendContext(Backend.CDSE),
-    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    restart_failed: bool = True,
-    job_options: Optional[dict] = None,
-    parallel_jobs: int = 2,
-    randomize_jobs: bool = True,
-    poll_sleep: int = 60,
-    simplify_logging: bool = True,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    base_delay: float = DEFAULT_BASE_DELAY,
-    max_delay: float = DEFAULT_MAX_DELAY,
-    log_fn: Optional[Callable[[str], None]] = None,
-    runner: Optional[Callable[..., Any]] = None,
-    runner_kwargs: Optional[Dict[str, Any]] = None,
-) -> "WorldCerealJobManager":
-    """Run map production with optional injected logging/runner hooks.
-
-    Parameters
-    ----------
-    aoi_gdf : gpd.GeoDataFrame
-        Areas of interest to process. Must have a CRS.
-    output_dir : Union[Path, str]
-        The directory where the output files will be saved.
-    grid_size : int, optional
-        The resolution of the tiles in kilometers, by default 20.
-    temporal_extent : Optional[TemporalContext], optional
-        Temporal context defining the time range for which to collect input data patches.
-        If provided together with `year`, temporal_extent will take precedence and override the year.
-    season_specifications : Optional[Dict[str, TemporalContext]], optional
-        Per-season temporal windows used for inference, by default None.
-    year : Optional[int], optional
-        Year used for crop calendar inference when dates are missing, by default None.
-    product_type : Union[WorldCerealProductType, Literal["cropland", "croptype"]], optional
-        The type of product to produce, by default "cropland".
-    seasonal_preset : str, optional
-        Name of the seasonal workflow preset to use when building the inference context.
-        This determines the default configuration settings of the inference workflow.
-        By default we use the "phase_ii_multitask" preset, which corresponds to the Phase II multitask seasonal backbone with dual landcover/croptype heads.
-    seasonal_model_zip : Optional[str], optional
-        Path to .zip file of a seasonal Presto model to be used for overriding the default seasonal model.
-        By default None, which means the seasonal model embedded in the preset will be used.
-    enable_cropland_head : Optional[bool], optional
-        Override whether the cropland (landcover) head is enabled. If None, defaults to
-        preset behavior unless `product_type` forces cropland-only execution.
-    landcover_head_zip : Optional[str], optional
-        Path to .zip file of a cropland/landcover head artifact to be used for overriding the default head.
-        If None, the head embedded in the preset seasonal model will be used.
-    enable_croptype_head : Optional[bool], optional
-        Override whether the croptype head is enabled. If None, defaults to preset behavior
-        unless `product_type` forces cropland-only execution.
-    croptype_head_zip : Optional[str], optional
-        Path to .zip file of a croptype head artifact to be used for overriding the default head.
-        If None, the head embedded in the preset seasonal model will be used.
-    enforce_cropland_gate : Optional[bool], optional
-        Whether or not to mask the crop type product with the cropland product.
-        If None, use the preset default (True).
-    export_class_probs : Optional[bool], optional
-        Export per-class probabilities in all products.
-        If None, use the preset default (True).
-    enable_cropland_postprocess : Optional[bool], optional
-        Enable cropland postprocessing. If None, use the preset default (False).
-    cropland_postprocess_method : Optional[str], optional
-        If None and postprocess is enabled, the preset default is used ("majority_vote").
-        Available options are "majority_vote" and "smooth_probabilities".
-    cropland_postprocess_kernel_size : Optional[int], optional
-        Cropland postprocess kernel size override.
-        If None and postprocess is enabled, the preset default is used (5).
-    enable_croptype_postprocess : Optional[bool], optional
-        Enable croptype postprocessing. If None, use the preset default (False).
-    croptype_postprocess_method : Optional[str], optional
-        Croptype postprocess method override.
-        If None and postprocess is enabled, the preset default is used ("majority_vote").
-        Available options are "majority_vote" and "smooth_probabilities".
-    croptype_postprocess_kernel_size : Optional[int], optional
-        Croptype postprocess kernel size override.
-        If None and postprocess is enabled, the preset default is used (5).
-    target_epsg : Optional[int], optional
-        The target EPSG code for the output, by default None.
-    backend_context : BackendContext, optional
-        The backend context to use for the production.
-    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
-        The Sentinel-1 orbit state to use for the production.
-    restart_failed : bool, optional
-        Whether to automatically restart failed jobs, by default True.
-    job_options : Optional[dict], optional
-        Additional options for the job, by default None.
-    parallel_jobs : int, optional
-        The number of parallel jobs to run, by default 2.
-    randomize_jobs : bool, optional
-        Whether to randomize the order of job execution, by default True.
-    poll_sleep : int, optional
-        The number of seconds to wait between polling the job status, by default 60.
-    simplify_logging : bool, optional
-        Whether to simplify logging output, by default True.
-    max_retries : int, optional
-        Maximum number of job submission retries.
-    base_delay : float, optional
-        Initial retry delay in seconds.
-    max_delay : float, optional
-        Maximum retry delay in seconds.
-    log_fn : Optional[Callable[[str], None]], optional
-        Logger function used for progress output. Defaults to loguru `logger.info`.
-    runner : Optional[Callable[..., Any]], optional
-        Optional runner hook for notebook workflows. When provided, it is called
-        as `runner(manager, run_kwargs=..., **runner_kwargs)`.
-    runner_kwargs : Optional[Dict[str, Any]], optional
-        Extra arguments forwarded to `runner` (e.g., notebook widgets).
-
-    Returns
-    -------
-    WorldCerealJobManager
-        The job manager used to submit and track production jobs.
-    """
-    if log_fn is None:
-        log_fn = logger.info
-
-    if isinstance(product_type, WorldCerealProductType):
-        product_type_value = product_type.value
-    else:
-        product_type_value = product_type
-
-    if product_type_value == "cropland":
-        enable_cropland_head = True
-        enable_croptype_head = False
-        enforce_cropland_gate = False
-    else:
-        enable_croptype_head = True
-
-    resolved_product_type = WorldCerealProductType(product_type_value)
-
-    if season_specifications is not None and len(season_specifications) > 0:
-        season_ids = list(season_specifications.keys())
-        season_windows = {
-            season_id: (
-                str(season_window.start_date),
-                str(season_window.end_date),
-            )
-            for season_id, season_window in season_specifications.items()
+    if task == WorldCerealTask.CLASSIFICATION:
+        workflow_config = build_workflow_config_from_params(resolved)
+        log_fn("Detailed workflow configuration:")
+        log_fn(json.dumps(workflow_config.to_dict(), indent=2))
+        log_fn("----------------------------------")
+        run_kwargs = {
+            **run_kwargs,
+            "workflow_config": workflow_config,
         }
-    else:
-        season_ids = None
-        season_windows = None
 
-    workflow_config = build_config_from_params(
-        enable_cropland_head=enable_cropland_head,
-        enable_croptype_head=enable_croptype_head,
-        enforce_cropland_gate=enforce_cropland_gate,
-        croptype_head_zip=croptype_head_zip,
-        landcover_head_zip=landcover_head_zip,
-        seasonal_model_zip=seasonal_model_zip,
-        export_class_probabilities=export_class_probs,
-        season_ids=season_ids,
-        season_windows=season_windows,
-        enable_cropland_postprocess=enable_cropland_postprocess,
-        cropland_postprocess_method=cropland_postprocess_method,
-        cropland_postprocess_kernel_size=cropland_postprocess_kernel_size,
-        enable_croptype_postprocess=enable_croptype_postprocess,
-        croptype_postprocess_method=croptype_postprocess_method,
-        croptype_postprocess_kernel_size=croptype_postprocess_kernel_size,
-    )
-
-    log_fn("------------------------------------")
-    log_fn("STARTING WORKFLOW: Map production")
-    log_fn("------------------------------------")
-    log_fn("----- Workflow configuration -----")
-
-    if temporal_extent is not None:
-        temporal_extent_str = (
-            f"{temporal_extent.start_date} to {temporal_extent.end_date}"
-        )
-    else:
-        temporal_extent_str = "None"
-
-    params = {
-        "output_folder": str(output_dir),
-        "number of AOI features": len(aoi_gdf),
-        "grid_size": grid_size,
-        "temporal_extent": temporal_extent_str,
-        "season_specifications": season_specifications,
-        "year": year,
-        "seasonal_preset": seasonal_preset,
-        "product_type": resolved_product_type,
-        "target_epsg": target_epsg,
-        "s1_orbit_state": s1_orbit_state,
-        "restart_failed": restart_failed,
-        "parallel_jobs": parallel_jobs,
-        "randomize_jobs": randomize_jobs,
-        "job_options": job_options,
-        "poll_sleep": poll_sleep,
-        "simplify_logging": simplify_logging,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
-    }
-    for key, value in params.items():
-        log_fn(f"{key}: {value}")
-
-    log_fn("Detailed workflow configuration:")
-    log_fn(json.dumps(workflow_config.to_dict(), indent=2))
-    log_fn("----------------------------------")
-
-    log_fn("Setting up job manager to handle map production...")
+    log_fn("Initializing job manager...")
     manager = WorldCerealJobManager(
-        output_dir=output_dir,
-        task=WorldCerealTask.INFERENCE,
-        aoi_gdf=aoi_gdf,
-        backend_context=backend_context,
-        temporal_extent=temporal_extent,
-        grid_size=grid_size,
-        year=year,
-        season_specifications=season_specifications,
-        poll_sleep=poll_sleep,
+        task=task,
+        **manager_init,
     )
+    log_fn("Job manager initialized!")
 
     status_callback = None
-    if simplify_logging and runner is None:
+    if simplify_logging:
         logging.getLogger("openeo").setLevel(logging.WARNING)
         logging.getLogger("openeo.extra.job_management._manager").setLevel(
             logging.WARNING
         )
-        status_callback = WorldCerealJobManager.cli_status_callback(
-            title="Inference job status"
-        )
-    elif simplify_logging:
-        logging.getLogger("openeo").setLevel(logging.WARNING)
-        logging.getLogger("openeo.extra.job_management._manager").setLevel(
-            logging.WARNING
-        )
+        if runner is None:
+            status_callback = WorldCerealJobManager.cli_status_callback(
+                title="Job status"
+            )
 
-    log_fn("Starting map production...")
-
+    log_fn("Starting job submissions...")
     break_msg = (
-        "Stopping map production...\n"
+        "Stopping job manager...\n"
         "Make sure to manually cancel any running jobs in the backend to avoid unnecessary costs!\n"
         "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
     )
 
     run_kwargs = {
-        "restart_failed": restart_failed,
-        "randomize_jobs": randomize_jobs,
-        "product_type": resolved_product_type,
-        "s1_orbit_state": s1_orbit_state,
-        "job_options": job_options,
-        "target_epsg": target_epsg,
-        "parallel_jobs": parallel_jobs,
-        "seasonal_preset": seasonal_preset,
-        "workflow_config": workflow_config,
+        **run_kwargs,
         "status_callback": status_callback,
-        "max_retries": max_retries,
-        "base_delay": base_delay,
-        "max_delay": max_delay,
     }
 
     try:
@@ -732,12 +158,11 @@ def run_map_production(
     except KeyboardInterrupt:
         log_fn(break_msg)
         manager.stop_job_thread()
-        log_fn("Map production has stopped.")
+        log_fn(f"{workflow_title} has stopped.")
         raise
 
     log_fn("All done!")
     log_fn(f"Results stored in {output_dir}")
-
     return manager
 
 
@@ -816,7 +241,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         if self.task == WorldCerealTask.EMBEDDINGS:
             self._on_job_done_embeddings(job, row)
             return
-        if self.task == WorldCerealTask.INFERENCE:
+        if self.task == WorldCerealTask.CLASSIFICATION:
             self._on_job_done_inference(job, row)
             return
         raise ValueError(f"Unsupported task: {self.task}")
@@ -959,7 +384,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             )
 
         # Additional checks on seasonality information for inference task
-        if self.task == WorldCerealTask.INFERENCE:
+        if self.task == WorldCerealTask.CLASSIFICATION:
             if "season_ids" not in df.columns or "season_windows" not in df.columns:
                 raise ValueError(
                     "Job database must include 'season_ids' and 'season_windows' for inference."
@@ -1441,6 +866,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         randomize_jobs: bool = False,
         parallel_jobs: int = 2,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+        target_epsg: Optional[int] = None,
         job_options: Optional[Dict[str, Union[str, int, None]]] = None,
         compositing_window: Literal["month", "dekad"] = "month",
         tile_size: Optional[int] = 128,
@@ -1453,6 +879,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         start_job = partial(
             self._create_inputs_job,
             s1_orbit_state=s1_orbit_state,
+            target_epsg=target_epsg,
             job_options=job_options,
             compositing_window=compositing_window,
             tile_size=tile_size,
@@ -1475,8 +902,10 @@ class WorldCerealJobManager(MultiBackendJobManager):
         randomize_jobs: bool = False,
         parallel_jobs: int = 2,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+        target_epsg: Optional[int] = None,
         job_options: Optional[Dict[str, Union[str, int, None]]] = None,
         embeddings_parameters: EmbeddingsParameters = EmbeddingsParameters(),
+        compositing_window: Literal["month", "dekad"] = "month",
         scale_uint16: bool = True,
         status_callback: Optional[Callable[[pd.DataFrame], None]] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -1487,8 +916,10 @@ class WorldCerealJobManager(MultiBackendJobManager):
         start_job = partial(
             self._create_embeddings_job,
             s1_orbit_state=s1_orbit_state,
+            target_epsg=target_epsg,
             job_options=job_options,
             embeddings_parameters=embeddings_parameters,
+            compositing_window=compositing_window,
             scale_uint16=scale_uint16,
         )
         return self._run_jobs_common(
@@ -1510,6 +941,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
         job_options: Optional[dict] = None,
         parallel_jobs: int = 2,
+        compositing_window: Literal["month", "dekad"] = "month",
         seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
         workflow_config: Optional[WorldCerealWorkflowConfig] = None,
         restart_failed: bool = False,
@@ -1526,6 +958,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             s1_orbit_state=s1_orbit_state,
             job_options=job_options,
             target_epsg=target_epsg,
+            compositing_window=compositing_window,
             seasonal_preset=seasonal_preset,
             workflow_config=workflow_config,
         )
@@ -1546,7 +979,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             return self._run_inputs_jobs(**kwargs)
         if self.task == WorldCerealTask.EMBEDDINGS:
             return self._run_embeddings_jobs(**kwargs)
-        if self.task == WorldCerealTask.INFERENCE:
+        if self.task == WorldCerealTask.CLASSIFICATION:
             return self._run_inference_jobs(**kwargs)
         raise ValueError(f"Unsupported task: {self.task}")
 
@@ -1557,6 +990,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         provider,
         connection_provider,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+        target_epsg: Optional[int] = None,
         job_options: Optional[Dict[str, Union[str, int, None]]] = None,
         compositing_window: Literal["month", "dekad"] = "month",
         tile_size: Optional[int] = 128,
@@ -1565,6 +999,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         temporal_extent = self._row_temporal_extent(row)
         spatial_extent = self._row_spatial_extent(row)
 
+        resolved_epsg = target_epsg or int(row["epsg_utm"])
         inputs = cast(
             openeo.DataCube,
             create_worldcereal_process_graph(
@@ -1572,7 +1007,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
                 spatial_extent=spatial_extent,
                 temporal_extent=temporal_extent,
                 s1_orbit_state=s1_orbit_state,
-                target_epsg=int(row["epsg_utm"]),
+                target_epsg=resolved_epsg,
                 compositing_window=compositing_window,
                 tile_size=tile_size,
                 connection=connection,
@@ -1595,14 +1030,17 @@ class WorldCerealJobManager(MultiBackendJobManager):
         provider,
         connection_provider,
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+        target_epsg: Optional[int] = None,
         job_options: Optional[Dict[str, Union[str, int, None]]] = None,
         embeddings_parameters: EmbeddingsParameters = EmbeddingsParameters(),
+        compositing_window: Literal["month", "dekad"] = "month",
         scale_uint16: bool = True,
     ) -> BatchJob:
         """Create an embeddings job for a single tile."""
         temporal_extent = self._row_temporal_extent(row)
         spatial_extent = self._row_spatial_extent(row)
 
+        resolved_epsg = target_epsg or int(row["epsg_utm"])
         embeddings = cast(
             openeo.DataCube,
             create_worldcereal_process_graph(
@@ -1610,8 +1048,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
                 spatial_extent=spatial_extent,
                 temporal_extent=temporal_extent,
                 s1_orbit_state=s1_orbit_state,
-                target_epsg=int(row["epsg_utm"]),
+                target_epsg=resolved_epsg,
                 embeddings_parameters=embeddings_parameters,
+                compositing_window=compositing_window,
                 scale_uint16=scale_uint16,
                 connection=connection,
             ),
@@ -1636,6 +1075,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
         target_epsg: Optional[int] = None,
         job_options: Optional[dict] = None,
+        compositing_window: Literal["month", "dekad"] = "month",
         seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
         workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     ) -> BatchJob:
@@ -1647,12 +1087,13 @@ class WorldCerealJobManager(MultiBackendJobManager):
             target_epsg = int(row["epsg_utm"])
 
         inference_result = create_worldcereal_process_graph(
-            task=WorldCerealTask.INFERENCE,
+            task=WorldCerealTask.CLASSIFICATION,
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
             product_type=product_type,
             s1_orbit_state=s1_orbit_state,
             target_epsg=target_epsg,
+            compositing_window=compositing_window,
             connection=connection,
             seasonal_preset=seasonal_preset,
             workflow_config=workflow_config,

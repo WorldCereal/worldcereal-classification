@@ -44,7 +44,7 @@ def test_run_inference_jobs_with_geodataframe():
     ):
         manager = WorldCerealJobManager(
             output_dir=output_dir,
-            task=WorldCerealTask.INFERENCE,
+            task=WorldCerealTask.CLASSIFICATION,
             backend_context=BackendContext(Backend.CDSE),
             aoi_gdf=production_gdf,
             temporal_extent=TemporalContext("2023-01-01", "2023-12-31"),
@@ -174,7 +174,7 @@ def test_create_inference_job_logic():
     # Mock the process graph creation
     manager = WorldCerealJobManager(
         output_dir=Path("."),
-        task=WorldCerealTask.INFERENCE,
+        task=WorldCerealTask.CLASSIFICATION,
         backend_context=BackendContext(Backend.CDSE),
         aoi_gdf=gpd.GeoDataFrame(
             {

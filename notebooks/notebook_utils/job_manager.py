@@ -11,7 +11,9 @@ from ipywidgets import Output
 from loguru import logger
 from tabulate import tabulate
 
-from worldcereal.jobmanager import WorldCerealJobManager
+from worldcereal.job import WorldCerealTask
+from worldcereal.job_params import WorldCerealJobParams
+from worldcereal.jobmanager import WorldCerealJobManager, run_worldcereal_task
 
 JOB_STATUS_COLORS = {
     "not_started": "grey",
@@ -127,11 +129,10 @@ def build_notebook_status_callback(
     plot_out: Optional[Output] = None,
     log_out: Optional[Output] = None,
     display_outputs: bool = True,
-    status_title: str = "Job status",
     zoom: int = 10,
 ) -> Tuple[Callable[[pd.DataFrame], None], Output, Output]:
     plot_out, log_out = _ensure_outputs(plot_out, log_out, display_outputs)
-    status_callback = manager.cli_status_callback(title=status_title)
+    status_callback = manager.cli_status_callback(title="Job status")
 
     if display_outputs and manager.prepared_grid is not None:
         grid_for_map = manager.prepared_grid.to_crs("EPSG:4326")
@@ -143,7 +144,7 @@ def build_notebook_status_callback(
             if status_df.empty:
                 with plot_out:
                     plot_out.clear_output(wait=True)
-                    print(f"[{timestamp}] {status_title}: waiting for jobs to start.")
+                    print(f"[{timestamp}] Job status: waiting for jobs to start.")
                 return
             fig = plot_job_status(
                 status_df=status_df,
@@ -155,7 +156,7 @@ def build_notebook_status_callback(
                 plot_out.clear_output(wait=True)
                 fig.show(renderer="notebook")
                 counts = status_df["status"].value_counts().to_string()
-                print(f"[{timestamp}] {status_title}:\n{counts}")
+                print(f"[{timestamp}] Job status:\n{counts}")
                 print(
                     "Detailed job tracking through: https://openeo.dataspace.copernicus.eu/"
                 )
@@ -172,7 +173,6 @@ def run_notebook_job_manager(
     plot_out: Optional[Output] = None,
     log_out: Optional[Output] = None,
     display_outputs: bool = True,
-    status_title: str = "Job status",
     zoom: int = 10,
 ) -> Tuple[Output, Output]:
     status_callback, plot_out, log_out = build_notebook_status_callback(
@@ -180,7 +180,6 @@ def run_notebook_job_manager(
         plot_out=plot_out,
         log_out=log_out,
         display_outputs=display_outputs,
-        status_title=status_title,
         zoom=zoom,
     )
 
@@ -189,6 +188,38 @@ def run_notebook_job_manager(
     manager.run_jobs(**resolved_kwargs)
 
     return plot_out, log_out
+
+
+def run_worldcereal_task_notebook(
+    task: WorldCerealTask,
+    *,
+    production_kwargs: WorldCerealJobParams | None = None,
+    plot_out: Optional[Output] = None,
+    log_out: Optional[Output] = None,
+    display_outputs: bool = True,
+    zoom: int = 10,
+) -> WorldCerealJobManager:
+    """Run a WorldCereal task from a notebook with unified logging and plots."""
+    plot_out, log_out, _log = notebook_logger(
+        plot_out=plot_out,
+        log_out=log_out,
+        display_outputs=display_outputs,
+    )
+
+    resolved_kwargs = dict(production_kwargs or {})
+
+    return run_worldcereal_task(
+        task,
+        resolved_kwargs,
+        log_fn=_log,
+        runner=run_notebook_job_manager,
+        runner_kwargs={
+            "plot_out": plot_out,
+            "log_out": log_out,
+            "display_outputs": display_outputs,
+            "zoom": zoom,
+        },
+    )
 
 
 def _read_job_tracking_csv(outdir: Path) -> pd.DataFrame:

@@ -5,8 +5,8 @@ export OPENEO_AUTH_METHOD=""
 
 # Make sure your current work directory is the root of the worldcereal repository
 # ("worldcereal-classification")
-# The next line should not be touched in principle.
-PROCESS_CMD="scripts/inference/cropland_croptype_mapping.py"
+# The next line should NOT be touched.
+PROCESS_CMD="scripts/inference/run_worldcereal_task_openeo.py"
 
 # Make sure you select the path to your WorldCereal Python environment
 PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
@@ -39,6 +39,7 @@ PARALLEL_JOBS="2"
 
 # Run mapping
 "${PYTHONPATH}" "${PROCESS_CMD}" \
+--task "classification" \
 --grid_path "${GRID_PATH}" \
 --grid_size "${GRID_SIZE}" \
 --target-epsg "${TARGET_EPSG}"} \

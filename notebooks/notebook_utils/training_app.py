@@ -42,12 +42,14 @@ from notebook_utils.extractions import (
     retrieve_extractions_extent,
     visualize_timeseries,
 )
-from notebook_utils.production import merge_maps, run_map_production_notebook
+from notebook_utils.job_manager import run_worldcereal_task_notebook
+from notebook_utils.production import merge_maps
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
 from openeo_gfmap import TemporalContext
 from tabulate import tabulate
 
+from worldcereal.job import WorldCerealTask
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
@@ -3549,7 +3551,8 @@ class WorldCerealTrainingApp:
             if generate_button is not None:
                 generate_button.disabled = True
 
-            _ = run_map_production_notebook(
+            _ = run_worldcereal_task_notebook(
+                task=WorldCerealTask.CLASSIFICATION,
                 aoi_gdf=aoi_gdf,
                 output_folder=output_dir,
                 grid_size=tile_resolution,

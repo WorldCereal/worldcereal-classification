@@ -72,7 +72,7 @@ ClassLUT = Dict[str, int]
 class WorldCerealTask(str, Enum):
     INPUTS = "inputs"
     EMBEDDINGS = "embeddings"
-    INFERENCE = "inference"
+    CLASSIFICATION = "classification"
 
 
 def _normalize_season_id_list(value: Optional[Union[str, Sequence[Any]]]) -> List[str]:
@@ -373,6 +373,7 @@ def create_inference_process_graph(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
     connection: Optional[openeo.Connection] = None,
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
@@ -400,6 +401,8 @@ def create_inference_process_graph(
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
+    compositing_window: Literal["month", "dekad"]
+        Compositing window to use for the inputs, by default "month".
     seasonal_preset: str
         Name of the seasonal workflow preset to use. Defaults to
         `DEFAULT_SEASONAL_WORKFLOW_PRESET`.
@@ -434,13 +437,14 @@ def create_inference_process_graph(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    inputs = _build_inputs_cube(
+    inputs = _get_preprocessed_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
+        compositing_window=compositing_window,
         connection=connection,
     )
 
@@ -480,6 +484,7 @@ def create_embeddings_process_graph(
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
+    compositing_window: Literal["month", "dekad"] = "month",
     scale_uint16: bool = True,
     connection: Optional[openeo.Connection] = None,
 ) -> openeo.DataCube:
@@ -503,6 +508,8 @@ def create_embeddings_process_graph(
         Tile size to use for the data loading in OpenEO, by default 128.
     target_epsg : Optional[int], optional
         EPSG code to use for the output products. If not provided, the default EPSG will be used.
+    compositing_window : Literal["month", "dekad"], optional
+        Compositing window to use for the inputs, by default "month".
     scale_uint16 : bool, optional
         Whether to scale the embeddings to uint16 for memory optimization, by default True.
     connection : Optional[openeo.Connection], optional
@@ -522,13 +529,14 @@ def create_embeddings_process_graph(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    inputs = _build_inputs_cube(
+    inputs = _get_preprocessed_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
+        compositing_window=compositing_window,
         connection=connection,
     )
 
@@ -603,7 +611,7 @@ def create_inputs_process_graph(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
-    inputs = _build_inputs_cube(
+    inputs = _get_preprocessed_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
         s1_orbit_state=s1_orbit_state,
@@ -670,11 +678,12 @@ def create_worldcereal_process_graph(
             backend_context=backend_context,
             tile_size=tile_size,
             target_epsg=target_epsg,
+            compositing_window=compositing_window,
             scale_uint16=scale_uint16,
             connection=connection,
         )
 
-    if task == WorldCerealTask.INFERENCE:
+    if task == WorldCerealTask.CLASSIFICATION:
         return create_inference_process_graph(
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
@@ -684,6 +693,7 @@ def create_worldcereal_process_graph(
             backend_context=backend_context,
             tile_size=tile_size,
             target_epsg=target_epsg,
+            compositing_window=compositing_window,
             connection=connection,
             seasonal_preset=seasonal_preset,
             workflow_config=workflow_config,
@@ -693,7 +703,7 @@ def create_worldcereal_process_graph(
     raise ValueError(f"Unsupported task: {task}")
 
 
-def _build_inputs_cube(
+def _get_preprocessed_inputs(
     *,
     spatial_extent: BoundingBoxExtent,
     temporal_extent: TemporalContext,

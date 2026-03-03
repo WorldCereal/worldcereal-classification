@@ -1,129 +1,19 @@
 from pathlib import Path
-from typing import Dict, Literal, Optional, Union
+from typing import Optional
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from ipywidgets import Output
 from loguru import logger
-from openeo_gfmap import Backend, BackendContext, TemporalContext
 from tabulate import tabulate
-
-from worldcereal.jobmanager import WorldCerealJobManager, collect_worldcereal_inputs
 
 from .extractions import (
     NODATAVALUE,
     WORLDCEREAL_BANDS,
     _apply_band_scaling,
 )
-from .job_manager import (
-    fetch_results_from_outdir,
-    notebook_logger,
-    run_notebook_job_manager,
-)
-
-
-def collect_worldcereal_inputs_notebook(
-    aoi_gdf: gpd.GeoDataFrame,
-    output_folder: Path,
-    grid_size: int = 20,
-    temporal_extent: Optional[TemporalContext] = None,
-    year: Optional[int] = None,
-    compositing_window: Literal["month", "dekad"] = "month",
-    parallel_jobs: int = 2,
-    randomize_jobs: bool = False,
-    s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
-    restart_failed: bool = True,
-    job_options: Optional[Dict[str, Union[str, int, None]]] = None,
-    plot_out: Optional[Output] = None,
-    log_out: Optional[Output] = None,
-    display_outputs: bool = True,
-    poll_sleep: int = 60,
-    simplify_logging: bool = True,
-) -> WorldCerealJobManager:
-    """Collect WorldCereal input data patches using WorldCerealJobManager.
-
-    Parameters
-    ----------
-    aoi_gdf : gpd.GeoDataFrame
-        GeoDataFrame containing the AOI geometries for which to collect input data patches.
-    output_folder : Path
-        Path to the folder where the collected input data patches will be stored.
-    grid_size : int, optional
-        Grid size in kilometers for tiling the AOI during job processing. Default is 20 km.
-    temporal_extent : Optional[TemporalContext], optional
-        Temporal context defining the time range for which to collect input data patches.
-        If provided together with `year`, temporal_extent will take precedence and override the year.
-    year : Optional[int], optional
-        Specific year to collect input data patches for.
-        If provided, it will be used only if temporal_extent is not provided.
-    compositing_window : Literal["month", "dekad"], optional
-        Temporal compositing window for inputs, by default "month".
-    parallel_jobs : int, optional
-        Number of parallel jobs to run. Default is 2.
-    randomize_jobs : bool, optional
-        Whether to randomize the order of job submissions. Default is False.
-    s1_orbit_state : Optional[Literal["ASCENDING", "DESCENDING"]], optional
-        If specified, only collect input data patches for Sentinel-1 data from the given orbit state.
-        If not specified, the best orbit state will be automatically selected for each tile.
-    restart_failed : bool, optional
-        Whether to automatically restart failed jobs. Default is True.
-    job_options : Optional[Dict[str, Union[str, int, None]]], optional
-        Additional job options to pass to the backend. Keys and values depend on the backend used.
-    plot_out : Optional[Output], optional
-        Optional ipywidgets Output widget for plotting job status and results.
-        If None, a new Output widget will be created for plotting. Default is None.
-    log_out : Optional[Output], optional
-        Optional ipywidgets Output widget for logging job progress and information.
-        If None, a new Output widget will be created for logging. Default is None.
-    display_outputs : bool, optional
-        Whether to display the log and plot Output widgets in the notebook. Default is True.
-    poll_sleep : int, optional
-        Time in seconds to wait between polling job status. Default is 60.
-    simplify_logging : bool, optional
-        Whether to simplify logging output by reducing OpenEO job management messages.
-        Default is True.
-
-    Returns
-    -------
-    WorldCerealJobManager
-        The job manager instance that was used to run the input data collection.
-        Can be used to further inspect the job status and results.
-    """
-
-    plot_out, log_out, _log = notebook_logger(
-        plot_out=plot_out,
-        log_out=log_out,
-        display_outputs=display_outputs,
-    )
-
-    return collect_worldcereal_inputs(
-        aoi_gdf=aoi_gdf,
-        output_dir=output_folder,
-        grid_size=grid_size,
-        temporal_extent=temporal_extent,
-        year=year,
-        compositing_window=compositing_window,
-        s1_orbit_state=s1_orbit_state,
-        parallel_jobs=parallel_jobs,
-        randomize_jobs=randomize_jobs,
-        restart_failed=restart_failed,
-        job_options=job_options,
-        poll_sleep=poll_sleep,
-        simplify_logging=simplify_logging,
-        backend_context=BackendContext(Backend.CDSE),
-        log_fn=_log,
-        runner=run_notebook_job_manager,
-        runner_kwargs={
-            "plot_out": plot_out,
-            "log_out": log_out,
-            "display_outputs": display_outputs,
-            "status_title": "Inputs job status",
-        },
-    )
-
+from .job_manager import fetch_results_from_outdir
 
 # ---------------------------------------------------------------------------
 # Utility functions to inspect locally downloaded preprocessed input NetCDFs
