@@ -12,34 +12,43 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
-                    Tuple)
+from typing import (
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from worldcereal.utils.sharepoint import (build_class_mappings,
-                                          get_excel_from_sharepoint)
+
+from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_WORLD_BOUNDS_PATH = (
-    REPO_ROOT / "src/worldcereal/data/world-" \
+    REPO_ROOT / "src/worldcereal/data/world-"
     "administrative-boundaries/world-administrative-boundaries.geoparquet"
 )
-DEFAULT_EXTRACTS_GLOB = (
-    REPO_ROOT / "data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/"
+DEFAULT_EXTRACTS_GLOB = str(
+    REPO_ROOT
+    / "data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/"
     "worldcereal_all_extractions.parquet/**/*.parquet"
 )
 DEFAULT_LEGEND_URL = (
     "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/legend/"
     "WorldCereal_LC_CT_legend_latest.csv"
 )
-DEFAULT_UNIFIED_SPLITS_PATH = Path(
-    "./unified_train_splits.parquet"
-)
+DEFAULT_UNIFIED_SPLITS_PATH = Path("./unified_train_splits.parquet")
 
 TRAIN_ONLY_REF_IDS: Tuple[str, ...] = (
     "2024_ARG_INTA-SUMMER_POINT_110",
@@ -121,6 +130,31 @@ MAX_BUDGET_CORRECTION_MOVES = 200
 
 LOGGER = logging.getLogger(__name__)
 AMBIGUOUS_REF_COUNTRY_CODES = {"GLO"}
+
+
+CellClassMap = Dict[object, Set[str]]
+RegionCellClassMap = Dict[str, CellClassMap]
+RegionClassTargets = Dict[str, Set[str]]
+
+
+class ClassSets(TypedDict):
+    lc_non_trainonly: CellClassMap
+    ct_non_trainonly: CellClassMap
+    lc_trainonly: CellClassMap
+    ct_trainonly: CellClassMap
+    lc_train: CellClassMap
+    ct_train: CellClassMap
+    lc_non_trainonly_region_cell: RegionCellClassMap
+    ct_non_trainonly_region_cell: RegionCellClassMap
+
+
+class ClassTargets(TypedDict):
+    lc_all: Set[str]
+    ct_all: Set[str]
+    lc_non_trainonly: Set[str]
+    ct_non_trainonly: Set[str]
+    lc_non_trainonly_by_region: RegionClassTargets
+    ct_non_trainonly_by_region: RegionClassTargets
 
 
 def init_duckdb_connection() -> duckdb.DuckDBPyConnection:
@@ -433,10 +467,16 @@ def _class_set_by_region_cell(
     subset = df.loc[mask, ["region", "h3_l3_cell", class_col]]
     if subset.empty:
         return {}
-    grouped = subset.groupby(["region", "h3_l3_cell"])[class_col].agg(lambda s: set(s))
+    grouped = (
+        subset.groupby(["region", "h3_l3_cell"])[class_col]
+        .agg(lambda s: set(s))
+        .to_dict()
+    )
     region_cell: Dict[str, Dict[object, Set[str]]] = {}
-    for (region, cell), classes in grouped.items():
-        region_cell.setdefault(region, {})[cell] = classes
+    for (region, cell), classes in cast(
+        Dict[Tuple[str, object], Set[str]], grouped
+    ).items():
+        region_cell.setdefault(str(region), {})[cell] = classes
     return region_cell
 
 
@@ -447,7 +487,7 @@ def build_cell_stats(
     lc_col: str = "lc10_class",
     ct_col: str = "ct27_class",
     ignore_label: str = IGNORE_LABEL,
-) -> Tuple[pd.DataFrame, Dict[str, Dict[object, Set[str]]], Dict[str, Set[str]]]:
+) -> Tuple[pd.DataFrame, ClassSets, ClassTargets]:
     """Build per-cell summaries and class sets for split selection."""
     df = counts_df.copy()
     if "region" not in df.columns:
@@ -463,9 +503,7 @@ def build_cell_stats(
 
     non_train = df[~df["is_train_only"]]
     total_labeled = (
-        non_train[~non_train["both_ignore"]]
-        .groupby("h3_l3_cell")["n_samples"]
-        .sum()
+        non_train[~non_train["both_ignore"]].groupby("h3_l3_cell")["n_samples"].sum()
     )
     recent_labeled = (
         non_train[~non_train["both_ignore"] & non_train["is_recent_year"]]
@@ -473,14 +511,10 @@ def build_cell_stats(
         .sum()
     )
     n_lc_classes = (
-        non_train[non_train["lc_valid"]]
-        .groupby("h3_l3_cell")[lc_col]
-        .nunique()
+        non_train[non_train["lc_valid"]].groupby("h3_l3_cell")[lc_col].nunique()
     )
     n_ct_classes = (
-        non_train[non_train["ct_valid"]]
-        .groupby("h3_l3_cell")[ct_col]
-        .nunique()
+        non_train[non_train["ct_valid"]].groupby("h3_l3_cell")[ct_col].nunique()
     )
 
     summary = h3_map.copy()
@@ -557,7 +591,7 @@ def build_cell_stats(
             cell, set()
         )
 
-    class_sets = {
+    class_sets: ClassSets = {
         "lc_non_trainonly": lc_non_trainonly,
         "ct_non_trainonly": ct_non_trainonly,
         "lc_trainonly": lc_trainonly,
@@ -567,32 +601,34 @@ def build_cell_stats(
         "lc_non_trainonly_region_cell": lc_non_trainonly_region,
         "ct_non_trainonly_region_cell": ct_non_trainonly_region,
     }
-    class_targets = {
+    class_targets: ClassTargets = {
         "lc_all": set(df.loc[df["lc_valid"], lc_col].unique()),
         "ct_all": set(df.loc[df["ct_valid"], ct_col].unique()),
         "lc_non_trainonly": set(non_train.loc[non_train["lc_valid"], lc_col].unique()),
         "ct_non_trainonly": set(non_train.loc[non_train["ct_valid"], ct_col].unique()),
         "lc_non_trainonly_by_region": {
-            region: set(classes)
+            str(region): set(classes)
             for region, classes in non_train[non_train["lc_valid"]]
             .groupby("region")[lc_col]
             .unique()
             .items()
-            if region != "Unknown"
+            if str(region) != "Unknown"
         },
         "ct_non_trainonly_by_region": {
-            region: set(classes)
+            str(region): set(classes)
             for region, classes in non_train[non_train["ct_valid"]]
             .groupby("region")[ct_col]
             .unique()
             .items()
-            if region != "Unknown"
+            if str(region) != "Unknown"
         },
     }
     return summary, class_sets, class_targets
 
 
-def select_initial_cells(cell_summary: pd.DataFrame) -> Tuple[Set[object], Set[object], int]:
+def select_initial_cells(
+    cell_summary: pd.DataFrame,
+) -> Tuple[Set[object], Set[object], int]:
     """Select initial val/test cells by ranking within each H3 L1 cell."""
     val_cells: Set[object] = set()
     test_cells: Set[object] = set()
@@ -619,7 +655,9 @@ def select_initial_cells(cell_summary: pd.DataFrame) -> Tuple[Set[object], Set[o
     return val_cells, test_cells, missing_level1
 
 
-def _coverage(split_cells: Set[object], cell_classes: Mapping[object, Set[str]]) -> Set[str]:
+def _coverage(
+    split_cells: Set[object], cell_classes: Mapping[object, Set[str]]
+) -> Set[str]:
     classes: Set[str] = set()
     for cell in split_cells:
         classes |= cell_classes.get(cell, set())
@@ -718,7 +756,9 @@ def add_cells_for_region_coverage(
             continue
 
         split_region_cells = {
-            cell for cell in split_cells if cell in region_cells_lc or cell in region_cells_ct
+            cell
+            for cell in split_cells
+            if cell in region_cells_lc or cell in region_cells_ct
         }
         coverage_lc = _coverage(split_region_cells, region_cells_lc)
         coverage_ct = _coverage(split_region_cells, region_cells_ct)
@@ -827,12 +867,10 @@ def ensure_recent_years(
     if current_recent >= min_recent_samples:
         return current_recent
 
-    candidates = [
-        cell
-        for cell in train_cells
-        if recent_by_cell.get(cell, 0) > 0
-    ]
-    candidates = sorted(candidates, key=lambda c: recent_by_cell.get(c, 0), reverse=True)
+    candidates = [cell for cell in train_cells if recent_by_cell.get(cell, 0) > 0]
+    candidates = sorted(
+        candidates, key=lambda c: recent_by_cell.get(c, 0), reverse=True
+    )
     for cell in candidates:
         if current_recent >= min_recent_samples:
             break
@@ -990,8 +1028,8 @@ def correct_split_budget(
     cell_summary: pd.DataFrame,
     val_cells: Set[object],
     test_cells: Set[object],
-    class_sets: Mapping[str, Mapping],
-    class_targets: Mapping[str, Mapping],
+    class_sets: ClassSets,
+    class_targets: ClassTargets,
     min_recent_samples: int = 1,
     target_ratios: Tuple[float, float, float] = (
         TARGET_TRAIN_RATIO,
@@ -1154,7 +1192,8 @@ def correct_split_budget(
     moves = 0
     while moves < max_moves:
         diffs = {
-            split: split_totals[split] - desired[split] for split in ("train", "val", "test")
+            split: split_totals[split] - desired[split]
+            for split in ("train", "val", "test")
         }
         overfull = {split: diff for split, diff in diffs.items() if diff > tolerance}
         underfull = {split: diff for split, diff in diffs.items() if diff < -tolerance}
@@ -1162,8 +1201,8 @@ def correct_split_budget(
             break
 
         candidates_found = False
-        for source in sorted(overfull, key=overfull.get, reverse=True):
-            for target in sorted(underfull, key=underfull.get):
+        for source in sorted(overfull, key=lambda k: overfull[k], reverse=True):
+            for target in sorted(underfull, key=lambda k: underfull[k]):
                 source_total = split_totals[source]
                 target_total = split_totals[target]
                 desired_source = desired[source]
@@ -1198,7 +1237,8 @@ def correct_split_budget(
             break
 
     final_diffs = {
-        split: split_totals[split] - desired[split] for split in ("train", "val", "test")
+        split: split_totals[split] - desired[split]
+        for split in ("train", "val", "test")
     }
     if moves:
         logger.info("Budget correction moved %s cells.", moves)
@@ -1236,8 +1276,8 @@ def write_sample_splits_parquet(
 
     cell_splits_df = pd.DataFrame(
         [
-            *[(cell, "val") for cell in sorted(val_cells)],
-            *[(cell, "test") for cell in sorted(test_cells)],
+            *[(cell, "val") for cell in sorted(val_cells, key=str)],
+            *[(cell, "test") for cell in sorted(test_cells, key=str)],
         ],
         columns=["h3_l3_cell", "split"],
     )
@@ -1289,6 +1329,7 @@ def write_sample_splits_parquet(
     left join train_only tr on samples.ref_id = tr.ref_id
     """
     conn.sql(f"copy ({query}) to '{output_path}' (format 'parquet')")
+
 
 def main(
     extractions_glob: str = DEFAULT_EXTRACTS_GLOB,
