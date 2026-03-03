@@ -110,7 +110,7 @@ def _validate_classification_flags(
 
 
 def main(task: WorldCerealTask, params: WorldCerealJobParams) -> None:
-    run_worldcereal_task(task, params)
+    run_worldcereal_task(task, dict(params))
 
 
 if __name__ == "__main__":
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--grid_size",
         type=int,
-        default=None,
+        default=20,
         help="Tile size in kilometers for splitting AOIs. If not specified, the original AOI geometries will be used.",
     )
     parser.add_argument(
@@ -181,9 +181,10 @@ if __name__ == "__main__":
         help="Restart the jobs that previously failed.",
     )
     parser.add_argument(
-        "--randomize_jobs",
-        action="store_true",
-        help="Randomize the order of jobs before submitting them.",
+        "--no-randomize-jobs",
+        action="store_false",
+        dest="randomize_jobs",
+        help="Disable randomization of job order before submission.",
     )
     parser.add_argument(
         "--poll_sleep",
@@ -192,9 +193,10 @@ if __name__ == "__main__":
         help="Seconds to wait between status updates.",
     )
     parser.add_argument(
-        "--simplify_logging",
-        action="store_true",
-        help="Use a compact CLI status callback and suppress openEO job manager logs.",
+        "--no-simplify-logging",
+        action="store_false",
+        dest="simplify_logging",
+        help="Disable compact CLI status callback and openEO log suppression.",
     )
     parser.add_argument(
         "--max_retries",
@@ -402,6 +404,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if not hasattr(args, "simplify_logging"):
+        args.simplify_logging = True
+    if not hasattr(args, "randomize_jobs"):
+        args.randomize_jobs = True
 
     aoi_gdf = (
         gpd.read_parquet(args.grid_path)

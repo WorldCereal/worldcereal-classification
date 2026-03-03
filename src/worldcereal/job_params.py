@@ -452,7 +452,7 @@ def build_job_params_from_args(
     enforce_cropland_gate: Optional[bool] = None,
 ) -> WorldCerealJobParams:
     """Build workflow params from CLI args for the selected job type."""
-    params: WorldCerealJobParams = {
+    base_params: WorldCerealJobParams = {
         "aoi_gdf": aoi_gdf,
         "output_dir": args.output_folder,
         "grid_size": args.grid_size,
@@ -474,39 +474,41 @@ def build_job_params_from_args(
     }
 
     if task == WorldCerealTask.INPUTS:
-        return params
+        return base_params
 
     if task == WorldCerealTask.EMBEDDINGS:
         if scale_uint16 is None:
             raise ValueError("scale_uint16 is required for embeddings params.")
-        params["embeddings_parameters"] = embeddings_parameters
-        params["scale_uint16"] = scale_uint16
-        return params
+        embeddings_params: WorldCerealEmbeddingsJobParams = {
+            **base_params,
+            "embeddings_parameters": embeddings_parameters,
+            "scale_uint16": scale_uint16,
+        }
+        return embeddings_params
 
     if task == WorldCerealTask.CLASSIFICATION:
         if product_type is None:
             raise ValueError("product_type is required for map production params.")
-        params["season_specifications"] = season_specifications
-        params["product_type"] = product_type
-        params["seasonal_preset"] = args.seasonal_preset
-        params["export_class_probs"] = args.class_probabilities
-        params["seasonal_model_zip"] = args.seasonal_model_zip
-        params["enable_cropland_head"] = enable_cropland_head
-        params["landcover_head_zip"] = args.landcover_head_zip
-        params["enable_croptype_head"] = enable_croptype_head
-        params["croptype_head_zip"] = args.croptype_head_zip
-        params["enforce_cropland_gate"] = enforce_cropland_gate
-        params["enable_cropland_postprocess"] = args.enable_cropland_postprocess
-        params["cropland_postprocess_method"] = args.cropland_postprocess_method
-        params["cropland_postprocess_kernel_size"] = (
-            args.cropland_postprocess_kernel_size
-        )
-        params["enable_croptype_postprocess"] = args.enable_croptype_postprocess
-        params["croptype_postprocess_method"] = args.croptype_postprocess_method
-        params["croptype_postprocess_kernel_size"] = (
-            args.croptype_postprocess_kernel_size
-        )
-        return params
+        production_params: WorldCerealMapProductionParams = {
+            **base_params,
+            "season_specifications": season_specifications,
+            "product_type": product_type,
+            "seasonal_preset": args.seasonal_preset,
+            "export_class_probs": args.class_probabilities,
+            "seasonal_model_zip": args.seasonal_model_zip,
+            "enable_cropland_head": enable_cropland_head,
+            "landcover_head_zip": args.landcover_head_zip,
+            "enable_croptype_head": enable_croptype_head,
+            "croptype_head_zip": args.croptype_head_zip,
+            "enforce_cropland_gate": enforce_cropland_gate,
+            "enable_cropland_postprocess": args.enable_cropland_postprocess,
+            "cropland_postprocess_method": args.cropland_postprocess_method,
+            "cropland_postprocess_kernel_size": args.cropland_postprocess_kernel_size,
+            "enable_croptype_postprocess": args.enable_croptype_postprocess,
+            "croptype_postprocess_method": args.croptype_postprocess_method,
+            "croptype_postprocess_kernel_size": args.croptype_postprocess_kernel_size,
+        }
+        return production_params
 
     raise ValueError(f"Unsupported task: {task}")
 
