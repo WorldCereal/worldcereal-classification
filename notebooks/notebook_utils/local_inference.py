@@ -17,7 +17,6 @@ from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
@@ -264,6 +263,9 @@ def run_seasonal_inference(
         enforce_cropland_gate=enforce_cropland_gate,
     )
 
+    if device == "cuda" and hasattr(result, "cpu"):
+        result = result.cpu()
+
     if as_dataset and isinstance(result, xr.DataArray):
         result = xr.Dataset(
             {
@@ -297,7 +299,6 @@ def classification_to_geotiff(
     import json
 
     import rasterio
-
     # ignore import error for rioxarray if not used
     import rioxarray  # noqa: F401
 
