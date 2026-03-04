@@ -4,24 +4,45 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib import resources
 from math import floor
-from typing import (Any, Dict, Hashable, List, Literal, Mapping, Optional,
-                    Sequence, Tuple, Union)
+from typing import (
+    Any,
+    Dict,
+    Hashable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
-                                  S1_BANDS, S2_BANDS, Predictors)
-from torch.utils.data import Dataset, WeightedRandomSampler
+from prometheo.predictors import (
+    DEM_BANDS,
+    METEO_BANDS,
+    NODATAVALUE,
+    S1_BANDS,
+    S2_BANDS,
+    Predictors,
+)
+from torch.utils.data import Dataset, Sampler
+
 from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER,
-                               SEASONALITY_COLUMN_MAP, SEASONALITY_LAT_RANGE,
-                               SEASONALITY_LON_RANGE,
-                               SEASONALITY_LOOKUP_COLUMNS,
-                               SEASONALITY_LOOKUP_FILENAME,
-                               SEASONALITY_LOOKUP_PACKAGE,
-                               SEASONALITY_LOOKUP_PATH)
+from worldcereal.train import (
+    GLOBAL_SEASON_IDS,
+    MIN_EDGE_BUFFER,
+    SEASONALITY_COLUMN_MAP,
+    SEASONALITY_LAT_RANGE,
+    SEASONALITY_LON_RANGE,
+    SEASONALITY_LOOKUP_COLUMNS,
+    SEASONALITY_LOOKUP_FILENAME,
+    SEASONALITY_LOOKUP_PACKAGE,
+    SEASONALITY_LOOKUP_PATH,
+)
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.seasonal import align_to_composite_window
 
@@ -460,6 +481,30 @@ def _stringify_weight_dict(weights: Dict[Hashable, float]) -> Dict[str, float]:
     """Convert potentially mixed-type keys to strings for deterministic indexing."""
 
     return {str(key): float(value) for key, value in weights.items()}
+
+
+def _get_normalized_weights(
+    labels: np.ndarray,
+    method: str,
+    clip_range: Optional[Tuple[float, float]],
+) -> np.ndarray:
+    """Return a per-sample float64 weight array.
+
+    Weights are computed from the label distribution via ``get_class_weights``
+    (clip → normalize to mean=1), then **re-clipped** to *clip_range*.  The
+    re-clip is necessary because ``get_class_weights`` normalises *after*
+    clipping, which can push values outside the intended range.  By applying
+    the clip a second time we guarantee that both class-weight and spatial-weight
+    arrays live in the same bounded interval before they are multiplied together,
+    preventing one from dominating the other.
+    """
+    w_dict = _stringify_weight_dict(
+        get_class_weights(labels, method=method, clip_range=clip_range, normalize=True)
+    )
+    arr = np.array([w_dict[str(lbl)] for lbl in labels], dtype=np.float64)
+    if clip_range is not None:
+        arr = np.clip(arr, clip_range[0], clip_range[1])
+    return arr
 
 
 def _spatial_bins_from_latlon(
@@ -1394,7 +1439,26 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
     def __getitem__(self, idx):
-        row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
+        # ---------------------------------------------------------------------------
+        # Virtual-index decoding for DualHeadBatchSampler
+        # The sampler encodes task assignment into the index to avoid mutating the
+        # dataframe across worker processes:
+        #   [N, 2N)  → LC-assigned  (real_idx = idx - N,   label_task = "landcover")
+        #   [2N, 3N) → CT-assigned  (real_idx = idx - 2N,  label_task = "croptype")
+        #   [0, N)   → natural idx  (val/test: label_task read from the dataframe)
+        # ---------------------------------------------------------------------------
+        n = len(self.dataframe)
+        if idx >= 2 * n:
+            real_idx = idx - 2 * n
+            task_override: Optional[str] = "croptype"
+        elif idx >= n:
+            real_idx = idx - n
+            task_override = "landcover"
+        else:
+            real_idx = idx
+            task_override = None  # use label_task stored in the dataframe row
+
+        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
@@ -1419,6 +1483,11 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             derive_from_calendar=self._season_engine == "calendar",
             label_datetime=_resolve_label_datetime(row),
         )
+
+        # Sampler-driven task assignment always overrides the dataframe value so
+        # that each sample supervises exactly one head per batch.
+        if task_override is not None:
+            attrs["label_task"] = task_override
 
         predictors = Predictors(**inputs, label=label)
         return predictors, attrs
@@ -1536,211 +1605,173 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
         return label
 
-    def get_balanced_sampler(
-        self,
-        method: str = "balanced",
-        clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
-        normalize: bool = True,
-        generator: Optional[Any] = None,
-        sampling_class: str = "finetune_class",
-    ) -> "WeightedRandomSampler":
-        """
-        Build a WeightedRandomSampler so that rare classes (from `balancing_class`)
-        are upsampled and common classes downsampled.
-        max_upsample:
-            maximum upsampling factor for the rarest class (e.g. 10 means
-            no class will be sampled >10× more than its frequency).
-        sampling_class:
-            column name in the dataframe to use for balancing.
-            Default is `finetune_class`, which is the class label
-            used in the training. `balancing_class` can be used as well.
-        """
-        # extract the sampling class (strings or ints)
-        bc_vals = self.dataframe[sampling_class].values
-
-        logger.info("Computing class weights ...")
-        class_weights = get_class_weights(
-            bc_vals, method, clip_range=clip_range, normalize=normalize
-        )
-        logger.info(f"Class weights: {class_weights}")
-
-        # per‐sample weight
-        sample_weights = np.ones_like(bc_vals).astype(np.float32)
-        for k, v in class_weights.items():
-            sample_weights[bc_vals == k] = v
-
-        sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True,
-            generator=generator,
-        )
-        return sampler
-
-    def get_task_balanced_sampler(
+    def get_dual_head_batch_sampler(
         self,
         *,
-        task_column: str = "label_task",
-        task_weight_method: str = "balanced",
-        class_column_map: Optional[Mapping[str, str]] = None,
+        batch_size: int,
+        landcover_column: str = "landcover_label",
+        croptype_column: str = "croptype_label",
         class_weight_method: str = "balanced",
-        spatial_group_column: Optional[str] = None,
+        clip_range: Optional[Tuple[float, float]] = (0.3, 5.0),
         spatial_bin_size_degrees: Optional[float] = None,
         spatial_weight_method: str = "log",
-        clip_range: Optional[Tuple[float, float]] = None,
-        normalize: bool = True,
-        generator: Optional[Any] = None,
-        fallback_sampling_class: str = "finetune_class",
-    ) -> "WeightedRandomSampler":
-        """Build weights that balance tasks, classes, and spatial density."""
+        num_batches: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
+    ) -> "DualHeadBatchSampler":
+        """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
-        def _log_weight_stats(name: str, values: np.ndarray) -> None:
-            if values.size == 0:
-                logger.warning(f"{name}: no values to describe")
-                return
-            stats = {
-                "min": float(values.min()),
-                "max": float(values.max()),
-                "mean": float(values.mean()),
-                "std": float(values.std(ddof=0)),
-            }
-            logger.info(f"{name} stats: {stats}")
-
-        if task_column not in self.dataframe.columns:
-            raise ValueError(f"Task column '{task_column}' not found in dataframe")
-
-        task_series = self.dataframe[task_column]
-        if task_series.isna().any():
-            raise ValueError(
-                "Task column contains missing values; balancing requires explicit task IDs"
-            )
-
-        tasks = task_series.astype(str).to_numpy()
-        unique_tasks = sorted(set(tasks.tolist()))
-        task_counts = {task: int((tasks == task).sum()) for task in unique_tasks}
-        logger.info(
-            f"Building task-balanced sampler for {len(tasks)} samples across tasks: {task_counts}"
-        )
-
-        effective_task_counts = dict(task_counts)
-        if {"landcover", "croptype"}.issubset(effective_task_counts):
-            effective_task_counts["landcover"] = len(tasks)
-            logger.info(
-                f"Treating landcover as supervising all samples for task weighting: {effective_task_counts}"
-            )
-
-        # Task-level weights
-        task_weights = _stringify_weight_dict(
-            get_class_weights(
-                tasks,
-                method=task_weight_method,
-                clip_range=None,
-                normalize=normalize,
-                counts_override=effective_task_counts,
-            )
-        )
-        logger.info(f"Task weights per task: {task_weights}")
-        task_weight_vec = np.array(
-            [task_weights[str(task)] for task in tasks], dtype=np.float64
-        )
-        _log_weight_stats("Task weight vector", task_weight_vec)
-
-        # Class-level weights (within each task)
-        class_weight_vec = np.ones_like(task_weight_vec)
-        class_column_map = class_column_map or {}
-        for task_name in unique_tasks:
-            class_column = class_column_map.get(task_name, fallback_sampling_class)
-            if class_column not in self.dataframe.columns:
-                raise ValueError(
-                    f"Class column '{class_column}' required for task '{task_name}' but not found in dataframe"
-                )
-
-            mask = tasks == task_name
-            if not np.any(mask):
-                continue
-
-            class_values = self.dataframe.loc[mask, class_column].astype(str).to_numpy()
-            class_counts = Counter(class_values.tolist())
-            class_weights = _stringify_weight_dict(
-                get_class_weights(
-                    class_values,
-                    method=class_weight_method,
-                    clip_range=(0.1, 10.0),
-                    normalize=normalize,
-                )
-            )
-            logger.info(f"[Task={task_name}] class counts: {class_counts}")
-            logger.info(f"[Task={task_name}] class weights: {class_weights}")
-
-            class_weight_vec[mask] = np.array(
-                [class_weights[str(value)] for value in class_values], dtype=np.float64
-            )
-        _log_weight_stats("Class weight vector", class_weight_vec)
-
-        # Spatial weights (down-weight dense regions, up-weight sparse ones)
-        spatial_weight_vec = np.ones_like(task_weight_vec)
-        if spatial_group_column or spatial_bin_size_degrees is not None:
-            if spatial_group_column:
-                if spatial_group_column not in self.dataframe.columns:
-                    raise ValueError(
-                        f"Spatial group column '{spatial_group_column}' not found in dataframe"
-                    )
-                spatial_groups = (
-                    self.dataframe[spatial_group_column].astype(str).to_numpy()
-                )
-                if pd.isna(spatial_groups).any():
-                    raise ValueError(
-                        f"Spatial group column '{spatial_group_column}' contains missing values"
-                    )
-            else:
-                if spatial_bin_size_degrees is None:
-                    raise ValueError(
-                        "spatial_bin_size_degrees must be provided when spatial_group_column is not set"
-                    )
-                if (
-                    "lat" not in self.dataframe.columns
-                    or "lon" not in self.dataframe.columns
-                ):
-                    raise ValueError(
-                        "Latitude/longitude columns are required to compute spatial bins"
-                    )
-                spatial_groups = _spatial_bins_from_latlon(
-                    self.dataframe["lat"],
-                    self.dataframe["lon"],
-                    spatial_bin_size_degrees,
-                )
-
-            spatial_weights = _stringify_weight_dict(
-                get_class_weights(
-                    spatial_groups,
-                    method=spatial_weight_method,
-                    clip_range=(0.1, 10.0),
-                    normalize=normalize,
-                )
-            )
-            spatial_weight_vec = np.array(
-                [spatial_weights[str(group)] for group in spatial_groups],
-                dtype=np.float64,
-            )
-            logger.info(f"Spatial weights: {spatial_weights}")
-        _log_weight_stats("Spatial weight vector", spatial_weight_vec)
-
-        combined = task_weight_vec * class_weight_vec * spatial_weight_vec
-        if clip_range is not None:
-            combined = np.clip(combined, clip_range[0], clip_range[1])
-        else:
-            combined = np.clip(combined, 1e-6, None)
-        _log_weight_stats("Combined sampling weights", combined)
-
-        weight_tensor = torch.as_tensor(combined, dtype=torch.double)
-        sampler = WeightedRandomSampler(
-            weights=weight_tensor.tolist(),
-            num_samples=len(combined),
-            replacement=True,
+        Each batch will contain exactly ``batch_size // 2`` LC-assigned and
+        ``batch_size // 2`` CT-assigned samples drawn from class-balanced pools.
+        See :class:`DualHeadBatchSampler` for full documentation.
+        """
+        return DualHeadBatchSampler(
+            dataframe=self.dataframe,
+            batch_size=batch_size,
+            landcover_column=landcover_column,
+            croptype_column=croptype_column,
+            class_weight_method=class_weight_method,
+            clip_range=clip_range,
+            spatial_bin_size_degrees=spatial_bin_size_degrees,
+            spatial_weight_method=spatial_weight_method,
+            num_batches=num_batches,
             generator=generator,
         )
-        sampler.weights = weight_tensor  # type: ignore[attr-defined]
-        return sampler
+
+
+class DualHeadBatchSampler(Sampler):
+    """Batch sampler for dual-head (landcover + croptype) finetuning.
+
+    Each batch is composed of exactly ``batch_size // 2`` **LC-assigned** samples
+    and ``batch_size // 2`` **CT-assigned** samples.  Task assignment is encoded
+    into the virtual index returned to the DataLoader so that
+    :meth:`WorldCerealLabelledDataset.__getitem__` can override ``label_task``
+    without mutating the dataframe or touching shared worker state:
+
+    * ``[N, 2N)``  → LC-assigned  (``real_idx = idx - N``,   ``label_task = "landcover"``)
+    * ``[2N, 3N)`` → CT-assigned  (``real_idx = idx - 2N``,  ``label_task = "croptype"``)
+    * ``[0, N)``   → natural idx  (val/test; ``label_task`` read from dataframe)
+
+    **LC pool**: all *N* training samples, weighted by the ``landcover_label``
+    class distribution over the full training set.
+
+    **CT pool**: only samples that carry a valid (non-null / non-ignore)
+    ``croptype_label``, weighted by the ``croptype_label`` class distribution
+    over that subset.  The "no-crop" class is included naturally.
+
+    **Spatial weighting** (optional): spatial-density weights are computed and
+    independently clipped to *clip_range* before being multiplied with the class
+    weights.  Both components are normalised to mean = 1 and re-clipped to the
+    same *clip_range* prior to combination, so neither can dominate the other
+    due to differences in absolute range.
+    """
+
+    _LC_OFFSET: int = 1  # virtual offset factor for LC pool
+    _CT_OFFSET: int = 2  # virtual offset factor for CT pool
+
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        batch_size: int,
+        *,
+        landcover_column: str = "landcover_label",
+        croptype_column: str = "croptype_label",
+        class_weight_method: str = "balanced",
+        clip_range: Optional[Tuple[float, float]] = (0.3, 5.0),
+        spatial_bin_size_degrees: Optional[float] = None,
+        spatial_weight_method: str = "log",
+        num_batches: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
+    ) -> None:
+        import math
+
+        N = len(dataframe)
+        self._n = N
+        self._batch_size = batch_size
+        self._generator = generator
+        self._num_batches = (
+            num_batches if num_batches is not None else math.ceil(N / batch_size)
+        )
+
+        # ---- LC pool: all N samples weighted by landcover class distribution ----
+        lc_labels = dataframe[landcover_column].astype(str).to_numpy()
+        lc_class_arr = _get_normalized_weights(
+            lc_labels, method=class_weight_method, clip_range=clip_range
+        )
+
+        # ---- CT pool: samples with a valid (non-null, non-ignore) croptype label ----
+        ct_valid = dataframe[croptype_column].notna() & (
+            dataframe[croptype_column].astype(str) != "ignore"
+        )
+        ct_real_indices = np.where(ct_valid.to_numpy())[0]
+        if len(ct_real_indices) == 0:
+            raise ValueError(
+                f"No samples with a valid '{croptype_column}' found; "
+                "DualHeadBatchSampler requires at least one CT-eligible sample."
+            )
+        ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
+        ct_class_arr = _get_normalized_weights(
+            ct_labels, method=class_weight_method, clip_range=clip_range
+        )
+
+        # ---- Optional spatial weighting ----
+        # Both class and spatial arrays are independently normalised to mean=1 and
+        # re-clipped to clip_range (see _get_normalized_weights) before being
+        # multiplied.  This guarantees that neither component can overrule the
+        # other due to differences in absolute weight range.
+        if (
+            spatial_bin_size_degrees is not None
+            and "lat" in dataframe.columns
+            and "lon" in dataframe.columns
+        ):
+            spatial_bins = _spatial_bins_from_latlon(
+                dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
+            )
+            sp_arr = _get_normalized_weights(
+                spatial_bins, method=spatial_weight_method, clip_range=clip_range
+            )
+            lc_class_arr = lc_class_arr * sp_arr  # full N-sample array
+            ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset only
+
+        # Convert to float64 probability tensors for torch.multinomial
+        self._lc_probs = torch.as_tensor(
+            lc_class_arr / lc_class_arr.sum(), dtype=torch.float64
+        )
+        self._ct_probs = torch.as_tensor(
+            ct_class_arr / ct_class_arr.sum(), dtype=torch.float64
+        )
+
+        # Virtual-index tensors: LC → [N, 2N), CT → [2N, 3N)
+        self._lc_virtual = torch.arange(N, dtype=torch.long) + N
+        self._ct_virtual = torch.as_tensor(ct_real_indices, dtype=torch.long) + 2 * N
+
+        lc_class_counts: Dict[str, int] = Counter(lc_labels.tolist())
+        ct_class_counts: Dict[str, int] = Counter(ct_labels.tolist())
+        lc_half = batch_size // 2
+        ct_half = batch_size - lc_half
+        logger.info(
+            f"DualHeadBatchSampler: N={N}, LC pool={N}, CT pool={len(ct_real_indices)}, "
+            f"batch_size={batch_size} (LC half={lc_half}, CT half={ct_half}), "
+            f"num_batches={self._num_batches}"
+        )
+        logger.info(f"DualHeadBatchSampler LC class distribution: {lc_class_counts}")
+        logger.info(f"DualHeadBatchSampler CT class distribution: {ct_class_counts}")
+
+    def __iter__(self):
+        lc_half = self._batch_size // 2
+        ct_half = self._batch_size - lc_half
+        for _ in range(self._num_batches):
+            lc_drawn = torch.multinomial(
+                self._lc_probs, lc_half, replacement=True, generator=self._generator
+            )
+            ct_drawn = torch.multinomial(
+                self._ct_probs, ct_half, replacement=True, generator=self._generator
+            )
+            batch = torch.cat([self._lc_virtual[lc_drawn], self._ct_virtual[ct_drawn]])
+            perm = torch.randperm(self._batch_size, generator=self._generator)
+            yield batch[perm].tolist()
+
+    def __len__(self) -> int:
+        return self._num_batches
 
 
 class WorldCerealTrainingDataset(WorldCerealDataset):

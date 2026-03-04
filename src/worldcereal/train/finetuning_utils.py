@@ -2,8 +2,17 @@ import json
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import (Any, Callable, List, Literal, Mapping, Optional, Sequence,
-                    Tuple, Union)
+from typing import (
+    Any,
+    Callable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,10 +36,13 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
+
 from worldcereal.train.data import collate_fn
-from worldcereal.train.datasets import (SensorMaskingConfig,
-                                        WorldCerealLabelledDataset,
-                                        _is_missing_value)
+from worldcereal.train.datasets import (
+    SensorMaskingConfig,
+    WorldCerealLabelledDataset,
+    _is_missing_value,
+)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
@@ -440,11 +452,15 @@ class SeasonalMultiTaskLoss(nn.Module):
 
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
-        # Landcover pathway (supervise whenever a valid label exists)
+        # Landcover pathway – only activate for samples explicitly routed to the LC
+        # head (tasks[idx] == landcover_task_name).  When the DualHeadBatchSampler is
+        # used, CT-assigned samples carry label_task="croptype" so they are excluded
+        # here, preventing cropland-class contamination of the LC supervision signal.
         landcover_indices = [
             idx
             for idx in range(batch_size)
-            if landcover_labels[idx] is not None
+            if tasks[idx] == self.landcover_task_name
+            and landcover_labels[idx] is not None
             and not _is_missing_value(landcover_labels[idx])
             and str(landcover_labels[idx]) in self._lc_to_idx
         ]

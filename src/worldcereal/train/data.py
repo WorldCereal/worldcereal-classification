@@ -1,7 +1,6 @@
 import gc
 from pathlib import Path
-from typing import (Any, Dict, List, Literal, Mapping, Optional, Sequence,
-                    Tuple, Union)
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import duckdb
 import numpy as np
@@ -16,13 +15,19 @@ from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
-from worldcereal.train.backbone import (build_presto_backbone,
-                                        resolve_seasonal_encoder)
-from worldcereal.train.datasets import (SeasonCalendarMode,
-                                        SensorMaskingConfig,
-                                        WorldCerealTrainingDataset)
-from worldcereal.utils.refdata import (DATA_DIR, get_class_mappings,
-                                       map_classes, split_df)
+
+from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
+from worldcereal.train.datasets import (
+    SeasonCalendarMode,
+    SensorMaskingConfig,
+    WorldCerealTrainingDataset,
+)
+from worldcereal.utils.refdata import (
+    DATA_DIR,
+    get_class_mappings,
+    map_classes,
+    split_df,
+)
 from worldcereal.utils.timeseries import process_parquet
 
 _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
@@ -41,7 +46,7 @@ _BOUNDARIES_PATH = (
 
 
 def _normalize_region_filter(
-    region_filter: Optional[Union[str, Sequence[str]]]
+    region_filter: Optional[Union[str, Sequence[str]]],
 ) -> Optional[List[str]]:
     if region_filter is None:
         return None
@@ -970,8 +975,8 @@ def get_training_dfs_from_parquet(
         "start_date",
         "end_date",
         "ref_id",
-        "CTY25_confidence_nonoutlier", 
-        "LC10_confidence_nonoutlier"
+        "CTY25_confidence_nonoutlier",
+        "LC10_confidence_nonoutlier",
     ]
     INT_COLS = [
         "extract",
@@ -993,7 +998,7 @@ def get_training_dfs_from_parquet(
         "slope",
         "elevation",
         "AGERA5-PRECIP",
-        "AGERA5-TMEAN",  
+        "AGERA5-TMEAN",
     ]
     FLOAT_COLS = ["lon", "lat", "CTY25_anomaly_flag", "LC10_anomaly_flag"]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
@@ -1094,7 +1099,9 @@ def get_training_dfs_from_parquet(
 
     if "region" in df.columns:
         region_series = df["region"]
-        region_missing_mask = region_series.isna() | region_series.astype(str).str.strip().eq("")
+        region_missing_mask = region_series.isna() | region_series.astype(
+            str
+        ).str.strip().eq("")
     else:
         region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
 
@@ -1109,11 +1116,11 @@ def get_training_dfs_from_parquet(
         df = _attach_regions_from_boundaries(
             df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
         )
-        if not is_tempfile:
-            df.to_parquet(wide_parquet_output_path, index=False)
-            logger.info(
-                f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
-            )
+        # if not is_tempfile:
+        #     df.to_parquet(wide_parquet_output_path, index=False)
+        # logger.info(
+        #     f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
+        # )
     elif normalized_regions is not None and "region" not in df.columns:
         raise ValueError(
             "Region filtering requested but no region labels were found or generated."
@@ -1126,7 +1133,9 @@ def get_training_dfs_from_parquet(
         )
         df = df[~df["sample_id"].isin(ignore_samples_df.sample_id.tolist())]
     else:
-        logger.info("No ignore_samples_file provided; skipping explicit sample exclusion step.")
+        logger.info(
+            "No ignore_samples_file provided; skipping explicit sample exclusion step."
+        )
 
     if normalized_regions is not None:
         if "region" not in df.columns:
@@ -1138,7 +1147,9 @@ def get_training_dfs_from_parquet(
         mask = region_series.isin(region_keys)
         available_regions = set(region_series.unique())
         missing_regions = [
-            region for region in normalized_regions if region.casefold() not in available_regions
+            region
+            for region in normalized_regions
+            if region.casefold() not in available_regions
         ]
         if missing_regions:
             logger.warning(
@@ -1156,7 +1167,6 @@ def get_training_dfs_from_parquet(
             f"Filtered dataset to {len(filtered)} samples in regions: {normalized_regions}"
         )
         df = filtered
-
 
     # Remove classes with too few samples for stratification
     df = remove_small_classes(df, min_samples=10)

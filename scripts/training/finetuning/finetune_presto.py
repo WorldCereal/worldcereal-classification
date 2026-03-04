@@ -5,8 +5,7 @@ import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
-                    cast)
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,15 +20,20 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
+
 from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
-                                                evaluate_finetuned_model,
-                                                prepare_training_datasets,
-                                                run_finetuning)
-from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
-                                             WorldCerealSeasonalModel)
+from worldcereal.train.finetuning_utils import (
+    SeasonalMultiTaskLoss,
+    evaluate_finetuned_model,
+    prepare_training_datasets,
+    run_finetuning,
+)
+from worldcereal.train.seasonal_head import (
+    SeasonalFinetuningHead,
+    WorldCerealSeasonalModel,
+)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
@@ -76,14 +80,18 @@ def _is_ignore_label(value) -> bool:
 
 def _filter_ignore_labels(values):
     """Drop class labels named 'ignore' (case-insensitive) while preserving order."""
-    return [value for value in values if value is not None and not _is_ignore_label(value)]
+    return [
+        value for value in values if value is not None and not _is_ignore_label(value)
+    ]
 
 
 def _drop_outliers(
     df: pd.DataFrame,
     split_name: str,
     outlier_col: str = "LC10_anomaly_flag",
-    drop_level: Literal["drop_candidate", "drop_suspect", "drop_flagged"] = "drop_candidate",
+    drop_level: Literal[
+        "drop_candidate", "drop_suspect", "drop_flagged"
+    ] = "drop_candidate",
 ) -> pd.DataFrame:
 
     if outlier_col not in df.columns:
@@ -91,16 +99,22 @@ def _drop_outliers(
             f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
         )
         return df
-    
-    if drop_level=="drop_candidate":
-        outliers = df[df[outlier_col]=="candidate"]["sample_id"].tolist()
-    elif drop_level=="drop_suspect":
-        outliers = df[df[outlier_col].isin(["candidate", "suspect"])]["sample_id"].tolist()
-    elif drop_level=="drop_flagged":
-        outliers = df[df[outlier_col].isin(["candidate", "suspect", "flagged"])]["sample_id"].tolist()
+
+    if drop_level == "drop_candidate":
+        outliers = df[df[outlier_col] == "candidate"]["sample_id"].tolist()
+    elif drop_level == "drop_suspect":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect"])][
+            "sample_id"
+        ].tolist()
+    elif drop_level == "drop_flagged":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect", "flagged"])][
+            "sample_id"
+        ].tolist()
     else:
-        raise ValueError(f"Invalid drop_level '{drop_level}'; must be one of ['drop_candidate', 'drop_suspect', 'drop_flagged']")
-    
+        raise ValueError(
+            f"Invalid drop_level '{drop_level}'; must be one of ['drop_candidate', 'drop_suspect', 'drop_flagged']"
+        )
+
     if len(outliers) > 0:
         logger.warning(
             f"Dropping {len(outliers)} samples from {split_name} split "
@@ -118,11 +132,7 @@ def _series_from_column(
     df: pd.DataFrame, column: Optional[str], default: float = 1.0
 ) -> pd.Series:
     if column and column in df.columns:
-        return (
-            pd.to_numeric(df[column], errors="coerce")
-            .fillna(default)
-            .astype(float)
-        )
+        return pd.to_numeric(df[column], errors="coerce").fillna(default).astype(float)
     return pd.Series(default, index=df.index, dtype=float)
 
 
@@ -137,7 +147,9 @@ def _combine_quality_outlier(
     denom = float(quality_weight + outlier_weight)
     if denom <= 0.0:
         return outlier_clipped
-    combined = (quality_clipped * quality_weight + outlier_clipped * outlier_weight) / denom
+    combined = (
+        quality_clipped * quality_weight + outlier_clipped * outlier_weight
+    ) / denom
     return combined.clip(0.0, 1.0)
 
 
@@ -164,9 +176,7 @@ def _attach_sample_weights(
         "max": float(combined.max()),
         "mean": float(combined.mean()),
     }
-    logger.info(
-        f"{split_name} {output_col} stats: {stats}"
-    )
+    logger.info(f"{split_name} {output_col} stats: {stats}")
     return updated
 
 
@@ -325,10 +335,10 @@ def _annotate_dual_task_labels(
         int(code): label for code, label in CLASS_MAPPINGS[landcover_key].items()
     }
     updated["landcover_label"] = updated["ewoc_code"].map(landcover_map)
-    
+
     # explicitly remove ignore class
     missing_landcover = updated["landcover_label"].isna()
-    ignore_landcover = updated["landcover_label"]=="ignore"
+    ignore_landcover = updated["landcover_label"] == "ignore"
 
     if missing_landcover.any() | ignore_landcover.any():
         logger.warning(
@@ -345,7 +355,9 @@ def _annotate_dual_task_labels(
     }
     updated["croptype_label"] = updated["ewoc_code"].map(croptype_map)
 
-    has_croptype_label = (updated["croptype_label"].notna()) & (updated["croptype_label"]!="ignore")
+    has_croptype_label = (updated["croptype_label"].notna()) & (
+        updated["croptype_label"] != "ignore"
+    )
     updated["label_task"] = np.where(
         has_croptype_label,
         "croptype",
@@ -548,9 +560,15 @@ def main(args):
     time_explicit = args.time_explicit
     enable_masking = args.enable_masking
     debug = args.debug
-    use_balancing = args.use_balancing  # If True, use class balancing for training
+    use_class_balancing = (
+        args.use_class_balancing
+    )  # If True, weight samples by class frequency
     cropland_class_names = _filter_ignore_labels(
-        [cls.strip() for cls in args.landcover_cropland_classes.split(",") if cls.strip()]
+        [
+            cls.strip()
+            for cls in args.landcover_cropland_classes.split(",")
+            if cls.strip()
+        ]
     )
     if not cropland_class_names:
         cropland_class_names = ["temporary_crops"]
@@ -594,9 +612,8 @@ def main(args):
     else:
         masking_info = "disabled"
 
-    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
-    # output_dir = f"{base_output_dir}/{experiment_name}"
-    output_dir = f"/projects/worldcereal/models/{experiment_name}"
+    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_class_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
+    output_dir = f"{base_output_dir}/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     tensorboard_dir: Optional[Path] = None
     if args.log_tensorboard:
@@ -748,7 +765,7 @@ def main(args):
             split_name="test",
             drop_level=args.outlier_mode,
         )
-    
+
     landcover_key = args.landcover_classes_key
     croptype_key = args.croptype_classes_key
     if landcover_key not in CLASS_MAPPINGS:
@@ -912,9 +929,7 @@ def main(args):
             landcover_key,
         )
 
-    croptype_classes_raw = _unique_preserve_order(
-        CLASS_MAPPINGS[croptype_key].values()
-    )
+    croptype_classes_raw = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
     croptype_classes = _filter_ignore_labels(croptype_classes_raw)
     if len(croptype_classes) != len(croptype_classes_raw):
         logger.warning(
@@ -938,10 +953,6 @@ def main(args):
         backbone=backbone,
         head=seasonal_head,
     ).to(device)
-    class_column_map = {
-        "landcover": "landcover_label",
-        "croptype": "croptype_label",
-    }
     sample_weight_mapping = {
         "landcover": "sample_weight_lc",
         "croptype": "sample_weight_ct",
@@ -1101,25 +1112,27 @@ def main(args):
     if args.balancing_clip_max > args.balancing_clip_min:
         balancing_clip = (args.balancing_clip_min, args.balancing_clip_max)
 
-    train_sampler = None
-    if use_balancing:
-        train_sampler = train_ds.get_task_balanced_sampler(
-            task_weight_method=args.task_balancing_method,
-            class_weight_method=args.class_balancing_method,
-            class_column_map=class_column_map,
-            clip_range=balancing_clip,
-            spatial_group_column=args.spatial_group_column,
-            spatial_bin_size_degrees=args.spatial_bin_size_deg,
-            spatial_weight_method=args.spatial_balancing_method,
-            generator=generator,
-        )
+    # DualHeadBatchSampler guarantees every batch has exactly 50 % LC-assigned
+    # and 50 % CT-assigned samples.  Task-level 50/50 split is always enforced.
+    # use_class_balancing controls whether sampling probabilities are weighted by
+    # the class distribution (True) or uniform across the pool (False, method="none").
+    # Spatial density down-weighting is always applied when spatial_bin_size_deg is
+    # set, independently of class balancing.
+    _effective_class_method = (
+        args.class_balancing_method if use_class_balancing else "none"
+    )
+    train_batch_sampler = train_ds.get_dual_head_batch_sampler(
+        batch_size=hyperparams.batch_size,
+        class_weight_method=_effective_class_method,
+        clip_range=balancing_clip,
+        spatial_bin_size_degrees=args.spatial_bin_size_deg,
+        spatial_weight_method=args.spatial_balancing_method,
+        generator=generator,
+    )
 
     train_dl = DataLoader(
         train_ds,
-        batch_size=hyperparams.batch_size,
-        shuffle=True if not use_balancing else None,
-        sampler=train_sampler,
-        generator=generator if not use_balancing else None,
+        batch_sampler=train_batch_sampler,
         num_workers=hyperparams.num_workers,
         collate_fn=collate_fn,
     )
@@ -1183,12 +1196,11 @@ def main(args):
         "full_learning_rate": full_lr,
     }
     balancing_payload = {
-        "enabled": use_balancing,
-        "task_weight_method": args.task_balancing_method,
-        "class_weight_method": args.class_balancing_method,
-        "class_column_map": class_column_map,
+        "sampler": "DualHeadBatchSampler",
+        "use_class_balancing": use_class_balancing,
+        "class_weight_method": _effective_class_method,
         "clip_range": list(balancing_clip) if balancing_clip else None,
-        "spatial_group_column": args.spatial_group_column,
+        "spatial_enabled": args.spatial_bin_size_deg is not None,
         "spatial_bin_size_deg": args.spatial_bin_size_deg,
         "spatial_balancing_method": args.spatial_balancing_method,
     }
@@ -1478,7 +1490,11 @@ def parse_args(arg_list=None):
     parser.add_argument("--time_explicit", action="store_true")
     parser.add_argument("--enable_masking", action="store_true")
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--use_balancing", action="store_true")
+    parser.add_argument(
+        "--use_class_balancing",
+        action="store_true",
+        help="Weight sampler draws by class frequency within each task pool.",
+    )
     parser.add_argument(
         "--log_tensorboard",
         action="store_true",
@@ -1501,13 +1517,13 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--balancing_clip_min",
         type=float,
-        default=0.3,
+        default=0.1,
         help="Lower bound applied to sampler weights when balancing is enabled.",
     )
     parser.add_argument(
         "--balancing_clip_max",
         type=float,
-        default=5.0,
+        default=10.0,
         help="Upper bound applied to sampler weights when balancing is enabled.",
     )
     parser.add_argument(
@@ -1537,7 +1553,7 @@ def parse_args(arg_list=None):
         type=str,
         default="keep",
         choices=["keep", "drop_candidate", "drop_suspect", "drop_flagged"],
-        help="Keep all samples or drop outliers based on nested anomaly_flag categories. " \
+        help="Keep all samples or drop outliers based on nested anomaly_flag categories. "
         "E.g., if 'drop_suspect' is chosen, both 'suspect' and 'candidate' categories will be dropped.",
     )
     parser.add_argument(
@@ -1640,7 +1656,7 @@ if __name__ == "__main__":
     #     "--augment",
     #     "--initial_mapping",
     #     "LANDCOVER10",  # CROPTYPE28
-    #     "--use_balancing",
+    #     "--use_class_balancing",
     #     "--spatial_bin_size_deg",
     #     "5.0",
     #     "--head_only_training",
