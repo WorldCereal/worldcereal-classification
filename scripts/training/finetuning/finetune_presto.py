@@ -22,7 +22,8 @@ from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
 from worldcereal.train.backbone import checkpoint_fingerprint
-from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
+from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
+                                    remove_small_classes)
 from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
                                                 evaluate_finetuned_model,
@@ -838,6 +839,28 @@ def main(args):
     quality_weight = args.sample_weight_quality
     outlier_weight = args.sample_weight_outlier
 
+    # Remove small classes from train_df; make sure to keep the same classes in val/test for consistency
+    train_df, removed_lc_classes = remove_small_classes(
+        train_df,
+        label_col="landcover_label",
+        min_samples=args.min_samples_per_class,
+    )
+    train_df, removed_ct_classes = remove_small_classes(
+        train_df,
+        label_col="croptype_label",
+        min_samples=args.min_samples_per_class,
+    )
+    logger.warning(
+        f"Removing {val_df['landcover_label'].isin(removed_lc_classes).sum()} validation and {test_df['landcover_label'].isin(removed_lc_classes).sum()} test samples with landcover classes {removed_lc_classes} removed from training split"
+    )
+    logger.warning(
+        f"Removing {val_df['croptype_label'].isin(removed_ct_classes).sum()} validation and {test_df['croptype_label'].isin(removed_ct_classes).sum()} test samples with croptype classes {removed_ct_classes} removed from training split"
+    )
+    val_df = val_df[~val_df["landcover_label"].isin(removed_lc_classes)].copy()
+    test_df = test_df[~test_df["landcover_label"].isin(removed_lc_classes)].copy()
+    val_df = val_df[~val_df["croptype_label"].isin(removed_ct_classes)].copy()
+    test_df = test_df[~test_df["croptype_label"].isin(removed_ct_classes)].copy()
+
     train_df = _attach_sample_weights(
         train_df,
         split_name="train",
@@ -1505,6 +1528,12 @@ def parse_args(arg_list=None):
         default="balanced",
         choices=["balanced", "log", "effective", "none"],
         help="Strategy for balancing classes within each task.",
+    )
+    parser.add_argument(
+        "--min_samples_per_class",
+        type=int,
+        default=100,
+        help="Minimum number of samples required for a class to be included in training. Classes with fewer samples will be removed. Decision is taken based on the training set, but the same classes will be removed from val and test for consistency.",
     )
     parser.add_argument(
         "--balancing_clip_min",
