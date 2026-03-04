@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-export OPENEO_AUTH_METHOD=""
-
 # Make sure your current work directory is the root of the worldcereal repository
 # ("worldcereal-classification")
 # The next line should NOT be touched.
@@ -44,5 +42,4 @@ PARALLEL_JOBS="2"
 --end_date "${END_DATE}" \
 --parallel_jobs "${PARALLEL_JOBS}" \
 --restart_failed \
---randomize_jobs \
---simplify_logging
+--randomize_jobs

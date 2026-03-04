@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-export OPENEO_AUTH_METHOD=""
-
 # Make sure your current work directory is the root of the worldcereal repository
 # ("worldcereal-classification")
 # The next line should NOT be touched.

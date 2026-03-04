@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-export OPENEO_AUTH_METHOD=""
-
 # Make sure your current work directory is the root of the worldcereal repository
 # ("worldcereal-classification")
 # The next line should NOT be touched.
@@ -16,7 +14,6 @@ PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
 # for which you want to collect inputs.
 GRID_PATH="./bbox/test.gpkg"
 GRID_SIZE="20"
-TARGET_EPSG="3857"
 
 # Parameter specifying output folder
 OUTPUT_FOLDER="./outputs/maps"
@@ -42,12 +39,10 @@ PARALLEL_JOBS="2"
 --task "classification" \
 --grid_path "${GRID_PATH}" \
 --grid_size "${GRID_SIZE}" \
---target-epsg "${TARGET_EPSG}"} \
 --start_date "${START_DATE}" \
 --end_date "${END_DATE}" \
 --product "${PRODUCT}" \
 --output_folder "${OUTPUT_FOLDER}" \
 --parallel-jobs "${PARALLEL_JOBS}" \
 --restart_failed \
---randomize_jobs \
---simplify_logging
+--randomize_jobs
