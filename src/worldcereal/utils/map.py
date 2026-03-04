@@ -524,11 +524,26 @@ class ui_map:
             raise ValueError("Expected exactly one geometry in single mode.")
         return gdf.geometry.iloc[0]
 
-    def get_bbox(self) -> BoundingBoxExtent:
+    def get_bbox(
+        self, projection: Literal["latlon", "utm"] = "latlon"
+    ) -> BoundingBoxExtent:
         if self.mode != "single":
             raise ValueError("get_bbox is only available in single mode.")
         gdf = self.get_gdf()
-        return gdf_to_bbox_extent(gdf)
+        bbox = gdf_to_bbox_extent(gdf)
+        if projection == "utm":
+            bbox_utm, epsg = _latlon_to_utm(
+                (bbox.west, bbox.south, bbox.east, bbox.north)
+            )
+            return BoundingBoxExtent(
+                west=bbox_utm[0],
+                south=bbox_utm[1],
+                east=bbox_utm[2],
+                north=bbox_utm[3],
+                epsg=epsg,
+            )
+        else:
+            return bbox
 
     def save_gdf(self, output_dir: Path, outputname: Optional[str] = None) -> Path:
         """Save the current GeoDataFrame to a GeoPackage file."""
