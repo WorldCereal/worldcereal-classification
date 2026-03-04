@@ -92,7 +92,7 @@ def run_worldcereal_task(
         log_fn = logger.info
 
     resolved = resolve_job_params(task, dict(params))
-    manager_init, run_kwargs, log_context = split_job_params(task, resolved)
+    manager_init, job_kwargs, log_context = split_job_params(task, resolved)
     output_dir = manager_init["output_dir"]
     simplify_logging = resolved["simplify_logging"]
 
@@ -113,8 +113,8 @@ def run_worldcereal_task(
         log_fn("Detailed workflow configuration:")
         log_fn(json.dumps(workflow_config.to_dict(), indent=2))
         log_fn("----------------------------------")
-        run_kwargs = {
-            **run_kwargs,
+        job_kwargs = {
+            **job_kwargs,
             "workflow_config": workflow_config,
         }
 
@@ -124,6 +124,7 @@ def run_worldcereal_task(
         **manager_init,
     )
     log_fn("Job manager initialized!")
+    log_fn("----------------------------------")
 
     status_callback = None
     if simplify_logging:
@@ -144,8 +145,8 @@ def run_worldcereal_task(
         "For this, visit the job tracking page in the backend dashboard: https://openeo.dataspace.copernicus.eu/\n"
     )
 
-    run_kwargs = {
-        **run_kwargs,
+    job_kwargs = {
+        **job_kwargs,
         "status_callback": status_callback,
     }
 
@@ -153,11 +154,11 @@ def run_worldcereal_task(
         if runner is not None:
             runner(
                 manager,
-                run_kwargs=run_kwargs,
+                job_kwargs=job_kwargs,
                 **(runner_kwargs or {}),
             )
         else:
-            manager.run_jobs(**run_kwargs)
+            manager.run_jobs(**job_kwargs)
     except KeyboardInterrupt:
         log_fn(break_msg)
         manager.stop_job_thread()

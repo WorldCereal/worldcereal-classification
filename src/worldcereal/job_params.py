@@ -376,7 +376,7 @@ def split_job_params(
         "poll_sleep": resolved["poll_sleep"],
     }
 
-    run_kwargs: Dict[str, Any] = {
+    job_kwargs: Dict[str, Any] = {
         "restart_failed": resolved["restart_failed"],
         "randomize_jobs": resolved["randomize_jobs"],
         "parallel_jobs": resolved["parallel_jobs"],
@@ -410,27 +410,27 @@ def split_job_params(
     }
 
     if task == WorldCerealTask.INPUTS:
-        return manager_init, run_kwargs, log_context
+        return manager_init, job_kwargs, log_context
 
     if task == WorldCerealTask.EMBEDDINGS:
         resolved_parameters = (
             resolved["embeddings_parameters"] or EmbeddingsParameters()
         )
-        run_kwargs["embeddings_parameters"] = resolved_parameters
-        run_kwargs["scale_uint16"] = resolved["scale_uint16"]
+        job_kwargs["embeddings_parameters"] = resolved_parameters
+        job_kwargs["scale_uint16"] = resolved["scale_uint16"]
         log_context["embeddings_parameters"] = resolved_parameters
         log_context["scale_uint16"] = resolved["scale_uint16"]
-        return manager_init, run_kwargs, log_context
+        return manager_init, job_kwargs, log_context
 
     if task == WorldCerealTask.CLASSIFICATION:
         product_type = _normalize_product_type(resolved["product_type"])
         manager_init["season_specifications"] = resolved["season_specifications"]
-        run_kwargs["product_type"] = product_type
-        run_kwargs["seasonal_preset"] = resolved["seasonal_preset"]
+        job_kwargs["product_type"] = product_type
+        job_kwargs["seasonal_preset"] = resolved["seasonal_preset"]
         log_context["season_specifications"] = resolved["season_specifications"]
         log_context["seasonal_preset"] = resolved["seasonal_preset"]
         log_context["product_type"] = product_type
-        return manager_init, run_kwargs, log_context
+        return manager_init, job_kwargs, log_context
 
     raise ValueError(f"Unsupported task: {task}")
 

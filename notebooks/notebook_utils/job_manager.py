@@ -169,7 +169,7 @@ def build_notebook_status_callback(
 def run_notebook_job_manager(
     manager: WorldCerealJobManager,
     *,
-    run_kwargs: Dict[str, object],
+    job_kwargs: Dict[str, object],
     plot_out: Optional[Output] = None,
     log_out: Optional[Output] = None,
     display_outputs: bool = True,
@@ -183,8 +183,8 @@ def run_notebook_job_manager(
         zoom=zoom,
     )
 
-    resolved_kwargs = dict(run_kwargs)
-    resolved_kwargs.setdefault("status_callback", status_callback)
+    resolved_kwargs = dict(job_kwargs)
+    resolved_kwargs["status_callback"] = status_callback
     manager.run_jobs(**resolved_kwargs)
 
     return plot_out, log_out
