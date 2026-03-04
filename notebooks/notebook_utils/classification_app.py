@@ -3600,6 +3600,14 @@ class WorldCerealClassificationApp:
         if self.workflow_mode == "apply-default-model":
             custom_seasonal_model_url = None
             selected_model_url = None
+            landcover_head_zip = None
+            croptype_head_zip = None
+            if product_type == "cropland":
+                enable_cropland_head = True
+                enable_croptype_head = False
+            else:
+                enable_cropland_head = True
+                enable_croptype_head = True
         else:
             custom_seasonal_model_url = (
                 self.presto_model_package.get("seasonal_model_path")
@@ -3607,30 +3615,30 @@ class WorldCerealClassificationApp:
                 else None
             )
             selected_model_url = self.tab7_model_url
+            if product_type == "cropland":
+                landcover_head_zip = selected_model_url
+                croptype_head_zip = None
+                enable_croptype_head = False
+            else:
+                landcover_head_zip = custom_seasonal_model_url
+                croptype_head_zip = selected_model_url
+                enable_croptype_head = True
 
-        if product_type == "cropland":
-            landcover_head_zip = selected_model_url
-            croptype_head_zip = None
-            enable_croptype_head = False
-        elif product_type == "croptype":
-            landcover_head_zip = None
-            croptype_head_zip = selected_model_url
-            enable_croptype_head = True
-        else:
-            raise ValueError(
-                f"Invalid product type: {product_type}. Must be 'cropland' or 'croptype'."
-            )
         with log_out:
             print("Using the following models:")
             print(
                 f"- Seasonal model: {custom_seasonal_model_url or 'Default WorldCereal seasonal model'}"
             )
             if enable_cropland_head:
-                print(f"- Cropland head: {landcover_head_zip}")
+                print(
+                    f"- Cropland head: {landcover_head_zip or 'Default WorldCereal cropland head'}"
+                )
             else:
                 print("- Cropland head: Not used")
             if enable_croptype_head:
-                print(f"- Crop type head: {croptype_head_zip}")
+                print(
+                    f"- Crop type head: {croptype_head_zip or 'Default WorldCereal crop type head'}"
+                )
             else:
                 print("- Crop type head: Not used")
 
@@ -4214,11 +4222,21 @@ class WorldCerealClassificationApp:
         """Enable/disable Tab 8 (generate map) depending on model availability."""
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
+        product_type_dropdown = self.tab8_widgets.get("product_type_dropdown")
         season_hint = self.tab8_widgets.get("season_hint")
         season_retrieve_message = self.tab8_widgets.get("season_retrieve_message")
         season_retrieve_info = self.tab8_widgets.get("season_retrieve_info")
         season_retrieve_button = self.tab8_widgets.get("season_retrieve_button")
         season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
+
+        if product_type_dropdown is not None:
+            options = [("Cropland", "cropland")]
+            if self.workflow_mode != "apply-default-model":
+                options.append(("Croptype", "croptype"))
+            product_type_dropdown.options = options
+            allowed_values = {value for _, value in options}
+            if product_type_dropdown.value not in allowed_values:
+                product_type_dropdown.value = "cropland"
 
         if season_hint is not None:
             if self.workflow_mode == "apply-default-model":
