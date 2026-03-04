@@ -1,0 +1,49 @@
+#!/bin/bash
+
+#SBATCH --account=vito                      # Name of Account (default is vito)
+#SBATCH --partition=batch                   # Name of Partition (default is batch)
+#SBATCH --job-name=worldcereal-training     # Name of job
+#SBATCH --output=outputlog.out              # Standard output written to file
+#SBATCH --error=errorlog.out                # Standard error written to file
+#SBATCH --ntasks=1                          # Number of CPU processes
+#SBATCH --cpus-per-task=8                   # Number of CPU threads
+#SBATCH --time=64:00:00                     # Wall time (format: d-hh:mm:ss)
+#SBATCH --mem=40gb                          # Amount of memory (units: gb, mg, kb)
+#SBATCH --gpus=a100:1                       # Number of GPU; either a100:1, or just 1
+#SBATCH --mail-type=END,FAIL                # Mail events (NONE, BEGIN, END, FAIL, ALL)
+#SBATCH --mail-user=christina.butsko.ext@vito.be # Email adress to notify events.
+
+set -euo pipefail
+
+# Necessary for GPU usage
+module load CUDA
+
+# Do not forget to activate the required environment
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate worldcereal-py311
+
+# which python
+
+# Calling the training script.
+srun python /home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/finetune_presto.py \
+    --experiment_tag dualtask-SeasonalMultiTaskLoss-LC10-CT24-WesternEurope-OutlierScoreEnabled \
+    --initial_mapping LANDCOVER10 \
+    --landcover_classes_key LANDCOVER10 \
+    --croptype_classes_key CROPTYPE24 \
+    --val_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/val_samples.csv \
+    --test_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/test_samples.csv \
+    --ignore_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/ignore_samples.csv \
+    --timestep_freq month \
+    --finetune_regions "Western Europe" \
+    --time_explicit \
+    --use_balancing \
+    --outlier_mode drop_candidate \
+    --spatial_bin_size_deg 3.0 \
+    --augment \
+    --enable_masking \
+    --max_timesteps_trim 18 \
+    --head_only_training 3 \
+    --post_unfreeze_warmup_epochs 2 \
+    --log_tensorboard \
+    --explicit_training_dataframe /home/vito/butskoc/worldcereal_finetuning/merged_319_wide.parquet \
+    --base_output_dir /home/vito/butskoc/worldcereal_finetuning/models \
