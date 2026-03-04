@@ -16,19 +16,8 @@ from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping,
+                    Optional, Sequence, Tuple, Union)
 
 try:  # Python 3.10+
     from typing import TypeAlias
@@ -68,7 +57,6 @@ from openeo.udf.udf_data import UdfData
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from prometheo.predictors import Predictors
-
     from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
 
     try:
@@ -678,11 +666,8 @@ class SeasonalModelBundle:
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
         from prometheo.models import Presto
-
-        from worldcereal.train.seasonal_head import (
-            SeasonalFinetuningHead,
-            WorldCerealSeasonalModel,
-        )
+        from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
+                                                     WorldCerealSeasonalModel)
 
         backbone = Presto()
         head = SeasonalFinetuningHead(
@@ -1273,7 +1258,7 @@ class SeasonalInferenceEngine:
         self, predictors: "Predictors", season_masks: np.ndarray
     ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor]]:
         torch = _lazy_import_torch()
-        from prometheo.predictors import Predictors, to_torchtensor
+        from prometheo.predictors import Predictors
 
         landcover_logits: List[TorchTensor] = []
         croptype_logits: List[TorchTensor] = []
@@ -1298,11 +1283,17 @@ class SeasonalInferenceEngine:
                 logger.debug(
                     f"Processing predictor batch {processed_batches}/{estimated_batches} (size={batch_size})"
                 )
-            batch_dict = {
-                field: to_torchtensor(getattr(batch, field), device=self.device)
-                for field in batch._fields
-                if getattr(batch, field) is not None
-            }
+            batch_dict = {}
+            for field in batch._fields:
+                value = getattr(batch, field)
+                if value is None:
+                    continue
+                # Keep predictor payloads on host memory: the upstream Presto
+                # wrapper stages them through NumPy before moving tensors to
+                # the model device internally.
+                if torch.is_tensor(value) and value.is_cuda:
+                    value = value.detach().cpu()
+                batch_dict[field] = value
             batch_predictors = Predictors(**batch_dict)
             mask_tensor = torch.as_tensor(
                 season_masks[start : start + batch_size],
@@ -1634,7 +1625,6 @@ def _require_openeo_runtime() -> None:
     try:
         import prometheo
         import torch
-
         import worldcereal
 
         logger.debug(f"Loading worldcereal from {worldcereal.__file__}")
