@@ -2,7 +2,7 @@
 Interactive application for the WorldCereal training and inference workflow.
 
 Usage:
-    app = WorldCerealTrainingApp.run(presto_model_package=presto_model_package)
+    app = WorldCerealClassificationApp.run(presto_model_package=presto_model_package)
 
 This module provides an interactive widget-based interface for:
 1. Retrieving reference data
@@ -60,11 +60,11 @@ from worldcereal.utils.map import ui_map
 from worldcereal.utils.upload import OpenEOArtifactHelper
 
 
-class WorldCerealTrainingApp:
+class WorldCerealClassificationApp:
     @classmethod
     def run(
         cls, presto_model_package: Optional[dict] = None
-    ) -> "WorldCerealTrainingApp":
+    ) -> "WorldCerealClassificationApp":
         """Instantiate and display the training application."""
         app = cls(presto_model_package=presto_model_package)
         display(app.tabs_container)
@@ -72,7 +72,7 @@ class WorldCerealTrainingApp:
 
     def __init__(self, presto_model_package: Optional[dict] = None):
         """
-        Initialize the training application, setting up state variables and building the UI.
+        Initialize the classification application, setting up state variables and building the UI.
 
         Parameters:
         - presto_model_package: Optional dictionary containing information about the Presto model to use, including:
@@ -331,7 +331,7 @@ class WorldCerealTrainingApp:
     def _build_tab0_workflow(self) -> widgets.VBox:
         """Build welcome screen: Choose workflow mode and launch."""
         header = widgets.HTML(
-            value="<h2>Welcome to the WorldCereal Model Training and Inference Application</h2>"
+            value="<h2>Welcome to the WorldCereal Classification Application</h2>"
             "<p>Select your workflow mode and launch the application.</p>"
         )
 
