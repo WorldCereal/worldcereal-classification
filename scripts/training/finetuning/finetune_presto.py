@@ -670,10 +670,10 @@ def main(args):
     if args.explicit_training_dataframe:
         wide_parquet_output_path = Path(args.explicit_training_dataframe)
     elif not debug:
-        wide_parquet_output_path = Path(
-            "/home/vito/butskoc/worldcereal_finetuning/merged_319_wide.parquet"
-        )
-        # wide_parquet_output_path = None
+        # wide_parquet_output_path = Path(
+        #     "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
+        # )
+        wide_parquet_output_path = None
     else:
         wide_parquet_output_path = None
 
@@ -1108,9 +1108,9 @@ def main(args):
             class_weight_method=args.class_balancing_method,
             class_column_map=class_column_map,
             clip_range=balancing_clip,
-            # spatial_group_column=args.spatial_group_column,
-            # spatial_bin_size_degrees=args.spatial_bin_size_deg,
-            # spatial_weight_method=args.spatial_balancing_method,
+            spatial_group_column=args.spatial_group_column,
+            spatial_bin_size_degrees=args.spatial_bin_size_deg,
+            spatial_weight_method=args.spatial_balancing_method,
             generator=generator,
         )
 
