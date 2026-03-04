@@ -3218,8 +3218,14 @@ class WorldCerealTrainingApp:
             tooltip="Required. Keep it short and avoid spaces and special characters.",
         )
 
+        product_type_options = [
+            ("Cropland", "cropland")
+        ]
+        if self.workflow_mode != "apply-default-model":
+            product_type_options.append(("Croptype", "croptype"))
+
         product_type_dropdown = widgets.Dropdown(
-            options=[("Cropland", "cropland"), ("Croptype", "croptype")],
+            options=product_type_options,
             value="cropland",
             description="Product type:",
             layout=widgets.Layout(width="240px"),
@@ -3536,6 +3542,11 @@ class WorldCerealTrainingApp:
             if product_type_dropdown is not None
             else "cropland"
         )
+
+        if self.workflow_mode == "apply-default-model" and product_type != "cropland":
+            with log_out:
+                print("Default-model workflow supports cropland only for now.")
+            return
 
         # model selection
         if self.workflow_mode == "apply-default-model":
