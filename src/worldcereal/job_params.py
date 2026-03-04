@@ -391,7 +391,7 @@ def split_job_params(
 
     log_context: Dict[str, Any] = {
         "output_folder": str(resolved["output_dir"]),
-        "number of AOI features": len(resolved["aoi_gdf"]),
+        "number of AOIs": len(resolved["aoi_gdf"]),
         "grid_size": resolved["grid_size"],
         "temporal_extent": _temporal_extent_label(resolved["temporal_extent"]),
         "year": resolved["year"],
