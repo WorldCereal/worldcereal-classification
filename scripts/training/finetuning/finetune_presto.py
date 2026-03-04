@@ -842,20 +842,22 @@ def main(args):
     # Remove small classes from train_df; make sure to keep the same classes in val/test for consistency
     train_df, removed_lc_classes = remove_small_classes(
         train_df,
-        label_col="landcover_label",
         min_samples=args.min_samples_per_class,
+        class_column="landcover_label",
     )
     train_df, removed_ct_classes = remove_small_classes(
         train_df,
-        label_col="croptype_label",
         min_samples=args.min_samples_per_class,
+        class_column="croptype_label",
     )
-    logger.warning(
-        f"Removing {val_df['landcover_label'].isin(removed_lc_classes).sum()} validation and {test_df['landcover_label'].isin(removed_lc_classes).sum()} test samples with landcover classes {removed_lc_classes} removed from training split"
-    )
-    logger.warning(
-        f"Removing {val_df['croptype_label'].isin(removed_ct_classes).sum()} validation and {test_df['croptype_label'].isin(removed_ct_classes).sum()} test samples with croptype classes {removed_ct_classes} removed from training split"
-    )
+    if len(removed_lc_classes) > 0:
+        logger.warning(
+            f"Removing {val_df['landcover_label'].isin(removed_lc_classes).sum()} validation and {test_df['landcover_label'].isin(removed_lc_classes).sum()} test samples with landcover classes {removed_lc_classes} removed from training split"
+        )
+    if len(removed_ct_classes) > 0:
+        logger.warning(
+            f"Removing {val_df['croptype_label'].isin(removed_ct_classes).sum()} validation and {test_df['croptype_label'].isin(removed_ct_classes).sum()} test samples with croptype classes {removed_ct_classes} removed from training split"
+        )
     val_df = val_df[~val_df["landcover_label"].isin(removed_lc_classes)].copy()
     test_df = test_df[~test_df["landcover_label"].isin(removed_lc_classes)].copy()
     val_df = val_df[~val_df["croptype_label"].isin(removed_ct_classes)].copy()
