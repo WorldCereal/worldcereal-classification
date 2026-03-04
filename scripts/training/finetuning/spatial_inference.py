@@ -548,7 +548,6 @@ def _build_color_map(class_names: Sequence[str]) -> Dict[int, Tuple[float, float
 
 def _load_class_mappings_from_sharepoint() -> Dict[str, Dict[str, str]]:
     try:
-
         from worldcereal.utils.sharepoint import (  # noqa: WPS433
             build_class_mappings, get_excel_from_sharepoint)
 
