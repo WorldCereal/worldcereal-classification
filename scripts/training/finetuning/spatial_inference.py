@@ -553,9 +553,7 @@ def _load_class_mappings_from_sharepoint() -> Dict[str, Dict[str, str]]:
 
         legend = get_excel_from_sharepoint(
             site_url="https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal",
-            file_server_relative_url=(
-                "Research and Development/Legend/WorldCereal_LC_CT_legend_v2_class_mappings.xlsx"
-            ),
+            file_server_relative_url="Research and Development/Legend/WorldCereal_LC_CT_legend_v2_class_mappings.xlsx",
             sheet_name=0,
         )
         legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
