@@ -1,6 +1,7 @@
 import gc
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
+from typing import (Any, Dict, List, Literal, Mapping, Optional, Sequence,
+                    Tuple, Union)
 
 import duckdb
 import numpy as np
@@ -15,19 +16,13 @@ from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
-
-from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
-from worldcereal.train.datasets import (
-    SeasonCalendarMode,
-    SensorMaskingConfig,
-    WorldCerealTrainingDataset,
-)
-from worldcereal.utils.refdata import (
-    DATA_DIR,
-    get_class_mappings,
-    map_classes,
-    split_df,
-)
+from worldcereal.train.backbone import (build_presto_backbone,
+                                        resolve_seasonal_encoder)
+from worldcereal.train.datasets import (SeasonCalendarMode,
+                                        SensorMaskingConfig,
+                                        WorldCerealTrainingDataset)
+from worldcereal.utils.refdata import (DATA_DIR, get_class_mappings,
+                                       map_classes, split_df)
 from worldcereal.utils.timeseries import process_parquet
 
 _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
@@ -236,7 +231,7 @@ def train_val_test_split(
         )
 
         # Remove classes with too few samples for stratification
-        df = remove_small_classes(
+        df, _ = remove_small_classes(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
@@ -320,7 +315,7 @@ def spatial_train_val_test_split(
 
     # Remove classes with too few samples
     if stratify_label and stratify_label in df.columns:
-        df = remove_small_classes(
+        df, _ = remove_small_classes(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
@@ -775,7 +770,7 @@ def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):
             logger.error(
                 "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
             )
-    return df
+    return df, minor_classes
 
 
 def duckdb_type_from_series(s: pd.Series) -> str:
@@ -1169,7 +1164,7 @@ def get_training_dfs_from_parquet(
         df = filtered
 
     # Remove classes with too few samples for stratification
-    df = remove_small_classes(df, min_samples=10)
+    df, _ = remove_small_classes(df, min_samples=10)
 
     if test_samples_file is not None:
         logger.info(
@@ -1189,7 +1184,7 @@ def get_training_dfs_from_parquet(
 
     # train_df, val_df = split_df(train_df, val_size=0.2)
     # Remove classes with too few samples for stratification, now on trainval_df
-    trainval_df = remove_small_classes(trainval_df, min_samples=5)
+    trainval_df, _ = remove_small_classes(trainval_df, min_samples=5)
 
     if val_samples_file is not None:
         logger.info(f"Controlled `train` vs `val` split based on: {val_samples_file}")
