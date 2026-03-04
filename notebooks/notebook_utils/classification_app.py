@@ -49,8 +49,10 @@ from notebook_utils.visualization import visualize_products
 from openeo_gfmap import TemporalContext
 from tabulate import tabulate
 
-from worldcereal.job import WorldCerealTask
+from worldcereal.job import WorldCerealTask, resolve_workflow_luts
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
+from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
     get_legend,
@@ -79,7 +81,7 @@ class WorldCerealClassificationApp:
             - "presto_remote_path": URL to the remote Presto model
             - "presto_local_path": Path to the local Presto model
             - "presto_fingerprint": Fingerprint of the Presto model
-            - "seasonal_model_path": Optional URL to a seasonal model package (.zip)
+            - "seasonal_model_path": URL to a seasonal model package (.zip)
 
         """
         self.workflow_mode = "full"
@@ -114,6 +116,10 @@ class WorldCerealClassificationApp:
         self.tab8_processing_period: Optional[TemporalContext] = None
         self.tab8_season_window: Optional[TemporalContext] = None
         self.tab8_results: Optional[Path] = None
+        self.tab8_seasonal_model_url: Optional[str] = None
+        self.tab8_landcover_head_url: Optional[str] = None
+        self.tab8_croptype_head_url: Optional[str] = None
+        self.tab8_product_type: Optional[str] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
 
         self.presto_model_package = presto_model_package
@@ -3590,6 +3596,7 @@ class WorldCerealClassificationApp:
             if product_type_dropdown is not None
             else "cropland"
         )
+        self.tab8_product_type = product_type
 
         if self.workflow_mode == "apply-default-model" and product_type != "cropland":
             with log_out:
@@ -3598,6 +3605,7 @@ class WorldCerealClassificationApp:
 
         # model selection
         if self.workflow_mode == "apply-default-model":
+            # no custom models are passed
             custom_seasonal_model_url = None
             selected_model_url = None
             landcover_head_zip = None
@@ -3609,6 +3617,7 @@ class WorldCerealClassificationApp:
                 enable_cropland_head = True
                 enable_croptype_head = True
         else:
+            # seasonal model taken from provided presto model package (if any)
             custom_seasonal_model_url = (
                 self.presto_model_package.get("seasonal_model_path")
                 if self.presto_model_package
@@ -3616,13 +3625,21 @@ class WorldCerealClassificationApp:
             )
             selected_model_url = self.tab7_model_url
             if product_type == "cropland":
+                # if cropland product only,
+                # we assume the user wants to use the custom trained model for cropland mapping
                 landcover_head_zip = selected_model_url
                 croptype_head_zip = None
                 enable_croptype_head = False
             else:
+                # if croptype product, we assume the user wants to use the custom trained model for crop type mapping
+                # and we use the seasonal model for landcover task
                 landcover_head_zip = custom_seasonal_model_url
                 croptype_head_zip = selected_model_url
                 enable_croptype_head = True
+            # save model URL's for later use
+            self.tab8_seasonal_model_url = custom_seasonal_model_url
+            self.tab8_landcover_head_url = landcover_head_zip
+            self.tab8_croptype_head_url = croptype_head_zip
 
         with log_out:
             print("Using the following models:")
@@ -3653,9 +3670,7 @@ class WorldCerealClassificationApp:
             if self.head_package_path is not None
             else "default-model"
         )
-
         output_dir = Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
-
         if output_dir.exists():
             with log_out:
                 print(
@@ -3951,19 +3966,26 @@ class WorldCerealClassificationApp:
                 if interactive_checkbox is not None
                 else False
             )
-            try:
-                print("Reading LUT from local config file...")
-                config_file = self.head_output_path / "config.json"
-                with config_file.open() as fp:
-                    head_config = json.load(fp)
-                class_map = {
-                    i: name for i, name in enumerate(head_config["classes_list"])
-                }
-                lut_croptype = {
-                    v: k for k, v in sorted(class_map.items(), key=lambda kv: kv[0])
-                }
-                luts = {"croptype": lut_croptype}
 
+            try:
+                print("Reading LUT from model configs...")
+                model_overrides = {
+                    "model": {
+                        "seasonal_model_zip": self.tab8_seasonal_model_url,
+                        "landcover_head_zip": self.tab8_landcover_head_url,
+                        "croptype_head_zip": self.tab8_croptype_head_url,
+                    }
+                }
+                preset = DEFAULT_SEASONAL_WORKFLOW_PRESET
+                product_type = WorldCerealProductType(self.tab8_product_type)
+                luts = resolve_workflow_luts(
+                    preset=preset, overrides=model_overrides, product_type=product_type
+                )
+
+            except Exception as exc:
+                print(f"Failed retrieving product LUTs: {exc}")
+
+            try:
                 result = visualize_products(
                     self.tab9_merged_paths,
                     luts=luts,

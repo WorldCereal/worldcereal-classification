@@ -9,6 +9,7 @@ import json
 from copy import deepcopy
 from enum import Enum
 from functools import lru_cache
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -362,6 +363,37 @@ def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
                 )
             return {name: idx for idx, name in enumerate(class_names)}
     raise ValueError(f"Manifest does not define a '{task}' head")
+
+
+def resolve_workflow_luts(
+    *,
+    preset: str,
+    overrides: Optional[Mapping[str, Dict[str, Any]]],
+    product_type: WorldCerealProductType,
+) -> Dict[str, ClassLUT]:
+
+    model_cfg = _resolve_model_config(preset, overrides)
+
+    base_manifest = _get_artifact_manifest(str(model_cfg["seasonal_model_zip"]))
+
+    def _manifest_for_source(source: Optional[Union[str, Path]]) -> ManifestDict:
+        if source:
+            return _get_artifact_manifest(str(source))
+        return base_manifest
+
+    luts: Dict[str, ClassLUT] = {}
+    luts[WorldCerealProductType.CROPLAND.value] = _lut_from_manifest(
+        _manifest_for_source(model_cfg.get("landcover_head_zip")),
+        task="landcover",
+    )
+    if product_type == WorldCerealProductType.CROPTYPE:
+
+        luts[WorldCerealProductType.CROPTYPE.value] = _lut_from_manifest(
+            _manifest_for_source(model_cfg.get("croptype_head_zip")),
+            task="croptype",
+        )
+
+    return luts
 
 
 def create_inference_process_graph(
