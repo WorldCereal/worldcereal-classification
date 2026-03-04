@@ -1531,7 +1531,7 @@ class WorldCerealTrainingApp:
                 if aoi_map is None:
                     print("No region of interest specified in Tab 1, cannot continue.")
                     return
-                spatial_extent = aoi_map.get_bbox()
+                spatial_extent = aoi_map.get_bbox(projection="utm")
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
@@ -3130,16 +3130,16 @@ class WorldCerealTrainingApp:
             value="<i>Select your area of interest (AOI) using the map below.</i>"
         )
         aoi_info = self._info_callout(
-            "The WorldCereal system is optimized to process 50 x 50 km tiles.<br>"
+            "The WorldCereal system is optimized to process 20 x 20 km tiles.<br>"
             "Large AOIs are automatically split into tiles for processing.<br>"
             "You can manually alter the <b>tile size</b> if you want to experiment with smaller or larger tiles, but keep in mind that this will also impact processing time and the required computational resources.<br><br>"
-            "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
+            "You can <b>draw</b> a rectangle using the drawing tools on the left side of the map.<br>"
             "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
-            "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
+            "Alternatively, you can also <b>upload a vector file</b> (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
-            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
+            "After you have selected your AOI you can <b>save</b> it to the local `./bbox` folder using the Save AOI button below.<br>"
         )
         tile_resolution_input = widgets.IntText(
             value=20,
@@ -3166,11 +3166,34 @@ class WorldCerealTrainingApp:
         season_message = widgets.HTML(
             value="<i>Select your growing season and year.</i>"
         )
+        season_retrieve_message = widgets.HTML(
+            value="<i> Learn about crop seasonality in your area of interest.</i>"
+        )
+        season_retrieve_info = self._info_callout(
+            "WorldCereal has produced global crop calendars identifying the two most dominant growing seasons for any place on Earth.<br><br>"
+            "Clicking the 'Retrieve WorldCereal seasons' button will visualize these seasons for your area of interest.<br><br>"
+            'Alternatively, you can consult the <a href="https://ipad.fas.usda.gov/ogamaps/cropcalendar.aspx">USDA crop calendars</a>.'
+        )
+        season_retrieve_button = widgets.Button(
+            description="Retrieve WorldCereal seasons",
+            button_style="info",
+            icon="calendar",
+            layout=widgets.Layout(width="300px"),
+        )
+        season_retrieve_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="120px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
         season_info = self._info_callout(
             "Use the slider to define your growing season of interest(max 12 months).<br>"
             "The tool automatically also derives a 12-month processing period that ends on your selected end month."
         )
         season_hint = widgets.HTML(value="<i>No model loaded yet.</i>")
+
         season_slider_output = widgets.Output(
             layout=widgets.Layout(width="100%", overflow="auto")
         )
@@ -3218,9 +3241,7 @@ class WorldCerealTrainingApp:
             tooltip="Required. Keep it short and avoid spaces and special characters.",
         )
 
-        product_type_options = [
-            ("Cropland", "cropland")
-        ]
+        product_type_options = [("Cropland", "cropland")]
         if self.workflow_mode != "apply-default-model":
             product_type_options.append(("Croptype", "croptype"))
 
@@ -3307,6 +3328,10 @@ class WorldCerealTrainingApp:
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_hint": season_hint,
+            "season_retrieve_message": season_retrieve_message,
+            "season_retrieve_info": season_retrieve_info,
+            "season_retrieve_button": season_retrieve_button,
+            "season_retrieve_output": season_retrieve_output,
             "season_id_input": season_id_input,
             "product_type_dropdown": product_type_dropdown,
             "product_header": product_header,
@@ -3352,6 +3377,7 @@ class WorldCerealTrainingApp:
 
         generate_button.on_click(self._on_generate_map_click)
         aoi_save_button.on_click(self._on_tab8_save_aoi_click)
+        season_retrieve_button.on_click(self._on_tab8_retrieve_seasons)
 
         return widgets.VBox(
             [
@@ -3370,9 +3396,13 @@ class WorldCerealTrainingApp:
                 widgets.HBox([aoi_save_button]),
                 aoi_save_output,
                 widgets.HTML("<h3>2) Select season</h3>"),
+                season_retrieve_message,
+                season_hint,
+                season_retrieve_info,
+                widgets.HBox([season_retrieve_button]),
+                season_retrieve_output,
                 season_message,
                 season_info,
-                season_hint,
                 season_slider_output,
                 widgets.HBox([season_id_input]),
                 widgets.HTML("<h3>3) Processing parameters</h3>"),
@@ -3410,6 +3440,24 @@ class WorldCerealTrainingApp:
         aoi_map = self.tab8_widgets.get("aoi_map")
         output = self.tab8_widgets.get("aoi_save_output")
         self._save_aoi_to_bbox(aoi_map, output)
+
+    def _on_tab8_retrieve_seasons(self, _=None) -> None:
+        """Retrieve and display WorldCereal seasons for the AOI in Tab 8."""
+        output = self.tab8_widgets.get("season_retrieve_output")
+        aoi_map = self.tab8_widgets.get("aoi_map")
+        if output is None:
+            return
+
+        with output:
+            output.clear_output()
+            try:
+                if aoi_map is None:
+                    print("No region of interest specified, cannot continue.")
+                    return
+                spatial_extent = aoi_map.get_bbox(projection="utm")
+                retrieve_worldcereal_seasons(spatial_extent)
+            except Exception as exc:
+                print(f"Failed to retrieve seasons: {exc}")
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
@@ -4167,25 +4215,42 @@ class WorldCerealTrainingApp:
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
         season_hint = self.tab8_widgets.get("season_hint")
+        season_retrieve_message = self.tab8_widgets.get("season_retrieve_message")
+        season_retrieve_info = self.tab8_widgets.get("season_retrieve_info")
+        season_retrieve_button = self.tab8_widgets.get("season_retrieve_button")
+        season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
+
         if season_hint is not None:
-            hint = None
             if self.workflow_mode == "apply-default-model":
-                hint = "<i>The default WorldCereal model was trained on a calendar year.</i>"
-            elif self.season_window is not None:
-                window_dt = self.season_window.to_datetime()
-                hint_start = window_dt[0].strftime("%d %b")
-                hint_end = window_dt[1].strftime("%d %b")
-                hint = (
-                    "<i>Growing season for which your model was trained:</i><br>"
-                    f"<b>{hint_start}</b> → "
-                    f"<b>{hint_end}</b>"
-                )
+                season_hint.layout.display = "none"
             else:
-                hint = (
-                    "<i>Growing season for which your model was trained:</i><br>"
-                    "<b>No season found yet.</b>"
-                )
-            season_hint.value = hint
+                season_hint.layout.display = "block"
+                if self.season_window is not None:
+                    window_dt = self.season_window.to_datetime()
+                    hint_start = window_dt[0].strftime("%d %b")
+                    hint_end = window_dt[1].strftime("%d %b")
+                    season_hint.value = (
+                        "<i>Growing season for which your model was trained:</i><br>"
+                        f"<b>{hint_start}</b> → "
+                        f"<b>{hint_end}</b>"
+                    )
+                else:
+                    season_hint.value = (
+                        "<i>Growing season for which your model was trained:</i><br>"
+                        "<b>No season found yet.</b>"
+                    )
+
+        retrieve_display = (
+            "block" if self.workflow_mode == "apply-default-model" else "none"
+        )
+        if season_retrieve_message is not None:
+            season_retrieve_message.layout.display = retrieve_display
+        if season_retrieve_info is not None:
+            season_retrieve_info.layout.display = retrieve_display
+        if season_retrieve_button is not None:
+            season_retrieve_button.layout.display = retrieve_display
+        if season_retrieve_output is not None:
+            season_retrieve_output.layout.display = retrieve_display
         if generate_button and status_message:
             generate_button.disabled = False
             if self.workflow_mode == "apply-default-model":
