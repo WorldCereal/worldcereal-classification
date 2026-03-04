@@ -32,7 +32,7 @@ from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
                                              WorldCerealSeasonalModel)
 from worldcereal.utils.refdata import get_class_mappings
 
-CLASS_MAPPINGS = get_class_mappings()
+CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
 
 
 def _path_to_str(path: Optional[Path]) -> Optional[str]:
