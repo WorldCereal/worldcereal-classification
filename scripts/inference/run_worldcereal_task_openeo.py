@@ -130,7 +130,7 @@ if __name__ == "__main__":
         "--grid_path",
         type=Path,
         required=True,
-        help="Path to the grid file (.parquet, .geoparquet, .gpkg, .shp) defining the locations to extract.",
+        help="Path to the grid file (.parquet, .geoparquet, .geojson, .gpkg, .shp) defining the locations to extract.",
     )
     parser.add_argument(
         "--grid_size",
