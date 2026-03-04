@@ -4,45 +4,24 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib import resources
 from math import floor
-from typing import (
-    Any,
-    Dict,
-    Hashable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (Any, Dict, Hashable, List, Literal, Mapping, Optional,
+                    Sequence, Tuple, Union)
 
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from prometheo.predictors import (
-    DEM_BANDS,
-    METEO_BANDS,
-    NODATAVALUE,
-    S1_BANDS,
-    S2_BANDS,
-    Predictors,
-)
+from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
+                                  S1_BANDS, S2_BANDS, Predictors)
 from torch.utils.data import Dataset, WeightedRandomSampler
-
 from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (
-    GLOBAL_SEASON_IDS,
-    MIN_EDGE_BUFFER,
-    SEASONALITY_COLUMN_MAP,
-    SEASONALITY_LAT_RANGE,
-    SEASONALITY_LON_RANGE,
-    SEASONALITY_LOOKUP_COLUMNS,
-    SEASONALITY_LOOKUP_FILENAME,
-    SEASONALITY_LOOKUP_PACKAGE,
-    SEASONALITY_LOOKUP_PATH,
-)
+from worldcereal.train import (GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER,
+                               SEASONALITY_COLUMN_MAP, SEASONALITY_LAT_RANGE,
+                               SEASONALITY_LON_RANGE,
+                               SEASONALITY_LOOKUP_COLUMNS,
+                               SEASONALITY_LOOKUP_FILENAME,
+                               SEASONALITY_LOOKUP_PACKAGE,
+                               SEASONALITY_LOOKUP_PATH)
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.seasonal import align_to_composite_window
 
@@ -87,6 +66,8 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "valid_time",
     "quality_score_lc",
     "quality_score_ct",
+    "sample_weight_lc",
+    "sample_weight_ct",
     "confidence_nonoutlier",
     "anomaly_flag",
 )
