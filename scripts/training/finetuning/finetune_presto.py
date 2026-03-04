@@ -5,7 +5,8 @@ import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
+                    cast)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,20 +21,15 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-
 from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.finetuning_utils import (
-    SeasonalMultiTaskLoss,
-    evaluate_finetuned_model,
-    prepare_training_datasets,
-    run_finetuning,
-)
-from worldcereal.train.seasonal_head import (
-    SeasonalFinetuningHead,
-    WorldCerealSeasonalModel,
-)
+from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
+                                                evaluate_finetuned_model,
+                                                prepare_training_datasets,
+                                                run_finetuning)
+from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
+                                             WorldCerealSeasonalModel)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
@@ -924,18 +920,14 @@ def main(args):
     landcover_classes = _filter_ignore_labels(landcover_classes_raw)
     if len(landcover_classes) != len(landcover_classes_raw):
         logger.warning(
-            "Removed %d 'ignore' class labels from landcover mapping %s",
-            len(landcover_classes_raw) - len(landcover_classes),
-            landcover_key,
+            f"Removed {len(landcover_classes_raw) - len(landcover_classes)} 'ignore' class labels from landcover mapping {landcover_key}"
         )
 
     croptype_classes_raw = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
     croptype_classes = _filter_ignore_labels(croptype_classes_raw)
     if len(croptype_classes) != len(croptype_classes_raw):
         logger.warning(
-            "Removed %d 'ignore' class labels from croptype mapping %s",
-            len(croptype_classes_raw) - len(croptype_classes),
-            croptype_key,
+            f"Removed {len(croptype_classes_raw) - len(croptype_classes)} 'ignore' class labels from croptype mapping {croptype_key}"
         )
     if not landcover_classes or not croptype_classes:
         raise ValueError(
