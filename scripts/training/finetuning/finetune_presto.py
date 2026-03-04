@@ -5,7 +5,8 @@ import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
+from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
+                    cast)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,20 +21,15 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-
 from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import collate_fn, get_training_dfs_from_parquet
 from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.finetuning_utils import (
-    SeasonalMultiTaskLoss,
-    evaluate_finetuned_model,
-    prepare_training_datasets,
-    run_finetuning,
-)
-from worldcereal.train.seasonal_head import (
-    SeasonalFinetuningHead,
-    WorldCerealSeasonalModel,
-)
+from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
+                                                evaluate_finetuned_model,
+                                                prepare_training_datasets,
+                                                run_finetuning)
+from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
+                                             WorldCerealSeasonalModel)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings()
@@ -69,6 +65,109 @@ def _unique_preserve_order(values):
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def _is_ignore_label(value) -> bool:
+    try:
+        return str(value).strip().lower() == "ignore"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _filter_ignore_labels(values):
+    """Drop class labels named 'ignore' (case-insensitive) while preserving order."""
+    return [value for value in values if value is not None and not _is_ignore_label(value)]
+
+
+def _drop_outliers(
+    df: pd.DataFrame,
+    split_name: str,
+    outlier_col: str = "LC10_anomaly_flag",
+    drop_level: Literal["drop_candidate", "drop_suspect", "drop_flagged"] = "drop_candidate",
+) -> pd.DataFrame:
+
+    if outlier_col not in df.columns:
+        logger.warning(
+            f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
+        )
+        return df
+    
+    if drop_level=="drop_candidate":
+        outliers = df[df[outlier_col]=="candidate"]["sample_id"].tolist()
+    elif drop_level=="drop_suspect":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect"])]["sample_id"].tolist()
+    elif drop_level=="drop_flagged":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect", "flagged"])]["sample_id"].tolist()
+    else:
+        raise ValueError(f"Invalid drop_level '{drop_level}'; must be one of ['drop_candidate', 'drop_suspect', 'drop_flagged']")
+    
+    if len(outliers) > 0:
+        logger.warning(
+            f"Dropping {len(outliers)} samples from {split_name} split "
+            f"with outlier categories <= '{drop_level}'"
+        )
+        df = df[~df["sample_id"].isin(outliers)].copy()
+    else:
+        logger.info(
+            f"No samples dropped from {split_name} split for outlier level '{drop_level}'."
+        )
+    return df
+
+
+def _series_from_column(
+    df: pd.DataFrame, column: Optional[str], default: float = 1.0
+) -> pd.Series:
+    if column and column in df.columns:
+        return (
+            pd.to_numeric(df[column], errors="coerce")
+            .fillna(default)
+            .astype(float)
+        )
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _combine_quality_outlier(
+    quality: pd.Series,
+    outlier: pd.Series,
+    quality_weight: float,
+    outlier_weight: float,
+) -> pd.Series:
+    quality_clipped = quality.clip(0.0, 1.0)
+    outlier_clipped = outlier.clip(0.0, 1.0)
+    denom = float(quality_weight + outlier_weight)
+    if denom <= 0.0:
+        return outlier_clipped
+    combined = (quality_clipped * quality_weight + outlier_clipped * outlier_weight) / denom
+    return combined.clip(0.0, 1.0)
+
+
+def _attach_sample_weights(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_score_col: str,
+    outlier_score_col: str,
+    quality_weight: float,
+    outlier_weight: float,
+    output_col: str,
+) -> pd.DataFrame:
+    quality_score = _series_from_column(df, quality_score_col, default=1.0)
+    outlier_score = _series_from_column(df, outlier_score_col, default=1.0)
+    base_weight = _combine_quality_outlier(
+        quality_score, outlier_score, quality_weight, outlier_weight
+    )
+    combined = base_weight.astype(float)
+    updated = df.copy()
+    updated[output_col] = combined
+
+    stats = {
+        "min": float(combined.min()),
+        "max": float(combined.max()),
+        "mean": float(combined.mean()),
+    }
+    logger.info(
+        f"{split_name} {output_col} stats: {stats}"
+    )
+    return updated
 
 
 def _build_head_manifest(
@@ -226,13 +325,16 @@ def _annotate_dual_task_labels(
         int(code): label for code, label in CLASS_MAPPINGS[landcover_key].items()
     }
     updated["landcover_label"] = updated["ewoc_code"].map(landcover_map)
+    
+    # explicitly remove ignore class
     missing_landcover = updated["landcover_label"].isna()
-    if missing_landcover.any():
-        removed = int(missing_landcover.sum())
+    ignore_landcover = updated["landcover_label"]=="ignore"
+
+    if missing_landcover.any() | ignore_landcover.any():
         logger.warning(
-            f"Removing {removed} samples from {split_name} split without '{landcover_key}' landcover mapping"
+            f"Removing {int(missing_landcover.sum())} samples from {split_name} split without '{landcover_key}' landcover mapping and {int(ignore_landcover.sum())} samples with 'ignore' landcover label"
         )
-        updated = updated.loc[~missing_landcover].copy()
+        updated = updated.loc[~missing_landcover & ~ignore_landcover].copy()
         if updated.empty:
             raise ValueError(
                 f"No samples remain in {split_name} split after applying landcover mapping {landcover_key}."
@@ -243,7 +345,7 @@ def _annotate_dual_task_labels(
     }
     updated["croptype_label"] = updated["ewoc_code"].map(croptype_map)
 
-    has_croptype_label = updated["croptype_label"].notna()
+    has_croptype_label = (updated["croptype_label"].notna()) & (updated["croptype_label"]!="ignore")
     updated["label_task"] = np.where(
         has_croptype_label,
         "croptype",
@@ -291,11 +393,120 @@ def _validate_seasonal_task_labels(
         _handle_violation("croptype", croptype_values)
 
 
+def _filter_temporally_invalid_rows(
+    df: pd.DataFrame,
+    *,
+    split_name: str,
+    num_timesteps: int,
+    augment: bool,
+    artifact_dir: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Drop rows that cannot produce valid timestep windows in dataset sampling.
+
+    This pre-check mirrors the center-point constraints in
+    `WorldCerealDataset._get_center_point()` to avoid runtime DataLoader crashes
+    such as `ValueError: low >= high`.
+    """
+
+    required_cols = {"available_timesteps", "valid_position"}
+    missing_cols = required_cols.difference(df.columns)
+    if missing_cols:
+        logger.warning(
+            f"{split_name}: cannot run temporal pre-check, missing columns: {sorted(missing_cols)}"
+        )
+        return df
+
+    if df.empty:
+        return df
+
+    checked = df.copy()
+    checked["_available_timesteps"] = pd.to_numeric(
+        checked["available_timesteps"], errors="coerce"
+    )
+    checked["_valid_position"] = pd.to_numeric(
+        checked["valid_position"], errors="coerce"
+    )
+
+    available = checked["_available_timesteps"]
+    valid_pos = checked["_valid_position"]
+    half = num_timesteps // 2
+
+    base_valid = (
+        available.notna()
+        & valid_pos.notna()
+        & (available >= num_timesteps)
+        & (valid_pos >= 0)
+        & (valid_pos < available)
+    )
+
+    if augment:
+        # Mirrors _get_center_point for non-ssl branch where np.random.randint is used.
+        min_center = np.maximum(half, valid_pos + 1 - half)
+        max_center = np.minimum(available - half, valid_pos - 1 + half)
+        jitter_valid = (available == num_timesteps) | (min_center <= max_center)
+        valid_mask = base_valid & jitter_valid
+    else:
+        valid_mask = base_valid
+
+    invalid_mask = ~valid_mask
+    invalid_count = int(invalid_mask.sum())
+    if invalid_count == 0:
+        return df
+
+    rejected = checked.loc[
+        invalid_mask,
+        [
+            col
+            for col in [
+                "sample_id",
+                "ref_id",
+                "start_date",
+                "end_date",
+                "valid_time",
+                "available_timesteps",
+                "valid_position",
+            ]
+            if col in checked.columns
+        ],
+    ].copy()
+
+    logger.warning(
+        f"{split_name}: dropping {invalid_count} temporally invalid sample(s) before dataset creation."
+    )
+    preview_cols = [
+        col
+        for col in ["sample_id", "available_timesteps", "valid_position"]
+        if col in rejected.columns
+    ]
+    if preview_cols:
+        logger.warning(
+            f"{split_name}: first invalid samples:\n{rejected[preview_cols].head(10).to_string(index=False)}"
+        )
+
+    if artifact_dir is not None:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        reject_path = artifact_dir / f"invalid_temporal_samples_{split_name}.csv"
+        rejected.to_csv(reject_path, index=False)
+        logger.warning(
+            f"{split_name}: wrote rejected temporal samples to {reject_path}"
+        )
+
+    filtered = checked.loc[valid_mask].drop(
+        columns=["_available_timesteps", "_valid_position"], errors="ignore"
+    )
+    if filtered.empty:
+        raise ValueError(
+            f"{split_name}: no samples remain after temporal pre-check filtering."
+        )
+    return filtered
+
+
 def get_parquet_file_list(timestep_freq: Literal["month", "dekad"] = "month"):
     if timestep_freq == "month":
         parquet_files = list(
             Path(
-                "/projects/TAP/worldcereal/data/worldcereal_all_extractions.parquet"
+                "/projects/TAP/worldcereal/data/worldcereal_all_extractions_with_anomalies.parquet"
+                # "/projects/TAP/worldcereal/data/worldcereal_all_extractions.parquet"
             ).rglob("*.parquet")
         )
     elif timestep_freq == "dekad":
@@ -317,6 +528,7 @@ def main(args):
     # ------------------------------------------
 
     experiment_tag = args.experiment_tag
+    base_output_dir = args.base_output_dir
     timestep_freq = args.timestep_freq  # "month" or "dekad"
     max_timesteps_trim = args.max_timesteps_trim  # "auto", int or tuple of string dates
     use_valid_time = args.use_valid_time
@@ -327,6 +539,8 @@ def main(args):
     else:
         parquet_files = get_parquet_file_list(timestep_freq)
     val_samples_file = args.val_samples_file  # If None, random split is used
+    test_samples_file = args.test_samples_file  # If None, random split is used
+    ignore_samples_file = args.ignore_samples_file  # If None, no samples are ignored
 
     # Most popular maps: LANDCOVER10, CROPTYPE9, CROPTYPE0, CROPLAND2
     initial_mapping = args.initial_mapping
@@ -335,9 +549,9 @@ def main(args):
     enable_masking = args.enable_masking
     debug = args.debug
     use_balancing = args.use_balancing  # If True, use class balancing for training
-    cropland_class_names = [
-        cls.strip() for cls in args.landcover_cropland_classes.split(",") if cls.strip()
-    ]
+    cropland_class_names = _filter_ignore_labels(
+        [cls.strip() for cls in args.landcover_cropland_classes.split(",") if cls.strip()]
+    )
     if not cropland_class_names:
         cropland_class_names = ["temporary_crops"]
 
@@ -381,6 +595,7 @@ def main(args):
         masking_info = "disabled"
 
     experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
+    # output_dir = f"{base_output_dir}/{experiment_name}"
     output_dir = f"/projects/worldcereal/models/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     tensorboard_dir: Optional[Path] = None
@@ -456,16 +671,18 @@ def main(args):
         wide_parquet_output_path = Path(args.explicit_training_dataframe)
     elif not debug:
         wide_parquet_output_path = Path(
-            "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
+            "/home/vito/butskoc/worldcereal_finetuning/merged_319_wide.parquet"
         )
+        # wide_parquet_output_path = None
     else:
         wide_parquet_output_path = None
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 50
+    # batch_size = 256
     batch_size = 4096
-    patience = 8
+    patience = 5
     num_workers = 8
 
     # ------------------------------------------
@@ -483,7 +700,6 @@ def main(args):
     test_df_path = Path(output_dir) / "test_df.parquet"
 
     # Get / load the train/val/test dataframes
-    # TODO: handle outliers
     if (
         train_df_path.exists()
         and val_df_path.exists()
@@ -505,6 +721,9 @@ def main(args):
             finetune_classes=initial_mapping,
             class_mappings=CLASS_MAPPINGS,
             val_samples_file=val_samples_file,
+            test_samples_file=test_samples_file,
+            ignore_samples_file=ignore_samples_file,
+            region_filter=args.finetune_regions,
             debug=debug,
             overwrite=False,
         )
@@ -513,6 +732,23 @@ def main(args):
         val_df.to_parquet(val_df_path)
         test_df.to_parquet(test_df_path)
 
+    if "drop" in args.outlier_mode:
+        train_df = _drop_outliers(
+            train_df,
+            split_name="train",
+            drop_level=args.outlier_mode,
+        )
+        val_df = _drop_outliers(
+            val_df,
+            split_name="val",
+            drop_level=args.outlier_mode,
+        )
+        test_df = _drop_outliers(
+            test_df,
+            split_name="test",
+            drop_level=args.outlier_mode,
+        )
+    
     landcover_key = args.landcover_classes_key
     croptype_key = args.croptype_classes_key
     if landcover_key not in CLASS_MAPPINGS:
@@ -542,6 +778,30 @@ def main(args):
     val_df = annotated_splits["val"]
     test_df = annotated_splits["test"]
 
+    num_timesteps = 12 if timestep_freq == "month" else 36
+    temporal_rejects_dir = Path(output_dir) / "logs"
+    train_df = _filter_temporally_invalid_rows(
+        train_df,
+        split_name="train",
+        num_timesteps=num_timesteps,
+        augment=augment,
+        artifact_dir=temporal_rejects_dir,
+    )
+    val_df = _filter_temporally_invalid_rows(
+        val_df,
+        split_name="val",
+        num_timesteps=num_timesteps,
+        augment=False,
+        artifact_dir=temporal_rejects_dir,
+    )
+    test_df = _filter_temporally_invalid_rows(
+        test_df,
+        split_name="test",
+        num_timesteps=num_timesteps,
+        augment=False,
+        artifact_dir=temporal_rejects_dir,
+    )
+
     # if debug:
     #     train_df = train_df.sample(n=100000, random_state=DEFAULT_SEED).reset_index(
     #         drop=True
@@ -562,6 +822,65 @@ def main(args):
     logger.info(f"Number of validation samples: {len(val_df)}")
     logger.info(f"Number of test samples: {len(test_df)}")
 
+    quality_weight = args.sample_weight_quality
+    outlier_weight = args.sample_weight_outlier
+
+    train_df = _attach_sample_weights(
+        train_df,
+        split_name="train",
+        quality_score_col="quality_score_lc",
+        outlier_score_col="LC10_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_lc",
+    )
+    val_df = _attach_sample_weights(
+        val_df,
+        split_name="val",
+        quality_score_col="quality_score_lc",
+        outlier_score_col="LC10_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_lc",
+    )
+    test_df = _attach_sample_weights(
+        test_df,
+        split_name="test",
+        quality_score_col="quality_score_lc",
+        outlier_score_col="LC10_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_lc",
+    )
+
+    train_df = _attach_sample_weights(
+        train_df,
+        split_name="train",
+        quality_score_col="quality_score_ct",
+        outlier_score_col="CT25_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_ct",
+    )
+    val_df = _attach_sample_weights(
+        val_df,
+        split_name="val",
+        quality_score_col="quality_score_ct",
+        outlier_score_col="CT25_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_ct",
+    )
+    test_df = _attach_sample_weights(
+        test_df,
+        split_name="test",
+        quality_score_col="quality_score_ct",
+        outlier_score_col="CT25_confidence_nonoutlier",
+        quality_weight=quality_weight,
+        outlier_weight=outlier_weight,
+        output_col="sample_weight_ct",
+    )
+
     # Use type casting to specify to mypy that task_type is a valid Literal value
     task_type_literal: Literal["binary", "multiclass"] = "multiclass"  # type: ignore
 
@@ -570,7 +889,7 @@ def main(args):
         train_df,
         val_df,
         test_df,
-        num_timesteps=12 if timestep_freq == "month" else 36,
+        num_timesteps=num_timesteps,
         timestep_freq=timestep_freq,
         augment=augment,
         time_explicit=time_explicit,
@@ -582,8 +901,27 @@ def main(args):
     )
 
     # Construct the finetuning model based on the pretrained model
-    landcover_classes = _unique_preserve_order(CLASS_MAPPINGS[landcover_key].values())
-    croptype_classes = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
+    landcover_classes_raw = _unique_preserve_order(
+        CLASS_MAPPINGS[landcover_key].values()
+    )
+    landcover_classes = _filter_ignore_labels(landcover_classes_raw)
+    if len(landcover_classes) != len(landcover_classes_raw):
+        logger.warning(
+            "Removed %d 'ignore' class labels from landcover mapping %s",
+            len(landcover_classes_raw) - len(landcover_classes),
+            landcover_key,
+        )
+
+    croptype_classes_raw = _unique_preserve_order(
+        CLASS_MAPPINGS[croptype_key].values()
+    )
+    croptype_classes = _filter_ignore_labels(croptype_classes_raw)
+    if len(croptype_classes) != len(croptype_classes_raw):
+        logger.warning(
+            "Removed %d 'ignore' class labels from croptype mapping %s",
+            len(croptype_classes_raw) - len(croptype_classes),
+            croptype_key,
+        )
     if not landcover_classes or not croptype_classes:
         raise ValueError(
             "Both landcover and croptype class mappings must contain at least one class."
@@ -604,12 +942,10 @@ def main(args):
         "landcover": "landcover_label",
         "croptype": "croptype_label",
     }
-    sample_weight_mapping: Optional[dict[str, str]] = None
-    if args.sample_weight_strategy == "quality":
-        sample_weight_mapping = {
-            "landcover": "quality_score_lc",
-            "croptype": "quality_score_ct",
-        }
+    sample_weight_mapping = {
+        "landcover": "sample_weight_lc",
+        "croptype": "sample_weight_ct",
+    }
 
     loss_fn = SeasonalMultiTaskLoss(
         landcover_classes=landcover_classes,
@@ -772,9 +1108,9 @@ def main(args):
             class_weight_method=args.class_balancing_method,
             class_column_map=class_column_map,
             clip_range=balancing_clip,
-            spatial_group_column=args.spatial_group_column,
-            spatial_bin_size_degrees=args.spatial_bin_size_deg,
-            spatial_weight_method=args.spatial_balancing_method,
+            # spatial_group_column=args.spatial_group_column,
+            # spatial_bin_size_degrees=args.spatial_bin_size_deg,
+            # spatial_weight_method=args.spatial_balancing_method,
             generator=generator,
         )
 
@@ -860,6 +1196,8 @@ def main(args):
         "parquet_files": [str(path) for path in parquet_files],
         "wide_parquet_output_path": _path_to_str(wide_parquet_output_path),
         "val_samples_file": args.val_samples_file,
+        "test_samples_file": args.test_samples_file,
+        "ignore_samples_file": args.ignore_samples_file,
         "train_df_cache": _path_to_str(train_df_path),
         "val_df_cache": _path_to_str(val_df_path),
         "test_df_cache": _path_to_str(test_df_path),
@@ -978,6 +1316,37 @@ def main(args):
         run_config_path=config_path,
     )
 
+    spatial_enabled = args.run_spatial_inference or bool(
+        args.spatial_inference_patches_dir
+    )
+    if spatial_enabled:
+        if not args.spatial_inference_patches_dir:
+            logger.warning(
+                "Spatial inference requested but no --spatial_inference_patches_dir provided; skipping."
+            )
+        else:
+            from spatial_inference import run_spatial_inference
+
+            continents_raw = args.spatial_inference_continents or "all"
+            continents: Union[str, List[str]] = continents_raw
+            if isinstance(continents_raw, str):
+                tokens = [
+                    token.strip()
+                    for token in continents_raw.split(",")
+                    if token.strip()
+                ]
+                if tokens and not any(token.lower() == "all" for token in tokens):
+                    continents = tokens
+
+            logger.info("Starting post-finetuning spatial inference...")
+            run_spatial_inference(
+                model_dir=Path(output_dir),
+                patches_dir=Path(args.spatial_inference_patches_dir),
+                continents=continents,
+                output_dir=Path(output_dir) / "inference_patches",
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
+
     logger.info("Finetuning completed!")
 
 
@@ -1020,7 +1389,7 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--croptype_classes_key",
         type=str,
-        default="CROPTYPE28",
+        default="CROPTYPE2",
         help="Class mapping key used for crop-type targets in the dual-head configuration.",
     )
     parser.add_argument(
@@ -1050,10 +1419,28 @@ def parse_args(arg_list=None):
 
     # Data paths
     parser.add_argument(
+        "--base_output_dir",
+        type=str,
+        default=None,
+        help="Base directory for output files. If not set, a default location will be used.",
+    )
+    parser.add_argument(
         "--val_samples_file",
         type=str,
         default=None,
         help="Path to a CSV with val sample IDs. If not set, a random split will be used.",
+    )
+    parser.add_argument(
+        "--ignore_samples_file",
+        type=str,
+        default=None,
+        help="Path to a CSV with ignore sample IDs. If not set, a random split will be used.",
+    )
+    parser.add_argument(
+        "--test_samples_file",
+        type=str,
+        default=None,
+        help="Path to a CSV with test sample IDs. If not set, a random split will be used.",
     )
     parser.add_argument(
         "--parquet_files",
@@ -1067,6 +1454,22 @@ def parse_args(arg_list=None):
         type=str,
         default=None,
         help="Path to cache the merged wide parquet file for reuse across experiments. If not set, uses default location in non-debug mode.",
+    )
+    parser.add_argument(
+        "--finetune_regions",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of region names to keep for finetuning "
+            "Use 'all' or leave unset to keep all samples."
+            "Possible regions: Micronesia, Eastern Asia, Western Europe, Southern Europe,"
+            "South America, Central America, Caribbean, Northern Africa,"
+            "Western Africa, Northern Europe, Central Asia,"
+            "Middle Africa, Western Asia, Eastern Europe,"
+            "Eastern Africa, South-Eastern Asia, Polynesia,"
+            "Northern America, Melanesia, None, Southern Asia,"
+            "Australia and New Zealand, Southern Africa"
+        ),
     )
 
     # Task setup
@@ -1112,7 +1515,30 @@ def parse_args(arg_list=None):
         type=str,
         default="quality",
         choices=["none", "quality"],
-        help="Enable sample-level weighting (currently supports using quality scores).",
+        help=(
+            "Enable sample-level weighting using quality/confidence scores. "
+            "Outlier weighting is always applied when confidence_nonoutlier columns are available."
+        ),
+    )
+    parser.add_argument(
+        "--sample_weight_quality",
+        type=float,
+        default=1.0,
+        help="Relative weight for quality scores when combining with outlier scores.",
+    )
+    parser.add_argument(
+        "--sample_weight_outlier",
+        type=float,
+        default=1.0,
+        help="Relative weight for outlier scores when combining with quality scores.",
+    )
+    parser.add_argument(
+        "--outlier_mode",
+        type=str,
+        default="keep",
+        choices=["keep", "drop_candidate", "drop_suspect", "drop_flagged"],
+        help="Keep all samples or drop outliers based on nested anomaly_flag categories. " \
+        "E.g., if 'drop_suspect' is chosen, both 'suspect' and 'candidate' categories will be dropped.",
     )
     parser.add_argument(
         "--spatial_group_column",
@@ -1173,6 +1599,27 @@ def parse_args(arg_list=None):
     # Label timing (for time_explicit only)
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
+
+    # Optional post-finetuning spatial inference
+    parser.add_argument(
+        "--run_spatial_inference",
+        action="store_true",
+        help="Run local spatial inference on patch .nc files at the end of finetuning.",
+    )
+    parser.add_argument(
+        "--spatial_inference_patches_dir",
+        type=str,
+        default=None,
+        help="Root directory containing continent subfolders with .nc patches.",
+    )
+    parser.add_argument(
+        "--spatial_inference_continents",
+        type=str,
+        default="all",
+        help=(
+            "Continent selection for spatial inference: 'all' or CSV list (e.g. Africa,Europe)."
+        ),
+    )
 
     # Parse the arguments
     args = parser.parse_args(arg_list)
