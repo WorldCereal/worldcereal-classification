@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -694,9 +695,9 @@ def main(args):
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 50
-    # batch_size = 256
-    batch_size = 4096
-    patience = 5
+    batch_size = 256
+    # batch_size = 4096
+    patience = 10
     num_workers = 8
 
     # ------------------------------------------
@@ -742,9 +743,9 @@ def main(args):
             overwrite=False,
         )
         logger.info("Saving train, val, and test DataFrames to parquet files ...")
-        train_df.to_parquet(train_df_path)
-        val_df.to_parquet(val_df_path)
-        test_df.to_parquet(test_df_path)
+        # train_df.to_parquet(train_df_path)
+        # val_df.to_parquet(val_df_path)
+        # test_df.to_parquet(test_df_path)
 
     if "drop" in args.outlier_mode:
         train_df = _drop_outliers(
@@ -919,6 +920,11 @@ def main(args):
         output_col="sample_weight_ct",
     )
 
+    # Write the processed dataframes after all manipulations have already been done
+    train_df.to_parquet(train_df_path)
+    val_df.to_parquet(val_df_path)
+    test_df.to_parquet(test_df_path)
+
     # Use type casting to specify to mypy that task_type is a valid Literal value
     task_type_literal: Literal["binary", "multiclass"] = "multiclass"  # type: ignore
 
@@ -939,24 +945,68 @@ def main(args):
     )
 
     # Construct the finetuning model based on the pretrained model
+    # Start from the full taxonomy ordering, then restrict to classes
+    # actually present in training data.  This guarantees:
+    #   1. Head output dim == number of effective classes (no wasted logits).
+    #   2. Loss indices stay consistent with head outputs.
+    #   3. Confusion matrices only show classes the model can predict.
     landcover_classes_raw = _unique_preserve_order(
         CLASS_MAPPINGS[landcover_key].values()
     )
-    landcover_classes = _filter_ignore_labels(landcover_classes_raw)
-    if len(landcover_classes) != len(landcover_classes_raw):
-        logger.warning(
-            f"Removed {len(landcover_classes_raw) - len(landcover_classes)} 'ignore' class labels from landcover mapping {landcover_key}"
-        )
+    landcover_classes_full = _filter_ignore_labels(landcover_classes_raw)
 
     croptype_classes_raw = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
-    croptype_classes = _filter_ignore_labels(croptype_classes_raw)
-    if len(croptype_classes) != len(croptype_classes_raw):
-        logger.warning(
-            f"Removed {len(croptype_classes_raw) - len(croptype_classes)} 'ignore' class labels from croptype mapping {croptype_key}"
+    croptype_classes_full = _filter_ignore_labels(croptype_classes_raw)
+
+    # Effective classes = those present in training split (preserving taxonomy order)
+    train_lc_labels = set(
+        str(label)
+        for label in train_df["landcover_label"].dropna().unique()
+        if not _is_ignore_label(label)
+    )
+    train_ct_labels = set(
+        str(label)
+        for label in train_df.loc[
+            train_df["label_task"] == "croptype", "croptype_label"
+        ]
+        .dropna()
+        .unique()
+        if not _is_ignore_label(label)
+    )
+    landcover_classes = [
+        cls for cls in landcover_classes_full if cls in train_lc_labels
+    ]
+    croptype_classes = [
+        cls for cls in croptype_classes_full if cls in train_ct_labels
+    ]
+
+    if len(landcover_classes) < len(landcover_classes_full):
+        dropped_lc = set(landcover_classes_full) - set(landcover_classes)
+        logger.info(
+            f"Narrowed landcover head from {len(landcover_classes_full)} to "
+            f"{len(landcover_classes)} classes (dropped {dropped_lc})"
         )
+    if len(croptype_classes) < len(croptype_classes_full):
+        dropped_ct = set(croptype_classes_full) - set(croptype_classes)
+        logger.info(
+            f"Narrowed croptype head from {len(croptype_classes_full)} to "
+            f"{len(croptype_classes)} classes (dropped {dropped_ct})"
+        )
+
     if not landcover_classes or not croptype_classes:
         raise ValueError(
-            "Both landcover and croptype class mappings must contain at least one class."
+            "Both landcover and croptype class mappings must contain at least one class "
+            "after restricting to training data."
+        )
+
+    # Keep cropland gate names consistent with the effective landcover head
+    cropland_class_names = [
+        name for name in cropland_class_names if name in landcover_classes
+    ]
+    if not cropland_class_names:
+        logger.warning(
+            "No cropland gate class names remain after narrowing to effective "
+            "landcover classes; cropland gating will be disabled."
         )
 
     backbone = Presto(pretrained_model_path=pretrained_model_path)

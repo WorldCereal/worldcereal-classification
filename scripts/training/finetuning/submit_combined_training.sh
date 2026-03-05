@@ -26,7 +26,7 @@ conda activate worldcereal-py311
 
 # Calling the training script.
 srun python /home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/finetune_presto.py \
-    --experiment_tag dualtask-SeasonalMultiTaskLoss-LC10-CT24-WesternEurope-OutlierScoreEnabled \
+    --experiment_tag dualtask-SeasonalMultiTaskLoss-LC10-CT24-SouthernEurope-OutlierScoreEnabled \
     --initial_mapping LANDCOVER10 \
     --landcover_classes_key LANDCOVER10 \
     --croptype_classes_key CROPTYPE24 \
@@ -34,16 +34,16 @@ srun python /home/vito/butskoc/worldcereal_finetuning/worldcereal-classification
     --test_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/test_samples.csv \
     --ignore_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/ignore_samples.csv \
     --timestep_freq month \
-    --finetune_regions "Western Europe" \
+    --finetune_regions "Southern Europe" \
     --time_explicit \
-    --use_balancing \
+    --use_class_balancing \
+    --min_samples_per_class 200 \
     --outlier_mode drop_candidate \
-    --spatial_bin_size_deg 3.0 \
     --augment \
     --enable_masking \
     --max_timesteps_trim 18 \
     --head_only_training 3 \
     --post_unfreeze_warmup_epochs 2 \
     --log_tensorboard \
-    --explicit_training_dataframe /home/vito/butskoc/worldcereal_finetuning/merged_319_wide.parquet \
+    --explicit_training_dataframe /home/vito/butskoc/projects/worldcereal/merged_319_wide.parquet \
     --base_output_dir /home/vito/butskoc/worldcereal_finetuning/models \
