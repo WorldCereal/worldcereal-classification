@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import os
 import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
-                    cast)
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,16 +20,24 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
+
 from worldcereal.train.backbone import checkpoint_fingerprint
-from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
-                                    remove_small_classes)
+from worldcereal.train.data import (
+    collate_fn,
+    get_training_dfs_from_parquet,
+    remove_small_classes,
+)
 from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
-                                                evaluate_finetuned_model,
-                                                prepare_training_datasets,
-                                                run_finetuning)
-from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
-                                             WorldCerealSeasonalModel)
+from worldcereal.train.finetuning_utils import (
+    SeasonalMultiTaskLoss,
+    evaluate_finetuned_model,
+    prepare_training_datasets,
+    run_finetuning,
+)
+from worldcereal.train.seasonal_head import (
+    SeasonalFinetuningHead,
+    WorldCerealSeasonalModel,
+)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
@@ -582,6 +588,11 @@ def main(args):
     # ± timesteps to expand around label pos (true or moved), for time_explicit only; will only be set for training
     label_window = args.label_window
 
+    # Minimum fraction of season slots required inside the training window for season supervision.
+    # Val/test always use 1.0 (full coverage). With augmentation the window shifts randomly
+    # so a lower threshold prevents spurious loss of croptype supervision signal.
+    train_min_season_coverage: float = args.train_min_season_coverage
+
     # Presto freezing settings
     freeze_layers = None
     unfreeze_epoch = None
@@ -947,6 +958,7 @@ def main(args):
         masking_config=masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
+        train_min_season_coverage=train_min_season_coverage,
     )
 
     # Construct the finetuning model based on the pretrained model
@@ -1693,6 +1705,23 @@ def parse_args(arg_list=None):
     # Label timing (for time_explicit only)
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
+
+    # Season coverage threshold for the training split.
+    # Val/test always enforce full coverage (1.0). During training with augmentation
+    # the timestamp window can shift so a season is only partially covered;
+    # lowering this threshold prevents losing croptype supervision in those cases.
+    parser.add_argument(
+        "--train_min_season_coverage",
+        type=float,
+        default=0.5,
+        help=(
+            "Minimum fraction of a season's composite slots that must fall inside "
+            "the selected 12-timestamp window for the season to contribute to "
+            "crop-type supervision in the training split. "
+            "Val/test always use 1.0 (full coverage required). "
+            "Default: 0.5."
+        ),
+    )
 
     # Optional post-finetuning spatial inference
     parser.add_argument(

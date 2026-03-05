@@ -622,6 +622,7 @@ class WorldCerealDataset(Dataset):
         num_outputs: Optional[int] = None,
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
+        min_season_coverage: float = 1.0,
     ):
         """WorldCereal base dataset. This dataset is typically used for
         self-supervised learning.
@@ -643,6 +644,14 @@ class WorldCerealDataset(Dataset):
             whether to augment the data, by default False
         masking_config : Optional[SensorMaskingConfig], optional
             configuration for sensor masking during training, by default None.
+        min_season_coverage : float, optional
+            Minimum fraction of a season's composite slots that must fall inside
+            the selected timestep window for the season mask to be enabled.
+            1.0 (default) enforces full coverage — every slot must be present,
+            matching the original strict behaviour used for val/test. For the
+            training split with augmentation enabled, pass a lower value (e.g.
+            0.5) so that seasons only partially shifted out of the window by
+            random augmentation still contribute supervision signal.
         """
         self.dataframe = dataframe.replace({np.nan: NODATAVALUE})
         self.num_timesteps = num_timesteps
@@ -657,6 +666,11 @@ class WorldCerealDataset(Dataset):
         self.is_ssl = task_type == "ssl"
         self.augment = augment
         self.masking_config = masking_config
+        if not (0.0 < min_season_coverage <= 1.0):
+            raise ValueError(
+                f"min_season_coverage must be in (0, 1]; got {min_season_coverage}"
+            )
+        self.min_season_coverage = min_season_coverage
         if self.masking_config:
             if self.masking_config.seed is not None:
                 # set a per-dataset RNG seed (numpy global for simplicity)
@@ -1171,12 +1185,14 @@ class WorldCerealDataset(Dataset):
             slots = self._enumerate_composite_slots(start_aligned, end_aligned)
             if not slots:
                 continue
-            if not self._has_full_window_coverage(composite_dates, slots):
-                continue
-            cycles.append((start_aligned, end_aligned))
-            mask |= (composite_dates >= start_aligned) & (
+            cycle_mask = (composite_dates >= start_aligned) & (
                 composite_dates <= end_aligned
             )
+            n_required = max(1, round(len(slots) * self.min_season_coverage))
+            if int(cycle_mask.sum()) < n_required:
+                continue
+            cycles.append((start_aligned, end_aligned))
+            mask |= cycle_mask
 
         in_flag = False
         if label_datetime is not None:
@@ -1218,30 +1234,22 @@ class WorldCerealDataset(Dataset):
         start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
         end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
         slots = self._enumerate_composite_slots(start_aligned, end_aligned)
-        has_full_coverage = self._has_full_window_coverage(composite_dates, slots)
-        if has_full_coverage:
-            mask = (composite_dates >= start_aligned) & (composite_dates <= end_aligned)
-        else:
-            mask = np.zeros_like(composite_dates, dtype=bool)
-        if label_datetime is not None and has_full_coverage:
-            in_flag = bool(start_dt <= label_datetime <= end_dt)
-        else:
-            in_flag = False
+        partial_mask = (composite_dates >= start_aligned) & (
+            composite_dates <= end_aligned
+        )
+        n_required = max(1, round(len(slots) * self.min_season_coverage))
+        meets_threshold = int(partial_mask.sum()) >= n_required
+        mask = (
+            partial_mask
+            if meets_threshold
+            else np.zeros_like(composite_dates, dtype=bool)
+        )
+        in_flag = (
+            bool(start_dt <= label_datetime <= end_dt)
+            if (label_datetime is not None and meets_threshold)
+            else False
+        )
         return mask.astype(bool, copy=False), in_flag
-
-    def _has_full_window_coverage(
-        self, composite_dates: np.ndarray, slots: Sequence[np.datetime64]
-    ) -> bool:
-        """Return True when every composite slot in ``slots`` exists in the sample."""
-        if not slots or composite_dates.size == 0:
-            return False
-        available = set(
-            composite_dates.astype("datetime64[D]").astype(np.int64).tolist()
-        )
-        required = set(
-            np.array(list(slots), dtype="datetime64[D]").astype(np.int64).tolist()
-        )
-        return required.issubset(available)
 
     def _enumerate_composite_slots(
         self, start: np.datetime64, end: np.datetime64
