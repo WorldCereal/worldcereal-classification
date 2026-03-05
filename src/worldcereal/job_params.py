@@ -389,50 +389,38 @@ def split_job_params(
         "max_delay": resolved["max_delay"],
     }
 
-    log_context: Dict[str, Any] = {
-        "output_folder": str(resolved["output_dir"]),
-        "number of AOIs": len(resolved["aoi_gdf"]),
-        "grid_size": resolved["grid_size"],
-        "temporal_extent": _temporal_extent_label(resolved["temporal_extent"]),
-        "year": resolved["year"],
-        "s1_orbit_state": resolved["s1_orbit_state"],
-        "target_epsg": resolved["target_epsg"],
-        "compositing_window": resolved["compositing_window"],
-        "parallel_jobs": resolved["parallel_jobs"],
-        "restart_failed": resolved["restart_failed"],
-        "randomize_jobs": resolved["randomize_jobs"],
-        "job_options": resolved["job_options"],
-        "poll_sleep": resolved["poll_sleep"],
-        "simplify_logging": resolved["simplify_logging"],
-        "max_retries": resolved["max_retries"],
-        "base_delay": resolved["base_delay"],
-        "max_delay": resolved["max_delay"],
-    }
-
     if task == WorldCerealTask.INPUTS:
-        return manager_init, job_kwargs, log_context
+        # No task-specific parameters to add for inputs task
+        pass
 
-    if task == WorldCerealTask.EMBEDDINGS:
+    elif task == WorldCerealTask.EMBEDDINGS:
         resolved_parameters = (
             resolved["embeddings_parameters"] or EmbeddingsParameters()
         )
         job_kwargs["embeddings_parameters"] = resolved_parameters
         job_kwargs["scale_uint16"] = resolved["scale_uint16"]
-        log_context["embeddings_parameters"] = resolved_parameters
-        log_context["scale_uint16"] = resolved["scale_uint16"]
-        return manager_init, job_kwargs, log_context
 
-    if task == WorldCerealTask.CLASSIFICATION:
+    elif task == WorldCerealTask.CLASSIFICATION:
         product_type = _normalize_product_type(resolved["product_type"])
         manager_init["season_specifications"] = resolved["season_specifications"]
         job_kwargs["product_type"] = product_type
         job_kwargs["seasonal_preset"] = resolved["seasonal_preset"]
-        log_context["season_specifications"] = resolved["season_specifications"]
-        log_context["seasonal_preset"] = resolved["seasonal_preset"]
-        log_context["product_type"] = product_type
-        return manager_init, job_kwargs, log_context
 
-    raise ValueError(f"Unsupported task: {task}")
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    # Create a log context with all parameters for easy reference in logs and callbacks
+    log_context = manager_init.copy()
+    log_context.update(job_kwargs)
+    # specific modifications for more readable logs
+    log_context["output_folder"] = str(log_context["output_dir"])
+    log_context["temporal_extent"] = _temporal_extent_label(
+        log_context["temporal_extent"]
+    )
+    log_context["number of AOIs"] = len(log_context["aoi_gdf"])
+    del log_context["aoi_gdf"]
+
+    return manager_init, job_kwargs, log_context
 
 
 def build_job_params_from_args(
