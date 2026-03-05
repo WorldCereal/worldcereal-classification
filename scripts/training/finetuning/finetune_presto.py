@@ -140,6 +140,11 @@ def _combine_quality_outlier(
     quality_weight: float,
     outlier_weight: float,
 ) -> pd.Series:
+    # Auto-detect 0–100 scale and rescale to 0–1
+    if quality.max() > 1.0:
+        quality = quality / 100.0
+    if outlier.max() > 1.0:
+        outlier = outlier / 100.0
     quality_clipped = quality.clip(0.0, 1.0)
     outlier_clipped = outlier.clip(0.0, 1.0)
     denom = float(quality_weight + outlier_weight)
@@ -695,8 +700,8 @@ def main(args):
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 50
-    batch_size = 256
-    # batch_size = 4096
+    # batch_size = 256
+    batch_size = 4096
     patience = 10
     num_workers = 8
 
