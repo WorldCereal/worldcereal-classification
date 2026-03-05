@@ -419,6 +419,8 @@ def split_job_params(
     )
     log_context["number of AOIs"] = len(log_context["aoi_gdf"])
     del log_context["aoi_gdf"]
+    log_context["backend"] = log_context["backend_context"].backend.value
+    del log_context["backend_context"]
 
     return manager_init, job_kwargs, log_context
 
