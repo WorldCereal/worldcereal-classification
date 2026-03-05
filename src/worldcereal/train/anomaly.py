@@ -328,7 +328,7 @@ def _write_outputs(
 ) -> None:
     """Persist results to disk (parquet + Excel)."""
     S_anomaly = "S_anomaly"
-    combined_anomaly = "combined_anomaly"
+    combined_anomaly = "anomaly_flag"  # renamed from combined_anomaly before this call
 
     if output_samples_path:
         print(f"[anomaly] Writing flagged samples -> {output_samples_path}")
@@ -348,7 +348,7 @@ def _write_outputs(
 
         # Cross-tabulation: long form
         cross_long = (
-            flagged_gdf.groupby([*slice_keys, S_anomaly, combined_anomaly]), dropna=False
+            flagged_gdf.groupby([*slice_keys, S_anomaly, combined_anomaly], dropna=False)
             .size()
             .reset_index(name="n")
         )
