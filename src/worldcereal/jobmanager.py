@@ -45,7 +45,6 @@ from typing import (
     Optional,
     Sequence,
     Union,
-    cast,
 )
 
 import geopandas as gpd
@@ -62,7 +61,9 @@ from worldcereal.job import (
     DEFAULT_INFERENCE_JOB_OPTIONS,
     DEFAULT_INPUTS_JOB_OPTIONS,
     WorldCerealTask,
-    create_worldcereal_process_graph,
+    create_embeddings_process_graph,
+    create_inference_process_graph,
+    create_inputs_process_graph,
 )
 from worldcereal.job_params import (
     DEFAULT_BASE_DELAY,
@@ -1005,18 +1006,15 @@ class WorldCerealJobManager(MultiBackendJobManager):
         spatial_extent = self._row_spatial_extent(row)
 
         resolved_epsg = target_epsg or int(row["epsg_utm"])
-        inputs = cast(
-            openeo.DataCube,
-            create_worldcereal_process_graph(
-                task=WorldCerealTask.INPUTS,
-                spatial_extent=spatial_extent,
-                temporal_extent=temporal_extent,
-                s1_orbit_state=s1_orbit_state,
-                target_epsg=resolved_epsg,
-                compositing_window=compositing_window,
-                tile_size=tile_size,
-                connection=connection,
-            ),
+
+        inputs = create_inputs_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            s1_orbit_state=s1_orbit_state,
+            target_epsg=resolved_epsg,
+            compositing_window=compositing_window,
+            tile_size=tile_size,
+            connection=connection,
         )
 
         resolved_options = dict(DEFAULT_INPUTS_JOB_OPTIONS)
@@ -1046,19 +1044,16 @@ class WorldCerealJobManager(MultiBackendJobManager):
         spatial_extent = self._row_spatial_extent(row)
 
         resolved_epsg = target_epsg or int(row["epsg_utm"])
-        embeddings = cast(
-            openeo.DataCube,
-            create_worldcereal_process_graph(
-                task=WorldCerealTask.EMBEDDINGS,
-                spatial_extent=spatial_extent,
-                temporal_extent=temporal_extent,
-                s1_orbit_state=s1_orbit_state,
-                target_epsg=resolved_epsg,
-                embeddings_parameters=embeddings_parameters,
-                compositing_window=compositing_window,
-                scale_uint16=scale_uint16,
-                connection=connection,
-            ),
+
+        embeddings = create_embeddings_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            s1_orbit_state=s1_orbit_state,
+            target_epsg=resolved_epsg,
+            embeddings_parameters=embeddings_parameters,
+            compositing_window=compositing_window,
+            scale_uint16=scale_uint16,
+            connection=connection,
         )
 
         resolved_options = dict(DEFAULT_INFERENCE_JOB_OPTIONS)
@@ -1091,8 +1086,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         if target_epsg is None:
             target_epsg = int(row["epsg_utm"])
 
-        inference_result = create_worldcereal_process_graph(
-            task=WorldCerealTask.CLASSIFICATION,
+        inference_result = create_inference_process_graph(
             spatial_extent=spatial_extent,
             temporal_extent=temporal_extent,
             product_type=product_type,

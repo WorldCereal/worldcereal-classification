@@ -192,7 +192,7 @@ def test_create_inference_job_logic(tmp_path: Path):
     )
 
     with patch(
-        "worldcereal.jobmanager.create_worldcereal_process_graph"
+        "worldcereal.jobmanager.create_inference_process_graph"
     ) as mock_create_graph:
         mock_create_graph.return_value = mock_inference_result
 
@@ -269,7 +269,7 @@ def test_create_inputs_job_logic(tmp_path: Path):
     )
 
     with patch(
-        "worldcereal.jobmanager.create_worldcereal_process_graph"
+        "worldcereal.jobmanager.create_inputs_process_graph"
     ) as mock_create_graph:
         mock_create_graph.return_value = mock_inputs
 
@@ -332,7 +332,7 @@ def test_create_embeddings_job_logic(tmp_path: Path):
     )
 
     with patch(
-        "worldcereal.jobmanager.create_worldcereal_process_graph"
+        "worldcereal.jobmanager.create_embeddings_process_graph"
     ) as mock_create_graph:
         mock_create_graph.return_value = mock_embeddings
 
