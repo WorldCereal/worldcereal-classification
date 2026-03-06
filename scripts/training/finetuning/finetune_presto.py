@@ -1346,6 +1346,7 @@ def main(args):
             "scheduler": scheduler_payload,
             "label_jitter": label_jitter,
             "label_window": label_window,
+            "val_loss_ema_alpha": args.val_loss_ema_alpha,
         },
         "balancing": balancing_payload,
     }
@@ -1366,6 +1367,7 @@ def main(args):
         unfreeze_epoch=unfreeze_epoch,
         on_validation_improved=_on_validation_improved,
         tensorboard_logdir=tensorboard_dir,
+        val_loss_ema_alpha=args.val_loss_ema_alpha,
     )
 
     seasonal_checkpoint_path = Path(output_dir) / f"{experiment_name}.pt"
@@ -1698,6 +1700,16 @@ def parse_args(arg_list=None):
     # Label timing (for time_explicit only)
     parser.add_argument("--label_jitter", type=int, default=0)
     parser.add_argument("--label_window", type=int, default=0)
+    parser.add_argument(
+        "--val_loss_ema_alpha",
+        type=float,
+        default=0.0,
+        help=(
+            "Exponential moving average alpha for smoothing val loss used in early stopping "
+            "and best-model selection. 0.0 disables smoothing (raw val loss is used directly). "
+            "Suggested: 0.3 (new epoch gets 30%% weight, running EMA gets 70%%)."
+        ),
+    )
 
     # Season coverage threshold for the training split.
     # Val/test always enforce full coverage (1.0). During training with augmentation

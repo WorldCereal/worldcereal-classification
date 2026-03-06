@@ -2,17 +2,8 @@ import json
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (Any, Callable, List, Literal, Mapping, Optional, Sequence,
+                    Tuple, Union)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,13 +27,10 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
-
 from worldcereal.train.data import collate_fn
-from worldcereal.train.datasets import (
-    SensorMaskingConfig,
-    WorldCerealLabelledDataset,
-    _is_missing_value,
-)
+from worldcereal.train.datasets import (SensorMaskingConfig,
+                                        WorldCerealLabelledDataset,
+                                        _is_missing_value)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
@@ -1393,6 +1381,7 @@ def run_finetuning(
     unfreeze_epoch: Optional[int] = None,
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
+    val_loss_ema_alpha: float = 0.0,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -1414,6 +1403,7 @@ def run_finetuning(
     best_loss = None
     best_model_dict = None
     epochs_since_improvement = 0
+    ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1543,6 +1533,16 @@ def run_finetuning(
                 ):
                     param.requires_grad = True
                     logger.info(f"Unfreezing layer: {name}")
+            # Reset patience counter so early stopping has a full budget for the
+            # full-model optimization regime (frozen-phase epochs don't consume it).
+            logger.info(
+                f"Patience counter reset at encoder unfreeze (epoch {epoch + 1}): "
+                f"was {epochs_since_improvement}/{hyperparams.patience}."
+            )
+            epochs_since_improvement = 0
+            if val_loss_ema_alpha > 0.0:
+                ema_val_loss = None  # Restart EMA for the new optimization regime.
+                logger.info("EMA val loss reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -1719,14 +1719,10 @@ def run_finetuning(
 
         if tb_writer is not None:
             global_step = epoch + 1
-            tb_writer.add_scalars(
-                "loss",
-                {
-                    "train": train_loss[-1],
-                    "val": current_val_loss,
-                },
-                global_step,
-            )
+            _loss_scalars: dict[str, float] = {"train": train_loss[-1], "val": current_val_loss}
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None:
+                _loss_scalars["val_ema"] = ema_val_loss
+            tb_writer.add_scalars("loss", _loss_scalars, global_step)
             tb_writer.add_scalar(
                 "learning_rate", scheduler.get_last_lr()[0], global_step
             )
@@ -1790,6 +1786,7 @@ def run_finetuning(
             "epoch": epoch + 1,
             "train_loss": train_loss[-1],
             "val_loss": current_val_loss,
+            "val_loss_ema": ema_val_loss,
             "task_losses": {
                 "train": train_task_loss_avgs,
                 "val": val_task_loss_avgs,
@@ -1806,9 +1803,26 @@ def run_finetuning(
                 f"Failed to append validation metrics history at epoch {epoch + 1}: {exc}"
             )
 
-        improved = best_loss is None or current_val_loss < best_loss
+        # ------ EMA smoothing of val loss for early stopping (Direction B) ------
+        if val_loss_ema_alpha > 0.0:
+            if ema_val_loss is None:
+                ema_val_loss = current_val_loss  # warm-start on first observation
+            else:
+                ema_val_loss = (
+                    val_loss_ema_alpha * current_val_loss
+                    + (1.0 - val_loss_ema_alpha) * ema_val_loss
+                )
+        # Metric used for early-stopping and best-model selection.
+        # Equals EMA-smoothed loss when val_loss_ema_alpha > 0, otherwise raw val loss.
+        early_stop_loss = (
+            ema_val_loss
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
+            else current_val_loss
+        )
+
+        improved = best_loss is None or early_stop_loss < best_loss
         if improved:
-            best_loss = current_val_loss
+            best_loss = early_stop_loss
             best_model_dict = deepcopy(model.state_dict())
             epochs_since_improvement = 0
 
@@ -1844,11 +1858,16 @@ def run_finetuning(
                 logger.info("Early stopping!")
                 break
 
+        _val_loss_str = (
+            f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
+            else f"{current_val_loss:.4f}"
+        )
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
-            f"Val Loss: {current_val_loss:.4f} | "
-            f"Best Loss: {best_loss:.4f}"
+            f"Val Loss: {_val_loss_str} | "
+            f"Best: {best_loss:.4f}"
         )
 
         description += (
