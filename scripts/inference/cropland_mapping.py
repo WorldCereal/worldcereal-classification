@@ -72,6 +72,9 @@ if __name__ == "__main__":
     export_class_probabilities = True
     enable_cropland_postprocess = True
     enable_croptype_postprocess = True
+    export_embeddings = True
+    export_ndvi = True
+    merge_classification_products = True
 
     season_windows = {
         "tc-s1": ("2020-12-01", "2021-07-31"),
@@ -94,18 +97,17 @@ if __name__ == "__main__":
         postprocess_config["croptype"] = {"enabled": True}
 
     workflow_cfg = WorldCerealWorkflowConfig(
-        model=(
-            ModelSection(
-                croptype_head_zip=croptype_head_uri,
-                enable_croptype_head=True,
-            )
-            if croptype_head_uri
-            else None
+        model=ModelSection(
+            croptype_head_zip=croptype_head_uri,
+            enable_croptype_head=True,
+            export_embeddings=export_embeddings,
+            export_ndvi=export_ndvi,
         ),
         season=SeasonSection(
             export_class_probabilities=export_class_probabilities,
             season_ids=season_ids,
             season_windows=season_windows,
+            merge_classification_products=merge_classification_products,
         ),
         postprocess=postprocess_config or None,
     )
