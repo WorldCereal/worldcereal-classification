@@ -10,15 +10,25 @@ Environment variables:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from io import BytesIO
-from typing import Dict
+from pathlib import Path
+from typing import Dict, Optional
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 import pandas as pd
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+SHAREPOINT_CACHE_PATH = (
+    _REPO_ROOT
+    / "src/worldcereal/data/croptype_mappings/class_mappings_sharepoint_cache.json"
+)
+
+LOGGER = logging.getLogger(__name__)
 
 ENV_TENANT_ID = "WORLDCEREAL_SP_TENANT_ID"
 ENV_CLIENT_ID = "WORLDCEREAL_SP_CLIENT_ID"
@@ -190,3 +200,62 @@ def build_class_mappings(df: pd.DataFrame) -> Dict[str, Dict[str, str]]:
     if not mappings:
         raise ValueError("No mappings could be built from the provided sheet.")
     return mappings
+
+
+def load_class_mappings_with_cache(
+    site_url: str,
+    file_server_relative_url: str,
+    cache_path: Path = SHAREPOINT_CACHE_PATH,
+    retries: int = 3,
+    **read_excel_kwargs,
+) -> Dict[str, Dict[str, str]]:
+    """Fetch class mappings from SharePoint with a local JSON cache as fallback.
+
+    Always attempts to download a fresh copy from SharePoint.  On success the
+    full mappings dict is written to *cache_path* (JSON) so it can be reused
+    when SharePoint is unavailable.  On failure a warning is logged and the
+    cached file is returned instead.  Raises :class:`RuntimeError` if the
+    fetch fails *and* no cache file exists.
+
+    Parameters
+    ----------
+    site_url : str
+        Full SharePoint site URL.
+    file_server_relative_url : str
+        Server-relative path to the Excel file inside the site.
+    cache_path : Path, optional
+        Where to store / read the JSON cache.  Defaults to
+        :data:`SHAREPOINT_CACHE_PATH`.
+    retries : int, optional
+        Number of download attempts before giving up (default 3).
+    **read_excel_kwargs
+        Extra keyword arguments forwarded to :func:`pandas.read_excel`.
+    """
+    cache_path = Path(cache_path)
+    try:
+        legend = get_excel_from_sharepoint(
+            site_url=site_url,
+            file_server_relative_url=file_server_relative_url,
+            retries=retries,
+            **read_excel_kwargs,
+        )
+        mappings = build_class_mappings(legend)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w") as fh:
+            json.dump(mappings, fh, indent=2)
+        LOGGER.info("Class mappings refreshed and saved to cache: %s", cache_path)
+        return mappings
+    except Exception as exc:
+        LOGGER.warning(
+            "Failed to fetch class mappings from SharePoint (%s). "
+            "Falling back to cached file: %s",
+            exc,
+            cache_path,
+        )
+        if not cache_path.exists():
+            raise RuntimeError(
+                f"SharePoint fetch failed and no cache file found at '{cache_path}'. "
+                "Run with a working SharePoint connection at least once to populate the cache."
+            ) from exc
+        with open(cache_path, "r") as fh:
+            return json.load(fh)
