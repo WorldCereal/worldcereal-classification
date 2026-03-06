@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import shutil
 import tempfile
 import urllib.parse
@@ -17,7 +18,11 @@ from typing import (
     Sequence,
 )
 
-from loguru import logger
+try:
+    from loguru import logger
+except ImportError:
+    # loguru not available, use standard logging
+    logger = logging.getLogger(__name__)  # type: ignore
 
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "worldcereal" / "models"
 
