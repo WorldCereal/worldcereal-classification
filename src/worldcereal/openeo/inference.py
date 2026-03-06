@@ -2048,9 +2048,9 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
     """openEO metadata hook that keeps band labels in sync with the workflow outputs."""
 
-    from worldcereal.utils.models import load_model_artifact
-
     _require_openeo_runtime()
+
+    from worldcereal.utils.models import load_model_artifact
 
     try:
         context_map = dict(context or {})
