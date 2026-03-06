@@ -465,13 +465,13 @@ def get_class_weights(
     else:
         raise ValueError(f"Unknown method: {method}")
 
+    if normalize:
+        logger.info("Normalizing weights to mean = 1")
+        weights = weights / weights.mean()
+
     if clip_range:
         logger.info(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
-
-    if normalize:
-        logger.info("Renormalizing weights to mean = 1")
-        weights = weights / weights.mean()
 
     rounded = np.round(weights, 3)
     return {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
@@ -490,21 +490,15 @@ def _get_normalized_weights(
 ) -> np.ndarray:
     """Return a per-sample float64 weight array.
 
-    Weights are computed from the label distribution via ``get_class_weights``
-    (clip → normalize to mean=1), then **re-clipped** to *clip_range*.  The
-    re-clip is necessary because ``get_class_weights`` normalises *after*
-    clipping, which can push values outside the intended range.  By applying
-    the clip a second time we guarantee that both class-weight and spatial-weight
-    arrays live in the same bounded interval before they are multiplied together,
-    preventing one from dominating the other.
+    Weights are computed via ``get_class_weights`` which normalizes to mean=1
+    first, then clips to *clip_range*.  This order guarantees that the clip
+    bounds are respected in the final output — values returned here are always
+    within *clip_range* (when provided).
     """
     w_dict = _stringify_weight_dict(
         get_class_weights(labels, method=method, clip_range=clip_range, normalize=True)
     )
-    arr = np.array([w_dict[str(lbl)] for lbl in labels], dtype=np.float64)
-    if clip_range is not None:
-        arr = np.clip(arr, clip_range[0], clip_range[1])
-    return arr
+    return np.array([w_dict[str(lbl)] for lbl in labels], dtype=np.float64)
 
 
 def _spatial_bins_from_latlon(
