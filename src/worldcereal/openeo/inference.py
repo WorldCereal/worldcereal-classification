@@ -9,6 +9,8 @@ import random
 import shutil
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -476,7 +478,14 @@ def _hash_source(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
 
 
-def _download_artifact(source: str, cache_root: Path) -> Path:
+def _download_artifact(
+    source: str,
+    cache_root: Path,
+    *,
+    attempts: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 8.0,
+) -> Path:
     parsed = urllib.parse.urlparse(source)
     downloads_dir = cache_root / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -485,10 +494,43 @@ def _download_artifact(source: str, cache_root: Path) -> Path:
         target = downloads_dir / f"{slug}.zip"
         if target.exists():
             return target
-        logger.info(f"Downloading seasonal model artifact from {source}")
-        with urllib.request.urlopen(source) as resp, open(target, "wb") as fh:  # nosec: B310
-            shutil.copyfileobj(resp, fh)
-        return target
+
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, attempts + 1):
+            logger.info(f"Downloading seasonal model artifact from {source}")
+            tmp_target = downloads_dir / f"{slug}.zip.tmp"
+            try:
+                with (
+                    urllib.request.urlopen(source) as resp,
+                    open(tmp_target, "wb") as fh,
+                ):  # nosec: B310
+                    shutil.copyfileobj(resp, fh)
+                tmp_target.replace(target)
+                return target
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+            ) as exc:
+                last_exc = exc
+                if attempt >= attempts:
+                    break
+                delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
+                delay += random.uniform(0.0, 0.5)
+                logger.warning(
+                    f"Artifact download failed (attempt {attempt}/{attempts}). "
+                    f"Retrying in {delay:.1f}s: {exc}"
+                )
+                time.sleep(delay)
+            finally:
+                if tmp_target.exists():
+                    tmp_target.unlink()
+
+        raise RuntimeError(
+            f"Failed to download artifact from {source} after {attempts} attempts."
+        ) from last_exc
+
     path = Path(source)
     if not path.exists():
         raise FileNotFoundError(f"Artifact not found at {source}")
@@ -1470,17 +1512,17 @@ class SeasonalInferenceEngine:
                 and cropland_mask_bool is not None
             )
             if gate_applicable:
-                assert cropland_mask_bool is not None, (
-                    "Cropland mask required when gating is enabled"
-                )
+                assert (
+                    cropland_mask_bool is not None
+                ), "Cropland mask required when gating is enabled"
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
-                assert cropland_mask_bool is not None, (
-                    "Cropland mask required when gating is enabled"
-                )
+                assert (
+                    cropland_mask_bool is not None
+                ), "Cropland mask required when gating is enabled"
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
@@ -2167,51 +2209,42 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
 
     _require_openeo_runtime()
 
-    try:
-        context_map = dict(context or {})
-        season_ids = _resolve_effective_season_ids(context_map)
-        export_probs = False
-        croptype_classes: Optional[Sequence[str]] = None
-        croptype_enabled = True
-        cropland_enabled = True
+    context_map = dict(context or {})
+    season_ids = _resolve_effective_season_ids(context_map)
+    export_probs = False
+    croptype_classes: Optional[Sequence[str]] = None
+    croptype_enabled = True
+    cropland_enabled = True
 
-        try:
-            config = _extract_udf_configuration(context_map)
-            export_probs = config.get("export_class_probabilities", False)
-            croptype_enabled = config.get("enable_croptype_head", True)
-            cropland_enabled = config.get("enable_cropland_head", True)
+    config = _extract_udf_configuration(context_map)
+    export_probs = config.get("export_class_probabilities", False)
+    croptype_enabled = config.get("enable_croptype_head", True)
+    cropland_enabled = config.get("enable_cropland_head", True)
 
-            if cropland_enabled or croptype_enabled:
-                cache_root = config.get("cache_root")
-                base_artifact = load_model_artifact(
-                    config["seasonal_model_zip"], cache_root=cache_root
-                )
-                base_heads = base_artifact.manifest.get("heads", [])
-
-                def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
-                    override_source = config.get(key)
-                    if override_source:
-                        return load_model_artifact(
-                            override_source, cache_root=cache_root
-                        ).manifest.get("heads", [])
-                    return base_heads
-
-                if croptype_enabled:
-                    croptype_heads = _heads_for_override("croptype_head_zip")
-                    croptype_classes = _select_head_spec(
-                        croptype_heads, "croptype"
-                    ).class_names
-        except Exception as exc:
-            logger.warning(f"Metadata configuration fallback: {exc}")
-
-        labels = _expected_udf_band_labels(
-            season_ids,
-            export_class_probabilities=export_probs,
-            croptype_classes=croptype_classes,
-            croptype_enabled=croptype_enabled,
-            cropland_enabled=cropland_enabled,
+    if cropland_enabled or croptype_enabled:
+        cache_root = config.get("cache_root")
+        base_artifact = load_model_artifact(
+            config["seasonal_model_zip"], cache_root=cache_root
         )
-        return metadata.rename_labels(dimension="bands", target=labels)
-    except Exception as exc:  # pragma: no cover - metadata best-effort
-        logger.warning(f"apply_metadata fallback: {exc}")
-        return metadata
+        base_heads = base_artifact.manifest.get("heads", [])
+
+        def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
+            override_source = config.get(key)
+            if override_source:
+                return load_model_artifact(
+                    override_source, cache_root=cache_root
+                ).manifest.get("heads", [])
+            return base_heads
+
+        if croptype_enabled:
+            croptype_heads = _heads_for_override("croptype_head_zip")
+            croptype_classes = _select_head_spec(croptype_heads, "croptype").class_names
+
+    labels = _expected_udf_band_labels(
+        season_ids,
+        export_class_probabilities=export_probs,
+        croptype_classes=croptype_classes,
+        croptype_enabled=croptype_enabled,
+        cropland_enabled=cropland_enabled,
+    )
+    return metadata.rename_labels(dimension="bands", target=labels)

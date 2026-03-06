@@ -275,8 +275,8 @@ class date_slider:
     def get_selected_dates(self):
         logger.info(
             "Processing period derived from season window: {} to {}",
-            self._processing_period.start,
-            self._processing_period.stop,
+            self._processing_period.start_date,
+            self._processing_period.end_date,
         )
         return self._processing_period
 
@@ -311,20 +311,28 @@ class date_slider:
         )
 
         season_range = [
-            season_start.strftime("%d %b %Y")
-            if self.show_year
-            else season_start.strftime("%d %b"),
-            season_end.strftime("%d %b %Y")
-            if self.show_year
-            else season_end.strftime("%d %b"),
+            (
+                season_start.strftime("%d %b %Y")
+                if self.show_year
+                else season_start.strftime("%d %b")
+            ),
+            (
+                season_end.strftime("%d %b %Y")
+                if self.show_year
+                else season_end.strftime("%d %b")
+            ),
         ]
         processing_range = [
-            processing_start.strftime("%d %b %Y")
-            if self.show_year
-            else processing_start.strftime("%d %b"),
-            processing_end.strftime("%d %b %Y")
-            if self.show_year
-            else processing_end.strftime("%d %b"),
+            (
+                processing_start.strftime("%d %b %Y")
+                if self.show_year
+                else processing_start.strftime("%d %b")
+            ),
+            (
+                processing_end.strftime("%d %b %Y")
+                if self.show_year
+                else processing_end.strftime("%d %b")
+            ),
         ]
 
         self.html_text.value = (

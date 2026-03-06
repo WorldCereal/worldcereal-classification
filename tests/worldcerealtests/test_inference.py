@@ -298,6 +298,18 @@ def test_apply_metadata_omits_croptype_labels_when_disabled(monkeypatch):
         }
 
     monkeypatch.setattr(inference, "_extract_udf_configuration", fake_extract)
+    monkeypatch.setattr(
+        inference,
+        "load_model_artifact",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            manifest={
+                "heads": [
+                    {"task": "landcover", "class_names": ["nocrop", "crop"]},
+                    {"task": "croptype", "class_names": ["wheat", "maize"]},
+                ]
+            }
+        ),
+    )
 
     class DummyMetadata:
         def __init__(self):
@@ -342,6 +354,18 @@ def test_apply_metadata_handles_cropland_disabled(monkeypatch):
         }
 
     monkeypatch.setattr(inference, "_extract_udf_configuration", fake_extract)
+    monkeypatch.setattr(
+        inference,
+        "load_model_artifact",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            manifest={
+                "heads": [
+                    {"task": "landcover", "class_names": ["nocrop", "crop"]},
+                    {"task": "croptype", "class_names": ["wheat", "maize"]},
+                ]
+            }
+        ),
+    )
 
     class DummyMetadata:
         def __init__(self):

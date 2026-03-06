@@ -11,6 +11,78 @@ SeasonWindowMapping = Mapping[str, SeasonWindow]
 PostprocessMapping = Dict[str, Dict[str, Any]]
 
 
+def build_config_from_params(
+    *,
+    croptype_head_zip: Optional[str] = None,
+    landcover_head_zip: Optional[str] = None,
+    seasonal_model_zip: Optional[str] = None,
+    enable_cropland_head: Optional[bool] = None,
+    enable_croptype_head: Optional[bool] = None,
+    enforce_cropland_gate: Optional[bool] = None,
+    export_class_probabilities: Optional[bool] = None,
+    season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[SeasonWindowMapping] = None,
+    season_masks: Optional[Sequence[Any]] = None,
+    composite_frequency: Optional[str] = None,
+    cache_root: Optional[Union[str, Path]] = None,
+    batch_size: Optional[int] = None,
+    device: Optional[str] = None,
+    enable_cropland_postprocess: Optional[bool] = None,
+    cropland_postprocess_method: Optional[str] = None,
+    cropland_postprocess_kernel_size: Optional[int] = None,
+    enable_croptype_postprocess: Optional[bool] = None,
+    croptype_postprocess_method: Optional[str] = None,
+    croptype_postprocess_kernel_size: Optional[int] = None,
+) -> WorldCerealWorkflowConfig:
+    """Build a workflow config from flat parameters (notebook/CLI friendly)."""
+    workflow_builder = WorldCerealWorkflowConfig.builder()
+
+    if croptype_head_zip is not None:
+        workflow_builder.croptype_head_zip(croptype_head_zip)
+    if landcover_head_zip is not None:
+        workflow_builder.landcover_head_zip(landcover_head_zip)
+    if seasonal_model_zip is not None:
+        workflow_builder.seasonal_model_zip(seasonal_model_zip)
+    if enable_cropland_head is not None:
+        workflow_builder.enable_cropland_head(enable_cropland_head)
+    if enable_croptype_head is not None:
+        workflow_builder.enable_croptype_head(enable_croptype_head)
+    if enforce_cropland_gate is not None:
+        workflow_builder.enforce_cropland_gate(enforce_cropland_gate)
+    if export_class_probabilities is not None:
+        workflow_builder.export_class_probabilities(export_class_probabilities)
+    if season_ids is not None:
+        workflow_builder.season_ids(season_ids)
+    if season_windows is not None:
+        workflow_builder.season_windows(season_windows)
+    if season_masks is not None:
+        workflow_builder.season_masks(season_masks)
+    if composite_frequency is not None:
+        workflow_builder.composite_frequency(composite_frequency)
+    if cache_root is not None:
+        workflow_builder.cache_root(cache_root)
+    if batch_size is not None:
+        workflow_builder.batch_size(batch_size)
+    if device is not None:
+        workflow_builder.device(device)
+    if enable_cropland_postprocess is not None and enable_cropland_postprocess:
+        workflow_builder.cropland_postprocess(
+            enabled=True,
+            method=cropland_postprocess_method,
+            kernel_size=cropland_postprocess_kernel_size,
+        )
+    if enable_croptype_postprocess is not None and enable_croptype_postprocess:
+        workflow_builder.croptype_postprocess(
+            enabled=True,
+            method=croptype_postprocess_method,
+            kernel_size=croptype_postprocess_kernel_size,
+        )
+
+    workflow_config = workflow_builder.build()
+
+    return workflow_config
+
+
 @dataclass
 class ModelSection:
     """Overrides for the seasonal workflow model section."""
