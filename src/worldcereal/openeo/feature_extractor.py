@@ -24,7 +24,10 @@ from scipy.ndimage import (
 from shapely.geometry import Point
 from shapely.ops import transform
 
+from worldcereal.utils.models import load_model_artifact
+
 sys.path.append("feature_deps")
+
 
 import torch  # noqa: E402
 
@@ -419,6 +422,14 @@ def extract_presto_embeddings(
     # self.logger.info(f"Compile presto: {compile_presto}")
 
     logger.info("Loading Presto model for inference")
+
+    if presto_model_url.endswith(".zip"):
+        # Use load model artifact functionality to get path to model weights file
+        model_artifact = load_model_artifact(
+            presto_model_url,
+            encoder_only=True,
+        )
+        presto_model_url = model_artifact.checkpoint_path
 
     # TODO: try to take run_model_inference from worldcereal
     from prometheo.datasets.worldcereal import run_model_inference

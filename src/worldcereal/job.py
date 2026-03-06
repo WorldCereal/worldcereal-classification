@@ -51,13 +51,13 @@ from typing_extensions import TypedDict
 from worldcereal.openeo.inference import (
     _merge_workflow_sections,
     _select_workflow_preset,
-    load_model_artifact,
 )
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.preprocessing import worldcereal_preprocessed_inputs
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
+from worldcereal.utils.models import load_model_artifact
 
 FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip"
 PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
@@ -1277,9 +1277,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert attr in production_gdf.columns, (
-                f"The production grid must contain a '{attr}' column."
-            )
+            assert (
+                attr in production_gdf.columns
+            ), f"The production grid must contain a '{attr}' column."
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 
