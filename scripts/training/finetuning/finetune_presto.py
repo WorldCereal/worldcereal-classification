@@ -704,8 +704,7 @@ def main(args):
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 50
-    # batch_size = 256
-    batch_size = 4096
+    batch_size = args.batch_size
     patience = 10
     num_workers = 8
 
@@ -1695,6 +1694,12 @@ def parse_args(arg_list=None):
         type=float,
         default=0.1,
         help="Relative factor (0-1] of the full finetuning LR to start from during the post-unfreeze warmup stage.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=4096,
+        help="Batch size for training."
     )
 
     # Label timing (for time_explicit only)
