@@ -118,6 +118,7 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
                 "landcover_head_zip": "lc.pt",
                 "croptype_head_zip": "ct.pt",
                 "enable_croptype_head": True,
+                "export_ndvi": True,
             },
             "runtime": {
                 "cache_root": tmp_path.as_posix(),
@@ -156,6 +157,7 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
     assert config["cache_root"] == Path(tmp_path)
     assert config["enable_croptype_head"] is True
     assert config["enable_cropland_head"] is True
+    assert config["export_ndvi"] is True
     assert config["cropland_postprocess"] == {"enabled": True, "kernel_size": 7}
     assert config["croptype_postprocess"]["method"] == "smooth_probabilities"
 
@@ -206,6 +208,24 @@ def test_extract_udf_configuration_allows_croptype_only(monkeypatch):
     assert config["enable_croptype_head"] is True
     assert config["enable_cropland_head"] is False
     assert config["enforce_cropland_gate"] is False
+
+
+def test_extract_udf_configuration_rejects_class_probs_without_croptype_head():
+    context = {
+        "workflow_config": {
+            "model": {
+                "seasonal_model_zip": "user.zip",
+                "enable_croptype_head": False,
+            },
+            "runtime": {},
+            "season": {
+                "export_class_probabilities": True,
+            },
+        }
+    }
+
+    with pytest.raises(ValueError, match="export_class_probabilities"):
+        inference._extract_udf_configuration(context)
 
 
 def test_build_masks_from_windows_handles_multiple_seasons():
@@ -329,6 +349,7 @@ def test_apply_udf_data_exports_embeddings_from_workflow_config(monkeypatch):
     result = inference.apply_udf_data(udf)
 
     assert captured["config"]["export_embeddings"] is True
+    assert captured["config"]["export_ndvi"] is False
     out_cube = result.datacube_list[0]
     stacked = out_cube.get_array()
     assert list(stacked.bands.values) == [
@@ -502,6 +523,44 @@ def test_expected_udf_labels_match_probability_dataset_order_without_class_probs
     )
 
     assert list(dataset.data_vars) == expected_labels
+
+
+def test_expected_udf_labels_do_not_duplicate_when_classes_missing():
+    labels = inference._expected_udf_band_labels(
+        ["tc-s1", "tc-s2"],
+        export_class_probabilities=True,
+        croptype_classes=None,
+        croptype_enabled=True,
+        cropland_enabled=True,
+    )
+    assert labels.count("croptype_probability:tc-s1") == 1
+    assert labels.count("croptype_probability:tc-s2") == 1
+
+
+def test_expected_udf_labels_include_embeddings_and_ndvi_when_enabled():
+    labels = inference._expected_udf_band_labels(
+        ["tc-s1"],
+        export_class_probabilities=False,
+        croptype_classes=["wheat", "maize"],
+        croptype_enabled=True,
+        cropland_enabled=True,
+        export_embeddings=True,
+        export_ndvi=True,
+    )
+
+    embedding_labels = [
+        label for label in labels if label.startswith("global_embedding:")
+    ]
+    ndvi_labels = [label for label in labels if label.startswith("ndvi:")]
+
+    assert len(embedding_labels) == 129
+    assert embedding_labels[0] == "global_embedding:dim_0"
+    assert embedding_labels[-2] == "global_embedding:dim_127"
+    assert embedding_labels[-1] == "global_embedding:scale"
+
+    assert len(ndvi_labels) == 12
+    assert ndvi_labels[0] == "ndvi:ts_0"
+    assert ndvi_labels[-1] == "ndvi:ts_11"
 
 
 def test_croptype_probabilities_use_nocrop_value_when_gated():

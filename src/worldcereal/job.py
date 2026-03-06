@@ -1277,9 +1277,9 @@ def setup_inference_job_manager(
             "bounds_epsg",
         ]
         for attr in REQUIRED_ATTRIBUTES:
-            assert (
-                attr in production_gdf.columns
-            ), f"The production grid must contain a '{attr}' column."
+            assert attr in production_gdf.columns, (
+                f"The production grid must contain a '{attr}' column."
+            )
 
         job_df = production_gdf[REQUIRED_ATTRIBUTES].copy()
 

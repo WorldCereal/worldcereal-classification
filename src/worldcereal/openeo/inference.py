@@ -257,14 +257,14 @@ class DataPreprocessor:
 
     @staticmethod
     def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
-        if not present:
+        band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
+        present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
+        if not present_idx:
             return arr
         if not np.issubdtype(arr.dtype, np.floating):
             # Allow negative dB values to be written back safely
             arr = arr.astype("float32")
-        s1 = arr.sel(bands=present).astype(np.float32)
-        data = s1.values
+        data = arr.isel(bands=present_idx).values.astype(np.float32)
         nodata_mask = data == NODATA_VALUE
         valid_mask = ~nodata_mask
         scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
@@ -274,7 +274,7 @@ class DataPreprocessor:
             power = np.power(10, power / 10.0)
             power[~np.isfinite(power)] = np.nan
             scaled[valid_mask] = 10.0 * np.log10(power)
-        arr.loc[{"bands": present}] = scaled
+        arr.values[present_idx, ...] = scaled
         return arr
 
     @staticmethod
@@ -286,13 +286,14 @@ class DataPreprocessor:
 
     @staticmethod
     def add_slope_band(arr: xr.DataArray, epsg: int) -> xr.DataArray:
-        if "slope" in arr.bands.values:
+        band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
+        if "slope" in band_names:
             return arr
-        if "COP-DEM" not in arr.bands.values:
+        if "COP-DEM" not in band_names:
             logger.warning("DEM band missing; slope band cannot be created.")
             return arr
         resolution = CoordinateTransformer.get_resolution(arr.isel(t=0), epsg)
-        dem = arr.sel(bands="COP-DEM").isel(t=0).values
+        dem = arr.isel(bands=band_names.index("COP-DEM"), t=0).values
         slope = SlopeCalculator.compute(resolution, dem)
         slope_da = (
             xr.DataArray(
@@ -1076,6 +1077,7 @@ class SeasonalInferenceEngine:
         season_masks: Optional[np.ndarray] = None,
         season_ids: Optional[Sequence[str]] = None,
         export_embeddings: bool = False,
+        export_ndvi: bool = False,
     ) -> xr.Dataset:
         dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
         logger.info(
@@ -1120,6 +1122,7 @@ class SeasonalInferenceEngine:
             season_ids=active_season_ids,
             enforce_cropland_gate=enforce_cropland_gate,
             export_embeddings=export_embeddings,
+            export_ndvi=export_ndvi,
         )
 
         return _dataset_to_multiband_array(dataset)
@@ -1249,7 +1252,7 @@ class SeasonalInferenceEngine:
             )
 
             for i, band in enumerate(bands_to_check):
-                band_data = arr.sel(bands=band).values
+                band_data = arr.isel(bands=i).values
                 valid_mask = ~np.isnan(band_data)
                 n_valid = valid_mask.sum()
                 n_total = band_data.size
@@ -1346,6 +1349,7 @@ class SeasonalInferenceEngine:
         season_ids: Sequence[str],
         enforce_cropland_gate: bool,
         export_embeddings: bool = False,
+        export_ndvi: bool = False,
     ) -> xr.Dataset:
         torch = _lazy_import_torch()
         height = arr.sizes["y"]
@@ -1585,11 +1589,19 @@ class SeasonalInferenceEngine:
             for idx in range(num_embedding_dims):
                 band_name = f"global_embedding:dim_{idx}"
                 _register_band(
-                    band_name, embedding_quantized[idx].astype(np.int8, copy=False)
+                    band_name, embedding_quantized[idx].astype(np.uint8, copy=False)
                 )
             _register_band(
-                "global_embedding:scale", embedding_scale.astype(np.float32, copy=False)
+                "global_embedding:scale",
+                embedding_scale.astype(np.float32, copy=False),
             )
+
+        if export_ndvi:
+            logger.info("Exporting NDVI time series as separate bands")
+            ndvi_scaled = _get_scaled_ndvi(arr)
+            for t in range(ndvi_scaled.shape[0]):
+                band_label = _format_ndvi_band_label(arr.t.values[t], t)
+                _register_band(band_label, ndvi_scaled[t, ...])
 
         ordered_vars: OrderedDict[str, xr.DataArray] = OrderedDict()
         for name, values in band_layers:
@@ -1627,6 +1639,7 @@ def run_seasonal_workflow(
     cropland_postprocess: Optional[Mapping[str, Any]] = None,
     croptype_postprocess: Optional[Mapping[str, Any]] = None,
     export_embeddings: bool = False,
+    export_ndvi: bool = False,
 ) -> xr.DataArray:
     """Run the full seasonal workflow and return a multi-band array."""
 
@@ -1654,6 +1667,7 @@ def run_seasonal_workflow(
         season_windows=season_windows,
         season_masks=season_masks,
         export_embeddings=export_embeddings,
+        export_ndvi=export_ndvi,
     )
     return datacube
 
@@ -1868,14 +1882,41 @@ def _ensure_uint8_range(values: np.ndarray, *, name: str) -> None:
 
 
 def _quantize_embedding_cube(cube: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    # Quantize embeddings to int8 with per-pixel scaling based on 99th percentile
-    emb_scale = np.repeat(
-        np.maximum(np.percentile(abs(cube), 99, axis=0) / 127.0, 1e-6)[np.newaxis, ...],
-        cube.shape[0],
-        axis=0,
+    # Quantize embeddings to uint8 with per-pixel scaling based on 99th percentile.
+    # Decode formula: embedding ~= (quantized_uint8 - 128) * scale
+    emb_scale = np.maximum(np.percentile(np.abs(cube), 99, axis=0) / 127.0, 1e-6)
+    emb_q_signed = np.clip(np.round(cube / emb_scale), -128, 127).astype(np.int16)
+    emb_q_uint8 = (emb_q_signed + 128).astype(np.uint8)
+    return emb_q_uint8, emb_scale.astype(np.float32, copy=False)
+
+
+def _get_scaled_ndvi(arr: xr.DataArray) -> np.ndarray:
+    ndvi_scale, ndvi_offset, ndvi_nodatavalue = 0.004, 0.08, 255
+
+    band_names = [str(name) for name in np.asarray(arr.coords["bands"].values)]
+    nir_band = "B8" if "B8" in band_names else "S2-L2A-B08"
+    red_band = "B4" if "B4" in band_names else "S2-L2A-B04"
+
+    # arr has dims ("bands", "t", "x", "y"); after isel the spatial axes are (x, y).
+    # We need (t, y, x) to match the (height, width) = (y_size, x_size) convention
+    # used everywhere else in _format_outputs (model outputs are flattened y-major).
+    nir = arr.isel(bands=band_names.index(nir_band)).transpose("t", "y", "x").values
+    red = arr.isel(bands=band_names.index(red_band)).transpose("t", "y", "x").values
+    nodata_mask = (nir == NODATA_VALUE) | (red == NODATA_VALUE)
+    ndvi = (nir - red) / (nir + red)
+    ndvi = np.clip(ndvi, -0.08, 0.92)
+    ndvi_scaled = (ndvi + ndvi_offset) / ndvi_scale
+    ndvi_scaled = np.where(nodata_mask, ndvi_nodatavalue, ndvi_scaled).astype(
+        np.uint8, copy=False
     )
-    emb_q = np.clip(np.round(cube / emb_scale), -127, 127).astype(np.int8)
-    return emb_q, emb_scale
+
+    return ndvi_scaled
+
+
+def _format_ndvi_band_label(timestamp: np.datetime64, idx: int) -> str:
+    """Format NDVI band label using a stable positional index."""
+
+    return f"ndvi:ts_{idx}"
 
 
 def _dataset_to_multiband_array(dataset: xr.Dataset) -> xr.DataArray:
@@ -1902,6 +1943,8 @@ def _expected_udf_band_labels(
     croptype_classes: Optional[Sequence[str]] = None,
     croptype_enabled: bool = True,
     cropland_enabled: bool = True,
+    export_embeddings: bool = False,
+    export_ndvi: bool = False,
 ) -> List[str]:
     labels: List[str] = []
     if cropland_enabled:
@@ -1927,9 +1970,16 @@ def _expected_udf_band_labels(
                             for cls in ct_classes
                         ]
                     )
-            else:
-                for season_id in season_ids:
-                    labels.append(f"croptype_probability:{season_id}")
+
+    if export_embeddings:
+        dim_count = 128
+        labels.extend([f"global_embedding:dim_{idx}" for idx in range(dim_count)])
+        labels.append("global_embedding:scale")
+
+    if export_ndvi:
+        step_count = 12
+        labels.extend([f"ndvi:ts_{idx}" for idx in range(step_count)])
+
     return labels
 
 
@@ -2022,6 +2072,8 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
     export_class_probabilities = _as_bool(export_probs_value, False)
     export_embeddings_value = model_cfg.get("export_embeddings")
     export_embeddings = _as_bool(export_embeddings_value, False)
+    export_ndvi_value = model_cfg.get("export_ndvi")
+    export_ndvi = _as_bool(export_ndvi_value, False)
     enable_croptype_head_value = model_cfg.get("enable_croptype_head")
     enable_croptype_head = _as_bool(enable_croptype_head_value, True)
     enable_cropland_head_value = model_cfg.get("enable_cropland_head")
@@ -2046,6 +2098,11 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         )
         enable_cropland_head = True
 
+    if export_class_probabilities and not enable_croptype_head:
+        raise ValueError(
+            "export_class_probabilities requires enable_croptype_head=True."
+        )
+
     def _normalize_postprocess_entry(value: Any) -> Optional[Dict[str, Any]]:
         if value is None:
             return None
@@ -2056,9 +2113,9 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
     cropland_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("cropland"))
     croptype_post_cfg = _normalize_postprocess_entry(postprocess_cfg.get("croptype"))
 
-    if not (enable_croptype_head or enable_cropland_head):
+    if not (enable_croptype_head or enable_cropland_head or export_embeddings):
         raise ValueError(
-            "Seasonal workflow configuration must enable at least one head."
+            "Seasonal workflow configuration must enable at least one head or export embeddings."
         )
 
     return {
@@ -2066,6 +2123,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "landcover_head_zip": model_cfg.get("landcover_head_zip"),
         "croptype_head_zip": model_cfg.get("croptype_head_zip"),
         "export_embeddings": export_embeddings,
+        "export_ndvi": export_ndvi,
         "enforce_cropland_gate": enforce_gate,
         "cache_root": cache_root,
         "device": device,
@@ -2188,6 +2246,11 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
             context.get("export_embeddings"), False
         )
 
+    if "export_ndvi" in context:
+        workflow_cfg["model"]["export_ndvi"] = _as_bool(
+            context.get("export_ndvi"), False
+        )
+
     return _finalize_workflow_config(workflow_cfg)
 
 
@@ -2224,6 +2287,8 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
         context_map = dict(context or {})
         season_ids = _resolve_effective_season_ids(context_map)
         export_probs = False
+        export_embeddings = False
+        export_ndvi = False
         croptype_classes: Optional[Sequence[str]] = None
         croptype_enabled = True
         cropland_enabled = True
@@ -2231,6 +2296,8 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
         try:
             config = _extract_udf_configuration(context_map)
             export_probs = config.get("export_class_probabilities", False)
+            export_embeddings = config.get("export_embeddings", False)
+            export_ndvi = config.get("export_ndvi", False)
             croptype_enabled = config.get("enable_croptype_head", True)
             cropland_enabled = config.get("enable_cropland_head", True)
 
@@ -2254,6 +2321,12 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
                     croptype_classes = _select_head_spec(
                         croptype_heads, "croptype"
                     ).class_names
+
+            if export_probs and croptype_enabled and not croptype_classes:
+                logger.warning(
+                    "apply_metadata: export_class_probabilities enabled but croptype class names are unavailable; leaving metadata unchanged."
+                )
+                return metadata
         except Exception as exc:
             logger.warning(f"Metadata configuration fallback: {exc}")
 
@@ -2263,6 +2336,8 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
             croptype_classes=croptype_classes,
             croptype_enabled=croptype_enabled,
             cropland_enabled=cropland_enabled,
+            export_embeddings=export_embeddings,
+            export_ndvi=export_ndvi,
         )
         return metadata.rename_labels(dimension="bands", target=labels)
     except Exception as exc:  # pragma: no cover - metadata best-effort
