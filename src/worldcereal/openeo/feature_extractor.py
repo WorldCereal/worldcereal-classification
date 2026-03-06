@@ -24,8 +24,6 @@ from scipy.ndimage import (
 from shapely.geometry import Point
 from shapely.ops import transform
 
-from worldcereal.utils.models import load_model_artifact
-
 sys.path.append("feature_deps")
 
 
@@ -424,6 +422,8 @@ def extract_presto_embeddings(
     logger.info("Loading Presto model for inference")
 
     if presto_model_url.endswith(".zip"):
+        from worldcereal.utils.models import load_model_artifact
+
         # Use load model artifact functionality to get path to model weights file
         model_artifact = load_model_artifact(
             presto_model_url,

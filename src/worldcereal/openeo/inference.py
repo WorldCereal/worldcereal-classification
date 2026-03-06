@@ -63,13 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from prometheo.predictors import Predictors
 
     from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
-    from worldcereal.utils.models import (
-        DEFAULT_CACHE_ROOT,
-        ModelArtifact,
-        ensure_cache_dir,
-        load_model_artifact,
-        resolve_checkpoint_path,
-    )
+    from worldcereal.utils.models import ModelArtifact
 
     try:
         from torch import Tensor as _TorchTensorType
@@ -452,7 +446,7 @@ class HeadSpec:
         return len(self.class_names)
 
 
-def _backbone_fingerprint_from_artifact(artifact: ModelArtifact) -> str:
+def _backbone_fingerprint_from_artifact(artifact: "ModelArtifact") -> str:
     backbone_entry = artifact.manifest.get("backbone") or {}
     fingerprint = backbone_entry.get("fingerprint")
     if not fingerprint:
@@ -493,7 +487,7 @@ class SeasonalModelBundle:
 
     def __init__(
         self,
-        base_artifact: ModelArtifact,
+        base_artifact: "ModelArtifact",
         *,
         landcover_head_zip: str | Path | None = None,
         croptype_head_zip: str | Path | None = None,
@@ -502,6 +496,12 @@ class SeasonalModelBundle:
         enable_croptype_head: bool = True,
         enable_cropland_head: bool = True,
     ) -> None:
+
+        from worldcereal.utils.models import (
+            DEFAULT_CACHE_ROOT,
+            ensure_cache_dir,
+        )
+
         torch = _lazy_import_torch()
 
         if not (enable_croptype_head or enable_cropland_head):
@@ -608,6 +608,11 @@ class SeasonalModelBundle:
         Validates backbone compatibility, replaces head architecture if needed,
         and loads the custom weights.
         """
+        from worldcereal.utils.models import (
+            load_model_artifact,
+            resolve_checkpoint_path,
+        )
+
         torch = _lazy_import_torch()
         artifact = load_model_artifact(source, cache_root=self.cache_root)
         backbone_fingerprint = _backbone_fingerprint_from_artifact(artifact)
@@ -898,6 +903,9 @@ class SeasonalInferenceEngine:
         cropland_postprocess: Optional[Mapping[str, Any]] = None,
         croptype_postprocess: Optional[Mapping[str, Any]] = None,
     ) -> None:
+
+        from worldcereal.utils.models import load_model_artifact
+
         base_artifact = load_model_artifact(seasonal_model_zip, cache_root=cache_root)
         self.bundle = SeasonalModelBundle(
             base_artifact,
@@ -2039,6 +2047,8 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
 def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
     """openEO metadata hook that keeps band labels in sync with the workflow outputs."""
+
+    from worldcereal.utils.models import load_model_artifact
 
     _require_openeo_runtime()
 
