@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+
 
 class WorldCerealProductType(Enum):
     """Enum to define the different WorldCereal products."""
@@ -94,7 +96,7 @@ class EmbeddingsParameters(BaseParameters):
         """
         return BaseParameters.create_feature_parameters(
             rescale_s1=False,
-            presto_model_url="https://s3.waw3-1.cloudferro.com/swift/v1/openeo-ml-models-prod/worldcereal/presto-prometheo-landcover-month-LANDCOVER10-augment%3DTrue-balance%3DTrue-timeexplicit%3DFalse-run%3D202507170930_encoder.pt",  # NOQA
+            presto_model_url=DEFAULT_SEASONAL_MODEL_URL,
             compile_presto=False,
             temporal_prediction=False,
             target_date=None,
