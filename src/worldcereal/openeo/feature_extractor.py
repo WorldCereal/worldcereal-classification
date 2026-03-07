@@ -236,7 +236,8 @@ def extract_presto_embeddings(
             presto_model_url,
             encoder_only=True,
         )
-        presto_model_url = model_artifact.checkpoint_path
+        raw_presto_model_url = model_artifact.checkpoint_path
+        presto_model_url = str(raw_presto_model_url)
 
     # TODO: try to take run_model_inference from worldcereal
     from prometheo.datasets.worldcereal import run_model_inference
