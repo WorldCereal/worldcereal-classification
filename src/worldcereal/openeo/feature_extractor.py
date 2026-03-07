@@ -149,7 +149,12 @@ def extract_presto_embeddings(
     if "presto_model_url" not in parameters:
         raise ValueError('Missing required parameter "presto_model_url"')
 
-    presto_model_url = parameters.get("presto_model_url")
+    presto_model_url_raw = parameters.get("presto_model_url")
+    if not isinstance(presto_model_url_raw, str) or not presto_model_url_raw:
+        raise ValueError(
+            'Parameter "presto_model_url" must be provided as a non-empty string'
+        )
+    presto_model_url = presto_model_url_raw
     logger.info(f'Loading Presto model from "{presto_model_url}"')
     prometheo_wheel_url = parameters.get("prometheo_wheel_url", PROMETHEO_WHL_URL)
     logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
