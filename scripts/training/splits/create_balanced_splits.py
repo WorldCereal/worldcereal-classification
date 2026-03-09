@@ -12,26 +12,17 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import (
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    TypedDict,
-    cast,
-)
+from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
+                    Tuple, TypedDict, cast)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
-from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
+from worldcereal.utils.sharepoint import (build_class_mappings,
+                                          get_excel_from_sharepoint,
+                                          load_class_mappings_with_cache)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -162,6 +153,13 @@ def init_duckdb_connection() -> duckdb.DuckDBPyConnection:
     conn = duckdb.connect()
     conn.sql("INSTALL spatial")
     conn.load_extension("spatial")
+    # Register a UDF so SQL queries can compute H3 cells from coordinates.
+    conn.create_function(
+        "h3_latlng_to_cell",
+        lambda lat, lng, res: h3.latlng_to_cell(float(lat), float(lng), int(res)),
+        [float, float, int],
+        str,
+    )
     return conn
 
 
@@ -194,13 +192,11 @@ def load_mappings(
             raise ValueError(
                 "sharepoint_site_url and sharepoint_file_url are required when class_mappings is None."
             )
-        legend = get_excel_from_sharepoint(
+        class_mappings = load_class_mappings_with_cache(
             site_url=sharepoint_site_url,
             file_server_relative_url=sharepoint_file_url,
             sheet_name=0,
         )
-        legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
-        class_mappings = build_class_mappings(legend)
     return class_mappings[ct_name], class_mappings[lc_name]
 
 
@@ -212,8 +208,24 @@ def load_legend(url: str = DEFAULT_LEGEND_URL) -> pd.DataFrame:
 
 
 def load_extraction_paths(extractions_glob: str) -> List[str]:
-    """Collect extraction parquet paths from a glob pattern."""
-    return glob.glob(extractions_glob)
+    """Collect extraction parquet paths from a glob pattern.
+
+    If the glob resolves to a directory (e.g. a partitioned parquet dataset),
+    it is automatically expanded to all leaf ``*.parquet`` files inside it so
+    that :func:`build_extractions_counts` can group them by ``ref_id`` and the
+    progress bar shows the correct per-dataset count.
+    """
+    raw = glob.glob(extractions_glob)
+    paths: List[str] = []
+    for p in raw:
+        if Path(p).is_dir():
+            leaf_files = sorted(
+                str(f) for f in Path(p).rglob("*.parquet") if f.is_file()
+            )
+            paths.extend(leaf_files if leaf_files else [p])
+        else:
+            paths.append(p)
+    return paths
 
 
 def _sql_quote(value: object) -> str:
@@ -231,6 +243,101 @@ def _is_ambiguous_country_code(code: str) -> bool:
     return code in AMBIGUOUS_REF_COUNTRY_CODES or len(code) != 3
 
 
+def _extract_ref_id_from_path(file_path: str) -> str:
+    """Extract the ref_id from a parquet file path.
+
+    Supports three directory layouts:
+
+    * **Flat** – the parquet file is named after the ref_id::
+
+          /parent/dir/2020_FRA_EUROCROPS_POLY_110.parquet
+          → ref_id = "2020_FRA_EUROCROPS_POLY_110"
+
+    * **Hive-partitioned** – the parquet file lives inside a folder whose
+      name follows the ``ref_id=<value>`` convention (the file itself may
+      be named ``part-0.parquet`` or similar)::
+
+          /parent/dir/ref_id=2020_FRA_EUROCROPS_POLY_110/part-0.parquet
+          → ref_id = "2020_FRA_EUROCROPS_POLY_110"
+
+    * **Bare-folder-partitioned** – the parquet file lives inside a folder
+      named directly after the ref_id (starts with a four-digit year)::
+
+          /parent/dir/2020_FRA_EUROCROPS_POLY_110/worldcereal.parquet
+          → ref_id = "2020_FRA_EUROCROPS_POLY_110"
+
+    Directory components are scanned from innermost to outermost; the first
+    match wins.  If no directory component matches, the filename without
+    extension is used as a fallback.
+    """
+    parts = file_path.replace("\\", "/").split("/")
+    for part in reversed(parts[:-1]):
+        if part.startswith("ref_id="):
+            return part[len("ref_id="):]
+        # Bare folder named like a ref_id: starts with YYYY_
+        if len(part) >= 5 and part[:4].isdigit() and part[4] == "_":
+            return part
+    return parts[-1].split(".")[0]
+
+
+def _aggregate_to_split_level(df: pd.DataFrame, h3_split_level: int) -> pd.DataFrame:
+    """Re-aggregate a counts DataFrame to a target H3 resolution.
+
+    Each ``h3_l3_cell`` value is mapped to its ancestor at ``h3_split_level``
+    via :func:`h3.cell_to_parent`.  If the stored cells are already at or
+    finer than ``h3_split_level`` (e.g. the column stores L5 cells and the
+    target is L5), the cell is returned unchanged.  ``n_samples`` is summed
+    within each new group while all other grouping columns are preserved.
+    Rows whose cell cannot be resolved are silently dropped.
+    """
+
+    def _to_parent(cell: object) -> Optional[str]:
+        cell_norm = _normalize_h3_cell(cell)
+        if not cell_norm:
+            return None
+        try:
+            stored_res = h3.get_resolution(cell_norm)
+            if h3_split_level >= stored_res:
+                # Already at or finer than target — use the cell as-is.
+                return cell_norm
+            return h3.cell_to_parent(cell_norm, h3_split_level)
+        except Exception:
+            return None
+
+    out = df.copy()
+    out["h3_l3_cell"] = out["h3_l3_cell"].map(_to_parent)
+    out = out.dropna(subset=["h3_l3_cell"])
+    group_cols = [
+        c
+        for c in [
+            "ref_id", "year", "h3_l3_cell", "ewoc_code",
+            "ct27_class", "lc10_class", "country", "region",
+        ]
+        if c in out.columns
+    ]
+    return out.groupby(group_cols, as_index=False)["n_samples"].sum()
+
+
+def _cache_path_for_ref(cache_dir: Path, ref_id: str, h3_split_level: int) -> Path:
+    """Return the cache parquet path for a given ref_id and H3 split level."""
+    safe_ref = ref_id.replace("/", "_").replace("\\", "_")
+    return cache_dir / f"{safe_ref}_l{h3_split_level}.parquet"
+
+
+def _is_cache_valid(cache_file: Path, source_files: List[str]) -> bool:
+    """Return True if *cache_file* exists and is newer than all *source_files*."""
+    if not cache_file.exists():
+        return False
+    cache_mtime = cache_file.stat().st_mtime
+    for src in source_files:
+        try:
+            if Path(src).stat().st_mtime > cache_mtime:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def build_extractions_counts(
     conn: duckdb.DuckDBPyConnection,
     extraction_paths: Sequence[str],
@@ -238,6 +345,9 @@ def build_extractions_counts(
     landcover_mapping: Mapping[str, str],
     world_bounds_path: Path = DEFAULT_WORLD_BOUNDS_PATH,
     exclude_ewoc_code: int = 1000000000,
+    h3_split_level: int = 3,
+    counts_cache_dir: Optional[Path] = None,
+    force_recompute: bool = False,
 ) -> pd.DataFrame:
     """Aggregate per-cell sample counts for CROPTYPE and LANDCOVER classes.
 
@@ -253,6 +363,16 @@ def build_extractions_counts(
         EWOC code to LANDCOVER10 mapping.
     exclude_ewoc_code : int, optional
         EWOC code to exclude, by default 1000000000.
+    counts_cache_dir : Path, optional
+        Directory where per-dataset count parquets are cached.  If *None*
+        (default), caching is disabled.  If provided, each ref_id is saved
+        as ``{ref_id}_l{h3_split_level}.parquet`` inside the directory.
+        A cached file is reused as long as it is newer than every source
+        file for that dataset.  Pass ``force_recompute=True`` to ignore
+        existing caches.
+    force_recompute : bool, optional
+        When *True*, existing cache files are ignored and all counts are
+        recomputed from scratch (default *False*).
 
     Returns
     -------
@@ -270,11 +390,53 @@ def build_extractions_counts(
         f"({_sql_quote(k)}, {_sql_quote(v)})" for k, v in landcover_mapping.items()
     )
 
+    # Group paths by ref_id so that all parts of a Hive-partitioned dataset
+    # (ref_id=.../part-N.parquet) are read together in a single DuckDB query.
+    paths_by_ref_id: Dict[str, List[str]] = {}
+    for file_path in extraction_paths:
+        rid = _extract_ref_id_from_path(file_path)
+        paths_by_ref_id.setdefault(rid, []).append(file_path)
+
+    # For any resolution other than the stored L3, compute H3 cells directly
+    # from sample coordinates via the h3_latlng_to_cell DuckDB UDF.  This
+    # works for both coarser targets (L1/L2 via parent) AND finer targets
+    # (L4/L5) that cannot be derived from stored L3 cells.
+    if h3_split_level != 3:
+        h3_cell_sql = (
+            "h3_latlng_to_cell(\n"
+            "                       ST_Y(ST_PointOnSurface(ST_GeomFromWKB(t.geometry))),\n"
+            "                       ST_X(ST_PointOnSurface(ST_GeomFromWKB(t.geometry))),\n"
+            f"                       {h3_split_level}\n"
+            "                   )"
+        )
+    else:
+        h3_cell_sql = "t.h3_l3_cell"
+
+    n_cache_hits = 0
+    n_cache_misses = 0
+    if counts_cache_dir is not None:
+        counts_cache_dir.mkdir(parents=True, exist_ok=True)
+
     results: List[pd.DataFrame] = []
-    for file_path in tqdm(extraction_paths, desc="Aggregating extractions"):
-        ref_id = file_path.split("/")[-1].split(".")[0]
+    agg_desc = (
+        f"Aggregating extractions (H3 L{h3_split_level} from geometry)"
+        if h3_split_level != 3
+        else "Aggregating extractions"
+    )
+    for ref_id, file_paths in tqdm(
+        sorted(paths_by_ref_id.items()), desc=agg_desc
+    ):
+        # --- cache lookup ---
+        if counts_cache_dir is not None and not force_recompute:
+            cache_file = _cache_path_for_ref(counts_cache_dir, ref_id, h3_split_level)
+            if _is_cache_valid(cache_file, file_paths):
+                results.append(pd.read_parquet(cache_file))
+                n_cache_hits += 1
+                continue
+
         ref_country = _ref_country_from_ref_id(ref_id)
         use_geometry = _is_ambiguous_country_code(ref_country)
+        files_sql = ", ".join(_sql_quote(p) for p in file_paths)
 
         if use_geometry:
             query = f"""
@@ -296,9 +458,9 @@ def build_extractions_counts(
                        t.ewoc_code,
                        lc10_class,
                        ct27_class,
-                       t.h3_l3_cell,
-                       ST_PointOnSurface(t.geometry) as geom
-                from read_parquet('{file_path}') as t
+                       {h3_cell_sql} as h3_l3_cell,
+                       ST_PointOnSurface(ST_GeomFromWKB(t.geometry)) as geom
+                from read_parquet([{files_sql}]) as t
                 left join ct27_map m
                     on cast(t.ewoc_code as varchar) = m.ewoc_code
                 left join lc10_map l
@@ -350,31 +512,59 @@ def build_extractions_counts(
             bounds as (
                 select iso3, region
                 from read_parquet('{world_bounds_path}')
+            ),
+            samples as (
+                select t.sample_id,
+                       t.ewoc_code,
+                       lc10_class,
+                       ct27_class,
+                       {h3_cell_sql} as h3_l3_cell,
+                       '{ref_country}' as country,
+                       coalesce(b.region, 'Unknown') as region
+                from read_parquet([{files_sql}]) as t
+                left join ct27_map m
+                    on cast(t.ewoc_code as varchar) = m.ewoc_code
+                left join lc10_map l
+                    on cast(t.ewoc_code as varchar) = l.ewoc_code
+                left join bounds b
+                    on b.iso3 = '{ref_country}'
+                where t.ewoc_code <> {exclude_ewoc_code}
             )
-            select t.ewoc_code,
+            select ewoc_code,
                    lc10_class,
                    ct27_class,
-                   t.h3_l3_cell,
-                   '{ref_country}' as country,
-                   coalesce(b.region, 'Unknown') as region,
+                   h3_l3_cell,
+                   country,
+                   region,
                    count(distinct sample_id) as n_samples
-            from read_parquet('{file_path}') as t
-            left join ct27_map m
-                on cast(t.ewoc_code as varchar) = m.ewoc_code
-            left join lc10_map l
-                on cast(t.ewoc_code as varchar) = l.ewoc_code
-            left join bounds b
-                on b.iso3 = '{ref_country}'
-            where t.ewoc_code <> {exclude_ewoc_code}
-            group by t.ewoc_code, ct27_class, lc10_class, t.h3_l3_cell, country, region
+            from samples
+            group by ewoc_code, ct27_class, lc10_class, h3_l3_cell, country, region
             """
 
         tdata = conn.sql(query).df()
         tdata["ref_id"] = ref_id
         tdata["year"] = int(ref_id.split("_")[0])
+
+        if counts_cache_dir is not None:
+            cache_file = _cache_path_for_ref(counts_cache_dir, ref_id, h3_split_level)
+            tdata.to_parquet(cache_file, index=False)
+        n_cache_misses += 1
         results.append(tdata)
 
-    return pd.concat(results, axis=0, ignore_index=True)
+    if counts_cache_dir is not None:
+        LOGGER.info(
+            "Counts cache: %s hits, %s misses (cache dir: %s).",
+            n_cache_hits,
+            n_cache_misses,
+            counts_cache_dir,
+        )
+
+    result = pd.concat(results, axis=0, ignore_index=True)
+    if h3_split_level != 3:
+        LOGGER.info(
+            "H3 L%s cells computed directly from sample coordinates.", h3_split_level
+        )
+    return result
 
 
 def attach_legend_labels(df: pd.DataFrame, legend: pd.DataFrame) -> pd.DataFrame:
@@ -423,24 +613,35 @@ def _normalize_h3_cell(cell: object) -> Optional[str]:
     return cell_str
 
 
-def build_h3_parent_map(h3_cells: Iterable[object]) -> pd.DataFrame:
-    """Build a mapping of H3 L3 -> L2/L1 cells (keeps original L3 values)."""
-    rows: List[Tuple[object, str, str]] = []
+def build_h3_parent_map(h3_cells: Iterable[object], split_level: int = 3) -> pd.DataFrame:
+    """Build a mapping from split-level H3 cells to their parent cells.
+
+    Always produces ``h3_l1_cell`` (H3 resolution 1) and ``h3_seed_cell``
+    (at ``max(1, split_level - 1)``), which is used by
+    :func:`select_initial_cells` as the geographic grouping unit for seeding
+    initial val/test cells.  Using ``split_level - 1`` keeps the seeding
+    density proportionally consistent across resolutions: each seed-level
+    cell contains roughly the same number (~7) of split-level candidates
+    regardless of what split level is requested.
+
+    Examples:
+    - ``split_level=5`` → ``h3_seed_cell`` at L4 (~2\u202f500 km² per cell)
+    - ``split_level=3`` → ``h3_seed_cell`` at L2 (~86\u202f000 km² per cell)
+    - ``split_level=2`` → ``h3_seed_cell`` at L1 (~4\u202f000\u202f000 km² per cell)
+    """
+    seed_level = max(1, split_level - 1)
+    rows: List = []
     for cell in h3_cells:
         cell_norm = _normalize_h3_cell(cell)
         if not cell_norm:
             continue
         try:
-            rows.append(
-                (
-                    cell,
-                    h3.cell_to_parent(cell_norm, 2),
-                    h3.cell_to_parent(cell_norm, 1),
-                )
-            )
+            l1 = h3.cell_to_parent(cell_norm, 1)
+            seed = l1 if seed_level == 1 else h3.cell_to_parent(cell_norm, seed_level)
+            rows.append((cell, seed, l1))
         except Exception:
             continue
-    return pd.DataFrame(rows, columns=["h3_l3_cell", "h3_l2_cell", "h3_l1_cell"])
+    return pd.DataFrame(rows, columns=["h3_l3_cell", "h3_seed_cell", "h3_l1_cell"])
 
 
 def _class_set_by_cell(
@@ -487,6 +688,7 @@ def build_cell_stats(
     lc_col: str = "lc10_class",
     ct_col: str = "ct27_class",
     ignore_label: str = IGNORE_LABEL,
+    h3_split_level: int = 3,
 ) -> Tuple[pd.DataFrame, ClassSets, ClassTargets]:
     """Build per-cell summaries and class sets for split selection."""
     df = counts_df.copy()
@@ -498,7 +700,7 @@ def build_cell_stats(
     df["both_ignore"] = ~df["lc_valid"] & ~df["ct_valid"]
     df["is_recent_year"] = df["year"].isin(recent_years)
 
-    h3_map = build_h3_parent_map(df["h3_l3_cell"].unique())
+    h3_map = build_h3_parent_map(df["h3_l3_cell"].unique(), split_level=h3_split_level)
     df = df.merge(h3_map, on="h3_l3_cell", how="left")
 
     non_train = df[~df["is_train_only"]]
@@ -628,15 +830,39 @@ def build_cell_stats(
 
 def select_initial_cells(
     cell_summary: pd.DataFrame,
+    h3_split_level: int = 3,
 ) -> Tuple[Set[object], Set[object], int]:
-    """Select initial val/test cells by ranking within each H3 L1 cell."""
+    """Select one val and one test seed per H3 seed-level cell.
+
+    Cells are grouped at ``max(1, h3_split_level - 1)`` — one resolution
+    level coarser than the requested split level.  Each seed group contains
+    roughly 7 split-level candidates (the H3 hierarchy scales by ~7x per
+    level), so the seeding density is proportionally consistent regardless
+    of split level.  For example:
+
+    - ``h3_split_level=5`` → group at L4 (~2\u202f500 km²): France gets ~220 seeds,
+      Austria gets ~33 — proportional to geographic extent.
+    - ``h3_split_level=3`` → group at L2 (~86\u202f000 km²): France gets ~6 seeds,
+      Austria gets ~1.
+
+    Within each group the two cells with the highest class diversity
+    (LC + CT classes, breaking ties by recent samples, total samples,
+    then cell ID) are assigned as test and val seeds respectively.
+    """
+    seed_level = max(1, h3_split_level - 1)
+    LOGGER.info(
+        "Seeding initial val/test cells grouped by H3 L%s cells "
+        "(split level L%s − 1).",
+        seed_level,
+        h3_split_level,
+    )
     val_cells: Set[object] = set()
     test_cells: Set[object] = set()
-    missing_level1 = 0
-    for _, group in cell_summary.groupby("h3_l1_cell"):
+    missing_groups = 0
+    for _, group in cell_summary.groupby("h3_seed_cell"):
         eligible = group[group["total_labeled_samples"] > 0]
         if len(eligible) < 2:
-            missing_level1 += 1
+            missing_groups += 1
             continue
         ranked = eligible.sort_values(
             [
@@ -652,7 +878,7 @@ def select_initial_cells(
         val_cell = ranked.iloc[1]["h3_l3_cell"]
         test_cells.add(test_cell)
         val_cells.add(val_cell)
-    return val_cells, test_cells, missing_level1
+    return val_cells, test_cells, missing_groups
 
 
 def _coverage(
@@ -1269,19 +1495,59 @@ def write_sample_splits_parquet(
     train_only_ref_ids: Sequence[str],
     exclude_ewoc_code: int = 1000000000,
     ignore_label: str = IGNORE_LABEL,
+    h3_split_level: int = 3,
 ) -> None:
-    """Write sample_id -> split parquet with train-only leakage protection."""
+    """Write sample_id -> split parquet with train-only leakage protection.
+
+    For ``h3_split_level == 3`` the stored ``h3_l3_cell`` column is joined
+    directly.  For any other resolution the H3 cell is computed on-the-fly
+    from each sample's geometry using the ``h3_latlng_to_cell`` DuckDB UDF
+    registered by :func:`init_duckdb_connection`.  This works for both coarser
+    (L1/L2) and finer (L4/L5+) targets.
+    """
     if not extraction_paths:
         raise ValueError("No extraction files found. Check the input glob.")
 
-    cell_splits_df = pd.DataFrame(
-        [
-            *[(cell, "val") for cell in sorted(val_cells, key=str)],
-            *[(cell, "test") for cell in sorted(test_cells, key=str)],
-        ],
-        columns=["h3_l3_cell", "split"],
-    )
-    conn.register("cell_splits", cell_splits_df)
+    paths_sql = ", ".join(_sql_quote(p) for p in extraction_paths)
+    conn.sql("set enable_progress_bar=false")
+
+    extra_cell_col = ""  # populated below for h3_split_level != 3
+
+    if h3_split_level == 3:
+        # Fast path: join directly on the stored h3_l3_cell column.
+        cell_splits_df = pd.DataFrame(
+            [
+                *[(cell, "val") for cell in sorted(val_cells, key=str)],
+                *[(cell, "test") for cell in sorted(test_cells, key=str)],
+            ],
+            columns=["h3_l3_cell", "split"],
+        )
+        conn.register("cell_splits", cell_splits_df)
+        split_join_sql = "left join cell_splits cs on samples.h3_l3_cell = cs.h3_l3_cell"
+    else:
+        # Any resolution other than L3: compute the split cell from sample geometry
+        # via the h3_latlng_to_cell DuckDB UDF.  Works for both coarser (L1/L2)
+        # and finer (L4/L5+) targets — no Python loop needed.
+        LOGGER.info(
+            "Computing H3 L%s cells from sample geometry for split assignment.",
+            h3_split_level,
+        )
+        cell_splits_df = pd.DataFrame(
+            [
+                *[(str(cell), "val") for cell in sorted(val_cells, key=str)],
+                *[(str(cell), "test") for cell in sorted(test_cells, key=str)],
+            ],
+            columns=["split_cell", "split"],
+        )
+        conn.register("cell_splits", cell_splits_df)
+        extra_cell_col = (
+            "h3_latlng_to_cell(\n"
+            "               ST_Y(ST_PointOnSurface(ST_GeomFromWKB(t.geometry))),\n"
+            "               ST_X(ST_PointOnSurface(ST_GeomFromWKB(t.geometry))),\n"
+            f"               {h3_split_level}\n"
+            "           ) as h3_computed_cell,\n           "
+        )
+        split_join_sql = "left join cell_splits cs on samples.h3_computed_cell = cs.split_cell"
 
     train_only_df = pd.DataFrame({"ref_id": list(train_only_ref_ids)})
     conn.register("train_only", train_only_df)
@@ -1292,8 +1558,6 @@ def write_sample_splits_parquet(
     lc10_values = ", ".join(
         f"({_sql_quote(k)}, {_sql_quote(v)})" for k, v in landcover_mapping.items()
     )
-    paths_sql = ", ".join(_sql_quote(p) for p in extraction_paths)
-    conn.sql("set enable_progress_bar=false")
     query = f"""
     with ct27_map(ewoc_code, ct27_class) as (
         values
@@ -1306,9 +1570,16 @@ def write_sample_splits_parquet(
     samples as (
         select distinct t.sample_id,
                t.h3_l3_cell,
-               lc10_class,
+               {extra_cell_col}lc10_class,
                ct27_class,
-               regexp_extract(filename, '([^/]+)\\\\.parquet$', 1) as ref_id
+               coalesce(
+                   -- Hive-style: ref_id=<value>/
+                   nullif(regexp_extract(filename, 'ref_id=([^/]+)/', 1), ''),
+                   -- Bare-folder: YYYY_COUNTRY_.../file.parquet
+                   nullif(regexp_extract(filename, '/(\d{4}_[^/]+)/[^/]+\\.parquet$', 1), ''),
+                   -- Flat: YYYY_COUNTRY_....parquet
+                   regexp_extract(filename, '([^/]+)\\\\.parquet$', 1)
+               ) as ref_id
         from read_parquet([{paths_sql}], filename=true) as t
         left join ct27_map m
             on cast(t.ewoc_code as varchar) = m.ewoc_code
@@ -1325,10 +1596,34 @@ def write_sample_splits_parquet(
                else cs.split
            end as split
     from samples
-    left join cell_splits cs on samples.h3_l3_cell = cs.h3_l3_cell
+    {split_join_sql}
     left join train_only tr on samples.ref_id = tr.ref_id
     """
+    if h3_split_level != 3:
+        # The COPY query calls the h3_latlng_to_cell UDF on every row.
+        # Re-enable DuckDB's own progress bar so the user can see it progressing.
+        conn.sql("set enable_progress_bar=true")
+        LOGGER.info(
+            "Writing split assignments (H3 L%s cells computed from geometry) — "
+            "DuckDB progress bar enabled for this step.",
+            h3_split_level,
+        )
     conn.sql(f"copy ({query}) to '{output_path}' (format 'parquet')")
+    if h3_split_level != 3:
+        conn.sql("set enable_progress_bar=false")
+    n_written = conn.sql(f"select count(*) from read_parquet('{output_path}')").fetchone()[0]
+    n_val_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'val'").fetchone()[0]
+    n_test_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'test'").fetchone()[0]
+    n_train_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'train'").fetchone()[0]
+    LOGGER.info(
+        "Written %s samples to %s: train=%s val=%s test=%s ignore=%s",
+        n_written,
+        output_path,
+        n_train_written,
+        n_val_written,
+        n_test_written,
+        n_written - n_train_written - n_val_written - n_test_written,
+    )
 
 
 def main(
@@ -1343,8 +1638,31 @@ def main(
     train_only_ref_ids: Sequence[str] = TRAIN_ONLY_REF_IDS,
     sharepoint_site_url: Optional[str] = None,
     sharepoint_file_url: Optional[str] = None,
+    h3_split_level: int = 3,
+    counts_cache_dir: Optional[Path] = None,
+    force_recompute: bool = False,
 ) -> None:
-    """Build unified H3-based splits for CROPTYPE27 and LANDCOVER10 datasets."""
+    """Build unified H3-based splits for CROPTYPE27 and LANDCOVER10 datasets.
+
+    Parameters
+    ----------
+    h3_split_level : int, optional
+        H3 resolution at which geographic splits are assigned (default 3).
+        Use a coarser level (1–2) for larger hold-out regions; use a finer
+        level (4–5+) for tighter spatial splits.  For level 3 the stored
+        ``h3_l3_cell`` column is used directly.  For any other level the
+        H3 cell is computed from each sample's lat/lon coordinates via
+        ``h3.latlng_to_cell``, so arbitrary resolutions 1–15 are supported.
+    counts_cache_dir : Path, optional
+        Directory for per-dataset counts cache.  Cached files are reused
+        when they are newer than their source parquets.  Disabled by default.
+    force_recompute : bool, optional
+        Ignore existing cache files and recompute all counts (default False).
+    """
+    if not (1 <= h3_split_level <= 15):
+        raise ValueError(
+            f"h3_split_level must be a valid H3 resolution between 1 and 15; got {h3_split_level}."
+        )
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -1364,6 +1682,9 @@ def main(
         croptype_mapping,
         landcover_mapping,
         world_bounds_path=world_bounds_path,
+        h3_split_level=h3_split_level,
+        counts_cache_dir=counts_cache_dir,
+        force_recompute=force_recompute,
     )
     if include_legend:
         legend = load_legend(legend_url)
@@ -1375,9 +1696,10 @@ def main(
         counts_df,
         train_only_ref_ids=train_only_ref_ids,
         recent_years=RECENT_YEARS,
+        h3_split_level=h3_split_level,
     )
 
-    val_cells, test_cells, missing_level1 = select_initial_cells(cell_summary)
+    val_cells, test_cells, missing_groups = select_initial_cells(cell_summary, h3_split_level)
     all_cells = set(cell_summary["h3_l3_cell"])
     train_cells = all_cells - val_cells - test_cells
 
@@ -1508,6 +1830,8 @@ def main(
     )
 
     total_l1 = cell_summary["h3_l1_cell"].nunique()
+    seed_level = max(1, h3_split_level - 1)
+    total_seed_cells = cell_summary["h3_seed_cell"].nunique()
     total_lc_nt = len(class_targets["lc_non_trainonly"])
     total_ct_nt = len(class_targets["ct_non_trainonly"])
     total_lc_all = len(class_targets["lc_all"])
@@ -1523,11 +1847,12 @@ def main(
         ].sum()
     )
 
-    if missing_level1:
+    if missing_groups:
         LOGGER.info(
-            "%s H3 L1 cells lack enough data for val/test (out of %s).",
-            missing_level1,
-            total_l1,
+            "%s H3 L%s seed cells lack enough data for val/test seeding (out of %s).",
+            missing_groups,
+            seed_level,
+            total_seed_cells,
         )
     if region_missing_test:
         LOGGER.warning(
@@ -1580,6 +1905,7 @@ def main(
         test_cells,
         output_path,
         train_only_ref_ids,
+        h3_split_level=h3_split_level,
     )
 
 
