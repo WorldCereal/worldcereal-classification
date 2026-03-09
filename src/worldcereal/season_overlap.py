@@ -195,11 +195,24 @@ def merge_seasons(
     nodata_val: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Where seasons are NOT distinct (distinct==0):
-      - Mask S2 SOS and S2 EOS with nodata_val
-      - Expand S1 EOS to max(S1_EOS, S2_EOS) accounting for wrap-around
+    Where seasons are NOT distinct (distinct==0), expand the longer of S1/S2
+    symmetrically to exactly 365 days and store the result as the merged S1 season.
+    S2 is masked with nodata_val.
 
-    Where distinct==1 or nodata (255): keep original values.
+    Strategy
+    --------
+    1. Compute the length-of-season (LOS) for both S1 and S2 in absolute days
+       (cross-year wrap handled by adding 365 when EOS < SOS).
+    2. Choose the season with the greater LOS as the *base* season.
+    3. Calculate padding = 365 - base_LOS  (split evenly: floor(pad/2) on the
+       SOS side, ceil(pad/2) on the EOS side so the total is always exactly 365).
+    4. The merged SOS = base_SOS - pad_sos  (in DOY, wrapping into previous year
+       if needed, but stored mod 365 in the 1-365 range).
+    5. The merged EOS is implied: base_EOS + pad_eos, similarly wrapped.
+    6. Where base_LOS >= 365 already (degenerate near-full-year season), no
+       expansion is done — the season is kept at 365 days exactly.
+
+    Where distinct==1 or nodata (255): keep original values unchanged.
 
     Returns
     -------
@@ -207,31 +220,46 @@ def merge_seasons(
     """
     not_distinct = distinct == 0  # pixels to merge
 
-    s1_sos_out = s1_sos.copy()
-    s2_sos_out = s2_sos.copy()
-    s2_eos_out = s2_eos.copy()
-
-    # Expand S1 EOS: use the later of S1_EOS and S2_EOS.
-    # For wrap-around: convert to "days since S1_SOS", pick max, convert back.
     s1_sos_f = s1_sos.astype(np.float32)
     s1_eos_f = s1_eos.astype(np.float32)
+    s2_sos_f = s2_sos.astype(np.float32)
     s2_eos_f = s2_eos.astype(np.float32)
 
-    # Expand eos to same reference (days since s1_sos)
-    s1_eos_exp = np.where(s1_eos_f < s1_sos_f, s1_eos_f + 365.0, s1_eos_f)
-    s2_eos_exp = np.where(s2_eos_f < s1_sos_f, s2_eos_f + 365.0, s2_eos_f)
+    # --- Absolute LOS for each season (handle cross-year wrap per season) ---
+    s1_eos_abs = np.where(s1_eos_f < s1_sos_f, s1_eos_f + 365.0, s1_eos_f)
+    s2_eos_abs = np.where(s2_eos_f < s2_sos_f, s2_eos_f + 365.0, s2_eos_f)
+    s1_los = s1_eos_abs - s1_sos_f   # float, may be 0 for degenerate pixels
+    s2_los = s2_eos_abs - s2_sos_f
 
-    # Take the later end-of-season
-    merged_eos_exp = np.maximum(s1_eos_exp, s2_eos_exp)
+    # --- Choose the longer season as the base ---
+    s1_is_longer = s1_los >= s2_los
+    base_sos = np.where(s1_is_longer, s1_sos_f, s2_sos_f)
+    base_los = np.where(s1_is_longer, s1_los, s2_los)
 
-    # Wrap back to 1-365 range
-    merged_eos = np.where(merged_eos_exp > 365, merged_eos_exp - 365.0, merged_eos_exp)
-    merged_eos = np.round(merged_eos).astype(np.int16)
+    # --- Compute symmetric padding to reach 365 days ---
+    # Clamp base_los to 365 so we never get negative padding.
+    base_los_clamped = np.minimum(base_los, 365.0)
+    padding = 365.0 - base_los_clamped
+    pad_sos = np.floor(padding / 2.0)    # days pulled earlier on SOS side
+    pad_eos = padding - pad_sos          # days pushed later on EOS side (ceil)
 
-    # Apply only where not distinct
-    s1_eos_out = np.where(not_distinct, merged_eos, s1_eos).astype(np.int16)
+    # --- New SOS: pull back by pad_sos, wrap into 1-365 range ---
+    new_sos_raw = base_sos - pad_sos
+    # Wrap: if new_sos_raw <= 0, it crossed Jan 1 into previous year
+    new_sos = np.where(new_sos_raw <= 0, new_sos_raw + 365.0, new_sos_raw)
+    new_sos = np.round(new_sos).astype(np.int16)
 
-    # Mask S2 with nodata where not distinct
+    # --- New EOS: base_EOS (abs) + pad_eos, wrap into 1-365 range ---
+    base_eos_abs = base_sos + base_los_clamped
+    new_eos_abs = base_eos_abs + pad_eos
+    new_eos_raw = np.where(new_eos_abs > 365.0, new_eos_abs - 365.0, new_eos_abs)
+    new_eos = np.round(new_eos_raw).astype(np.int16)
+
+    # --- Apply only where not distinct ---
+    s1_sos_out = np.where(not_distinct, new_sos, s1_sos).astype(np.int16)
+    s1_eos_out = np.where(not_distinct, new_eos, s1_eos).astype(np.int16)
+
+    # --- Mask S2 with nodata where not distinct ---
     s2_sos_out = np.where(not_distinct, nodata_val, s2_sos).astype(np.int16)
     s2_eos_out = np.where(not_distinct, nodata_val, s2_eos).astype(np.int16)
 
@@ -349,8 +377,18 @@ def run_season_overlap_pipeline(
 
     s1_los_before = _compute_los(s1_sos, s1_eos, nodata_val=nodata_val)
     s2_los_before = _compute_los(s2_sos, s2_eos, nodata_val=nodata_val)
-    s1_los_after  = _compute_los(s1_sos_m, s1_eos_m, nodata_val=nodata_val)
-    s2_los_after  = _compute_los(s2_sos_m, s2_eos_m, nodata_val=nodata_val)
+
+    # S1_LOS_after: the merged season is always exactly 365 days for non-distinct
+    # pixels (by construction in merge_seasons). For distinct pixels the original
+    # S1 season is unchanged. Use _compute_los on the merged arrays but guard
+    # against the degenerate wrap case where merged SOS ≈ merged EOS by using
+    # the known 365-day result directly where not_distinct.
+    nd_mask_s1 = (s1_sos == nodata_val) | (s1_eos == nodata_val)
+    not_distinct_mask = (distinct == 0) & ~nd_mask_s1
+    s1_los_after = _compute_los(s1_sos, s1_eos, nodata_val=nodata_val)  # start from before
+    s1_los_after = np.where(not_distinct_mask, 365, s1_los_after).astype(np.int16)
+
+    s2_los_after = _compute_los(s2_sos_m, s2_eos_m, nodata_val=nodata_val)
 
     for name, arr in [
         ("S1_LOS_before", s1_los_before),
