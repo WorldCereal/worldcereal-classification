@@ -362,9 +362,8 @@ AND ewoc_code IN ({ct_list_str})
             collateral_condition = collateral_query_part.replace(
                 "AND ", "WHERE " if not cropland_condition else "AND ", 1
             )
-
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 {spatial_condition}
 {cropland_condition}
@@ -508,11 +507,10 @@ AND ewoc_code > 1100000000
         cropland_filter_query_part += f"""
 {prefix} ewoc_code IN ({ct_list_str})
 """
-
     main_query = "SET TimeZone = 'UTC';\n"
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{tpath}')
 {spatial_query_part}
 {cropland_filter_query_part}
