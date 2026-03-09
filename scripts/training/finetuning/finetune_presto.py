@@ -703,9 +703,9 @@ def main(args):
 
     # Training parameters
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
-    epochs = 50
+    epochs = 100
     batch_size = args.batch_size
-    patience = 10
+    patience = 20
     num_workers = 8
 
     # ------------------------------------------
