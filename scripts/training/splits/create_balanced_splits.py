@@ -12,17 +12,26 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
-                    Tuple, TypedDict, cast)
+from typing import (
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from worldcereal.utils.sharepoint import (build_class_mappings,
-                                          get_excel_from_sharepoint,
-                                          load_class_mappings_with_cache)
+
+from worldcereal.utils.sharepoint import load_class_mappings_with_cache
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -1829,7 +1838,6 @@ def main(
         train_cells, class_sets["ct_train"]
     )
 
-    total_l1 = cell_summary["h3_l1_cell"].nunique()
     seed_level = max(1, h3_split_level - 1)
     total_seed_cells = cell_summary["h3_seed_cell"].nunique()
     total_lc_nt = len(class_targets["lc_non_trainonly"])
