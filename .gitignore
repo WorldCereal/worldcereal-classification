@@ -10,6 +10,7 @@ tmp
 *.pkl
 *.mep2
 *.tig
+*.tif
 *.jp2
 *.npy
 *.kml
