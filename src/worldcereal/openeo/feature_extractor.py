@@ -8,7 +8,7 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import xarray as xr
@@ -16,19 +16,17 @@ from openeo.metadata import CollectionMetadata
 from openeo.udf import XarrayDataCube
 from openeo.udf.udf_data import UdfData
 from pyproj import Transformer
-from pyproj.crs import CRS
 from scipy.ndimage import (
     convolve,
     zoom,
 )
-from shapely.geometry import Point
-from shapely.ops import transform
 
 sys.path.append("feature_deps")
 
+
 import torch  # noqa: E402
 
-PROMETHEO_WHL_URL = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/dependencies/prometheo-0.0.3-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
@@ -47,6 +45,8 @@ GFMAP_BAND_MAPPING = {
     "AGERA5-PRECIP": "total_precipitation",
 }
 
+S1_INPUT_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH"]
+NODATA_VALUE = 65535
 LAT_HARMONIZED_NAME = "GEO-LAT"
 LON_HARMONIZED_NAME = "GEO-LON"
 EPSG_HARMONIZED_NAME = "GEO-EPSG"
@@ -93,194 +93,6 @@ def compile_encoder(presto_encoder):
         )
 
     return presto_encoder
-
-
-def evaluate_resolution(inarr: xr.DataArray, epsg: int) -> int:
-    """Helper function to get the resolution in meters for
-    the input array.
-
-    Parameters
-    ----------
-    inarr : xr.DataArray
-        input array to determine resolution for.
-
-    Returns
-    -------
-    int
-        resolution in meters.
-    """
-
-    if epsg == 4326:
-        logger.info(
-            "Converting WGS84 coordinates to EPSG:3857 to determine resolution."
-        )
-
-        transformer = Transformer.from_crs(epsg, 3857, always_xy=True)
-        points = [Point(x, y) for x, y in zip(inarr.x.values, inarr.y.values)]
-        points = [transform(transformer.transform, point) for point in points]
-
-        resolution = abs(points[1].x - points[0].x)
-
-    else:
-        resolution = abs(inarr.x[1].values - inarr.x[0].values)
-
-    logger.info(f"Resolution for computing slope: {resolution}")
-
-    return resolution
-
-
-def compute_slope(inarr: xr.DataArray, resolution: int) -> xr.DataArray:
-    """Computes the slope using the scipy library. The input array should
-    have the following bands: 'elevation' And no time dimension. Returns a
-    new DataArray containing the new `slope` band.
-
-    Parameters
-    ----------
-    inarr : xr.DataArray
-        input array containing a band 'elevation'.
-    resolution : int
-        resolution of the input array in meters.
-
-    Returns
-    -------
-    xr.DataArray
-        output array containing 'slope' band in degrees.
-    """
-
-    def _rolling_fill(darr, max_iter=2):
-        """Helper function that also reflects values inside
-        a patch with NaNs."""
-        if max_iter == 0:
-            return darr
-        else:
-            max_iter -= 1
-        # arr of shape (rows, cols)
-        mask = np.isnan(darr)
-
-        if ~np.any(mask):
-            return darr
-
-        roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]
-        random.shuffle(roll_params)
-
-        for roll_param in roll_params:
-            rolled = np.roll(darr, roll_param, axis=(0, 1))
-            darr[mask] = rolled[mask]
-
-        return _rolling_fill(darr, max_iter=max_iter)
-
-    def _downsample(arr: np.ndarray, factor: int) -> np.ndarray:
-        """Downsamples a 2D NumPy array by a given factor with average resampling and reflect padding.
-
-        Parameters
-        ----------
-        arr : np.ndarray
-            The 2D input array.
-        factor : int
-            The factor by which to downsample. For example, factor=2 downsamples by 2x.
-
-        Returns
-        -------
-        np.ndarray
-            Downsampled array.
-        """
-
-        # Get the original shape of the array
-        X, Y = arr.shape
-
-        # Calculate how much padding is needed for each dimension
-        pad_X = (
-            factor - (X % factor)
-        ) % factor  # Ensures padding is only applied if needed
-        pad_Y = (
-            factor - (Y % factor)
-        ) % factor  # Ensures padding is only applied if needed
-
-        # Pad the array using 'reflect' mode
-        padded = np.pad(arr, ((0, pad_X), (0, pad_Y)), mode="reflect")
-
-        # Reshape the array to form blocks of size 'factor' x 'factor'
-        reshaped = padded.reshape(
-            (X + pad_X) // factor, factor, (Y + pad_Y) // factor, factor
-        )
-
-        # Take the mean over the factor-sized blocks
-        downsampled = np.nanmean(reshaped, axis=(1, 3))
-
-        return downsampled
-
-    dem = inarr.sel(bands="elevation").values
-    dem_arr = dem.astype(np.float32)
-
-    # Invalid to NaN and keep track of these pixels
-    dem_arr[dem_arr == 65535] = np.nan
-    idx_invalid = np.isnan(dem_arr)
-
-    # Fill NaNs with rolling fill
-    dem_arr = _rolling_fill(dem_arr)
-
-    # We make sure DEM is at 20m for slope computation
-    # compatible with global slope collection
-    factor = int(20 / resolution)
-    if factor < 1 or factor % 2 != 0:
-        raise NotImplementedError(
-            f"Unsupported resolution for slope computation: {resolution}"
-        )
-    dem_arr_downsampled = _downsample(dem_arr, factor)
-    x_odd, y_odd = dem_arr.shape[0] % 2 != 0, dem_arr.shape[1] % 2 != 0
-
-    # Mask NaN values in the DEM data
-    dem_masked = np.ma.masked_invalid(dem_arr_downsampled)
-
-    # Define convolution kernels for x and y gradients (simple finite difference approximation)
-    kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (
-        8.0 * 20  # array is now at 20m resolution
-    )  # x-derivative kernel
-
-    kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (
-        8.0 * 20  # array is now at 20m resolution
-    )  # y-derivative kernel
-
-    # Apply convolution to compute gradients
-    dx = convolve(dem_masked, kernel_x)  # Gradient in the x-direction
-    dy = convolve(dem_masked, kernel_y)  # Gradient in the y-direction
-
-    # Reapply the mask to the gradients
-    dx = np.ma.masked_where(dem_masked.mask, dx)
-    dy = np.ma.masked_where(dem_masked.mask, dy)
-
-    # Calculate the magnitude of the gradient (rise/run)
-    gradient_magnitude = np.ma.sqrt(dx**2 + dy**2)
-
-    # Convert gradient magnitude to slope (in degrees)
-    slope = np.ma.arctan(gradient_magnitude) * (180 / np.pi)
-
-    # Upsample to original resolution with bilinear interpolation
-    mask = slope.mask
-    mask = zoom(mask, zoom=factor, order=0)
-    slope = zoom(slope, zoom=factor, order=1)
-    slope[mask] = 65535
-
-    # Strip one row or column if original array was odd in that dimension
-    if x_odd:
-        slope = slope[:-1, :]
-    if y_odd:
-        slope = slope[:, :-1]
-
-    # Fill slope values where the original DEM had NaNs
-    slope[idx_invalid] = 65535
-    slope[np.isnan(slope)] = 65535
-    slope = slope.astype(np.uint16)
-
-    return xr.DataArray(
-        slope[None, :, :],
-        dims=("bands", "y", "x"),
-        coords={
-            "bands": ["slope"],
-            "y": inarr.y,
-            "x": inarr.x,
-        },
-    )
 
 
 def select_timestep_from_temporal_features(
@@ -337,7 +149,12 @@ def extract_presto_embeddings(
     if "presto_model_url" not in parameters:
         raise ValueError('Missing required parameter "presto_model_url"')
 
-    presto_model_url = parameters.get("presto_model_url")
+    presto_model_url_raw = parameters.get("presto_model_url")
+    if not isinstance(presto_model_url_raw, str) or not presto_model_url_raw:
+        raise ValueError(
+            'Parameter "presto_model_url" must be provided as a non-empty string'
+        )
+    presto_model_url = presto_model_url_raw
     logger.info(f'Loading Presto model from "{presto_model_url}"')
     prometheo_wheel_url = parameters.get("prometheo_wheel_url", PROMETHEO_WHL_URL)
     logger.info(f'Loading Prometheo wheel from "{prometheo_wheel_url}"')
@@ -394,15 +211,6 @@ def extract_presto_embeddings(
         logger.info("Appending dependencies")
         sys.path.append(str(deps_dir))
 
-    if "slope" not in inarr.bands:
-        # If 'slope' is not present we need to compute it here
-        logger.warning("`slope` not found in input array. Computing ...")
-        resolution = evaluate_resolution(inarr.isel(t=0), epsg)
-        slope = compute_slope(inarr.isel(t=0), resolution)
-        slope = slope.expand_dims({"t": inarr.t}, axis=0).astype("float32")
-
-        inarr = xr.concat([inarr.astype("float32"), slope], dim="bands")
-
     batch_size = parameters.get("batch_size", 256)
     temporal_prediction = parameters.get("temporal_prediction", False)
     target_date = parameters.get("target_date", None)
@@ -419,6 +227,16 @@ def extract_presto_embeddings(
     # self.logger.info(f"Compile presto: {compile_presto}")
 
     logger.info("Loading Presto model for inference")
+
+    if presto_model_url.endswith(".zip"):
+        from worldcereal.utils.models import load_model_artifact
+
+        # Use load model artifact functionality to get path to model weights file
+        model_artifact = load_model_artifact(
+            presto_model_url,
+            encoder_only=True,
+        )
+        presto_model_url = str(model_artifact.checkpoint_path)
 
     # TODO: try to take run_model_inference from worldcereal
     from prometheo.datasets.worldcereal import run_model_inference
@@ -459,87 +277,195 @@ def extract_presto_embeddings(
     return features
 
 
-def get_latlons(inarr: xr.DataArray, epsg: int) -> xr.DataArray:
-    """Returns the latitude and longitude coordinates of the given array in
-    a dataarray. Returns a dataarray with the same width/height of the input
-    array, but with two bands, one for latitude and one for longitude. The
-    metadata coordinates of the output array are the same as the input
-    array, as the array wasn't reprojected but instead new features were
-    computed.
+# ---------------------------------------------------------------------------
+# DEM helpers reused from the legacy pipeline
+# ---------------------------------------------------------------------------
 
-    The latitude and longitude band names are standardized to the names
-    `LAT_HARMONIZED_NAME` and `LON_HARMONIZED_NAME` respectively.
-    """
 
-    lon = inarr.coords["x"]
-    lat = inarr.coords["y"]
-    lon, lat = np.meshgrid(lon, lat)
+class SlopeCalculator:
+    """Utility that computes slope layers from DEM inputs."""
 
-    if epsg is None:
-        raise Exception(
-            "EPSG code was not defined, cannot extract lat/lon array "
-            "as the CRS is unknown."
+    @staticmethod
+    def compute(resolution: float, dem: np.ndarray) -> np.ndarray:
+        prepared = SlopeCalculator._prepare_dem_array(dem)
+        downsampled = SlopeCalculator._downsample_to_20m(prepared, resolution)
+        gradient = SlopeCalculator._compute_slope_gradient(downsampled)
+        return SlopeCalculator._upsample_to_original(gradient, dem.shape, resolution)
+
+    @staticmethod
+    def _prepare_dem_array(dem: np.ndarray) -> np.ndarray:
+        dem_arr = dem.astype(np.float32)
+        dem_arr[dem_arr == NODATA_VALUE] = np.nan
+        return SlopeCalculator._fill_nans(dem_arr)
+
+    @staticmethod
+    def _fill_nans(dem_arr: np.ndarray, max_iter: int = 2) -> np.ndarray:
+        if max_iter == 0 or not np.any(np.isnan(dem_arr)):
+            return dem_arr
+
+        mask = np.isnan(dem_arr)
+        roll_params = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        random.shuffle(roll_params)
+
+        for shift_x, shift_y in roll_params:
+            rolled = np.roll(dem_arr, shift_x, axis=0)
+            rolled = np.roll(rolled, shift_y, axis=1)
+            dem_arr[mask] = rolled[mask]
+
+        return SlopeCalculator._fill_nans(dem_arr, max_iter - 1)
+
+    @staticmethod
+    def _downsample_to_20m(dem_arr: np.ndarray, resolution: float) -> np.ndarray:
+        factor = int(20 / resolution)
+        if factor < 1 or factor % 2 != 0:
+            raise ValueError(
+                f"Unsupported resolution for slope computation: {resolution}"
+            )
+
+        x_size, y_size = dem_arr.shape
+        pad_x = (factor - (x_size % factor)) % factor
+        pad_y = (factor - (y_size % factor)) % factor
+        padded = np.pad(dem_arr, ((0, pad_x), (0, pad_y)), mode="reflect")
+
+        reshaped = padded.reshape(
+            (x_size + pad_x) // factor, factor, (y_size + pad_y) // factor, factor
         )
+        return np.nanmean(reshaped, axis=(1, 3))
 
-    # If the coordiantes are not in EPSG:4326, we need to reproject them
-    if epsg != 4326:
-        # Initializes a pyproj reprojection object
-        transformer = Transformer.from_crs(
-            crs_from=CRS.from_epsg(epsg),
-            crs_to=CRS.from_epsg(4326),
-            always_xy=True,
-        )
-        lon, lat = transformer.transform(xx=lon, yy=lat)
+    @staticmethod
+    def _compute_slope_gradient(dem: np.ndarray) -> np.ndarray:
+        kernel_x = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]) / (8.0 * 20)
+        kernel_y = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]) / (8.0 * 20)
 
-    # Create a two channel numpy array of the lat and lons together by stacking
-    latlon = np.stack([lat, lon])
+        dx = convolve(dem, kernel_x, mode="nearest")
+        dy = convolve(dem, kernel_y, mode="nearest")
+        gradient = np.sqrt(dx**2 + dy**2)
+        return np.arctan(gradient) * (180 / np.pi)
 
-    # Repack in a dataarray
-    return xr.DataArray(
-        latlon,
-        dims=["bands", "y", "x"],
-        coords={
-            "bands": [LAT_HARMONIZED_NAME, LON_HARMONIZED_NAME],
-            "y": inarr.coords["y"],
-            "x": inarr.coords["x"],
-        },
-    )
+    @staticmethod
+    def _upsample_to_original(
+        slope: np.ndarray, original_shape: Tuple[int, int], resolution: float
+    ) -> np.ndarray:
+        factor = int(20 / resolution)
+        slope_upsampled = zoom(slope, zoom=factor, order=1)
+
+        if original_shape[0] % 2 != 0:
+            slope_upsampled = slope_upsampled[:-1, :]
+        if original_shape[1] % 2 != 0:
+            slope_upsampled = slope_upsampled[:, :-1]
+
+        return slope_upsampled.astype(np.uint16)
 
 
-def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-    """Rescales the input array from uint16 to float32 decibel values.
-    The input array should be in uint16 format, as this optimizes memory usage in Open-EO
-    processes. This function is called automatically on the bands of the input array, except
-    if the parameter `rescale_s1` is set to False.
-    """
-    s1_bands = ["S1-SIGMA0-VV", "S1-SIGMA0-VH", "S1-SIGMA0-HV", "S1-SIGMA0-HH"]
-    s1_bands_to_select = list(set(arr.bands.values) & set(s1_bands))
+class CoordinateTransformer:
+    """Minimal helpers for resolution estimation and coordinate transforms."""
 
-    if len(s1_bands_to_select) == 0:
+    @staticmethod
+    def get_resolution(arr: xr.DataArray, epsg: int) -> float:
+        if epsg == 4326:
+            transformer = Transformer.from_crs(4326, 3857, always_xy=True)
+            pts = [
+                transformer.transform(arr.x.values[i], arr.y.values[0])
+                for i in range(2)
+            ]
+            return abs(pts[1][0] - pts[0][0])
+        return abs(float(arr.x.values[1] - arr.x.values[0]))
+
+
+class DataPreprocessor:
+    """Apply harmonization/rescaling expected by the predictor builder."""
+
+    @staticmethod
+    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+        present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
+        if not present:
+            return arr
+        if not np.issubdtype(arr.dtype, np.floating):
+            # Allow negative dB values to be written back safely
+            arr = arr.astype("float32")
+        s1 = arr.sel(bands=present).astype(np.float32)
+        data = s1.values
+        nodata_mask = data == NODATA_VALUE
+        valid_mask = ~nodata_mask
+        scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
+        if np.any(valid_mask):
+            DataPreprocessor._validate_s1_data(data[valid_mask])
+            power = 20.0 * np.log10(data[valid_mask]) - 83.0
+            power = np.power(10, power / 10.0)
+            power[~np.isfinite(power)] = np.nan
+            scaled[valid_mask] = 10.0 * np.log10(power)
+        arr.loc[{"bands": present}] = scaled
         return arr
 
-    data_to_rescale = arr.sel(bands=s1_bands_to_select).astype(np.float32).data
+    @staticmethod
+    def _validate_s1_data(data: np.ndarray) -> None:
+        if data.min() < 1 or data.max() > NODATA_VALUE:
+            raise ValueError(
+                "S1 data expected as uint16 in range 1-65535 before rescaling."
+            )
 
-    # Assert that the values are set between 1 and 65535
-    if data_to_rescale.min().item() < 1 or data_to_rescale.max().item() > 65535:
-        raise ValueError(
-            "The input array should be in uint16 format, with values between 1 and 65535. "
-            "This restriction assures that the data was processed according to the S1 fetcher "
-            "preprocessor. The user can disable this scaling manually by setting the "
-            "`rescale_s1` parameter to False in the feature extractor."
+    @staticmethod
+    def add_slope_band(arr: xr.DataArray, epsg: int) -> xr.DataArray:
+        if "slope" in arr.bands.values:
+            return arr
+        if "COP-DEM" not in arr.bands.values:
+            logger.warning("DEM band missing; slope band cannot be created.")
+            return arr
+        resolution = CoordinateTransformer.get_resolution(arr.isel(t=0), epsg)
+        dem = arr.sel(bands="COP-DEM").isel(t=0).values
+        slope = SlopeCalculator.compute(resolution, dem)
+        slope_da = (
+            xr.DataArray(
+                slope[None, :, :],
+                dims=("bands", "y", "x"),
+                coords={"bands": ["slope"], "y": arr.y, "x": arr.x},
+            )
+            .expand_dims({"t": arr.t})
+            .astype("float32")
         )
+        return xr.concat([arr.astype("float32"), slope_da], dim="bands")
 
-    # Converting back to power values
-    data_to_rescale = 20.0 * np.log10(data_to_rescale) - 83.0
-    data_to_rescale = np.power(10, data_to_rescale / 10.0)
-    data_to_rescale[~np.isfinite(data_to_rescale)] = np.nan
 
-    # Converting power values to decibels
-    data_to_rescale = 10.0 * np.log10(data_to_rescale)
+def _prepare_array(
+    arr: xr.DataArray, epsg: int, rescale_s1: bool = True
+) -> xr.DataArray:
+    if "bands" not in arr.dims:
+        raise ValueError("Input DataArray must expose a 'bands' dimension")
+    reordered = arr.transpose("bands", "t", "y", "x")
+    if rescale_s1:
+        reordered = DataPreprocessor.rescale_s1_backscatter(reordered)
+    renamed_bands = [
+        GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
+    ]
+    reordered = reordered.assign_coords(bands=renamed_bands)
+    reordered = reordered.transpose("bands", "t", "x", "y")
+    reordered = DataPreprocessor.add_slope_band(reordered, epsg)
+    return reordered.fillna(NODATA_VALUE).astype(np.float32)
 
-    # Change the bands within the array
-    arr.loc[dict(bands=s1_bands_to_select)] = data_to_rescale
-    return arr
+
+# ---------------------------------------------------------------------------
+# openEO UDF integration hooks
+# ---------------------------------------------------------------------------
+
+
+def _require_openeo_runtime() -> None:
+    sys.path.insert(0, "feature_deps")
+    sys.path.insert(0, "worldcereallib")
+    sys.path.insert(0, "prometheolib")
+
+    try:
+        import prometheo
+        import torch
+
+        import worldcereal
+
+        logger.debug(f"Loading worldcereal from {worldcereal.__file__}")
+        logger.debug(f"Loading prometheo from {prometheo.__file__}")
+        logger.debug(f"Loading torch from {torch.__file__}")
+    except ImportError as exc:
+        raise ImportError(
+            "openEO UDF seasonal inference requires the worldcereal, prometheo, and loguru packages."
+        ) from exc
 
 
 # Below comes the actual UDF part
@@ -548,6 +474,8 @@ def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
 # Apply the Feature Extraction UDF
 def apply_udf_data(udf_data: UdfData) -> UdfData:
     """This is the actual openeo UDF that will be executed by the backend."""
+
+    _require_openeo_runtime()
 
     cube = udf_data.datacube_list[0]
     parameters = copy.deepcopy(udf_data.user_context)
@@ -563,10 +491,10 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     epsg = parameters.pop(EPSG_HARMONIZED_NAME)
     logger.info(f"EPSG code determined for feature extraction: {epsg}")
 
-    if parameters.get("rescale_s1", True):
-        arr = rescale_s1_backscatter(arr)
+    rescale_s1 = parameters.get("rescale_s1", True)
+    prepped = _prepare_array(arr, epsg, rescale_s1)
 
-    arr = extract_presto_embeddings(inarr=arr, parameters=parameters, epsg=epsg)
+    arr = extract_presto_embeddings(inarr=prepped, parameters=parameters, epsg=epsg)
 
     cube = XarrayDataCube(arr)
 
