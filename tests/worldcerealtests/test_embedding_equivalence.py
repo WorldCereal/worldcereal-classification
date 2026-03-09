@@ -15,13 +15,13 @@ from prometheo.models import Presto
 from prometheo.models.pooling import PoolingMethods
 from prometheo.predictors import Predictors
 
-from worldcereal.openeo.inference import load_model_artifact
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.train.backbone import build_presto_backbone
 from worldcereal.train.seasonal_head import (
     SeasonalFinetuningHead,
     WorldCerealSeasonalModel,
 )
+from worldcereal.utils.models import load_model_artifact
 
 
 @pytest.fixture
@@ -234,15 +234,15 @@ def test_embedding_equivalence(
     # Assert all methods produce identical embeddings
     max_diff = max(max_diff_1_2, max_diff_1_3, max_diff_2_3)
 
-    assert max_diff_1_2 < threshold, (
-        f"Standalone vs Seasonal.forward() embeddings differ by {max_diff_1_2:.6e} (threshold: {threshold:.0e})"
-    )
-    assert max_diff_1_3 < threshold, (
-        f"Standalone vs Seasonal.backbone embeddings differ by {max_diff_1_3:.6e} (threshold: {threshold:.0e})"
-    )
-    assert max_diff_2_3 < threshold, (
-        f"Seasonal.forward() vs Seasonal.backbone embeddings differ by {max_diff_2_3:.6e} (threshold: {threshold:.0e})"
-    )
+    assert (
+        max_diff_1_2 < threshold
+    ), f"Standalone vs Seasonal.forward() embeddings differ by {max_diff_1_2:.6e} (threshold: {threshold:.0e})"
+    assert (
+        max_diff_1_3 < threshold
+    ), f"Standalone vs Seasonal.backbone embeddings differ by {max_diff_1_3:.6e} (threshold: {threshold:.0e})"
+    assert (
+        max_diff_2_3 < threshold
+    ), f"Seasonal.forward() vs Seasonal.backbone embeddings differ by {max_diff_2_3:.6e} (threshold: {threshold:.0e})"
 
     # Success message when test passes
     print(
