@@ -1366,17 +1366,17 @@ class SeasonalInferenceEngine:
                 and cropland_mask_bool is not None
             )
             if gate_applicable:
-                assert (
-                    cropland_mask_bool is not None
-                ), "Cropland mask required when gating is enabled"
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
-                assert (
-                    cropland_mask_bool is not None
-                ), "Cropland mask required when gating is enabled"
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
@@ -1774,7 +1774,9 @@ def _quantize_embedding_cube(cube: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _get_scaled_ndvi(arr: xr.DataArray) -> np.ndarray:
-    ndvi_scale, ndvi_offset, ndvi_nodatavalue = 0.004, 0.08, 255
+
+    # Nodata value is NaN because openEO needs to deal with it later
+    ndvi_scale, ndvi_offset, ndvi_nodatavalue = 0.004, 0.08, np.nan
 
     band_names = [str(name) for name in np.asarray(arr.coords["bands"].values)]
     nir_band = "B8" if "B8" in band_names else "S2-L2A-B08"
@@ -1789,9 +1791,7 @@ def _get_scaled_ndvi(arr: xr.DataArray) -> np.ndarray:
     ndvi = (nir - red) / (nir + red)
     ndvi = np.clip(ndvi, -0.08, 0.92)
     ndvi_scaled = (ndvi + ndvi_offset) / ndvi_scale
-    ndvi_scaled = np.where(nodata_mask, ndvi_nodatavalue, ndvi_scaled).astype(
-        np.uint8, copy=False
-    )
+    ndvi_scaled = np.where(nodata_mask, ndvi_nodatavalue, ndvi_scaled)
 
     return ndvi_scaled
 
