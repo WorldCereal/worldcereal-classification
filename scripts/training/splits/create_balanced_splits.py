@@ -1613,6 +1613,19 @@ def write_sample_splits_parquet(
         n_written - n_train_written - n_val_written - n_test_written,
     )
 
+    # Write per-split CSV subsets into the same directory as the unified file.
+    output_dir = output_path.parent
+    for split_name in ("train", "val", "test", "ignore"):
+        csv_path = output_dir / f"{split_name}_samples.csv"
+        conn.sql(
+            f"copy (select * from read_parquet('{output_path}') "
+            f"where split = '{split_name}') to '{csv_path}' (format 'csv', header true)"
+        )
+        n_csv = conn.sql(
+            f"select count(*) from read_csv_auto('{csv_path}')"
+        ).fetchone()[0]
+        LOGGER.info("Written %s samples to %s", n_csv, csv_path)
+
 
 def main(
     extractions_glob: str = DEFAULT_EXTRACTS_GLOB,
@@ -1887,6 +1900,16 @@ def main(
         extraction_paths,
         croptype_mapping,
         landcover_mapping,
+        val_cells,
+        test_cells,
+        output_path,
+        train_only_ref_ids,
+        h3_split_level=h3_split_level,
+    )
+
+
+if __name__ == "__main__":
+    main()
         val_cells,
         test_cells,
         output_path,
