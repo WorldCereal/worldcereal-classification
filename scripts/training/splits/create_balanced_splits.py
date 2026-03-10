@@ -1,9 +1,68 @@
 #!/usr/bin/env python3
 """Build balanced train/val/test splits for landcover and croptype datasets.
 
-This script builds H3-based splits (level 3 primary), assigns splits to
-sample_ids, enforces class coverage per split for both LC and CT, and writes
-a unified parquet with sample_id -> split.
+This script produces geographically balanced train / val / test splits for
+WorldCereal's CROPTYPE and LANDCOVER classification tasks.  Splits are
+assigned at the level of H3 hexagonal grid cells (default resolution 3,
+~12 000 km² per cell) so that nearby samples always belong to the same split,
+preventing spatial data leakage.
+
+Conceptual workflow
+-------------------
+1. **Initialise DuckDB** – create an in-memory connection with the ``spatial``
+   extension and a custom ``h3_latlng_to_cell`` UDF that wraps the Python
+   ``h3`` library.
+
+2. **Load class mappings** – fetch CROPTYPE** and LANDCOVER** lookup tables
+   (EWOC numeric code → class label) from SharePoint or a local cache.
+
+3. **Discover extraction files** – expand a glob pattern to collect all
+   Parquet extraction files on disk.
+
+4. **Aggregate per-cell sample counts** – for each dataset (ref_id), run a
+   DuckDB SQL query that groups samples by H3 cell and EWOC code, determines
+   the country via a spatial join against world boundaries when the ref_id is
+   ambiguous, maps countries to macro-regions, and translates EWOC codes to
+   CT/LC classes.  Results are cached per dataset for fast re-runs.
+
+5. **Attach legend labels & normalise** – optionally enrich class labels with
+   human-readable names from the WorldCereal legend, and replace unmapped
+   codes with the ``ignore`` class.
+
+6. **Build cell statistics** – compute a per-H3-cell summary (total / recent
+   sample counts, class diversity) and build cell → class-set dictionaries
+   that separate *train-only* datasets (those in ``TRAIN_ONLY_REF_IDS``) from
+   datasets eligible for val/test.
+
+7. **Select initial seed cells** – group cells by their H3 parent at one
+   resolution coarser than the split level.  Within each group pick the two
+   most class-diverse cells as test and val seeds, giving a geographically
+   well-distributed initial skeleton.
+
+8. **Add cells for region-level class coverage** – for test first, then val,
+   greedily add cells from the remaining train pool until every macro-region
+   contains representatives of all its LC and CT classes.
+
+9. **Ensure recent-year samples in test** – if the test split lacks samples
+   from recent years (≥ 2021), move cells with recent data from train to test.
+
+10. **Add cells for global class coverage** – greedily add cells to test and
+    val to cover any LC/CT classes still missing globally.
+
+11. **Ensure train coverage** – if train lost coverage of any class (including
+    train-only classes), attempt to move cells back from val/test without
+    breaking those splits' coverage guarantees.
+
+12. **Budget correction** – iteratively move cells between splits to bring
+    sample counts within ±2 % of the target 70/15/15 ratio (tunable), while respecting
+    all class-coverage and recent-sample constraints.
+
+13. **Write output** – produce a unified Parquet file mapping every
+    ``sample_id`` to its split (``train``, ``val``, ``test``, or ``ignore``).
+    Samples from train-only datasets that land in a val/test cell are marked
+    ``ignore`` as a leakage guard.  Additionally, four per-split CSV files
+    (``train_samples.csv``, ``val_samples.csv``, ``test_samples.csv``,
+    ``ignore_samples.csv``) are written to the same output directory.
 """
 
 from __future__ import annotations
@@ -574,6 +633,26 @@ def normalize_class_labels(
 ) -> pd.DataFrame:
     """Ensure class label columns have a consistent ignore label."""
     df = df.copy()
+
+    # Detect samples that could not be mapped to either LC or CT class.
+    unmapped_mask = df[lc_col].isna() & df[ct_col].isna()
+    if unmapped_mask.any():
+        unmapped = df.loc[unmapped_mask]
+        n_samples = int(unmapped["sample_count"].sum()) if "sample_count" in unmapped.columns else len(unmapped)
+        unique_ewoc = sorted(unmapped["ewoc_code"].dropna().unique().tolist()) if "ewoc_code" in unmapped.columns else []
+        unique_labels = sorted(unmapped["label_full"].dropna().unique().tolist()) if "label_full" in unmapped.columns else []
+        LOGGER.warning(
+            "Found %s samples with no LC or CT mapping — they will be treated "
+            "as '%s' and will not participate in splits. "
+            "Unique ewoc_codes (%s): %s | Unique label_full (%s): %s",
+            n_samples,
+            ignore_label,
+            len(unique_ewoc),
+            unique_ewoc,
+            len(unique_labels),
+            unique_labels,
+        )
+
     df[lc_col] = df[lc_col].fillna(ignore_label)
     df[ct_col] = df[ct_col].fillna(ignore_label)
     return df
