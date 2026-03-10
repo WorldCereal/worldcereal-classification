@@ -15,10 +15,10 @@ from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from shapely import wkt
 from shapely.geometry import Polygon
-
 from worldcereal.data import croptype_mappings
 from worldcereal.train import MIN_EDGE_BUFFER
-from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
+from worldcereal.utils.sharepoint import (build_class_mappings,
+                                          get_excel_from_sharepoint)
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
 SHAREPOINT_FILE_URL = (
@@ -38,18 +38,18 @@ def get_class_mappings(source: Literal["sharepoint", "local"] = "local") -> Dict
     """
     if source == "local":
         resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
-        CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
+        class_mappings = json.loads(resource.read_text(encoding="utf-8"))
     elif source == "sharepoint":
         legend = get_excel_from_sharepoint(
             site_url=SHAREPOINT_SITE_URL,
             file_server_relative_url=SHAREPOINT_FILE_URL,
             sheet_name=0,
         )
-        CLASS_MAPPINGS = build_class_mappings(legend)
+        class_mappings = build_class_mappings(legend)
     else:
         raise ValueError(f"Unsupported source for class mappings: {source}")
 
-    return CLASS_MAPPINGS
+    return class_mappings
 
 
 def get_legend() -> pd.DataFrame:
@@ -808,11 +808,9 @@ def process_extractions_df(
     """
 
     from worldcereal.utils.legend import ewoc_code_to_label
-    from worldcereal.utils.timeseries import (
-        DataFrameValidator,
-        TimeSeriesProcessor,
-        process_parquet,
-    )
+    from worldcereal.utils.timeseries import (DataFrameValidator,
+                                              TimeSeriesProcessor,
+                                              process_parquet)
 
     logger.info("Processing selected samples ...")
 
