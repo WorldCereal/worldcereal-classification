@@ -15,10 +15,10 @@ from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from shapely import wkt
 from shapely.geometry import Polygon
+
 from worldcereal.data import croptype_mappings
 from worldcereal.train import MIN_EDGE_BUFFER
-from worldcereal.utils.sharepoint import (build_class_mappings,
-                                          get_excel_from_sharepoint)
+from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
 SHAREPOINT_FILE_URL = (
@@ -808,9 +808,11 @@ def process_extractions_df(
     """
 
     from worldcereal.utils.legend import ewoc_code_to_label
-    from worldcereal.utils.timeseries import (DataFrameValidator,
-                                              TimeSeriesProcessor,
-                                              process_parquet)
+    from worldcereal.utils.timeseries import (
+        DataFrameValidator,
+        TimeSeriesProcessor,
+        process_parquet,
+    )
 
     logger.info("Processing selected samples ...")
 
