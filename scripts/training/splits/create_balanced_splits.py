@@ -90,7 +90,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from worldcereal.utils.refdata import load_legend
+from worldcereal.utils.refdata import get_legend
 from worldcereal.utils.sharepoint import load_class_mappings_with_cache
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -222,8 +222,8 @@ def init_duckdb_connection() -> duckdb.DuckDBPyConnection:
     conn.create_function(
         "h3_latlng_to_cell",
         lambda lat, lng, res: h3.latlng_to_cell(float(lat), float(lng), int(res)),
-        [float, float, int],
-        str,
+        ["DOUBLE", "DOUBLE", "INTEGER"],  # type: ignore[list-item]
+        "VARCHAR",  # type: ignore[arg-type]
     )
     return conn
 
@@ -1689,10 +1689,10 @@ def write_sample_splits_parquet(
     conn.sql(f"copy ({query}) to '{output_path}' (format 'parquet')")
     if h3_split_level != 3:
         conn.sql("set enable_progress_bar=false")
-    n_written = conn.sql(f"select count(*) from read_parquet('{output_path}')").fetchone()[0]
-    n_val_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'val'").fetchone()[0]
-    n_test_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'test'").fetchone()[0]
-    n_train_written = conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'train'").fetchone()[0]
+    n_written = (conn.sql(f"select count(*) from read_parquet('{output_path}')").fetchone() or (0,))[0]
+    n_val_written = (conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'val'").fetchone() or (0,))[0]
+    n_test_written = (conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'test'").fetchone() or (0,))[0]
+    n_train_written = (conn.sql(f"select count(*) from read_parquet('{output_path}') where split = 'train'").fetchone() or (0,))[0]
     LOGGER.info(
         "Written %s samples to %s: train=%s val=%s test=%s ignore=%s",
         n_written,
@@ -1711,9 +1711,9 @@ def write_sample_splits_parquet(
             f"copy (select * from read_parquet('{output_path}') "
             f"where split = '{split_name}') to '{csv_path}' (format 'csv', header true)"
         )
-        n_csv = conn.sql(
+        n_csv = (conn.sql(
             f"select count(*) from read_csv_auto('{csv_path}')"
-        ).fetchone()[0]
+        ).fetchone() or (0,))[0]
         LOGGER.info("Written %s samples to %s", n_csv, csv_path)
 
 
@@ -1777,7 +1777,7 @@ def main(
         force_recompute=force_recompute,
     )
     if include_legend:
-        legend = load_legend()
+        legend = get_legend()
         counts_df = attach_legend_labels(counts_df, legend)
 
     counts_df = normalize_class_labels(counts_df)
