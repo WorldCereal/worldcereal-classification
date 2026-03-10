@@ -12,25 +12,15 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import (
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    TypedDict,
-    cast,
-)
+from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
+                    Tuple, TypedDict, cast)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
+from worldcereal.utils.refdata import load_legend
 from worldcereal.utils.sharepoint import load_class_mappings_with_cache
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -43,10 +33,6 @@ DEFAULT_EXTRACTS_GLOB = str(
     REPO_ROOT
     / "data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/"
     "worldcereal_all_extractions.parquet/**/*.parquet"
-)
-DEFAULT_LEGEND_URL = (
-    "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/legend/"
-    "WorldCereal_LC_CT_legend_latest.csv"
 )
 DEFAULT_UNIFIED_SPLITS_PATH = Path("./unified_train_splits.parquet")
 
@@ -207,13 +193,6 @@ def load_mappings(
             sheet_name=0,
         )
     return class_mappings[ct_name], class_mappings[lc_name]
-
-
-def load_legend(url: str = DEFAULT_LEGEND_URL) -> pd.DataFrame:
-    """Load and normalize the WorldCereal legend table."""
-    legend = pd.read_csv(url, header=0, sep=";")
-    legend["ewoc_code"] = legend["ewoc_code"].str.replace("-", "").astype(int)
-    return legend.ffill(axis=1)
 
 
 def load_extraction_paths(extractions_glob: str) -> List[str]:
@@ -1640,7 +1619,6 @@ def main(
     class_mappings: Optional[dict] = None,
     lc_name: str = "LANDCOVER10",
     ct_name: str = "CROPTYPE27",
-    legend_url: str = DEFAULT_LEGEND_URL,
     include_legend: bool = True,
     world_bounds_path: Path = DEFAULT_WORLD_BOUNDS_PATH,
     output_path: Path = DEFAULT_UNIFIED_SPLITS_PATH,
@@ -1696,7 +1674,7 @@ def main(
         force_recompute=force_recompute,
     )
     if include_legend:
-        legend = load_legend(legend_url)
+        legend = load_legend()
         counts_df = attach_legend_labels(counts_df, legend)
 
     counts_df = normalize_class_labels(counts_df)
