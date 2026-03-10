@@ -71,14 +71,25 @@ import glob
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import (Dict, Iterable, List, Mapping, Optional, Sequence, Set,
-                    Tuple, TypedDict, cast)
+from typing import (
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 import duckdb
 import h3
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
 from worldcereal.utils.refdata import load_legend
 from worldcereal.utils.sharepoint import load_class_mappings_with_cache
 
@@ -1979,16 +1990,6 @@ def main(
         extraction_paths,
         croptype_mapping,
         landcover_mapping,
-        val_cells,
-        test_cells,
-        output_path,
-        train_only_ref_ids,
-        h3_split_level=h3_split_level,
-    )
-
-
-if __name__ == "__main__":
-    main()
         val_cells,
         test_cells,
         output_path,
