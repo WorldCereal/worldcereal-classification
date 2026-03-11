@@ -1,49 +1,62 @@
-"""
-season_overlap.py
------------------
-Computes season overlap between S1 and S2 crop calendars from rasters
-(day-of-year encoded, nodata=0) and produces:
+"""season_overlap — Season overlap analysis and zonal aggregation.
 
-  1.  distinct_seasons.tif  -- uint8, 1=distinct, 0=overlapping, 255=nodata
-  2.  S1_SOS_merged.tif     -- S1 SOS with nodata where seasons are not distinct
-  3.  S1_EOS_merged.tif     -- S1 EOS expanded to cover S2 where seasons are not distinct
-                               (i.e. in non-distinct pixels, EOS = max(S1_EOS, S2_EOS))
-  4.  S2_SOS_masked.tif     -- S2 SOS masked (nodata) where seasons are not distinct
-  5.  S2_EOS_masked.tif     -- S2 EOS masked (nodata) where seasons are not distinct
-  6.  S1_LOS_before.tif     -- S1 length-of-season in days (original)
-  7.  S2_LOS_before.tif     -- S2 length-of-season in days (original, nodata=0)
-  8.  S1_LOS_after.tif      -- S1 length-of-season after expansion (merged)
-  9.  S2_LOS_after.tif      -- S2 length-of-season after masking (nodata=0 where non-distinct)
+Computes season overlap between S1 and S2 crop calendars from
+day-of-year rasters (nodata=0), optionally smooths the result with a
+median filter, and optionally aggregates to spatial zones.
 
-Overlap is computed purely per-pixel on the rasters (day-of-year values).
-Cross-year wrapping is handled: if EOS < SOS the season wraps around the
-year boundary (e.g. sowing in day 300, harvest in day 60 of next year).
+Outputs
+-------
+  distinct_seasons_raw.tif  -- pixel-level classification before smoothing/zones
+  distinct_seasons.tif      -- final uint8: 1=distinct, 0=overlapping, 255=nodata
+  S1_SOS_merged.tif         -- S1 SOS (expanded to 365-day season where overlapping)
+  S1_EOS_merged.tif         -- S1 EOS (expanded symmetrically where overlapping)
+  S2_SOS_masked.tif         -- S2 SOS masked (nodata) where overlapping
+  S2_EOS_masked.tif         -- S2 EOS masked (nodata) where overlapping
+  S1/S2_LOS_before.tif      -- length-of-season (days) before merging
+  S1/S2_LOS_after.tif       -- length-of-season (days) after merging
+  zone_stats.parquet         -- per-zone overlap statistics (when zones provided)
+  zone_id_raster.tif         -- numeric zone-ID raster for traceability
+  zone_id_legend.json        -- JSON mapping numeric IDs → zone names
+
+Pipeline stages
+---------------
+  1. Per-pixel overlap computation (cross-year wrapping handled)
+  2. Spatial smoothing via median filter (default kernel=3)
+  3. Zonal aggregation: per-zone majority vote with configurable threshold
+  4. Season merging: longer season expanded to 365 days, S2 masked
+
+Zone helpers
+------------
+  ``polygonize_classification_raster()`` — convert a classification raster
+      (e.g. GAEZ, Köppen-Geiger) to polygon GeoDataFrame.
+  ``intersect_zone_layers()`` — overlay multiple zone GeoDataFrames to
+      produce composite zones (e.g. Country × GAEZ).
 
 Usage (CLI)
 -----------
-python season_overlap.py \\
-    --s1-sos  /path/to/S1_SOS_WGS84.tif \\
-    --s1-eos  /path/to/S1_EOS_WGS84.tif \\
-    --s2-sos  /path/to/S2_SOS_WGS84.tif \\
-    --s2-eos  /path/to/S2_EOS_WGS84.tif \\
-    --out-dir /path/to/output/ \\
-    [--overlap-threshold-days  60] \\
-    [--overlap-threshold-frac  0.30] \\
-    [--threshold-mode          days|fraction|either|both]
+::
 
-Threshold logic (--threshold-mode):
+    python -m worldcereal.season_overlap \\
+        --s1-sos  S1_SOS_WGS84.tif --s1-eos  S1_EOS_WGS84.tif \\
+        --s2-sos  S2_SOS_WGS84.tif --s2-eos  S2_EOS_WGS84.tif \\
+        --out-dir output/ \\
+        [--overlap-threshold-days 100] [--overlap-threshold-frac 0.35] \\
+        [--threshold-mode both] [--smooth-kernel 5]
+
+Threshold modes (--threshold-mode):
   days      : distinct if overlap_days  < threshold_days
-  fraction  : distinct if overlap_frac  < threshold_frac  (fraction of longer season)
-  either    : distinct if EITHER condition holds  (more permissive → more distinct)
-  both      : distinct if BOTH conditions hold    (more strict   → fewer distinct)
+  fraction  : distinct if overlap_frac  < threshold_frac
+  either    : distinct if EITHER condition holds  (more permissive)
+  both      : distinct if BOTH conditions hold    (stricter, default)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import rasterio
@@ -91,7 +104,6 @@ def _doy_overlap_days(
     Returns float32 array (0 where no overlap, positive where overlap).
     """
     shape = s1_sos.shape
-    overlap = np.zeros(shape, dtype=np.float32)
 
     # Flatten for vectorised work
     ss1 = s1_sos.astype(np.float32).ravel()
@@ -267,6 +279,619 @@ def merge_seasons(
 
 
 # ---------------------------------------------------------------------------
+# Spatial smoothing
+# ---------------------------------------------------------------------------
+
+def smooth_distinct_seasons(
+    distinct: np.ndarray,
+    kernel_size: int = 3,
+) -> np.ndarray:
+    """Apply a median filter to the distinct_seasons raster to remove
+    salt-and-pepper noise (isolated pixels that flip between
+    distinct/overlapping while their neighbours are uniform).
+
+    Only operates on valid pixels (0 or 1); nodata (255) is preserved.
+
+    Parameters
+    ----------
+    distinct : uint8 array (1=distinct, 0=overlapping, 255=nodata)
+    kernel_size : int
+        Size of the square median filter window.  3 means a 3×3 kernel,
+        5 means 5×5 etc.  Set to 0 or 1 to skip smoothing entirely.
+
+    Returns
+    -------
+    uint8 array with the same shape / nodata convention.
+    """
+    if kernel_size <= 1:
+        return distinct.copy()
+
+    try:
+        from scipy.ndimage import median_filter
+    except ImportError:
+        print("[WARN] scipy not available — skipping spatial smoothing.")
+        return distinct.copy()
+
+    nodata_mask = distinct == 255
+    valid_mask = ~nodata_mask
+
+    # Work on a float copy: 1=distinct, 0=overlap, nan=nodata
+    work = distinct.astype(np.float32)
+    work[nodata_mask] = np.nan
+
+    # Use median filter which is ideal for binary salt-and-pepper removal.
+    # We need to handle NaN carefully: replace with -1 temporarily.
+    work_filled = np.where(nodata_mask, -1.0, work)
+    filtered = median_filter(work_filled, size=kernel_size)
+
+    # Restore: only update valid pixels, keep nodata unchanged
+    result = distinct.copy()
+    result[valid_mask] = np.where(filtered[valid_mask] >= 0.5, 1, 0).astype(np.uint8)
+    result[nodata_mask] = 255
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Zone creation helpers (raster → vector, intersect, clean)
+# ---------------------------------------------------------------------------
+
+def polygonize_classification_raster(
+    raster_path: str,
+    class_names: Optional[dict[int, str]] = None,
+    nodata_val: int = 0,
+    target_resolution: Optional[float] = None,
+    simplify_tolerance: float = 0.05,
+    min_area_deg2: float = 0.01,
+) -> "gpd.GeoDataFrame":
+    """Convert a classified raster (uint8) to a polygon GeoDataFrame.
+
+    The raster is optionally downsampled first (to avoid millions of tiny
+    polygons from 1 km data), then polygonized, simplified, and cleaned.
+
+    Parameters
+    ----------
+    raster_path : str
+        Path to the input classification raster (uint8, EPSG:4326).
+    class_names : dict[int, str], optional
+        Mapping from raster value → human-readable class name.
+        If None, uses ``"class_<value>"`` as the name.
+    nodata_val : int
+        Raster value to treat as nodata (excluded from output).
+    target_resolution : float, optional
+        If set, the raster is first resampled to this resolution (degrees)
+        using nearest-neighbour before polygonizing. Recommended for 1 km
+        inputs (~0.008333°) to reduce polygon count. E.g. 0.1° ≈ 11 km.
+    simplify_tolerance : float
+        Douglas-Peucker tolerance in degrees for simplifying polygon edges.
+    min_area_deg2 : float
+        Minimum polygon area in square degrees. Smaller polygons (slivers)
+        are dropped.
+
+    Returns
+    -------
+    gpd.GeoDataFrame with columns: zone_value (int), zone_name (str), geometry.
+    CRS = EPSG:4326.
+    """
+    import geopandas as gpd
+    from rasterio.features import shapes
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+    from shapely.geometry import shape
+
+    with rasterio.open(raster_path) as src:
+        if target_resolution is not None and abs(src.res[0] - target_resolution) > 1e-6:
+            # Resample to coarser resolution
+            dst_transform, dst_width, dst_height = calculate_default_transform(
+                src.crs, src.crs, src.width, src.height,
+                *src.bounds,
+                resolution=target_resolution,
+            )
+            data = np.empty((dst_height, dst_width), dtype=src.dtypes[0])
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=data,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=dst_transform,
+                dst_crs=src.crs,
+                resampling=Resampling.nearest,
+            )
+            transform = dst_transform
+        else:
+            data = src.read(1)
+            transform = src.transform
+
+    # Mask out nodata
+    mask = data != nodata_val
+
+    # Polygonize
+    records = []
+    for geom_dict, value in shapes(data, mask=mask, transform=transform):
+        value = int(value)
+        geom = shape(geom_dict)
+        if simplify_tolerance > 0:
+            geom = geom.simplify(simplify_tolerance, preserve_topology=True)
+        if geom.is_empty or geom.area < min_area_deg2:
+            continue
+        name = class_names.get(value, f"class_{value}") if class_names else f"class_{value}"
+        records.append({"zone_value": value, "zone_name": name, "geometry": geom})
+
+    gdf = gpd.GeoDataFrame(records, crs="EPSG:4326")
+    print(f"  Polygonized: {len(gdf)} polygons from {gdf['zone_value'].nunique()} classes")
+    return gdf
+
+
+def intersect_zone_layers(
+    gdf_list: Sequence["gpd.GeoDataFrame"],
+    zone_columns: Sequence[str],
+    min_area_deg2: float = 0.01,
+) -> "gpd.GeoDataFrame":
+    """Intersect two or more zone GeoDataFrames and produce a combined zone layer.
+
+    The resulting GeoDataFrame has a composite ``zone_id`` column formed by
+    concatenating the zone labels from each input layer (e.g.
+    ``"FRA__Cfa"`` for France × Koppen Cfa).
+
+    Parameters
+    ----------
+    gdf_list : list of GeoDataFrames
+        Each must have a geometry column and the column named in *zone_columns*.
+    zone_columns : list of str
+        Column name in each corresponding GeoDataFrame to use as the zone label.
+    min_area_deg2 : float
+        Minimum intersection area in square degrees. Smaller slivers are dropped.
+
+    Returns
+    -------
+    gpd.GeoDataFrame with columns: zone_id (str), geometry, plus original zone columns.
+    """
+    import geopandas as gpd
+
+    if len(gdf_list) != len(zone_columns):
+        raise ValueError("gdf_list and zone_columns must have the same length.")
+    if len(gdf_list) < 1:
+        raise ValueError("At least one GeoDataFrame is required.")
+    if len(gdf_list) == 1:
+        result = gdf_list[0].copy()
+        result["zone_id"] = result[zone_columns[0]].astype(str)
+        return result
+
+    # Start with the first layer
+    combined = gdf_list[0][[zone_columns[0], "geometry"]].copy()
+    combined = combined.rename(columns={zone_columns[0]: zone_columns[0]})
+
+    for i in range(1, len(gdf_list)):
+        right = gdf_list[i][[zone_columns[i], "geometry"]].copy()
+        print(f"  Intersecting layer {i} ({zone_columns[i]}, {len(right)} polygons) "
+              f"with accumulated {len(combined)} polygons...")
+        combined = gpd.overlay(combined, right, how="intersection", keep_geom_type=True)
+        # Drop slivers
+        combined = combined[combined.geometry.area >= min_area_deg2].copy()
+        print(f"    → {len(combined)} polygons after sliver removal")
+
+    # Build composite zone_id
+    combined["zone_id"] = combined[zone_columns[0]].astype(str)
+    for col in zone_columns[1:]:
+        combined["zone_id"] = combined["zone_id"] + "__" + combined[col].astype(str)
+
+    combined = combined.reset_index(drop=True)
+    print(f"  Final intersected zones: {len(combined)} polygons, "
+          f"{combined['zone_id'].nunique()} unique zone IDs")
+    return combined
+
+
+def aggregate_by_zones(
+    distinct: np.ndarray,
+    transform: "rasterio.Affine",
+    zone_gdf: "gpd.GeoDataFrame",
+    zone_column: str = "zone_id",
+    threshold: float = 0.75,
+) -> tuple[np.ndarray, "gpd.GeoDataFrame"]:
+    """Aggregate the pixel-level distinct_seasons array by spatial zones.
+
+    For each zone polygon, compute the fraction of valid pixels that are
+    NOT distinct (overlapping, value=0). If that fraction >= ``threshold``,
+    the entire zone is set to overlapping (0). Otherwise the entire zone is
+    set to distinct (1).
+
+    Parameters
+    ----------
+    distinct : uint8 array (1=distinct, 0=overlapping, 255=nodata)
+    transform : rasterio Affine transform matching *distinct*.
+    zone_gdf : GeoDataFrame
+        Zone polygons with a *zone_column* and geometry in EPSG:4326.
+    zone_column : str
+        Column in *zone_gdf* to use as the zone label.
+    threshold : float
+        Fraction of overlapping pixels (among valid) required to set the
+        entire zone to overlapping. Default 0.75 means ≥75% overlapping
+        → whole zone = overlapping.
+
+    Returns
+    -------
+    distinct_zonal : uint8 array same shape as *distinct*.
+        Zonally aggregated version: 0 or 1 per zone, 255=nodata.
+    zone_stats : GeoDataFrame
+        Per-zone statistics: zone_column, n_valid, n_overlapping,
+        frac_overlapping, zonal_decision (0 or 1).
+    """
+    from rasterio.features import rasterize
+
+    h, w = distinct.shape
+
+    # Rasterize zone IDs to a label array matching distinct's grid
+    # Assign a numeric ID to each zone polygon
+    zone_ids = zone_gdf[zone_column].unique()
+    id_map = {name: idx + 1 for idx, name in enumerate(zone_ids)}  # 1-based
+    rev_map = {v: k for k, v in id_map.items()}
+
+    shapes_iter = [
+        (geom, id_map[zone_name])
+        for geom, zone_name in zip(zone_gdf.geometry, zone_gdf[zone_column])
+        if zone_name in id_map
+    ]
+
+    zone_raster = rasterize(
+        shapes_iter,
+        out_shape=(h, w),
+        transform=transform,
+        fill=0,
+        dtype=np.int32,
+    )
+
+    # Compute per-zone statistics
+    valid_mask = (distinct == 0) | (distinct == 1)
+    overlapping_mask = distinct == 0
+
+    stats_records = []
+    for numeric_id, zone_name in rev_map.items():
+        zone_mask = zone_raster == numeric_id
+        zone_valid = zone_mask & valid_mask
+        n_valid = int(zone_valid.sum())
+        if n_valid == 0:
+            stats_records.append({
+                zone_column: zone_name,
+                "n_valid": 0, "n_overlapping": 0,
+                "frac_overlapping": np.nan, "zonal_decision": 255,
+            })
+            continue
+        n_overlapping = int((zone_valid & overlapping_mask).sum())
+        frac_ov = n_overlapping / n_valid
+        decision = 0 if frac_ov >= threshold else 1  # 0=overlapping, 1=distinct
+        stats_records.append({
+            zone_column: zone_name,
+            "n_valid": n_valid,
+            "n_overlapping": n_overlapping,
+            "frac_overlapping": round(frac_ov, 4),
+            "zonal_decision": decision,
+        })
+
+    import pandas as pd  # local import — avoid hard dependency for non-zone use
+    zone_stats_df = pd.DataFrame(stats_records)
+    # Merge back to get geometry
+    zone_stats = zone_gdf[[zone_column, "geometry"]].drop_duplicates(subset=zone_column)
+    zone_stats = zone_stats.merge(zone_stats_df, on=zone_column, how="left")
+
+    # Build the zonally-aggregated distinct raster
+    # Start from original, then overwrite valid zone pixels with the zonal decision
+    distinct_zonal = distinct.copy()
+    for _, row in zone_stats_df.iterrows():
+        numeric_id = id_map.get(row[zone_column])
+        if numeric_id is None or row["zonal_decision"] == 255:
+            continue
+        zone_mask = zone_raster == numeric_id
+        # Only overwrite valid pixels within this zone
+        update_mask = zone_mask & valid_mask
+        distinct_zonal[update_mask] = row["zonal_decision"]
+
+    n_changed = int((distinct_zonal != distinct)[valid_mask].sum())
+    n_zones_ov = int((zone_stats_df["zonal_decision"] == 0).sum())
+    n_zones_dist = int((zone_stats_df["zonal_decision"] == 1).sum())
+    n_zones_nd = int((zone_stats_df["zonal_decision"] == 255).sum())
+    print(f"  Zonal aggregation: {n_zones_ov} zones → overlapping, "
+          f"{n_zones_dist} zones → distinct, {n_zones_nd} zones → nodata")
+    print(f"  Pixels changed by zonal aggregation: {n_changed:,}")
+
+    return distinct_zonal, zone_stats
+
+
+# ---------------------------------------------------------------------------
+# Season diagnostics — differences between S1/S2/Annual
+# ---------------------------------------------------------------------------
+# Cropland mask utilities
+# ---------------------------------------------------------------------------
+
+def build_cropland_mask(
+    mask_file: str,
+    mask_attribute: str,
+    mask_threshold: float,
+    reference_raster_path: str,
+) -> np.ndarray:
+    """Build a boolean raster mask from a vector grid file.
+
+    Reads *mask_file* (a geoparquet / shapefile / GPKG whose geometry column
+    may be stored as raw WKB bytes), filters features where
+    ``feature[mask_attribute] > mask_threshold``, and rasterizes the result
+    onto the same grid as *reference_raster_path*.
+
+    Parameters
+    ----------
+    mask_file : str
+        Path to a vector file (geoparquet, shapefile, GPKG, …) with a
+        geometry column and at least one numeric attribute.
+    mask_attribute : str
+        Name of the numeric column used for filtering.
+    mask_threshold : float
+        Threshold value; features with ``attribute > threshold`` are kept.
+    reference_raster_path : str
+        Path to any of the input DOY rasters — used only for its shape,
+        transform and CRS so the mask aligns pixel-for-pixel.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean array (True = inside filtered grid cells = keep).
+    """
+    import geopandas as gpd
+    import pandas as pd
+    from rasterio.features import rasterize as _rasterize_fn
+
+    # --- Load the vector file ------------------------------------------------
+    try:
+        gdf = gpd.read_parquet(mask_file)
+    except (ValueError, Exception):
+        # Fallback: geometry stored as raw WKB bytes (non-geo parquet)
+        df = pd.read_parquet(mask_file)
+        if "geometry" not in df.columns:
+            raise ValueError(f"No 'geometry' column found in {mask_file}")
+        from shapely import wkb
+
+        geoms = df["geometry"].apply(wkb.loads)
+        gdf = gpd.GeoDataFrame(df.drop(columns=["geometry"]), geometry=geoms, crs="EPSG:4326")
+
+    # --- Filter by attribute -------------------------------------------------
+    if mask_attribute not in gdf.columns:
+        raise ValueError(
+            f"Column '{mask_attribute}' not found in {mask_file}. "
+            f"Available columns: {list(gdf.columns)}"
+        )
+    gdf_filtered = gdf[gdf[mask_attribute] > mask_threshold].copy()
+    print(
+        f"  Cropland mask: {len(gdf_filtered):,} / {len(gdf):,} features "
+        f"with {mask_attribute} > {mask_threshold}"
+    )
+
+    # --- Rasterize onto the reference grid -----------------------------------
+    with rasterio.open(reference_raster_path) as ref:
+        out_shape = (ref.height, ref.width)
+        transform = ref.transform
+
+    if len(gdf_filtered) == 0:
+        print("  WARNING: no features passed the mask filter — all pixels will be masked out!")
+        return np.zeros(out_shape, dtype=bool)
+
+    # Ensure CRS matches (input rasters are EPSG:4326)
+    if gdf_filtered.crs is not None and not gdf_filtered.crs.equals("EPSG:4326"):
+        gdf_filtered = gdf_filtered.to_crs("EPSG:4326")
+
+    shapes = [(geom, 1) for geom in gdf_filtered.geometry if geom is not None and geom.is_valid]
+    mask_arr = _rasterize_fn(
+        shapes,
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,
+        dtype=np.uint8,
+        all_touched=True,
+    )
+    mask_bool = mask_arr.astype(bool)
+    print(f"  Cropland mask: {mask_bool.sum():,} pixels inside, "
+          f"{(~mask_bool).sum():,} pixels outside")
+    return mask_bool
+
+
+# ---------------------------------------------------------------------------
+
+def _doy_difference(doy_a: np.ndarray, doy_b: np.ndarray) -> np.ndarray:
+    """Signed circular difference between two DOY arrays: a − b.
+
+    Result is in the range (−182, +182] days (shortest arc on the 365-day
+    circle).  Positive means *a* is later in the year than *b*.
+
+    Both inputs are int/float arrays with DOY in 1..365.  Returns float32.
+    """
+    a = doy_a.astype(np.float32)
+    b = doy_b.astype(np.float32)
+    diff = a - b
+    # Wrap into (−182, +182]  (half-year)
+    diff = np.where(diff > 182.0, diff - 365.0, diff)
+    diff = np.where(diff <= -183.0, diff + 365.0, diff)
+    return diff
+
+
+def run_season_diagnostics(
+    s1_sos_path: str,
+    s1_eos_path: str,
+    s2_sos_path: str,
+    s2_eos_path: str,
+    annual_sos_path: str,
+    annual_eos_path: str,
+    out_dir: str,
+    nodata_val: int = 0,
+    mask_file: Optional[str] = None,
+    mask_attribute: Optional[str] = None,
+    mask_threshold: float = 0.0,
+) -> dict[str, str]:
+    """Compare S1, S2, and Annual seasons pixel-by-pixel.
+
+    Computes and writes:
+      - ``S1_SOS_minus_ANN_SOS.tif`` — DOY difference: S1 SOS − Annual SOS
+      - ``S1_EOS_minus_ANN_EOS.tif`` — DOY difference: S1 EOS − Annual EOS
+      - ``S2_SOS_minus_ANN_SOS.tif`` — DOY difference: S2 SOS − Annual SOS
+      - ``S2_EOS_minus_ANN_EOS.tif`` — DOY difference: S2 EOS − Annual EOS
+      - ``S1_LOS.tif``              — S1 length-of-season (days)
+      - ``S2_LOS.tif``              — S2 length-of-season (days)
+      - ``ANN_LOS.tif``             — Annual length-of-season (days)
+      - ``S1_LOS_minus_ANN_LOS.tif``— LOS difference: S1 LOS − Annual LOS
+      - ``S2_LOS_minus_ANN_LOS.tif``— LOS difference: S2 LOS − Annual LOS
+      - ``longer_season.tif``       — which season is longer: 1=S1, 2=S2,
+                                       0=equal, 255=nodata
+
+    All DOY differences use circular (wrap-aware) arithmetic on a 365-day
+    cycle, returning values in (−182, +182] days.  LOS differences are
+    ordinary signed integers (no wrapping needed since LOS is 0–365).
+
+    Parameters
+    ----------
+    s1_sos_path, s1_eos_path : str
+        S1 start/end-of-season DOY rasters (nodata = *nodata_val*).
+    s2_sos_path, s2_eos_path : str
+        S2 start/end-of-season DOY rasters.
+    annual_sos_path, annual_eos_path : str
+        Annual start/end-of-season DOY rasters.
+    out_dir : str
+        Directory where diagnostic rasters are written.
+    nodata_val : int
+        Value treated as nodata in all input rasters (default 0).
+    mask_file : str, optional
+        Path to a vector file (geoparquet, shapefile, …) with grid
+        polygons and a numeric attribute.  When provided together with
+        *mask_attribute*, pixels falling outside the filtered grid cells
+        are set to nodata before processing.
+    mask_attribute : str, optional
+        Numeric column in *mask_file* used for filtering.
+    mask_threshold : float
+        Features with ``mask_attribute > mask_threshold`` are kept.
+        Default 0.0.
+
+    Returns
+    -------
+    dict mapping output name → file path.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Reading input rasters for diagnostics...")
+    s1_sos, profile = _read_raster(s1_sos_path)
+    s1_eos, _ = _read_raster(s1_eos_path)
+    s2_sos, _ = _read_raster(s2_sos_path)
+    s2_eos, _ = _read_raster(s2_eos_path)
+    ann_sos, _ = _read_raster(annual_sos_path)
+    ann_eos, _ = _read_raster(annual_eos_path)
+
+    print(f"  Raster shape: {s1_sos.shape}")
+
+    # Optional: apply cropland mask — set outside pixels to nodata
+    if mask_file is not None and mask_attribute is not None:
+        print("Building cropland mask for diagnostics...")
+        crop_mask = build_cropland_mask(
+            mask_file, mask_attribute, mask_threshold, s1_sos_path
+        )
+        outside = ~crop_mask
+        for arr in (s1_sos, s1_eos, s2_sos, s2_eos, ann_sos, ann_eos):
+            arr[outside] = nodata_val
+
+    # Nodata masks — one per pair of seasons being compared
+    nd_s1  = (s1_sos == nodata_val) | (s1_eos == nodata_val)
+    nd_s2  = (s2_sos == nodata_val) | (s2_eos == nodata_val)
+    nd_ann = (ann_sos == nodata_val) | (ann_eos == nodata_val)
+    nd_s1_ann = nd_s1 | nd_ann
+    nd_s2_ann = nd_s2 | nd_ann
+    nd_all = nd_s1 | nd_s2
+
+    out_paths: dict[str, str] = {}
+
+    # ── SOS / EOS differences (circular, int16, nodata = 0) ──────────────
+    diff_profile = profile.copy()
+    diff_profile.update(dtype="int16", nodata=0)
+
+    diffs = [
+        ("S1_SOS_minus_ANN_SOS", s1_sos, ann_sos, nd_s1_ann),
+        ("S1_EOS_minus_ANN_EOS", s1_eos, ann_eos, nd_s1_ann),
+        ("S2_SOS_minus_ANN_SOS", s2_sos, ann_sos, nd_s2_ann),
+        ("S2_EOS_minus_ANN_EOS", s2_eos, ann_eos, nd_s2_ann),
+    ]
+    for name, a, b, nd_mask in diffs:
+        diff = _doy_difference(a, b)
+        arr = np.where(nd_mask, 0, np.round(diff)).astype(np.int16)
+        p = out_dir / f"{name}.tif"
+        _write_raster(p, arr, diff_profile)
+        out_paths[name] = str(p)
+
+        # Summary stats (valid pixels only)
+        valid = ~nd_mask
+        vals = diff[valid]
+        print(f"  {name}: mean={vals.mean():.1f}d  median={np.median(vals):.0f}d  "
+              f"std={vals.std():.1f}d  |abs|_mean={np.abs(vals).mean():.1f}d  "
+              f"range=[{vals.min():.0f}, {vals.max():.0f}]  valid={valid.sum():,}")
+
+    # ── LOS per season (int16, nodata = 0) ───────────────────────────────
+    los_profile = profile.copy()
+    los_profile.update(dtype="int16", nodata=0)
+
+    s1_los = _compute_los(s1_sos, s1_eos, nodata_val=nodata_val)
+    s2_los = _compute_los(s2_sos, s2_eos, nodata_val=nodata_val)
+    ann_los = _compute_los(ann_sos, ann_eos, nodata_val=nodata_val)
+
+    for name, arr in [("S1_LOS", s1_los), ("S2_LOS", s2_los), ("ANN_LOS", ann_los)]:
+        p = out_dir / f"{name}.tif"
+        _write_raster(p, arr, los_profile)
+        out_paths[name] = str(p)
+
+    # ── LOS differences (ordinary signed, int16, nodata = 0) ─────────────
+    los_diffs = [
+        ("S1_LOS_minus_ANN_LOS", s1_los, ann_los, nd_s1_ann),
+        ("S2_LOS_minus_ANN_LOS", s2_los, ann_los, nd_s2_ann),
+    ]
+    for name, a, b, nd_mask in los_diffs:
+        diff = (a.astype(np.int16) - b.astype(np.int16))
+        arr = np.where(nd_mask, 0, diff).astype(np.int16)
+        p = out_dir / f"{name}.tif"
+        _write_raster(p, arr, los_profile)
+        out_paths[name] = str(p)
+
+        valid = ~nd_mask
+        vals = diff[valid].astype(np.float32)
+        print(f"  {name}: mean={vals.mean():.1f}d  median={np.median(vals):.0f}d  "
+              f"std={vals.std():.1f}d  range=[{vals.min():.0f}, {vals.max():.0f}]")
+
+    # ── Which season is longer? (uint8: 1=S1, 2=S2, 0=equal, 255=nodata)
+    longer_profile = profile.copy()
+    longer_profile.update(dtype="uint8", nodata=255)
+
+    s1_los_f = s1_los.astype(np.float32)
+    s2_los_f = s2_los.astype(np.float32)
+    longer = np.where(
+        nd_all, 255,
+        np.where(s1_los_f > s2_los_f, 1,
+                 np.where(s2_los_f > s1_los_f, 2, 0))
+    ).astype(np.uint8)
+
+    p = out_dir / "longer_season.tif"
+    _write_raster(p, longer, longer_profile)
+    out_paths["longer_season"] = str(p)
+
+    # Summary
+    valid_longer = ~nd_all
+    n_s1 = int((longer[valid_longer] == 1).sum())
+    n_s2 = int((longer[valid_longer] == 2).sum())
+    n_eq = int((longer[valid_longer] == 0).sum())
+    n_valid = int(valid_longer.sum())
+    print(f"\n  Longer season: S1={n_s1:,} ({100*n_s1/n_valid:.1f}%)  "
+          f"S2={n_s2:,} ({100*n_s2/n_valid:.1f}%)  "
+          f"equal={n_eq:,} ({100*n_eq/n_valid:.1f}%)  "
+          f"nodata={int(nd_all.sum()):,}")
+
+    # LOS summary table
+    for lbl, los, nd in [("S1", s1_los, nd_s1), ("S2", s2_los, nd_s2), ("ANN", ann_los, nd_ann)]:
+        v = los[~nd].astype(np.float32)
+        print(f"  {lbl} LOS: mean={v.mean():.0f}d  median={np.median(v):.0f}d  "
+              f"std={v.std():.0f}d  range=[{v.min():.0f}, {v.max():.0f}]")
+
+    print(f"\nDone. {len(out_paths)} files written to {out_dir}")
+    return out_paths
+
+
+# ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
 
@@ -306,11 +931,53 @@ def run_season_overlap_pipeline(
     threshold_frac: float = 0.35,
     threshold_mode: str = "both",
     nodata_val: int = 0,
+    smooth_kernel_size: int = 3,
+    zone_gdf: Optional["gpd.GeoDataFrame"] = None,
+    zone_column: str = "zone_id",
+    zone_threshold: float = 0.75,
+    mask_file: Optional[str] = None,
+    mask_attribute: Optional[str] = None,
+    mask_threshold: float = 0.0,
 ) -> dict[str, str]:
     """
-    Full pipeline: read rasters → compute overlap → write outputs.
+    Full pipeline: read rasters → compute overlap → (smooth) → (aggregate zones) → write outputs.
 
-    Returns dict mapping output name → file path.
+    Parameters
+    ----------
+    s1_sos_path, s1_eos_path, s2_sos_path, s2_eos_path : str
+        Paths to the 4 input DOY rasters.
+    out_dir : str
+        Output directory for all generated rasters.
+    threshold_days, threshold_frac, threshold_mode : overlap thresholds
+    nodata_val : int
+        Nodata value in input rasters (default 0).
+    smooth_kernel_size : int
+        Median-filter kernel size for spatial smoothing of the distinct_seasons
+        raster before zone aggregation. Default 3 (light smoothing). Set to 0
+        or 1 to disable smoothing.
+    zone_gdf : GeoDataFrame, optional
+        Zone polygons for spatial aggregation. Must have a *zone_column* and
+        geometry in EPSG:4326.  When ``None`` (default), no zonal aggregation
+        is applied and the result is purely pixel-based (+ optional smoothing).
+    zone_column : str
+        Column in *zone_gdf* to use as the zone label.  Default ``"zone_id"``.
+    zone_threshold : float
+        Fraction of overlapping pixels per zone above which the entire zone
+        is set to overlapping.  Default 0.75.
+    mask_file : str, optional
+        Path to a vector file (geoparquet, shapefile, …) with grid
+        polygons and a numeric attribute.  When provided together with
+        *mask_attribute*, pixels falling outside the filtered grid cells
+        are set to nodata before processing.
+    mask_attribute : str, optional
+        Numeric column in *mask_file* used for filtering.
+    mask_threshold : float
+        Features with ``mask_attribute > mask_threshold`` are kept.
+        Default 0.0.
+
+    Returns
+    -------
+    dict mapping output name → file path.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -323,6 +990,16 @@ def run_season_overlap_pipeline(
 
     print(f"Raster shape: {s1_sos.shape}")
     print(f"Threshold: {threshold_days} days  /  {threshold_frac*100:.0f}% fraction  [mode={threshold_mode}]")
+
+    # Optional: apply cropland mask — set outside pixels to nodata
+    if mask_file is not None and mask_attribute is not None:
+        print("Building cropland mask...")
+        crop_mask = build_cropland_mask(
+            mask_file, mask_attribute, mask_threshold, s1_sos_path
+        )
+        outside = ~crop_mask
+        for arr in (s1_sos, s1_eos, s2_sos, s2_eos):
+            arr[outside] = nodata_val
 
     # --- Step 1: compute distinct flag ---
     print("Computing season overlap...")
@@ -342,6 +1019,69 @@ def run_season_overlap_pipeline(
     print(f"  Overlapping pixels: {n_overlap:,}  ({n_overlap / max(valid.sum(), 1) * 100:.1f}%)")
     print(f"  Nodata pixels    : {n_nodata:,}")
 
+    # --- Step 1b: write raw pixel-level distinct_seasons before any smoothing/aggregation ---
+    dist_profile = profile.copy()
+    dist_profile.update(dtype="uint8", nodata=255)
+    p = out_dir / "distinct_seasons_raw.tif"
+    _write_raster(p, distinct, dist_profile)
+    out_paths: dict[str, str] = {}
+    out_paths["distinct_seasons_raw"] = str(p)
+
+    # --- Step 1c: optional spatial smoothing ---
+    if smooth_kernel_size and smooth_kernel_size > 1:
+        print(f"Applying spatial smoothing (median filter, kernel={smooth_kernel_size})...")
+        distinct = smooth_distinct_seasons(distinct, kernel_size=smooth_kernel_size)
+        n_distinct_s = int((distinct == 1).sum())
+        n_overlap_s = int((distinct == 0).sum())
+        print(f"  After smoothing — distinct: {n_distinct_s:,}, overlapping: {n_overlap_s:,}")
+
+    # --- Step 1d: optional zonal aggregation ---
+    zone_stats_gdf = None
+    if zone_gdf is not None:
+        print(f"Aggregating by zones (column={zone_column!r}, threshold={zone_threshold})...")
+        raster_transform = profile["transform"]
+        distinct, zone_stats_gdf = aggregate_by_zones(
+            distinct, raster_transform, zone_gdf,
+            zone_column=zone_column, threshold=zone_threshold,
+        )
+        n_distinct_z = int((distinct == 1).sum())
+        n_overlap_z = int((distinct == 0).sum())
+        print(f"  After zonal aggregation — distinct: {n_distinct_z:,}, overlapping: {n_overlap_z:,}")
+
+        # Write zone statistics
+        p_stats = out_dir / "zone_stats.parquet"
+        zone_stats_gdf.to_parquet(str(p_stats), index=False)
+        out_paths["zone_stats"] = str(p_stats)
+        print(f"  Written: {p_stats}")
+
+        # Write zone_id raster for traceability
+        from rasterio.features import rasterize as _rasterize_fn
+        zone_ids_unique = zone_gdf[zone_column].unique()
+        _zid_map = {name: idx + 1 for idx, name in enumerate(zone_ids_unique)}
+        _shapes_for_zones = [
+            (geom, _zid_map[zn])
+            for geom, zn in zip(zone_gdf.geometry, zone_gdf[zone_column])
+            if zn in _zid_map
+        ]
+        zone_id_raster = _rasterize_fn(
+            _shapes_for_zones,
+            out_shape=distinct.shape,
+            transform=profile["transform"],
+            fill=0, dtype=np.int32,
+        )
+        zid_profile = profile.copy()
+        zid_profile.update(dtype="int32", nodata=0)
+        p_zid = out_dir / "zone_id_raster.tif"
+        _write_raster(p_zid, zone_id_raster, zid_profile)
+        out_paths["zone_id_raster"] = str(p_zid)
+
+        # Write zone_id legend (JSON mapping numeric_id → zone_name)
+        p_legend = out_dir / "zone_id_legend.json"
+        with open(p_legend, "w") as f:
+            json.dump({str(v): k for k, v in _zid_map.items()}, f, indent=2)
+        out_paths["zone_id_legend"] = str(p_legend)
+        print(f"  Written: {p_legend}")
+
     # --- Step 2: produce merged/masked seasons ---
     print("Merging/masking seasons for non-distinct pixels...")
     s1_sos_m, s1_eos_m, s2_sos_m, s2_eos_m = merge_seasons(
@@ -350,11 +1090,8 @@ def run_season_overlap_pipeline(
 
     # --- Step 3: write outputs ---
     print("Writing outputs...")
-    out_paths: dict[str, str] = {}
 
-    # distinct_seasons.tif
-    dist_profile = profile.copy()
-    dist_profile.update(dtype="uint8", nodata=255)
+    # distinct_seasons.tif (final, after smoothing + zonal aggregation)
     p = out_dir / "distinct_seasons.tif"
     _write_raster(p, distinct, dist_profile)
     out_paths["distinct_seasons"] = str(p)
@@ -497,10 +1234,7 @@ def visualize_season_overlap(
                 return str(candidate)
         return None
 
-    _CAL_DIR = (
-        Path(__file__).resolve().parent.parent
-        / "worldcereal-classification/src/worldcereal/data/cropcalendars"
-    )
+    _CAL_DIR = Path(__file__).resolve().parent / "data" / "cropcalendars"
 
     paths = {
         "S1_SOS_before":    _resolve(s1_sos_before, "S1_SOS_WGS84") or str(_CAL_DIR / "S1_SOS_WGS84.tif"),
@@ -665,25 +1399,24 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Compute season overlap and produce distinct_seasons.tif + merged season rasters.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    cal_dir = (
-        Path(__file__).resolve().parent.parent
-        / "worldcereal-classification/src/worldcereal/data/cropcalendars"
-    )
+    cal_dir = Path(__file__).resolve().parent / "data" / "cropcalendars"
     p.add_argument("--s1-sos",  default=str(cal_dir / "S1_SOS_WGS84.tif"),  help="S1 start-of-season raster (DOY)")
     p.add_argument("--s1-eos",  default=str(cal_dir / "S1_EOS_WGS84.tif"),  help="S1 end-of-season raster (DOY)")
     p.add_argument("--s2-sos",  default=str(cal_dir / "S2_SOS_WGS84.tif"),  help="S2 start-of-season raster (DOY)")
     p.add_argument("--s2-eos",  default=str(cal_dir / "S2_EOS_WGS84.tif"),  help="S2 end-of-season raster (DOY)")
-    p.add_argument("--out-dir", default=str(Path(__file__).resolve().parent / "season_overlap_output"),
+    p.add_argument("--out-dir", default=str(cal_dir / "season_overlap_outputs"),
                    help="Output directory")
-    p.add_argument("--overlap-threshold-days",  type=float, default=60.0,
+    p.add_argument("--overlap-threshold-days",  type=float, default=100.0,
                    help="Overlap in days below which seasons are considered distinct")
-    p.add_argument("--overlap-threshold-frac",  type=float, default=0.30,
+    p.add_argument("--overlap-threshold-frac",  type=float, default=0.35,
                    help="Overlap as fraction of longer season below which distinct (0–1)")
     p.add_argument("--threshold-mode", choices=["days", "fraction", "either", "both"],
                    default="both",
                    help="How to combine the two thresholds: "
                         "'days'=only day threshold, 'fraction'=only fraction threshold, "
                         "'either'=distinct if either holds, 'both'=distinct only if both hold")
+    p.add_argument("--smooth-kernel", type=int, default=3,
+                   help="Median-filter kernel size for spatial smoothing (0 or 1 to disable)")
     p.add_argument("--nodata", type=int, default=0,
                    help="Nodata value in input rasters")
     return p
@@ -702,6 +1435,7 @@ def main(args=None):
         threshold_frac=ns.overlap_threshold_frac,
         threshold_mode=ns.threshold_mode,
         nodata_val=ns.nodata,
+        smooth_kernel_size=ns.smooth_kernel,
     )
 
 
