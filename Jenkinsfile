@@ -11,7 +11,7 @@ pythonPipeline {
   python_version = ["3.11"]
   extras_require = "dev,train,notebooks"
   upload_dev_wheels = false
-  pipeline_triggers = [cron('H H(0-6) * * *')]
+  pipeline_triggers = (env.BRANCH_NAME in ['main','master']) ? [cron('H H(0-6) * * *')] : []
   pep440 = true
   pre_install_script = 'jenkins_pre_install_script.sh'
   extra_env_variables = [
