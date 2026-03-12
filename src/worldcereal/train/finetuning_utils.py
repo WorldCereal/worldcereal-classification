@@ -626,6 +626,7 @@ def prepare_training_datasets(
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
+    season_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -673,6 +674,10 @@ def prepare_training_datasets(
         its slots are available. Validation and test splits always use 1.0
         (full coverage required) so that evaluation metrics are not inflated by
         partial-season pooling.
+    season_ids : Optional[Sequence[str]], default=None
+        Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
+        or ``("annual",)``).  When ``None`` the dataset falls back to
+        ``GLOBAL_SEASON_IDS``.
 
     Returns
     -------
@@ -693,6 +698,7 @@ def prepare_training_datasets(
         label_jitter=label_jitter,
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
+        season_ids=season_ids,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -708,6 +714,7 @@ def prepare_training_datasets(
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
         min_season_coverage=1.0,  # Full coverage required for evaluation
+        season_ids=season_ids,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -723,6 +730,7 @@ def prepare_training_datasets(
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
         min_season_coverage=1.0,  # Full coverage required for evaluation
+        season_ids=season_ids,
     )
     return train_ds, val_ds, test_ds
 
