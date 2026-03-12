@@ -12,8 +12,8 @@ from typing import Optional, Tuple, Union
 
 from loguru import logger
 
-from worldcereal.openeo.inference import DEFAULT_CACHE_ROOT, load_model_artifact
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+from worldcereal.utils.models import DEFAULT_CACHE_ROOT, load_model_artifact
 
 
 def checkpoint_fingerprint(path: Union[str, Path]) -> str:
@@ -107,6 +107,9 @@ def _download_checkpoint(reference: str) -> Path:
         return target
 
     logger.info("Downloading seasonal backbone checkpoint from {}", reference)
-    with urllib.request.urlopen(reference) as response, open(target, "wb") as handle:  # nosec: B310
+    with (
+        urllib.request.urlopen(reference) as response,
+        open(target, "wb") as handle,
+    ):  # nosec: B310
         shutil.copyfileobj(response, handle)
     return target

@@ -15,10 +15,10 @@ from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from shapely import wkt
 from shapely.geometry import Polygon
+
 from worldcereal.data import croptype_mappings
 from worldcereal.train import MIN_EDGE_BUFFER
-from worldcereal.utils.sharepoint import (build_class_mappings,
-                                          get_excel_from_sharepoint)
+from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
 SHAREPOINT_FILE_URL = (
@@ -38,18 +38,18 @@ def get_class_mappings(source: Literal["sharepoint", "local"] = "local") -> Dict
     """
     if source == "local":
         resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
-        CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
+        class_mappings = json.loads(resource.read_text(encoding="utf-8"))
     elif source == "sharepoint":
         legend = get_excel_from_sharepoint(
-                site_url=SHAREPOINT_SITE_URL,
-                file_server_relative_url=SHAREPOINT_FILE_URL,
-                sheet_name=0,
+            site_url=SHAREPOINT_SITE_URL,
+            file_server_relative_url=SHAREPOINT_FILE_URL,
+            sheet_name=0,
         )
-        CLASS_MAPPINGS = build_class_mappings(legend)
+        class_mappings = build_class_mappings(legend)
     else:
         raise ValueError(f"Unsupported source for class mappings: {source}")
 
-    return CLASS_MAPPINGS
+    return class_mappings
 
 
 def get_legend() -> pd.DataFrame:
@@ -78,7 +78,7 @@ def get_legend() -> pd.DataFrame:
 def map_classes(
     df: pd.DataFrame,
     finetune_classes="CROPTYPE0",
-    class_mappings: Optional[Dict[str, Dict[str, str]]] = None,
+    class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
     filter_classes=[0, 1000000000],
 ) -> pd.DataFrame:
     """
@@ -111,9 +111,6 @@ def map_classes(
     Notes:
         - Removes classes that are not present in the CLASS_MAPPINGS dictionary
     """
-
-    if class_mappings is None:
-        class_mappings = get_class_mappings()
 
     df = df.loc[~df["ewoc_code"].isin(filter_classes)].copy()
     legend = get_legend()
@@ -365,9 +362,8 @@ AND ewoc_code IN ({ct_list_str})
             collateral_condition = collateral_query_part.replace(
                 "AND ", "WHERE " if not cropland_condition else "AND ", 1
             )
-
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 {spatial_condition}
 {cropland_condition}
@@ -511,11 +507,10 @@ AND ewoc_code > 1100000000
         cropland_filter_query_part += f"""
 {prefix} ewoc_code IN ({ct_list_str})
 """
-
     main_query = "SET TimeZone = 'UTC';\n"
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{tpath}')
 {spatial_query_part}
 {cropland_filter_query_part}
@@ -813,9 +808,11 @@ def process_extractions_df(
     """
 
     from worldcereal.utils.legend import ewoc_code_to_label
-    from worldcereal.utils.timeseries import (DataFrameValidator,
-                                              TimeSeriesProcessor,
-                                              process_parquet)
+    from worldcereal.utils.timeseries import (
+        DataFrameValidator,
+        TimeSeriesProcessor,
+        process_parquet,
+    )
 
     logger.info("Processing selected samples ...")
 

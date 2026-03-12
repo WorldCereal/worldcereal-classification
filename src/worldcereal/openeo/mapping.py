@@ -161,10 +161,15 @@ def _reduce_temporal_mean(cube: DataCube) -> DataCube:
 
 
 def _filename_prefix(
-    product: WorldCerealProductType, temporal: TemporalContext, raw: bool = False
+    product: WorldCerealProductType | str,
+    temporal: TemporalContext,
+    raw: bool = False,
 ) -> str:
+    stem = (
+        product.value if isinstance(product, WorldCerealProductType) else str(product)
+    )
     suffix = "-raw" if raw else ""
-    return f"{product.value}{suffix}_{temporal.start_date}_{temporal.end_date}"
+    return f"{stem}{suffix}_{temporal.start_date}_{temporal.end_date}"
 
 
 def _save_result(cube: DataCube, prefix: str) -> DataCube:
@@ -181,7 +186,153 @@ def _workflow_inference_cube(
     cube = _run_udf(inputs, inference_udf)
     cube.metadata = apply_metadata(cube.metadata, workflow_context)
     cube = _reduce_temporal_mean(cube)
-    return cube.linear_scale_range(0, 254, 0, 254)
+    return cube
+
+
+def _dedupe_bands(bands: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for band in bands:
+        if band not in seen:
+            seen.add(band)
+            ordered.append(band)
+    return ordered
+
+
+def _split_auxiliary_bands(
+    band_names: Sequence[str],
+) -> Tuple[List[str], List[str], List[str], List[str]]:
+    """Split UDF outputs into classification, ndvi, embedding dims and embedding-scale groups."""
+
+    ndvi = [band for band in band_names if band.startswith("ndvi:")]
+    embedding_dims = [
+        band for band in band_names if band.startswith("global_embedding:dim_")
+    ]
+    emb_scale = [band for band in band_names if band == "global_embedding:scale"]
+    classification = [
+        band
+        for band in band_names
+        if band not in set(ndvi)
+        and band not in set(embedding_dims)
+        and band not in set(emb_scale)
+    ]
+    return (
+        _dedupe_bands(classification),
+        _dedupe_bands(ndvi),
+        _dedupe_bands(embedding_dims),
+        _dedupe_bands(emb_scale),
+    )
+
+
+def _is_supported_workflow_band(band: str) -> bool:
+    if band in {
+        "cropland_classification",
+        "probability_cropland",
+        "probability_other",
+        "global_embedding:scale",
+    }:
+        return True
+    if band.startswith("croptype_classification:"):
+        return True
+    if band.startswith("croptype_probability:"):
+        return True
+    if band.startswith("ndvi:"):
+        return True
+    if band.startswith("global_embedding:dim_"):
+        return True
+    return False
+
+
+def _embeddings_export_requested(workflow_context: Mapping[str, Any]) -> bool:
+    def _resolve_in_block(block: Optional[Mapping[str, Any]]) -> Optional[bool]:
+        if not isinstance(block, Mapping):
+            return None
+        model = block.get("model")
+        if not isinstance(model, Mapping):
+            return None
+        value = model.get("export_embeddings")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, str)):
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+        return None
+
+    for key in ("workflow_config", "seasonal_workflow"):
+        resolved = _resolve_in_block(workflow_context.get(key))
+        if resolved is not None:
+            return resolved
+
+    direct = workflow_context.get("export_embeddings")
+    if isinstance(direct, bool):
+        return direct
+    if isinstance(direct, (int, str)):
+        return str(direct).strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _merge_products_requested(workflow_context: Mapping[str, Any]) -> bool:
+    season = workflow_context.get("workflow_config", workflow_context).get("season", {})
+    value = season.get("merge_classification_products")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, str)):
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _validate_band_contract(
+    band_names: Sequence[str], *, require_embeddings_bundle: bool = False
+) -> None:
+    unknown = [band for band in band_names if not _is_supported_workflow_band(band)]
+    if unknown:
+        unknown_sorted = ", ".join(sorted(set(unknown)))
+        raise ValueError(
+            "Seasonal UDF emitted unsupported output bands: "
+            f"{unknown_sorted}. Update mapping contract before exporting."
+        )
+
+    embedding_dims = [
+        band for band in band_names if band.startswith("global_embedding:dim_")
+    ]
+    has_embedding_dims = bool(embedding_dims)
+    has_embedding_scale = "global_embedding:scale" in band_names
+
+    if has_embedding_dims != has_embedding_scale:
+        raise ValueError(
+            "Embeddings outputs must include both quantized dimensions and global_embedding:scale."
+        )
+
+    if require_embeddings_bundle and not (has_embedding_dims and has_embedding_scale):
+        raise ValueError(
+            "export_embeddings=True but embeddings bundle is incomplete or missing from UDF outputs."
+        )
+
+
+def _save_optional_scaled_result(
+    cube: DataCube,
+    bands: Sequence[str],
+    prefix: str,
+    *,
+    in_min: float,
+    in_max: float,
+    out_min: float,
+    out_max: float,
+) -> Optional[DataCube]:
+    if not bands:
+        return None
+    selected = cube.filter_bands(list(bands))
+    scaled = selected.linear_scale_range(in_min, in_max, out_min, out_max)
+    return _save_result(scaled, prefix)
+
+
+def _save_optional_result(
+    cube: DataCube,
+    bands: Sequence[str],
+    prefix: str,
+) -> Optional[DataCube]:
+    if not bands:
+        return None
+    return _save_result(cube.filter_bands(list(bands)), prefix)
 
 
 def _cropland_map(
@@ -200,18 +351,66 @@ def _cropland_map(
             model_cfg["enable_croptype_head"] = False
     cube = _workflow_inference_cube(inputs, cropland_context)
     band_names = cube.metadata.band_names
-    available_bands = [band for band in band_names if not band.startswith("croptype")]
-    if not available_bands:
+    _validate_band_contract(
+        band_names,
+        require_embeddings_bundle=_embeddings_export_requested(cropland_context),
+    )
+    classification_bands, ndvi_bands, embedding_dim_bands, emb_scale_bands = (
+        _split_auxiliary_bands(
+            [band for band in band_names if not band.startswith("croptype_")]
+        )
+    )
+    if not classification_bands:
         raise ValueError(
             "Seasonal UDF did not emit cropland bands; expected cropland outputs."
         )
-    filtered = cube.filter_bands(available_bands)
-    return [
-        _save_result(
-            filtered,
-            _filename_prefix(WorldCerealProductType.CROPLAND, temporal_extent),
-        )
-    ]
+
+    outputs: List[DataCube] = []
+    cropland_main = _save_optional_scaled_result(
+        cube,
+        classification_bands,
+        _filename_prefix(WorldCerealProductType.CROPLAND, temporal_extent),
+        in_min=0,
+        in_max=254,
+        out_min=0,
+        out_max=254,
+    )
+    if cropland_main is not None:
+        outputs.append(cropland_main)
+
+    ndvi_output = _save_optional_scaled_result(
+        cube,
+        ndvi_bands,
+        _filename_prefix("ndvi", temporal_extent),
+        in_min=0,
+        in_max=254,
+        out_min=0,
+        out_max=254,
+    )
+    if ndvi_output is not None:
+        outputs.append(ndvi_output)
+
+    embeddings_output = _save_optional_scaled_result(
+        cube,
+        embedding_dim_bands,
+        _filename_prefix("embeddings", temporal_extent),
+        in_min=0,
+        in_max=254,
+        out_min=0,
+        out_max=254,
+    )
+    if embeddings_output is not None:
+        outputs.append(embeddings_output)
+
+    emb_scale_output = _save_optional_result(
+        cube,
+        emb_scale_bands,
+        _filename_prefix("embeddings-scale", temporal_extent),
+    )
+    if emb_scale_output is not None:
+        outputs.append(emb_scale_output)
+
+    return outputs
 
 
 def _croptype_map(
@@ -223,6 +422,10 @@ def _croptype_map(
 
     cube = _workflow_inference_cube(inputs, workflow_context)
     band_names = cube.metadata.band_names
+    _validate_band_contract(
+        band_names,
+        require_embeddings_bundle=_embeddings_export_requested(workflow_context),
+    )
     classification_bands = [
         band for band in band_names if band.startswith("croptype_classification")
     ]
@@ -249,6 +452,7 @@ def _croptype_map(
             if season_id not in season_order:
                 season_order.append(season_id)
 
+    merge_products = _merge_products_requested(workflow_context)
     season_windows = _season_windows_from_context(workflow_context)
     season_results: List[DataCube] = []
     for season_id in season_order:
@@ -263,49 +467,107 @@ def _croptype_map(
         normalized_labels = [
             _season_band_label(band, season_id) for band in season_bands
         ]
-        season_cube = cube.filter_bands(season_bands).rename_labels(
-            dimension="bands",
-            target=normalized_labels,
-        )
-        window = season_windows.get(season_id)
-        window_suffix = ""
-        if window:
-            start_label = _sanitize_filename_fragment(window[0])
-            end_label = _sanitize_filename_fragment(window[1])
-            window_suffix = f"_[{start_label}_{end_label}]"
-        season_results.append(
-            _save_result(
-                season_cube,
-                f"{_filename_prefix(WorldCerealProductType.CROPTYPE, temporal_extent)}_{season_id}{window_suffix}",
+        if not merge_products:
+            season_cube = cube.filter_bands(season_bands).rename_labels(
+                dimension="bands",
+                target=normalized_labels,
             )
-        )
+            season_cube = season_cube.linear_scale_range(0, 254, 0, 254)
+            window = season_windows.get(season_id)
+            window_suffix = ""
+            if window:
+                start_label = _sanitize_filename_fragment(window[0])
+                end_label = _sanitize_filename_fragment(window[1])
+                window_suffix = f"_[{start_label}_{end_label}]"
+            season_results.append(
+                _save_result(
+                    season_cube,
+                    f"{_filename_prefix(WorldCerealProductType.CROPTYPE, temporal_extent)}_{season_id}{window_suffix}",
+                )
+            )
 
-    if not season_results:
+    if not season_order:
         raise ValueError(
             "Seasonal UDF did not emit croptype bands that could be assigned to a season."
         )
 
-    cropland_bands = [band for band in band_names if not band.startswith("croptype")]
-
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    ordered_cropland = []
-    for band in cropland_bands:
-        if band not in seen:
-            seen.add(band)
-            ordered_cropland.append(band)
-
-    cropland_results: List[DataCube] = []
-    if ordered_cropland:
-        cropland_cube = cube.filter_bands(ordered_cropland)
-        cropland_results.append(
+    if merge_products:
+        all_croptype_bands = [
+            band for band in band_names if band.startswith("croptype_")
+        ]
+        if not all_croptype_bands:
+            raise ValueError(
+                "Seasonal UDF did not emit croptype bands; cannot build merged product."
+            )
+        cropland_bands_for_merge, _, _, _ = _split_auxiliary_bands(
+            [band for band in band_names if not band.startswith("croptype_")]
+        )
+        # merged_bands = all cropland outputs (classification + probabilities)
+        #              + all croptype outputs (classification + probabilities, all seasons)
+        merged_bands = cropland_bands_for_merge + all_croptype_bands
+        merged_cube = cube.filter_bands(merged_bands).linear_scale_range(0, 254, 0, 254)
+        season_results.append(
             _save_result(
-                cropland_cube,
-                _filename_prefix(WorldCerealProductType.CROPLAND, temporal_extent),
+                merged_cube,
+                _filename_prefix("cropland-croptype", temporal_extent),
             )
         )
 
-    return season_results + cropland_results
+    cropland_bands = [band for band in band_names if not band.startswith("croptype_")]
+    (
+        cropland_classification_bands,
+        ndvi_bands,
+        embedding_dim_bands,
+        emb_scale_bands,
+    ) = _split_auxiliary_bands(cropland_bands)
+
+    additional_results: List[DataCube] = []
+    if not merge_products:
+        cropland_output = _save_optional_scaled_result(
+            cube,
+            cropland_classification_bands,
+            _filename_prefix(WorldCerealProductType.CROPLAND, temporal_extent),
+            in_min=0,
+            in_max=254,
+            out_min=0,
+            out_max=254,
+        )
+        if cropland_output is not None:
+            additional_results.append(cropland_output)
+
+    ndvi_output = _save_optional_scaled_result(
+        cube,
+        ndvi_bands,
+        _filename_prefix("ndvi", temporal_extent),
+        in_min=0,
+        in_max=254,
+        out_min=0,
+        out_max=254,
+    )
+    if ndvi_output is not None:
+        additional_results.append(ndvi_output)
+
+    embeddings_output = _save_optional_scaled_result(
+        cube,
+        embedding_dim_bands,
+        _filename_prefix("embeddings", temporal_extent),
+        in_min=0,
+        in_max=254,
+        out_min=0,
+        out_max=254,
+    )
+    if embeddings_output is not None:
+        additional_results.append(embeddings_output)
+
+    emb_scale_output = _save_optional_result(
+        cube,
+        emb_scale_bands,
+        _filename_prefix("embeddings-scale", temporal_extent),
+    )
+    if emb_scale_output is not None:
+        additional_results.append(emb_scale_output)
+
+    return season_results + additional_results
 
 
 def _embeddings_map(

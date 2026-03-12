@@ -15,7 +15,7 @@ import os
 import re
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
