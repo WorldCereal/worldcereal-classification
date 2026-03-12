@@ -205,10 +205,11 @@ def merge_seasons(
     s2_eos: np.ndarray,
     distinct: np.ndarray,
     nodata_val: int = 0,
+    merge_mode: str = "symmetric",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Where seasons are NOT distinct (distinct==0), expand the longer of S1/S2
-    symmetrically to exactly 365 days and store the result as the merged S1 season.
+    to exactly 365 days and store the result as the merged S1 season.
     S2 is masked with nodata_val.
 
     Strategy
@@ -216,20 +217,45 @@ def merge_seasons(
     1. Compute the length-of-season (LOS) for both S1 and S2 in absolute days
        (cross-year wrap handled by adding 365 when EOS < SOS).
     2. Choose the season with the greater LOS as the *base* season.
-    3. Calculate padding = 365 - base_LOS  (split evenly: floor(pad/2) on the
-       SOS side, ceil(pad/2) on the EOS side so the total is always exactly 365).
-    4. The merged SOS = base_SOS - pad_sos  (in DOY, wrapping into previous year
-       if needed, but stored mod 365 in the 1-365 range).
-    5. The merged EOS is implied: base_EOS + pad_eos, similarly wrapped.
-    6. Where base_LOS >= 365 already (degenerate near-full-year season), no
+    3. Calculate padding = 365 - base_LOS to reach a full year.
+    4. Distribute the padding according to *merge_mode* (see below).
+    5. Where base_LOS >= 365 already (degenerate near-full-year season), no
        expansion is done — the season is kept at 365 days exactly.
+    6. EOS is always kept strictly less than SOS (i.e. EOS = SOS − 1, wrapped)
+       to avoid a zero-length degenerate season (e.g. SOS=256 → EOS=255).
 
     Where distinct==1 or nodata (255): keep original values unchanged.
+
+    Parameters
+    ----------
+    merge_mode : str
+        How to distribute the padding days:
+
+        ``"symmetric"`` *(default)*
+            Split evenly: ``floor(pad/2)`` pulled earlier on the SOS side,
+            ``ceil(pad/2)`` pushed later on the EOS side.
+            The base season grows in both directions equally.
+
+        ``"towards_other"``
+            Expand the base season *only toward the side where the shorter
+            season's centre lies*.  The centre of the shorter season is
+            compared (on the circular DOY axis) to both ends of the base
+            season.  If the shorter season's centre is closer to the EOS of
+            the base season, all padding goes to the EOS side (SOS stays
+            fixed); otherwise all padding goes to the SOS side (EOS stays
+            fixed).  This avoids stretching the base season away from the
+            region of interest and keeps the merged window as close as
+            possible to where crops actually grow.
 
     Returns
     -------
     s1_sos_out, s1_eos_out, s2_sos_out, s2_eos_out  -- all int16
     """
+    if merge_mode not in ("symmetric", "towards_other"):
+        raise ValueError(
+            f"merge_mode must be 'symmetric' or 'towards_other', got {merge_mode!r}"
+        )
+
     not_distinct = distinct == 0  # pixels to merge
 
     s1_sos_f = s1_sos.astype(np.float32)
@@ -246,26 +272,62 @@ def merge_seasons(
     # --- Choose the longer season as the base ---
     s1_is_longer = s1_los >= s2_los
     base_sos = np.where(s1_is_longer, s1_sos_f, s2_sos_f)
-    base_los = np.where(s1_is_longer, s1_los, s2_los)
+    base_eos_abs = base_sos + np.where(s1_is_longer, s1_los, s2_los)
+    base_los = base_eos_abs - base_sos  # = max(s1_los, s2_los)
 
-    # --- Compute symmetric padding to reach 365 days ---
-    # Clamp base_los to 365 so we never get negative padding.
+    # Centre of the shorter (other) season on the absolute DOY axis anchored
+    # at base_sos, so circular comparisons stay consistent.
+    other_sos = np.where(s1_is_longer, s2_sos_f, s1_sos_f)
+    other_eos_abs = np.where(s1_is_longer, s2_eos_abs, s1_eos_abs)
+    other_centre_abs = (other_sos + other_eos_abs) / 2.0
+    # If the other season's centre is numerically before base_sos on the
+    # absolute axis, shift it forward by 365 so it falls within the same
+    # "ring" as the base season window.
+    other_centre_abs = np.where(
+        other_centre_abs < base_sos,
+        other_centre_abs + 365.0,
+        other_centre_abs,
+    )
+
+    # --- Compute padding to reach 365 days ---
     base_los_clamped = np.minimum(base_los, 365.0)
     padding = 365.0 - base_los_clamped
-    pad_sos = np.floor(padding / 2.0)    # days pulled earlier on SOS side
-    pad_eos = padding - pad_sos          # days pushed later on EOS side (ceil)
+
+    if merge_mode == "symmetric":
+        # Split evenly: floor on SOS side, ceil on EOS side.
+        pad_sos = np.floor(padding / 2.0)
+        pad_eos = padding - pad_sos
+
+    else:  # "towards_other"
+        # Determine which end of the base season the other season's centre
+        # is closer to on the circular axis.
+        # Distance from other_centre to EOS of the base season:
+        dist_to_eos = other_centre_abs - base_eos_abs
+        # Negative means the other centre is *before* base_eos, so the other
+        # season partly overlaps / is on the SOS side of the base.
+        # Expand toward the side where |dist| is smaller, i.e. where the
+        # other season actually sits.
+        # Closer to EOS side → put all padding on EOS (SOS stays fixed).
+        # Closer to SOS side → put all padding on SOS (EOS stays fixed).
+        closer_to_eos = np.abs(dist_to_eos) <= (base_los_clamped / 2.0)
+        pad_sos = np.where(closer_to_eos, 0.0, padding)
+        pad_eos = np.where(closer_to_eos, padding, 0.0)
 
     # --- New SOS: pull back by pad_sos, wrap into 1-365 range ---
     new_sos_raw = base_sos - pad_sos
-    # Wrap: if new_sos_raw <= 0, it crossed Jan 1 into previous year
     new_sos = np.where(new_sos_raw <= 0, new_sos_raw + 365.0, new_sos_raw)
     new_sos = np.round(new_sos).astype(np.int16)
 
     # --- New EOS: base_EOS (abs) + pad_eos, wrap into 1-365 range ---
-    base_eos_abs = base_sos + base_los_clamped
     new_eos_abs = base_eos_abs + pad_eos
     new_eos_raw = np.where(new_eos_abs > 365.0, new_eos_abs - 365.0, new_eos_abs)
     new_eos = np.round(new_eos_raw).astype(np.int16)
+
+    # --- Ensure EOS != SOS: if they are equal, pull EOS back by 1 day (wrapped) ---
+    # e.g. SOS=256 → EOS must be 255, not 256.
+    eos_eq_sos = new_eos == new_sos
+    new_eos_adj = np.where(new_eos <= 1, np.int16(365), new_eos - np.int16(1))
+    new_eos = np.where(eos_eq_sos, new_eos_adj, new_eos).astype(np.int16)
 
     # --- Apply only where not distinct ---
     s1_sos_out = np.where(not_distinct, new_sos, s1_sos).astype(np.int16)
@@ -938,6 +1000,7 @@ def run_season_overlap_pipeline(
     mask_file: Optional[str] = None,
     mask_attribute: Optional[str] = None,
     mask_threshold: float = 0.0,
+    merge_mode: str = "symmetric",
 ) -> dict[str, str]:
     """
     Full pipeline: read rasters → compute overlap → (smooth) → (aggregate zones) → write outputs.
@@ -974,6 +1037,17 @@ def run_season_overlap_pipeline(
     mask_threshold : float
         Features with ``mask_attribute > mask_threshold`` are kept.
         Default 0.0.
+    merge_mode : str
+        Controls how the longer season is extended to 365 days when seasons
+        are not distinct.  Passed directly to :func:`merge_seasons`.
+
+        ``"symmetric"`` *(default)*
+            Padding split evenly on both the SOS and EOS sides.
+
+        ``"towards_other"``
+            All padding goes toward the side where the shorter season's
+            centre lies, so the base season grows only in the direction
+            where the other season actually falls.
 
     Returns
     -------
@@ -1083,9 +1157,10 @@ def run_season_overlap_pipeline(
         print(f"  Written: {p_legend}")
 
     # --- Step 2: produce merged/masked seasons ---
-    print("Merging/masking seasons for non-distinct pixels...")
+    print(f"Merging/masking seasons for non-distinct pixels (merge_mode={merge_mode!r})...")
     s1_sos_m, s1_eos_m, s2_sos_m, s2_eos_m = merge_seasons(
-        s1_sos, s1_eos, s2_sos, s2_eos, distinct, nodata_val=nodata_val
+        s1_sos, s1_eos, s2_sos, s2_eos, distinct,
+        nodata_val=nodata_val, merge_mode=merge_mode,
     )
 
     # --- Step 3: write outputs ---
