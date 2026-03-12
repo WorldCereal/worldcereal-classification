@@ -817,7 +817,7 @@
                       "cropland": {
                         "enabled": true,
                         "method": {
-                          "from_parameter": "postprocessing_method"
+                          "from_parameter": "postprocess_method"
                         },
                         "kernel_size": {
                           "from_parameter": "postprocess_kernel_size"
@@ -826,7 +826,7 @@
                       "croptype": {
                         "enabled": true,
                         "method": {
-                          "from_parameter": "postprocessing_method"
+                          "from_parameter": "postprocess_method"
                         },
                         "kernel_size": {
                           "from_parameter": "postprocess_kernel_size"
