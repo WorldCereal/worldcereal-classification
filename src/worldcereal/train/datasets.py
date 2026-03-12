@@ -4,45 +4,24 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib import resources
 from math import floor
-from typing import (
-    Any,
-    Dict,
-    Hashable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (Any, Dict, Hashable, List, Literal, Mapping, Optional,
+                    Sequence, Tuple, Union)
 
 import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from prometheo.predictors import (
-    DEM_BANDS,
-    METEO_BANDS,
-    NODATAVALUE,
-    S1_BANDS,
-    S2_BANDS,
-    Predictors,
-)
+from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
+                                  S1_BANDS, S2_BANDS, Predictors)
 from torch.utils.data import Dataset, Sampler
-
 from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (
-    GLOBAL_SEASON_IDS,
-    MIN_EDGE_BUFFER,
-    SEASONALITY_COLUMN_MAP,
-    SEASONALITY_LAT_RANGE,
-    SEASONALITY_LON_RANGE,
-    SEASONALITY_LOOKUP_COLUMNS,
-    SEASONALITY_LOOKUP_FILENAME,
-    SEASONALITY_LOOKUP_PACKAGE,
-    SEASONALITY_LOOKUP_PATH,
-)
+from worldcereal.train import (GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER,
+                               SEASONALITY_COLUMN_MAP, SEASONALITY_LAT_RANGE,
+                               SEASONALITY_LON_RANGE,
+                               SEASONALITY_LOOKUP_COLUMNS,
+                               SEASONALITY_LOOKUP_FILENAME,
+                               SEASONALITY_LOOKUP_PACKAGE,
+                               SEASONALITY_LOOKUP_PATH)
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.seasonal import align_to_composite_window
 
@@ -387,7 +366,12 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
     if not table.index.is_unique:
         raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
 
-    _SEASONALITY_LOOKUP_TABLE = table[list(SEASONALITY_LOOKUP_COLUMNS)].sort_index()
+    # Keep all DOY columns registered in SEASONALITY_COLUMN_MAP that exist in
+    # the parquet. This allows newer lookup parquets (with annual columns) to work
+    # without breaking backward compatibility with older 4-column files.
+    all_known_cols = {col for pair in SEASONALITY_COLUMN_MAP.values() for col in pair}
+    keep_cols = sorted(col for col in all_known_cols if col in table.columns)
+    _SEASONALITY_LOOKUP_TABLE = table[keep_cols].sort_index()
     return _SEASONALITY_LOOKUP_TABLE
 
 
@@ -1293,10 +1277,17 @@ class WorldCerealDataset(Dataset):
             sos_col, eos_col = SEASONALITY_COLUMN_MAP[season_id]
         except KeyError as exc:
             raise ValueError(
-                f"Season '{season_id}' is not available in the seasonality lookup."
+                f"Season '{season_id}' is not available in the seasonality lookup. "
+                f"Known seasons: {sorted(SEASONALITY_COLUMN_MAP)}"
             ) from exc
 
         table = _ensure_seasonality_lookup()
+        if sos_col not in table.columns or eos_col not in table.columns:
+            raise ValueError(
+                f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
+                "but they are not present in the seasonality lookup parquet. "
+                "Regenerate the parquet with the required bands included."
+            )
         try:
             doy_row = table.loc[(lat_center, lon_center)]
         except KeyError as exc:  # pragma: no cover - unexpected gaps
