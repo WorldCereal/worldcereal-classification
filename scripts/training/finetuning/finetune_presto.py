@@ -21,6 +21,7 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
+from worldcereal.train import GLOBAL_SEASON_IDS
 from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
                                     remove_small_classes)
@@ -586,6 +587,15 @@ def main(args):
     # so a lower threshold prevents spurious loss of croptype supervision signal.
     train_min_season_coverage: float = args.train_min_season_coverage
 
+    # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
+    season_ids: Optional[Tuple[str, ...]] = (
+        tuple(args.season_ids) if args.season_ids else None
+    )
+    logger.info(
+        f"Season IDs: {season_ids or GLOBAL_SEASON_IDS}"
+        + (" (default)" if season_ids is None else " (custom)")
+    )
+
     # Presto freezing settings
     freeze_layers = None
     unfreeze_epoch = None
@@ -951,6 +961,7 @@ def main(args):
         label_jitter=label_jitter,
         label_window=label_window,
         train_min_season_coverage=train_min_season_coverage,
+        season_ids=season_ids,
     )
 
     # Construct the finetuning model based on the pretrained model
@@ -1300,6 +1311,7 @@ def main(args):
         "time_explicit": time_explicit,
         "label_jitter": label_jitter,
         "label_window": label_window,
+        "season_ids": list(season_ids) if season_ids else list(GLOBAL_SEASON_IDS),
         "masking": masking_payload,
     }
     classes_payload = {
@@ -1730,6 +1742,19 @@ def parse_args(arg_list=None):
             "crop-type supervision in the training split. "
             "Val/test always use 1.0 (full coverage required). "
             "Default: 0.5."
+        ),
+    )
+
+    # Season selection
+    parser.add_argument(
+        "--season_ids",
+        type=str,
+        nargs="*",
+        default=None,
+        help=(
+            "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'annual'). "
+            "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2). "
+            "Use 'annual' for a single annual season from the crop calendar."
         ),
     )
 
