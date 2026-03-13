@@ -26,7 +26,7 @@ SEASONALITY_LOOKUP_COLUMNS: Tuple[str, ...] = (
 SEASONALITY_COLUMN_MAP: Dict[str, Tuple[str, str]] = {
     "tc-s1": ("s1_sos_doy", "s1_eos_doy"),
     "tc-s2": ("s2_sos_doy", "s2_eos_doy"),
-    "annual": ("annual_sos_doy", "annual_eos_doy"),
+    "tc-annual": ("annual_sos_doy", "annual_eos_doy"),
 }
 SEASONALITY_LAT_RANGE = (-89.999, 89.999)
 SEASONALITY_LON_RANGE = (-179.999, 179.999)

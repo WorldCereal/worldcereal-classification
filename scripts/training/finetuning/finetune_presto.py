@@ -1752,9 +1752,9 @@ def parse_args(arg_list=None):
         nargs="*",
         default=None,
         help=(
-            "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'annual'). "
+            "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'tc-annual'). "
             "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2). "
-            "Use 'annual' for a single annual season from the crop calendar."
+            "Use 'tc-annual' for a single annual season from the crop calendar."
         ),
     )
 
