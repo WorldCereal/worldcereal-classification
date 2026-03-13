@@ -626,6 +626,7 @@ def prepare_training_datasets(
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
+    eval_min_season_coverage: Optional[float] = None,
     season_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
@@ -671,9 +672,15 @@ def prepare_training_datasets(
         crop-type supervision signal in the **training** split. With augmentation
         enabled, the window can shift so that a season is only partially inside
         the window; a value of 0.5 retains the season as long as at least half
-        its slots are available. Validation and test splits always use 1.0
-        (full coverage required) so that evaluation metrics are not inflated by
-        partial-season pooling.
+        its slots are available.
+    eval_min_season_coverage : float or None, default=None
+        Minimum fraction of a season's composite slots required for the
+        **validation and test** splits.  When ``None`` (default), falls back to
+        ``train_min_season_coverage``.  The previous hard-coded value of 1.0
+        works for seasonal windows that fit within the data's timestep count
+        (e.g. tc-s1/tc-s2 at ~6 months), but is unreachable for annual windows
+        that span more timesteps than the data provides (e.g. 13 monthly slots
+        vs 12-month data), causing nearly all samples to be silently dropped.
     season_ids : Optional[Sequence[str]], default=None
         Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
         or ``("annual",)``).  When ``None`` the dataset falls back to
@@ -700,6 +707,11 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
     )
+    effective_eval_coverage = (
+        eval_min_season_coverage
+        if eval_min_season_coverage is not None
+        else train_min_season_coverage
+    )
     val_ds = WorldCerealLabelledDataset(
         val_df,
         num_timesteps=num_timesteps,
@@ -713,7 +725,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for validation
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
-        min_season_coverage=1.0,  # Full coverage required for evaluation
+        min_season_coverage=effective_eval_coverage,
         season_ids=season_ids,
     )
     test_ds = WorldCerealLabelledDataset(
@@ -729,7 +741,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for testing
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
-        min_season_coverage=1.0,  # Full coverage required for evaluation
+        min_season_coverage=effective_eval_coverage,
         season_ids=season_ids,
     )
     return train_ds, val_ds, test_ds
