@@ -60,6 +60,61 @@ CLASS_MAPPINGS_PATH = (
     / "class_mappings.json"
 )
 DEFAULT_SEASON_IDS = ("tc-s1", "tc-s2")
+
+# -- Season-ID ↔ head-key helpers ------------------------------------------
+_SEASON_TO_HEAD: Dict[str, str] = {
+    "tc-s1": "CROPTYPE_S1",
+    "tc-s2": "CROPTYPE_S2",
+    "tc-annual": "CROPTYPE_ANNUAL",
+}
+_HEAD_TO_SEASON: Dict[str, str] = {v: k for k, v in _SEASON_TO_HEAD.items()}
+
+
+def _season_id_to_head_key(season_id: str) -> str:
+    """Map a season ID to the corresponding head key for display/indexing."""
+    return _SEASON_TO_HEAD.get(
+        season_id,
+        f"CROPTYPE_{season_id.upper().replace('-', '_')}",
+    )
+
+
+def _head_key_to_season_id(head_key: str) -> Optional[str]:
+    """Map a head key back to its season ID (``None`` if not a croptype head)."""
+    return _HEAD_TO_SEASON.get(head_key)
+
+
+# -- GT variable helpers per head key --------------------------------------
+_HEAD_GT_CONFIG: Dict[str, Dict[str, Any]] = {
+    "LANDCOVER": {
+        "candidates": [
+            "WORLDCEREAL_LANDCOVER_GT",
+            "LANDCOVER10_GT",
+            "landcover_gt",
+            "landcover",
+        ],
+        "gt_var": "WORLDCEREAL_LANDCOVER_GT",
+    },
+    "CROPTYPE_S1": {
+        "candidates": ["WORLDCEREAL_SEASON1_GT", "worldcereal_season1_gt"],
+        "gt_var": "WORLDCEREAL_SEASON1_GT",
+    },
+    "CROPTYPE_S2": {
+        "candidates": ["WORLDCEREAL_SEASON2_GT", "worldcereal_season2_gt"],
+        "gt_var": "WORLDCEREAL_SEASON2_GT",
+    },
+    "CROPTYPE_ANNUAL": {
+        # Annual season: use season-1 GT as best available proxy.
+        "candidates": [
+            "WORLDCEREAL_SEASON1_GT",
+            "worldcereal_season1_gt",
+            "WORLDCEREAL_SEASON2_GT",
+            "worldcereal_season2_gt",
+        ],
+        "gt_var": "WORLDCEREAL_SEASON1_GT",
+    },
+}
+
+
 NO_CROP_VALUE = 254
 DEBUG_CROP_SIZE = 256
 PANEL_TITLE_FONTSIZE = 40
@@ -435,22 +490,27 @@ def _to_2d_array(da: xr.DataArray, target_shape: Tuple[int, int]) -> np.ndarray:
 
 
 def get_gt_for_row(ds: xr.Dataset, row_key: str, target_shape: Tuple[int, int]) -> Optional[np.ndarray]:
-    """Get ground-truth array per output row, if present and interpretable."""
+    """Get ground-truth array per output row, if present and interpretable.
 
-    candidates: List[str]
-    if row_key == "croptype_s1":
-        candidates = ["WORLDCEREAL_SEASON1_GT", "worldcereal_season1_gt"]
-    elif row_key == "croptype_s2":
-        candidates = ["WORLDCEREAL_SEASON2_GT", "worldcereal_season2_gt"]
-    elif row_key == "landcover":
-        candidates = [
-            "WORLDCEREAL_LANDCOVER_GT",
-            "LANDCOVER10_GT",
-            "landcover_gt",
-            "landcover",
-        ]
-    else:
+    *row_key* can be an uppercase head key (``"CROPTYPE_S1"``, ``"CROPTYPE_ANNUAL"``,
+    ``"LANDCOVER"``) or a legacy lowercase key (``"croptype_s1"`` etc.).
+    """
+    # Normalise to uppercase head key for config lookup.
+    lookup_key = row_key.upper()
+
+    if lookup_key not in _HEAD_GT_CONFIG:
+        # Try legacy lowercase conversions.
+        _LOWER_TO_HEAD = {
+            "croptype_s1": "CROPTYPE_S1",
+            "croptype_s2": "CROPTYPE_S2",
+            "landcover": "LANDCOVER",
+        }
+        lookup_key = _LOWER_TO_HEAD.get(row_key, lookup_key)
+
+    cfg = _HEAD_GT_CONFIG.get(lookup_key)
+    if cfg is None:
         return None
+    candidates: List[str] = cfg["candidates"]
 
     for var in candidates:
         if var not in ds:
@@ -767,7 +827,24 @@ def _infer_model_signature(
     return str(signature)
 
 
-def _build_head_specs(metadata: Mapping[str, Any]) -> Dict[str, HeadSpec]:
+def _resolve_season_ids_from_metadata(
+    metadata: Mapping[str, Any],
+) -> Tuple[str, ...]:
+    """Read ``season_ids`` from the model's run_config; fall back to *DEFAULT_SEASON_IDS*."""
+    run_config = metadata.get("run_config", {})
+    if isinstance(run_config, dict):
+        dataset_cfg = run_config.get("dataset", {})
+        if isinstance(dataset_cfg, dict):
+            sids = dataset_cfg.get("season_ids")
+            if sids and isinstance(sids, (list, tuple)):
+                return tuple(str(s) for s in sids)
+    return DEFAULT_SEASON_IDS
+
+
+def _build_head_specs(
+    metadata: Mapping[str, Any],
+    season_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, HeadSpec]:
     run_config = metadata.get("run_config", {})
     classes_cfg = run_config.get("classes", {}) if isinstance(run_config, dict) else {}
     manifest = metadata.get("manifest", {}) if isinstance(metadata, Mapping) else {}
@@ -805,41 +882,47 @@ def _build_head_specs(metadata: Mapping[str, Any]) -> Dict[str, HeadSpec]:
         )
         landcover_classes = ["no_cropland", "cropland"]
 
+    if season_ids is None:
+        season_ids = _resolve_season_ids_from_metadata(metadata)
+
     def _summarize(labels: Sequence[str]) -> str:
         preview = ", ".join(labels[:5])
         suffix = "..." if len(labels) > 5 else ""
         return f"{len(labels)} labels [{preview}{suffix}]"
 
     logger.info(
-        "Building head specs with croptype=%s and landcover=%s.",
+        "Building head specs with croptype=%s, landcover=%s, seasons=%s.",
         _summarize(croptype_classes),
         _summarize(landcover_classes),
+        list(season_ids),
     )
 
-    specs = {
+    specs: Dict[str, HeadSpec] = {
         "LANDCOVER": HeadSpec(
             key="LANDCOVER",
             display_name="LANDCOVER",
             class_names=[str(x) for x in landcover_classes],
             class_colors=_build_color_map(landcover_classes),
         ),
-        "CROPTYPE_S1": HeadSpec(
-            key="CROPTYPE_S1",
-            display_name="CROPTYPE Season 1",
-            class_names=[str(x) for x in croptype_classes],
-            class_colors=_build_color_map(croptype_classes),
-        ),
-        "CROPTYPE_S2": HeadSpec(
-            key="CROPTYPE_S2",
-            display_name="CROPTYPE Season 2",
-            class_names=[str(x) for x in croptype_classes],
-            class_colors=_build_color_map(croptype_classes),
-        ),
     }
+    for sid in season_ids:
+        head_key = _season_id_to_head_key(sid)
+        display = f"CROPTYPE ({sid})"
+        specs[head_key] = HeadSpec(
+            key=head_key,
+            display_name=display,
+            class_names=[str(x) for x in croptype_classes],
+            class_colors=_build_color_map(croptype_classes),
+        )
     return specs
 
 
 def _season_for_row(row_key: str) -> str:
+    """Map a head/row key to its season ID."""
+    sid = _head_key_to_season_id(row_key)
+    if sid is not None:
+        return sid
+    # Legacy fallback for unknown keys
     return DEFAULT_SEASON_IDS[0] if row_key == "CROPTYPE_S1" else DEFAULT_SEASON_IDS[1]
 
 
@@ -1167,7 +1250,23 @@ def _render_patch_figure(
 ) -> None:
     rgb, ndvi = _compute_rgb_ndvi(ds)
 
-    fig, axes = plt.subplots(4, 3, figsize=(30, 42), constrained_layout=False)
+    # Build row layout dynamically from head_specs (LANDCOVER first, then croptype heads).
+    row_layout: List[str] = []
+    if "LANDCOVER" in head_specs:
+        row_layout.append("LANDCOVER")
+    for key in head_specs:
+        if key.startswith("CROPTYPE"):
+            row_layout.append(key)
+
+    n_rows = 1 + len(row_layout)  # 1 overview row + head rows
+    row_height = 42 / 4  # keep per-row height identical to original 4-row layout
+    fig_height = row_height * n_rows
+
+    fig, axes = plt.subplots(n_rows, 3, figsize=(30, fig_height), constrained_layout=False)
+    # Ensure axes is 2-D even when n_rows == 1.
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]
+
     title_line = _infer_title(
         ds,
         patch_name,
@@ -1210,15 +1309,24 @@ def _render_patch_figure(
     axes[0, 1].axis("off")
     fig.colorbar(ndvi_im, ax=axes[0, 1], fraction=0.046, pad=0.04)
 
-    gt_context = get_gt_for_row(ds, "croptype_s1", ndvi.shape)
-    if gt_context is not None:
-        gt_context = _map_gt_to_indices(
-            gt_context,
-            head_specs["CROPTYPE_S1"].class_names,
-            mapping_key=ct_mapping_key,
-        )
+    # Use the first croptype head for the reference GT panel.
+    first_ct_key = next((k for k in row_layout if k.startswith("CROPTYPE")), None)
+    if first_ct_key is not None:
+        gt_context = get_gt_for_row(ds, first_ct_key, ndvi.shape)
+        if gt_context is not None:
+            gt_context = _map_gt_to_indices(
+                gt_context,
+                head_specs[first_ct_key].class_names,
+                mapping_key=ct_mapping_key,
+            )
+        context_head = head_specs[first_ct_key]
+        gt_label = _season_for_row(first_ct_key)
+    else:
+        gt_context = None
+        context_head = next(iter(head_specs.values()))
+        gt_label = None
+
     if gt_context is None:
-        context_head = head_specs["CROPTYPE_S1"]
         empty = np.full(ndvi.shape, -1, dtype=np.int32)
         _plot_categorical(
             axes[0, 2],
@@ -1232,18 +1340,17 @@ def _render_patch_figure(
             "Reference", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
         )
     else:
-        context_head = head_specs["CROPTYPE_S1"]
         _plot_categorical(
             axes[0, 2],
             gt_context.astype(np.int32),
             context_head,
             fit_legend=True,
         )
+        ref_suffix = f" ({gt_label} GT)" if gt_label else ""
         axes[0, 2].set_title(
-            "Reference (S1 GT)", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
+            f"Reference{ref_suffix}", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
         )
 
-    row_layout = ["LANDCOVER", "CROPTYPE_S1", "CROPTYPE_S2"]
     cropland_mask = None
     if "LANDCOVER" in enabled_rows and "LANDCOVER" in outputs:
         cropland_pred = outputs["LANDCOVER"][0]
@@ -1265,10 +1372,8 @@ def _render_patch_figure(
         pred, win, second = outputs[row_key]
         head = head_specs[row_key]
 
-        gt_row_key = "landcover" if row_key.startswith("LANDCOVER") else (
-            "croptype_s1" if row_key == "CROPTYPE_S1" else "croptype_s2"
-        )
-        gt_arr = get_gt_for_row(ds, gt_row_key, pred.shape)
+        # Fetch GT for this row via the config-driven lookup.
+        gt_arr = get_gt_for_row(ds, row_key, pred.shape)
         if gt_arr is not None and row_key.startswith("CROPTYPE"):
             gt_arr = _map_gt_to_indices(
                 gt_arr,
@@ -1281,11 +1386,8 @@ def _render_patch_figure(
         macro: Optional[float] = None
         if gt_arr is not None:
             fill_values: List[float] = []
-            gt_var = {
-                "landcover": "WORLDCEREAL_LANDCOVER_GT",
-                "croptype_s1": "WORLDCEREAL_SEASON1_GT",
-                "croptype_s2": "WORLDCEREAL_SEASON2_GT",
-            }.get(gt_row_key)
+            gt_cfg = _HEAD_GT_CONFIG.get(row_key, {})
+            gt_var = gt_cfg.get("gt_var")
             if gt_var and gt_var in ds:
                 fill_values = _extract_fill_values(ds[gt_var])
             acc, macro, per_class_f1 = _compute_metrics(
@@ -1310,8 +1412,7 @@ def _render_patch_figure(
             season_id = _season_for_row(row_key)
             season_months = _format_season_months(season_windows, season_id)
             season_suffix = f" ({season_months})" if season_months else ""
-            season_label = "1" if row_key.endswith("S1") else "2"
-            row_title = f"CT Season {season_label}{season_suffix}"
+            row_title = f"CT {head.display_name}{season_suffix}"
 
         if acc is not None and macro is not None:
             row_title += f" — Acc={acc:.3f} MacroF1={macro:.3f}"
@@ -1383,8 +1484,16 @@ def _render_patch_figure(
     plt.close(fig)
 
 
-def _normalize_heads(heads: Optional[Sequence[str]]) -> List[str]:
-    default = ["LANDCOVER", "CROPTYPE_S1", "CROPTYPE_S2"]
+def _normalize_heads(
+    heads: Optional[Sequence[str]],
+    valid_keys: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """Parse ``--heads`` CLI values into valid head keys.
+
+    *valid_keys* should come from ``head_specs.keys()`` so it adapts to
+    the model's actual season configuration.
+    """
+    default = list(valid_keys) if valid_keys else ["LANDCOVER", "CROPTYPE_S1", "CROPTYPE_S2"]
     if not heads:
         return default
     parsed: List[str] = []
@@ -1443,8 +1552,25 @@ def run_spatial_inference(
     metadata = _load_model_metadata(model_dir)
     model_zip = _resolve_model_zip(model_dir, metadata)
     model_signature = _infer_model_signature(metadata, model_zip, model_dir=model_dir)
-    head_specs = _build_head_specs(metadata)
-    selected_heads = _normalize_heads(heads)
+    season_ids = _resolve_season_ids_from_metadata(metadata)
+    head_specs = _build_head_specs(metadata, season_ids=season_ids)
+    selected_heads = _normalize_heads(heads, valid_keys=list(head_specs.keys()))
+
+    # Derive the season IDs that are actually enabled for this run.
+    model_season_ids: List[str] = []
+    for hk in selected_heads:
+        sid = _head_key_to_season_id(hk)
+        if sid is not None:
+            model_season_ids.append(sid)
+    if not model_season_ids:
+        # Fallback: use whatever the model was trained with.
+        model_season_ids = list(season_ids)
+
+    logger.info(
+        "Resolved model seasons: %s  (head keys: %s)",
+        model_season_ids,
+        [_season_id_to_head_key(s) for s in model_season_ids],
+    )
 
     patch_items = list_patches(patches_dir, continents)
     if limit is not None and limit > 0:
@@ -1505,15 +1631,9 @@ def run_spatial_inference(
 
         enable_cropland = "LANDCOVER" in selected_heads
         enable_croptype = any(
-            key in selected_heads for key in ["CROPTYPE_S1", "CROPTYPE_S2"]
+            _head_key_to_season_id(key) is not None for key in selected_heads
         )
-        season_ids_for_run: List[str] = []
-        if "CROPTYPE_S1" in selected_heads:
-            season_ids_for_run.append(DEFAULT_SEASON_IDS[0])
-        if "CROPTYPE_S2" in selected_heads:
-            season_ids_for_run.append(DEFAULT_SEASON_IDS[1])
-        if not season_ids_for_run:
-            season_ids_for_run = [DEFAULT_SEASON_IDS[0]]
+        season_ids_for_run = model_season_ids if enable_croptype else []
 
         season_windows = (
             _derive_season_windows_for_patch(ds, season_ids_for_run)
@@ -1536,8 +1656,7 @@ def run_spatial_inference(
             raise TypeError("Expected dataset output from run_seasonal_inference.")
 
         outputs: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-        for key in ["LANDCOVER", "CROPTYPE_S1", "CROPTYPE_S2"]:
-            spec = head_specs[key]
+        for key, spec in head_specs.items():
             try:
                 pred, win, second = _extract_head_outputs(
                     result_ds,
@@ -1546,14 +1665,9 @@ def run_spatial_inference(
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Failed to extract {key} outputs for {nc_path.name}: {exc}")
-                if key.startswith("CROPTYPE"):
-                    pred = np.zeros((ds.dims.get("y", 1), ds.dims.get("x", 1)), dtype=np.int32)
-                    win = np.zeros_like(pred, dtype=np.float32)
-                    second = np.zeros_like(pred, dtype=np.float32)
-                else:
-                    pred = np.zeros((ds.dims.get("y", 1), ds.dims.get("x", 1)), dtype=np.int32)
-                    win = np.zeros_like(pred, dtype=np.float32)
-                    second = np.zeros_like(pred, dtype=np.float32)
+                pred = np.zeros((ds.dims.get("y", 1), ds.dims.get("x", 1)), dtype=np.int32)
+                win = np.zeros_like(pred, dtype=np.float32)
+                second = np.zeros_like(pred, dtype=np.float32)
             outputs[key] = (pred, win, second)
 
         _render_patch_figure(
@@ -1604,7 +1718,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--heads",
         type=str,
         default=None,
-        help="List of heads: LANDCOVER,CROPTYPE_S1,CROPTYPE_S2",
+        help=(
+            "Comma-separated list of heads to render. Valid keys depend on "
+            "the model's season configuration: LANDCOVER, CROPTYPE_S1, "
+            "CROPTYPE_S2, CROPTYPE_ANNUAL. Defaults to all heads the model "
+            "was trained with."
+        ),
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
