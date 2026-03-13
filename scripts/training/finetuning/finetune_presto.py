@@ -583,9 +583,10 @@ def main(args):
     label_window = args.label_window
 
     # Minimum fraction of season slots required inside the training window for season supervision.
-    # Val/test always use 1.0 (full coverage). With augmentation the window shifts randomly
-    # so a lower threshold prevents spurious loss of croptype supervision signal.
+    # With augmentation the window shifts randomly so a lower threshold prevents spurious
+    # loss of croptype supervision signal.
     train_min_season_coverage: float = args.train_min_season_coverage
+    eval_min_season_coverage: Optional[float] = args.eval_min_season_coverage
 
     # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
     season_ids: Optional[Tuple[str, ...]] = (
@@ -961,6 +962,7 @@ def main(args):
         label_jitter=label_jitter,
         label_window=label_window,
         train_min_season_coverage=train_min_season_coverage,
+        eval_min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
     )
 
@@ -1312,6 +1314,8 @@ def main(args):
         "label_jitter": label_jitter,
         "label_window": label_window,
         "season_ids": list(season_ids) if season_ids else list(GLOBAL_SEASON_IDS),
+        "train_min_season_coverage": train_min_season_coverage,
+        "eval_min_season_coverage": eval_min_season_coverage,
         "masking": masking_payload,
     }
     classes_payload = {
@@ -1729,9 +1733,9 @@ def parse_args(arg_list=None):
     )
 
     # Season coverage threshold for the training split.
-    # Val/test always enforce full coverage (1.0). During training with augmentation
-    # the timestamp window can shift so a season is only partially covered;
-    # lowering this threshold prevents losing croptype supervision in those cases.
+    # During training with augmentation the timestamp window can shift so a season
+    # is only partially covered; lowering this threshold prevents losing croptype
+    # supervision in those cases.
     parser.add_argument(
         "--train_min_season_coverage",
         type=float,
@@ -1740,8 +1744,21 @@ def parse_args(arg_list=None):
             "Minimum fraction of a season's composite slots that must fall inside "
             "the selected 12-timestamp window for the season to contribute to "
             "crop-type supervision in the training split. "
-            "Val/test always use 1.0 (full coverage required). "
             "Default: 0.5."
+        ),
+    )
+
+    # Season coverage threshold for the validation/test splits.
+    parser.add_argument(
+        "--eval_min_season_coverage",
+        type=float,
+        default=None,
+        help=(
+            "Minimum fraction of a season's composite slots required for val/test "
+            "splits.  When omitted, uses the same value as --train_min_season_coverage. "
+            "The previous hard-coded value of 1.0 is unreachable for annual seasons "
+            "that span more composite slots than the data's timestep count (e.g. 13 "
+            "monthly slots vs 12-month data). Default: None (= train value)."
         ),
     )
 
