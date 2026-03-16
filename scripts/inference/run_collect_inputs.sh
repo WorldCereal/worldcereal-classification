@@ -13,25 +13,23 @@ PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
 # Make sure to provide a valid path to a vector file containing the grid cells 
 # for which you want to collect inputs.
 GRID_PATH="./bbox/test.gpkg"
-GRID_SIZE="20"
+GRID_SIZE="20" #km
 
 # Parameter specifying output folder
 OUTPUT_FOLDER="./preprocessed_inputs"
 
 # Parameters for temporal extent
-# For using OPTION 2, provide start and end date
-# START_DATE="2024-01-01"
-# END_DATE="2024-04-30"
-
-# For using OPTION 3, provide a year
+# In this example, we just provide a year.
+# The system will automatically determine the appropriate start and
+# end dates based on the local crop calendars.
 YEAR="2024"
 
 # Optional parameters
 S1_ORBIT_STATE="ASCENDING"
-PERIOD="month"
+COMPOSITING_WINDOW="month" # either "month" or "dekad"
 PARALLEL_JOBS="2"
-# note below we set restart_failed and randomize_jobs to True
-
+# note below we set restart_failed to True, meaning that failed jobs
+# will be restarted if you run the script again.
 
 # Run inputs collection
 "${PYTHONPATH}" "${PROCESS_CMD}" \
@@ -39,9 +37,8 @@ PARALLEL_JOBS="2"
 --grid_path "${GRID_PATH}" \
 --grid_size "${GRID_SIZE}" \
 --output_folder "${OUTPUT_FOLDER}" \
---compositing_window "${PERIOD}" \
+--compositing_window "${COMPOSITING_WINDOW}" \
 --s1_orbit_state "${S1_ORBIT_STATE}" \
 --year "${YEAR}" \
 --parallel_jobs "${PARALLEL_JOBS}" \
---restart_failed \
---randomize_jobs
+--restart_failed
