@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import geopandas as gpd
+from shapely.geometry import box
 from openeo_gfmap import TemporalContext
 
 from worldcereal.job import WorldCerealTask
@@ -129,8 +130,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--grid_path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the grid file (.parquet, .geoparquet, .geojson, .gpkg, .shp) defining the locations to extract.",
+    )
+    parser.add_argument(
+        "--bbox",
+        type=float,
+        nargs=4,
+        metavar=("MINX", "MINY", "MAXX", "MAXY"),
+        default=None,
+        help="Bounding box as four floats: minx miny maxx maxy. Mutually exclusive with --grid_path.",
+    )
+    parser.add_argument(
+        "--bbox_epsg",
+        type=int,
+        default=4326,
+        help="EPSG code for the bounding box coordinates (default: 4326).",
     )
     parser.add_argument(
         "--grid_size",
@@ -409,11 +424,23 @@ if __name__ == "__main__":
     if not hasattr(args, "randomize_jobs"):
         args.randomize_jobs = True
 
-    aoi_gdf = (
-        gpd.read_parquet(args.grid_path)
-        if args.grid_path.suffix.lower() in [".parquet", ".geoparquet"]
-        else gpd.read_file(args.grid_path)
-    )
+    if args.grid_path is None and args.bbox is None:
+        parser.error("One of --grid_path or --bbox is required.")
+    if args.grid_path is not None and args.bbox is not None:
+        parser.error("--grid_path and --bbox are mutually exclusive.")
+
+    if args.bbox is not None:
+        minx, miny, maxx, maxy = args.bbox
+        aoi_gdf = gpd.GeoDataFrame(
+            geometry=[box(minx, miny, maxx, maxy)],
+            crs=f"EPSG:{args.bbox_epsg}",
+        )
+    else:
+        aoi_gdf = (
+            gpd.read_parquet(args.grid_path)
+            if args.grid_path.suffix.lower() in [".parquet", ".geoparquet"]
+            else gpd.read_file(args.grid_path)
+        )
 
     temporal_extent = None
     if args.start_date and args.end_date:
