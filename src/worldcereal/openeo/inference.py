@@ -447,7 +447,7 @@ class HeadSpec:
         return len(self.class_names)
 
 
-def _backbone_fingerprint_from_artifact(artifact: ModelArtifact) -> str:
+def _backbone_fingerprint_from_artifact(artifact: "ModelArtifact") -> str:
     backbone_entry = artifact.manifest.get("backbone") or {}
     fingerprint = backbone_entry.get("fingerprint")
     if not fingerprint:

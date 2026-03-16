@@ -372,8 +372,7 @@ def test_apply_metadata_omits_croptype_labels_when_disabled(monkeypatch):
 
     monkeypatch.setattr(inference, "_extract_udf_configuration", fake_extract)
     monkeypatch.setattr(
-        inference,
-        "load_model_artifact",
+        "worldcereal.utils.models.load_model_artifact",
         lambda *_args, **_kwargs: SimpleNamespace(
             manifest={
                 "heads": [
@@ -428,8 +427,7 @@ def test_apply_metadata_handles_cropland_disabled(monkeypatch):
 
     monkeypatch.setattr(inference, "_extract_udf_configuration", fake_extract)
     monkeypatch.setattr(
-        inference,
-        "load_model_artifact",
+        "worldcereal.utils.models.load_model_artifact",
         lambda *_args, **_kwargs: SimpleNamespace(
             manifest={
                 "heads": [
