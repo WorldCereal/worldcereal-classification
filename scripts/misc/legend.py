@@ -9,9 +9,9 @@ from worldcereal.utils.legend import (
     ARTIFACTORY_BASE_URL,
     _get_artifactory_credentials,
     _upload_file,
-    delete_legend_file,
+    # delete_legend_file,
     download_legend,
-    get_legend,
+    # get_legend,
     upload_legend,
 )
 
