@@ -9,40 +9,43 @@ PROCESS_CMD="scripts/inference/run_worldcereal_task_openeo.py"
 # Make sure you select the path to your WorldCereal Python environment
 PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
 
-# Parameters for spatial extent (grid file)
-# Make sure to provide a valid path to a vector file containing the grid cells 
-# for which you want to collect inputs.
-GRID_PATH="./bbox/test.gpkg"
-GRID_SIZE="20"
+# Parameters for spatial extent
+# here we provide a custom bounding box and epsg
+MINX=664000
+MINY=5611134
+MAXX=665000
+MAXY=5612134
+EPSG=32631
+GRID_SIZE=20 # km
 
+# minx, miny, maxx, maxy = (664000, 5611134, 684000, 5631134)  # Large test
+# minx, miny, maxx, maxy = (634000, 5601134, 684000, 5651134)  # Very large test
+    
 # Parameter specifying output folder
-OUTPUT_FOLDER="./outputs/maps"
+OUTPUT_FOLDER="./outputs/maps/cropland_mapping_test4"
 
 # Parameters for temporal extent
-# For using OPTION 2, provide start and end date
-START_DATE="2024-01-01"
-END_DATE="2024-12-31"
-# For using OPTION 3, provide a year
-# YEAR="2024"
+# We just specify a year, the system will retieve the best processing window
+# in function of the local crop calendar.
+YEAR=2021
 
 # Product to generate: cropland or croptype
 PRODUCT="cropland"
 
 # Optional parameters
 PARALLEL_JOBS="2"
-# S1_ORBIT_STATE="ASCENDING"
 
-# note below we set restart_failed and randomize_jobs to True
+# note below we set restart_failed to True, meaning that failed jobs
+# will be restarted if you run the script again.
 
 # Run mapping
 "${PYTHONPATH}" "${PROCESS_CMD}" \
 --task "classification" \
---grid_path "${GRID_PATH}" \
+--bbox "${MINX}" "${MINY}" "${MAXX}" "${MAXY}" \
+--bbox_epsg "${EPSG}" \
 --grid_size "${GRID_SIZE}" \
---start_date "${START_DATE}" \
---end_date "${END_DATE}" \
+--year "${YEAR}" \
 --product "${PRODUCT}" \
 --output_folder "${OUTPUT_FOLDER}" \
---parallel-jobs "${PARALLEL_JOBS}" \
---restart_failed \
---randomize_jobs
+--parallel_jobs "${PARALLEL_JOBS}" \
+--restart_failed
