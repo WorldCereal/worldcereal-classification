@@ -663,18 +663,15 @@ class WorldCerealJobManager(MultiBackendJobManager):
         df = df.copy()
 
         for idx, row in df.iterrows():
-            extent = self._row_spatial_extent(row)
+
             # Get the start and end date for each season
+            extent = self._row_spatial_extent(row)
             seasons = {}
             for season_idx, season in enumerate(["s1", "s2"]):
                 seasons[season] = get_season_dates_for_extent(
                     extent, year, f"tc-{season}"
                 )
-            # If get_seasons is False, we only infer the overall temporal extent
-            if get_seasons:
-                row = self._apply_season_specifications(row, seasons)
-                df.loc[idx, "season_ids"] = row["season_ids"]
-                df.loc[idx, "season_windows"] = row["season_windows"]
+
             # Infer overall temporal extent from the latest season end
             all_end_dates = [
                 pd.to_datetime(season.end_date) for season in seasons.values()
@@ -688,6 +685,35 @@ class WorldCerealJobManager(MultiBackendJobManager):
             )
             df.loc[idx, "end_date"] = proposed_end.strftime("%Y-%m-%d")
             df.loc[idx, "start_date"] = proposed_start.strftime("%Y-%m-%d")
+            logger.info(f"Start date: {proposed_start.strftime('%Y-%m-%d')}")
+            logger.info(f"End date: {proposed_end.strftime('%Y-%m-%d')}")
+
+            # If get_seasons is True, we also return the seasons
+            if get_seasons:
+
+                # Check whether season start date not before temporal extent start
+                for season_id, season in seasons.items():
+                    if pd.to_datetime(season.start_date) < proposed_start:
+                        logger.warning(
+                            f"Season '{season_id}' start date {season.start_date} is before inferred temporal extent start date {proposed_start}. Adjusting season start date to match temporal extent start date."
+                        )
+                        seasons[season_id] = TemporalContext(
+                            proposed_start.strftime("%Y-%m-%d"), season.end_date
+                        )
+
+                logger.info(
+                    f"Inferred seasons for tile {row['tile_name']}:\n"
+                    + "\n".join(
+                        [
+                            f"  {season_id}: {season.start_date} to {season.end_date}"
+                            for season_id, season in seasons.items()
+                        ]
+                    )
+                )
+
+                row = self._apply_season_specifications(row, seasons)
+                df.loc[idx, "season_ids"] = row["season_ids"]
+                df.loc[idx, "season_windows"] = row["season_windows"]
 
         return df
 

@@ -116,7 +116,7 @@ def main(task: WorldCerealTask, params: WorldCerealJobParams) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog="WC - WorldCereal openEO task",
+        prog="WorldCereal OpenEO task",
         description="Run a WorldCereal task using the unified job manager",
     )
 
@@ -349,6 +349,24 @@ if __name__ == "__main__":
         help="Croptype postprocess kernel size override.",
     )
     parser.add_argument(
+        "--export-embeddings",
+        action="store_true",
+        dest="export_embeddings",
+        help="Export model embeddings in the resulting product.",
+    )
+    parser.add_argument(
+        "--export-ndvi",
+        action="store_true",
+        dest="export_ndvi",
+        help="Export NDVI time series in the resulting product.",
+    )
+    parser.add_argument(
+        "--merge-classification-products",
+        action="store_true",
+        dest="merge_classification_products",
+        help="Merge classification products across seasons into a single output.",
+    )
+    parser.add_argument(
         "--seasonal-preset",
         type=str,
         default=DEFAULT_SEASONAL_WORKFLOW_PRESET,
@@ -435,6 +453,7 @@ if __name__ == "__main__":
             geometry=[box(minx, miny, maxx, maxy)],
             crs=f"EPSG:{args.bbox_epsg}",
         )
+        aoi_gdf["id"] = "aoi_1"
     else:
         aoi_gdf = (
             gpd.read_parquet(args.grid_path)

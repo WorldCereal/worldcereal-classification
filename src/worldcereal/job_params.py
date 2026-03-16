@@ -145,6 +145,12 @@ class WorldCerealMapProductionParams(WorldCerealJobParams, total=False):
         Croptype postprocess method.
     croptype_postprocess_kernel_size : Optional[int]
         Croptype postprocess kernel size.
+    export_embeddings : Optional[bool]
+        Whether to export embeddings alongside classifications.
+    export_ndvi : Optional[bool]
+        Whether to export NDVI alongside classifications.
+    merge_classification_products : Optional[bool]
+        Whether to merge cropland and croptype outputs into a single product when both heads are enabled
     """
 
     season_specifications: Optional[Dict[str, TemporalContext]]
@@ -167,6 +173,9 @@ class WorldCerealMapProductionParams(WorldCerealJobParams, total=False):
         Literal["majority_vote", "smooth_probabilities"]
     ]
     croptype_postprocess_kernel_size: Optional[int]
+    export_embeddings: Optional[bool]
+    export_ndvi: Optional[bool]
+    merge_classification_products: Optional[bool]
 
 
 DEFAULT_MAX_RETRIES = 50
@@ -255,6 +264,9 @@ def build_workflow_config_from_params(
         croptype_postprocess_kernel_size=resolved.get(
             "croptype_postprocess_kernel_size"
         ),
+        export_embeddings=resolved.get("export_embeddings"),
+        export_ndvi=resolved.get("export_ndvi"),
+        merge_classification_products=resolved.get("merge_classification_products"),
     )
 
 
@@ -355,6 +367,11 @@ def resolve_job_params(
         )
         resolved["croptype_postprocess_kernel_size"] = params.get(
             "croptype_postprocess_kernel_size"
+        )
+        resolved["export_embeddings"] = params.get("export_embeddings")
+        resolved["export_ndvi"] = params.get("export_ndvi")
+        resolved["merge_classification_products"] = params.get(
+            "merge_classification_products"
         )
         return resolved
 
@@ -497,6 +514,9 @@ def build_job_params_from_args(
             "enable_croptype_postprocess": args.enable_croptype_postprocess,
             "croptype_postprocess_method": args.croptype_postprocess_method,
             "croptype_postprocess_kernel_size": args.croptype_postprocess_kernel_size,
+            "export_embeddings": args.export_embeddings,
+            "export_ndvi": args.export_ndvi,
+            "merge_classification_products": args.merge_classification_products,
         }
         return production_params
 

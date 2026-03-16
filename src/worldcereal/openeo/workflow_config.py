@@ -33,6 +33,9 @@ def build_config_from_params(
     enable_croptype_postprocess: Optional[bool] = None,
     croptype_postprocess_method: Optional[str] = None,
     croptype_postprocess_kernel_size: Optional[int] = None,
+    export_embeddings: Optional[bool] = None,
+    export_ndvi: Optional[bool] = None,
+    merge_classification_products: Optional[bool] = None,
 ) -> WorldCerealWorkflowConfig:
     """Build a workflow config from flat parameters (notebook/CLI friendly)."""
     workflow_builder = WorldCerealWorkflowConfig.builder()
@@ -77,6 +80,12 @@ def build_config_from_params(
             method=croptype_postprocess_method,
             kernel_size=croptype_postprocess_kernel_size,
         )
+    if export_embeddings is not None:
+        workflow_builder.export_embeddings(export_embeddings)
+    if export_ndvi is not None:
+        workflow_builder.export_ndvi(export_ndvi)
+    if merge_classification_products is not None:
+        workflow_builder.merge_classification_products(merge_classification_products)
 
     workflow_config = workflow_builder.build()
 
