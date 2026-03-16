@@ -21,7 +21,7 @@ if __name__ == "__main__":
     # 1. Copy new CSV and pdf files to folder /vitodata/worldcereal/data/legend/
     # 2. Adjust date:
 
-    date = "20260217"
+    date = "20260313"
     srcpath = Path(
         f"/vitodata/worldcereal/data/legend/WorldCereal_LC_CT_legend_{date}.csv"
     )
@@ -50,6 +50,12 @@ if __name__ == "__main__":
     )
 
     # 7. MAKE SURE YOU ALSO UPDATE THE MAPPINGS FILE (on sharepoint) TO ASSIGN A MAPPING CLASS TO EACH NEWLY ADDED CROP TYPE.
+    # How to add landcover/croptype mapping to new classes:
+    # - wait for the update of the mirror tab
+    # - in the mirror tab, you need to look for rows where LANDCOVER10/CROPTYPE24 columns are NA. you can do this however you like, using filters or just scrolling
+    # - copy missing ewoc_codes and label_full to the MAPPINGS tab, just appending to the end
+    # - in the MAPPINGS tab, add LANDCOVER/CROPTYPE mappings manually
+    # - done! check in the mirror tab again if the formulas picked up the mapping correctly
 
     # #####
     # Functions to retrieve legend and irr legend:
