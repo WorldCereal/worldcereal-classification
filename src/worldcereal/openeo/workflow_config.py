@@ -92,6 +92,8 @@ class ModelSection:
     croptype_head_zip: Optional[str] = None
     enable_croptype_head: Optional[bool] = None
     enable_cropland_head: Optional[bool] = None
+    export_embeddings: Optional[bool] = None
+    export_ndvi: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -105,6 +107,10 @@ class ModelSection:
             data["enable_croptype_head"] = self.enable_croptype_head
         if self.enable_cropland_head is not None:
             data["enable_cropland_head"] = self.enable_cropland_head
+        if self.export_embeddings is not None:
+            data["export_embeddings"] = self.export_embeddings
+        if self.export_ndvi is not None:
+            data["export_ndvi"] = self.export_ndvi
         return data
 
 
@@ -137,6 +143,7 @@ class SeasonSection:
     composite_frequency: Optional[str] = None
     enforce_cropland_gate: Optional[bool] = None
     export_class_probabilities: Optional[bool] = None
+    merge_classification_products: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -152,6 +159,8 @@ class SeasonSection:
             data["enforce_cropland_gate"] = self.enforce_cropland_gate
         if self.export_class_probabilities is not None:
             data["export_class_probabilities"] = self.export_class_probabilities
+        if self.merge_classification_products is not None:
+            data["merge_classification_products"] = self.merge_classification_products
         return data
 
 
@@ -223,6 +232,12 @@ class WorldCerealWorkflowConfigBuilder:
         # dataclass fields are already separate instances via default_factory
         return
 
+    def merge_classification_products(
+        self, enabled: bool = True
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        self.season.merge_classification_products = bool(enabled)
+        return self
+
     def enable_croptype_head(
         self, enabled: bool = True
     ) -> "WorldCerealWorkflowConfigBuilder":
@@ -240,6 +255,16 @@ class WorldCerealWorkflowConfigBuilder:
 
     def disable_cropland_head(self) -> "WorldCerealWorkflowConfigBuilder":
         return self.enable_cropland_head(False)
+
+    def export_embeddings(
+        self, enabled: bool = True
+    ) -> "WorldCerealWorkflowConfigBuilder":
+        self.model.export_embeddings = bool(enabled)
+        return self
+
+    def export_ndvi(self, enabled: bool = True) -> "WorldCerealWorkflowConfigBuilder":
+        self.model.export_ndvi = bool(enabled)
+        return self
 
     def export_class_probabilities(
         self, enabled: bool = True

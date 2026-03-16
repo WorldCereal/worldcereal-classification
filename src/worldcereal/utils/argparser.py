@@ -1,6 +1,13 @@
 from typing import Dict, Union
 
-from loguru import logger
+try:
+    from loguru import logger
+except ImportError:
+    # loguru not available, use standard logging
+    import logging
+
+    logger = logging.getLogger(__name__)  # type: ignore
+
 
 DEFAULT_JOB_OPTIONS: Dict[str, Union[str, int, None]] = {
     "driver-memory": "12G",
