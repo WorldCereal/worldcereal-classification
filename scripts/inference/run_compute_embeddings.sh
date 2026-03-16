@@ -13,26 +13,23 @@ PYTHONPATH="/PATH/TO/YOUR/WORLDCEREAL/PYTHON/ENVIRONMENT/bin/python"
 # Make sure to provide a valid path to a vector file containing the grid cells
 # for which you want to compute embeddings.
 GRID_PATH="./bbox/test.gpkg"
-GRID_SIZE="20"
+GRID_SIZE="20" # km
 
 # Parameter specifying output folder
 OUTPUT_FOLDER="./embeddings"
 
 # Parameters for temporal extent
-# For using OPTION 2, provide start and end date
+# In this example, we provide fixed start and end dates
 START_DATE="2024-01-01"
 END_DATE="2024-12-31"
 
-# For using OPTION 3, provide a year
-# YEAR="2024"
-
 # Optional parameters
-# S1_ORBIT_STATE="ASCENDING"
 PARALLEL_JOBS="2"
-# note below we set restart_failed and randomize_jobs to True
+# note below we set restart_failed to True, meaning that failed jobs
+# will be restarted if you run the script again.
 
 
-# Run extraction
+# Run embeddings computation workflow
 "${PYTHONPATH}" "${PROCESS_CMD}" \
 --task "embeddings" \
 --grid_path "${GRID_PATH}" \
@@ -41,5 +38,4 @@ PARALLEL_JOBS="2"
 --start_date "${START_DATE}" \
 --end_date "${END_DATE}" \
 --parallel_jobs "${PARALLEL_JOBS}" \
---restart_failed \
---randomize_jobs
+--restart_failed
