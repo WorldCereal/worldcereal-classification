@@ -227,12 +227,14 @@ class WorldCerealClassificationApp:
         """Update visible tabs based on the selected workflow."""
         if self.workflow_mode == "apply-default-model":
             children = [
+                self.tab_pages["deploy"],
                 self.tab_pages["generate"],
                 self.tab_pages["visualize"],
             ]
             titles = [
-                "1. Generate Map",
-                "2. Visualize Map",
+                "1. Authenticate",
+                "2. Generate Map",
+                "3. Visualize Map",
             ]
         elif self.workflow_mode == "apply-custom-model":
             children = [
@@ -2975,19 +2977,30 @@ class WorldCerealClassificationApp:
             )
         )
 
+        auth_header = widgets.HTML("<h3>CDSE authentication</h3>")
+        model_section_header = widgets.HTML("<h3>Model to be deployed:</h3>")
+        deploy_section_header = widgets.HTML("<h3>Deployment</h3>")
+        deployment_status_label = widgets.HTML("<b>Deployment Status:</b>")
+
         self.tab7_widgets = {
+            "header": header,
             "status_message": status_message,
             "load_title": load_title,
             "load_input": load_input,
             "load_button": load_button,
             "load_output": load_output,
             "model_path_output": model_path_output,
+            "auth_header": auth_header,
             "auth_info": auth_info,
             "deploy_button": deploy_button,
             "report_output": report_output,
             "auth_output": auth_output,
             "reset_auth_button": reset_auth_button,
             "authenticate_button": authenticate_button,
+            "model_section_header": model_section_header,
+            "deploy_section_header": deploy_section_header,
+            "deploy_info": deploy_info,
+            "deployment_status_label": deployment_status_label,
         }
         load_button.on_click(self._on_tab7_load_model)
         deploy_button.on_click(self._on_deploy_click)
@@ -3003,18 +3016,18 @@ class WorldCerealClassificationApp:
                 load_input,
                 widgets.HBox([load_button]),
                 load_output,
-                widgets.HTML("<h3>Model to be deployed:</h3>"),
+                model_section_header,
                 model_path_output,
-                widgets.HTML("<h3>CDSE authentication</h3>"),
+                auth_header,
                 auth_info,
                 widgets.HBox([authenticate_button, reset_auth_button]),
                 auth_output,
-                widgets.HTML("<h3>Deployment</h3>"),
+                deploy_section_header,
                 widgets.HBox(
                     [deploy_button],
                     layout=widgets.Layout(justify_content="center", margin="20px 0"),
                 ),
-                widgets.HTML("<b>Deployment Status:</b>"),
+                deployment_status_label,
                 report_output,
                 self._build_tab_navigation(),
             ]
@@ -3988,13 +4001,19 @@ class WorldCerealClassificationApp:
 
             try:
                 print("Reading LUT from model configs...")
-                model_overrides = {
-                    "model": {
+                # Filter out None values so the preset's defaults (including the
+                # public DEFAULT_SEASONAL_MODEL_URL) are preserved when no custom
+                # model URLs were set (e.g. apply-default-model workflow).
+                _model_cfg = {
+                    k: v
+                    for k, v in {
                         "seasonal_model_zip": self.tab8_seasonal_model_url,
                         "landcover_head_zip": self.tab8_landcover_head_url,
                         "croptype_head_zip": self.tab8_croptype_head_url,
-                    }
+                    }.items()
+                    if v is not None
                 }
+                model_overrides = {"model": _model_cfg} if _model_cfg else None
                 preset = DEFAULT_SEASONAL_WORKFLOW_PRESET
                 product_type = WorldCerealProductType(self.tab8_product_type)
                 luts = resolve_workflow_luts(
@@ -4188,69 +4207,89 @@ class WorldCerealClassificationApp:
         reset_auth_button = self.tab7_widgets.get("reset_auth_button")
         authenticate_button = self.tab7_widgets.get("authenticate_button")
         model_output = self.tab7_widgets.get("model_path_output")
+        model_section_header = self.tab7_widgets.get("model_section_header")
+        deploy_section_header = self.tab7_widgets.get("deploy_section_header")
+        deploy_info = self.tab7_widgets.get("deploy_info")
+        tab7_header = self.tab7_widgets.get("header")
+        deployment_status_label = self.tab7_widgets.get("deployment_status_label")
+        report_output = self.tab7_widgets.get("report_output")
 
-        if self.workflow_mode == "apply-default-model":
-            not_ready_msg = "<i>Skipped (default model mode).</i>"
-        elif self.workflow_mode == "apply-custom-model":
-            not_ready_msg = "<i>No model available. Load a torch head archive (.zip) using the button below to continue.</i>"
-        else:
-            not_ready_msg = "<i>No trained model available. Finish training a model in Tab 6 first or load a torch head archive (.zip) using the button below to continue.</i>"
+        is_default_mode = self.workflow_mode == "apply-default-model"
 
-        if self.workflow_mode == "apply-default-model":
-            deploy_button.disabled = True
-            status_message.value = not_ready_msg
-            with model_output:
-                model_output.clear_output()
-                print("Default WorldCereal model will be used.")
-            load_title.layout.display = "none"
-            load_input.layout.display = "none"
-            load_button.layout.display = "none"
-            load_output.layout.display = "none"
+        # --- Model loading / deployment section: hidden in default-model mode ---
+        model_section_display = "none" if is_default_mode else "block"
+        for widget in [
+            tab7_header,
+            load_title,
+            load_input,
+            model_section_header,
+            model_output,
+            deploy_section_header,
+            deploy_button,
+            deploy_info,
+            deployment_status_label,
+            report_output,
+        ]:
+            if widget is not None:
+                widget.layout.display = model_section_display
+        if load_button is not None:
+            load_button.layout.display = model_section_display
+        if load_output is not None:
+            load_output.layout.display = model_section_display
+
+        if is_default_mode:
+            if status_message is not None:
+                status_message.value = (
+                    "<i>Authenticate with CDSE below before generating a map.</i>"
+                )
         else:
+            if self.workflow_mode == "apply-custom-model":
+                not_ready_msg = "<i>No model available. Load a torch head archive (.zip) using the button below to continue.</i>"
+            else:
+                not_ready_msg = "<i>No trained model available. Finish training a model in Tab 6 first or load a torch head archive (.zip) using the button below to continue.</i>"
+
             is_ready = (
                 self.head_package_path is not None and self.head_package_path.exists()
             )
-            deploy_button.disabled = not is_ready
+            if deploy_button is not None:
+                deploy_button.disabled = not is_ready
             if is_ready:
-                status_message.value = "<i>Ready to deploy model.</i>"
-                with model_output:
-                    model_output.clear_output()
-                    print(f"Model archive: {self.head_package_path}")
-                load_title.layout.display = "none"
-                load_input.layout.display = "none"
-                load_button.layout.display = "none"
-                load_output.layout.display = "block"
+                if status_message is not None:
+                    status_message.value = "<i>Ready to deploy model.</i>"
+                if model_output is not None:
+                    with model_output:
+                        model_output.clear_output()
+                        print(f"Model archive: {self.head_package_path}")
+                for widget in [load_title, load_input, load_button]:
+                    if widget is not None:
+                        widget.layout.display = "none"
+                if load_output is not None:
+                    load_output.layout.display = "block"
             else:
-                status_message.value = not_ready_msg
-                with model_output:
-                    model_output.clear_output()
-                    print("No model archive loaded yet.")
-                load_title.layout.display = "block"
-                load_input.layout.display = "block"
-                load_button.layout.display = "block"
-                load_output.layout.display = "block"
+                if status_message is not None:
+                    status_message.value = not_ready_msg
+                if model_output is not None:
+                    with model_output:
+                        model_output.clear_output()
+                        print("No model archive loaded yet.")
+                for widget in [load_title, load_input, load_button, load_output]:
+                    if widget is not None:
+                        widget.layout.display = "block"
 
-        if self.workflow_mode == "apply-default-model":
-            if reset_auth_button is not None:
-                reset_auth_button.layout.display = "none"
-            if authenticate_button is not None:
-                authenticate_button.layout.display = "none"
+        # --- CDSE authentication section: always shown ---
+        needs_auth = self._needs_cdse_authentication()
+        if not self.cdse_auth_failed and not self.cdse_auth_in_progress:
             if auth_output is not None:
                 with auth_output:
                     auth_output.clear_output()
-                    print("Authentication not required in default model mode.")
-            return
-
-        needs_auth = self._needs_cdse_authentication()
-        if not self.cdse_auth_failed and not self.cdse_auth_in_progress:
-            with auth_output:
-                auth_output.clear_output()
-                if needs_auth:
-                    print("No CDSE refresh token found. Click Authenticate to sign in.")
-                else:
-                    print(
-                        "CDSE refresh token found. Click Reset authentication to switch accounts."
-                    )
+                    if needs_auth:
+                        print(
+                            "No CDSE refresh token found. Click Authenticate to sign in."
+                        )
+                    else:
+                        print(
+                            "CDSE refresh token found. Click Reset authentication to switch accounts."
+                        )
 
         if reset_auth_button is not None:
             reset_auth_button.layout.display = "block" if not needs_auth else "none"
