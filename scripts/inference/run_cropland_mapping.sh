@@ -22,7 +22,7 @@ GRID_SIZE=20 # km
 # minx, miny, maxx, maxy = (634000, 5601134, 684000, 5651134)  # Very large test
     
 # Parameter specifying output folder
-OUTPUT_FOLDER="./outputs/maps/cropland_mapping_test4"
+OUTPUT_FOLDER="./outputs/maps/cropland_mapping"
 
 # Parameters for temporal extent
 # We just specify a year, the system will retieve the best processing window
