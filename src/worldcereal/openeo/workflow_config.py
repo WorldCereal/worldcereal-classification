@@ -68,17 +68,17 @@ def build_config_from_params(
         workflow_builder.batch_size(batch_size)
     if device is not None:
         workflow_builder.device(device)
-    if enable_cropland_postprocess is not None and enable_cropland_postprocess:
+    if enable_cropland_postprocess is not None:
         workflow_builder.cropland_postprocess(
-            enabled=True,
-            method=cropland_postprocess_method,
-            kernel_size=cropland_postprocess_kernel_size,
+            enabled=enable_cropland_postprocess,
+            method=cropland_postprocess_method if enable_cropland_postprocess else None,
+            kernel_size=cropland_postprocess_kernel_size if enable_cropland_postprocess else None,
         )
-    if enable_croptype_postprocess is not None and enable_croptype_postprocess:
+    if enable_croptype_postprocess is not None:
         workflow_builder.croptype_postprocess(
-            enabled=True,
-            method=croptype_postprocess_method,
-            kernel_size=croptype_postprocess_kernel_size,
+            enabled=enable_croptype_postprocess,
+            method=croptype_postprocess_method if enable_croptype_postprocess else None,
+            kernel_size=croptype_postprocess_kernel_size if enable_croptype_postprocess else None,
         )
     if export_embeddings is not None:
         workflow_builder.export_embeddings(export_embeddings)
