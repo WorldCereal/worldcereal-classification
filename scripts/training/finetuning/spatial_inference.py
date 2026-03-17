@@ -716,14 +716,20 @@ def _plot_ndvi_phenology(
         label = f"{head.class_names[cls_idx]} (n={n_pixels})"
         ax.plot(dates, mean_curve, color=color[:3], linewidth=2.2, label=label)
 
-    # Format x-axis with month labels.
+    # Format x-axis with month labels (every other tick labelled).
     import matplotlib.dates as mdates
     ax.xaxis.set_major_locator(mdates.MonthLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     ax.tick_params(axis="x", labelsize=max(10, LEGEND_FONTSIZE - 8), rotation=45)
+    # Show text on every other tick to reduce crowding.
+    for i, tick_label in enumerate(ax.xaxis.get_ticklabels()):
+        if i % 2 != 0:
+            tick_label.set_visible(False)
     ax.tick_params(axis="y", labelsize=max(10, LEGEND_FONTSIZE - 8))
 
-    ax.set_ylim(-0.2, 1.0)
+    ax.set_ylim(-0.05, 1.0)
+    ax.yaxis.set_label_position("right")
+    ax.yaxis.tick_right()
     ax.set_ylabel("NDVI", fontsize=max(12, LEGEND_FONTSIZE - 4))
     ax.grid(True, alpha=0.3)
     ax.legend(
