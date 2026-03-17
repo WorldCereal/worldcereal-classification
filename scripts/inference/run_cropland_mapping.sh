@@ -32,6 +32,11 @@ YEAR=2021
 # Product to generate: cropland or croptype
 PRODUCT="cropland"
 
+# Postprocessing options
+# (note that we activate cropland post-processing by setting enable-cropland-postprocess flag below.
+POSTPROCESS_METHOD="majority_vote" # options are "majority_vote" or "smooth_probabilities"
+POSTPROCESS_KERNEL_SIZE=3 # only used if method is "majority_vote"
+
 # Optional parameters
 PARALLEL_JOBS="2"
 
@@ -48,4 +53,7 @@ PARALLEL_JOBS="2"
 --product "${PRODUCT}" \
 --output_folder "${OUTPUT_FOLDER}" \
 --parallel_jobs "${PARALLEL_JOBS}" \
---restart_failed
+--restart_failed \
+--enable-cropland-postprocess \
+--cropland-postprocess-method "${POSTPROCESS_METHOD}" \
+--cropland-postprocess-kernel-size "${POSTPROCESS_KERNEL_SIZE}"
