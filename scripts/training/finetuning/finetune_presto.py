@@ -561,7 +561,7 @@ def main(args):
     initial_mapping = args.initial_mapping
     augment = args.augment
     time_explicit = args.time_explicit
-    enable_masking = args.enable_masking
+    enable_masking = args.enable_masking or args.disable_meteo or args.disable_s1 or args.disable_s2
     debug = args.debug
     use_class_balancing = (
         args.use_class_balancing
@@ -608,18 +608,35 @@ def main(args):
         )
 
     # Masking parameters
+    s1_full_dropout = 1.0 if args.disable_s1 else 0.05
+    s1_ts_dropout = 0.0 if args.disable_s1 else 0.05  # redundant when full=1.0
+    s2_cloud_ts = 1.0 if args.disable_s2 else 0.1
+    s2_cloud_block = 0.0 if args.disable_s2 else 0.05  # block not needed when ts=1.0
+    meteo_dropout = 1.0 if args.disable_meteo else 0.05
     masking_config = SensorMaskingConfig(
         enable=enable_masking,
-        s1_full_dropout_prob=0.05,
-        s1_timestep_dropout_prob=0.05,
-        s2_cloud_timestep_prob=0.1,
-        s2_cloud_block_prob=0.05,
+        s1_full_dropout_prob=s1_full_dropout,
+        s1_timestep_dropout_prob=s1_ts_dropout,
+        s2_cloud_timestep_prob=s2_cloud_ts,
+        s2_cloud_block_prob=s2_cloud_block,
         s2_cloud_block_min=2,
         s2_cloud_block_max=3 if timestep_freq == "month" else 9,
-        meteo_timestep_dropout_prob=0.05,
+        meteo_timestep_dropout_prob=meteo_dropout,
         dem_dropout_prob=0.01,
         seed=DEFAULT_SEED,
     )
+    disabled_sensors = []
+    if args.disable_s1:
+        disabled_sensors.append("S1")
+    if args.disable_s2:
+        disabled_sensors.append("S2")
+    if args.disable_meteo:
+        disabled_sensors.append("METEO")
+    if disabled_sensors:
+        logger.info(
+            f"Sensor(s) disabled: {', '.join(disabled_sensors)}. "
+            f"All corresponding tokens will be masked out."
+        )
 
     # Experiment signature
     timestamp_ind = datetime.now().strftime("%Y%m%d%H%M")
@@ -630,7 +647,10 @@ def main(args):
     else:
         masking_info = "disabled"
 
-    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_class_balancing}-timeexplicit={time_explicit}-masking={masking_info}-run={timestamp_ind}"
+    sensor_disable_tag = ''.join(
+        f'-no{s}' for s in disabled_sensors
+    )  # e.g. '-noS1-noMETEO'
+    experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_class_balancing}-timeexplicit={time_explicit}-masking={masking_info}{sensor_disable_tag}-run={timestamp_ind}"
     output_dir = f"{base_output_dir}/{experiment_name}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     tensorboard_dir: Optional[Path] = None
@@ -1583,6 +1603,30 @@ def parse_args(arg_list=None):
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--time_explicit", action="store_true")
     parser.add_argument("--enable_masking", action="store_true")
+    parser.add_argument(
+        "--disable_s1",
+        action="store_true",
+        help=(
+            "Completely mask out Sentinel-1 (SAR) inputs during training "
+            "and evaluation. Internally sets s1_full_dropout_prob to 1.0."
+        ),
+    )
+    parser.add_argument(
+        "--disable_s2",
+        action="store_true",
+        help=(
+            "Completely mask out Sentinel-2 (optical) inputs during training "
+            "and evaluation. Internally sets s2_cloud_timestep_prob to 1.0."
+        ),
+    )
+    parser.add_argument(
+        "--disable_meteo",
+        action="store_true",
+        help=(
+            "Completely mask out meteorological (AGERA5) inputs during training "
+            "and evaluation. Internally sets meteo_timestep_dropout_prob to 1.0."
+        ),
+    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument(
         "--use_class_balancing",
