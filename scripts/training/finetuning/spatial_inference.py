@@ -1193,9 +1193,8 @@ def _build_head_specs(
     lc_lower = [name.strip().lower() for name in landcover_classes]
     if lc_lower != ["no_cropland", "cropland"]:
         logger.warning(
-            "Overriding landcover class labels %s -> ['no_cropland', 'cropland'] "
-            "because local inference emits a binary cropland head.",
-            landcover_classes,
+            f"Overriding landcover class labels {landcover_classes} -> ['no_cropland', 'cropland'] "
+            "because local inference emits a binary cropland head."
         )
         landcover_classes = ["no_cropland", "cropland"]
 
@@ -1884,9 +1883,7 @@ def run_spatial_inference(
     cropland_classes = _resolve_cropland_classes(metadata)
     lc_mapping_key = _resolve_lc_mapping_key(metadata)
     logger.info(
-        "Landcover GT config: lc_mapping_key=%s, cropland_classes=%s",
-        lc_mapping_key,
-        cropland_classes,
+        f"Landcover GT config: lc_mapping_key={lc_mapping_key}, cropland_classes={cropland_classes}"
     )
 
     # Derive the season IDs that are actually enabled for this run.
@@ -1900,9 +1897,8 @@ def run_spatial_inference(
         model_season_ids = list(season_ids)
 
     logger.info(
-        "Resolved model seasons: %s  (head keys: %s)",
-        model_season_ids,
-        [_season_id_to_head_key(s) for s in model_season_ids],
+        f"Resolved model seasons: {model_season_ids}  "
+        f"(head keys: {[_season_id_to_head_key(s) for s in model_season_ids]})"
     )
 
     patch_items = list_patches(patches_dir, continents)
