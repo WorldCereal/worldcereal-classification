@@ -489,11 +489,23 @@ def _to_2d_array(da: xr.DataArray, target_shape: Tuple[int, int]) -> np.ndarray:
     )
 
 
-def get_gt_for_row(ds: xr.Dataset, row_key: str, target_shape: Tuple[int, int]) -> Optional[np.ndarray]:
+def get_gt_for_row(
+    ds: xr.Dataset,
+    row_key: str,
+    target_shape: Tuple[int, int],
+    *,
+    lc_mapping_key: Optional[str] = None,
+    cropland_classes: Optional[Sequence[str]] = None,
+) -> Optional[np.ndarray]:
     """Get ground-truth array per output row, if present and interpretable.
 
     *row_key* can be an uppercase head key (``"CROPTYPE_S1"``, ``"CROPTYPE_ANNUAL"``,
     ``"LANDCOVER"``) or a legacy lowercase key (``"croptype_s1"`` etc.).
+
+    For the ``LANDCOVER`` head the function first looks for a direct landcover GT
+    variable.  When none is found it falls back to deriving a binary
+    cropland / no-cropland mask from the croptype EWOC-code GT via the
+    *lc_mapping_key* (e.g. ``"LANDCOVER10"``) and *cropland_classes*.
     """
     # Normalise to uppercase head key for config lookup.
     lookup_key = row_key.upper()
@@ -519,6 +531,30 @@ def get_gt_for_row(ds: xr.Dataset, row_key: str, target_shape: Tuple[int, int]) 
             return _to_2d_array(ds[var], target_shape)
         except ValueError:
             continue
+
+    # -- LANDCOVER fallback: derive binary from croptype EWOC codes ----------
+    if lookup_key == "LANDCOVER" and lc_mapping_key and cropland_classes:
+        # Try all croptype GT candidates.
+        ct_candidates = [
+            "WORLDCEREAL_SEASON1_GT", "worldcereal_season1_gt",
+            "WORLDCEREAL_SEASON2_GT", "worldcereal_season2_gt",
+        ]
+        for var in ct_candidates:
+            if var not in ds:
+                continue
+            try:
+                ewoc_gt = _to_2d_array(ds[var], target_shape)
+            except ValueError:
+                continue
+            binary = _map_gt_to_binary_landcover(
+                ewoc_gt, lc_mapping_key, cropland_classes,
+            )
+            if np.any(binary >= 0):
+                logger.info(
+                    f"Derived binary landcover GT from {var} via {lc_mapping_key} "
+                    f"(cropland_classes={list(cropland_classes)})."
+                )
+                return binary.astype(np.float64)
 
     return None
 
@@ -749,6 +785,118 @@ def _map_gt_to_indices(
         logger.info(
             f"GT mapping for {mapping_key} mapped {mapped_count}/{total_valid} pixels; "
             f"{unmapped_count} unmapped. Top unmapped codes: {top}"
+        )
+
+    return out
+
+
+def _resolve_cropland_classes(metadata: Mapping[str, Any]) -> List[str]:
+    """Extract cropland gating classes from model metadata.
+
+    Checks the manifest's croptype head gating config and falls back to
+    ``run_config.args.landcover_cropland_classes``.  Default: ``["temporary_crops"]``.
+    """
+    manifest = metadata.get("manifest", {})
+    if isinstance(manifest, Mapping):
+        for head in manifest.get("heads", []):
+            if not isinstance(head, Mapping):
+                continue
+            gating = head.get("gating", {})
+            if isinstance(gating, Mapping):
+                classes = gating.get("cropland_classes")
+                if classes and isinstance(classes, (list, tuple)):
+                    return [str(c) for c in classes]
+
+    run_config = metadata.get("run_config", {})
+    if isinstance(run_config, Mapping):
+        args = run_config.get("args", {})
+        if isinstance(args, Mapping):
+            raw = args.get("landcover_cropland_classes")
+            if raw and isinstance(raw, str):
+                return [c.strip() for c in raw.split(",") if c.strip()]
+            if raw and isinstance(raw, (list, tuple)):
+                return [str(c) for c in raw]
+
+    return ["temporary_crops"]
+
+
+def _resolve_lc_mapping_key(metadata: Mapping[str, Any]) -> str:
+    """Extract the landcover mapping key from model metadata.
+
+    Falls back to ``"LANDCOVER10"``.
+    """
+    run_config = metadata.get("run_config", {})
+    if isinstance(run_config, Mapping):
+        args = run_config.get("args", {})
+        if isinstance(args, Mapping):
+            key = args.get("landcover_classes_key") or args.get("initial_mapping")
+            if key and isinstance(key, str):
+                return key
+        classes_cfg = run_config.get("classes", {})
+        if isinstance(classes_cfg, Mapping):
+            lc_cfg = classes_cfg.get("landcover", {})
+            if isinstance(lc_cfg, Mapping):
+                key = lc_cfg.get("key")
+                if key and isinstance(key, str):
+                    return key
+    return "LANDCOVER10"
+
+
+def _map_gt_to_binary_landcover(
+    gt: np.ndarray,
+    lc_mapping_key: str,
+    cropland_classes: Sequence[str],
+) -> np.ndarray:
+    """Map EWOC codes in *gt* to binary landcover (0=no_cropland, 1=cropland).
+
+    1. Map each EWOC code to its LANDCOVER10 class name using *lc_mapping_key*.
+    2. If the class name is in *cropland_classes* → 1, else → 0.
+    3. Unmapped / invalid pixels → -1.
+    """
+    if gt.size == 0:
+        return gt.astype(np.int32, copy=False)
+
+    mapping = _load_mapping_for_key(lc_mapping_key)
+    if not mapping:
+        logger.warning(
+            f"Binary landcover GT mapping skipped: no entries for {lc_mapping_key}."
+        )
+        return np.full(gt.shape, -1, dtype=np.int32)
+
+    cropland_set = {name.strip().lower() for name in cropland_classes}
+    code_to_binary: Dict[int, int] = {}
+    for code, label in mapping.items():
+        label_lower = str(label).strip().lower()
+        code_to_binary[int(code)] = 1 if label_lower in cropland_set else 0
+
+    out = np.full(gt.shape, -1, dtype=np.int32)
+    valid = np.isfinite(gt)
+    if not np.any(valid):
+        return out
+
+    gt_int = np.where(valid, gt, 0).astype(np.int64, copy=False)
+    unique_codes = np.unique(gt_int[valid])
+    mapped_count = 0
+    unmapped_codes: List[int] = []
+    for code in unique_codes:
+        binary = code_to_binary.get(int(code))
+        if binary is None:
+            unmapped_codes.append(int(code))
+            continue
+        mask = (gt_int == code) & valid
+        out[mask] = binary
+        mapped_count += int(mask.sum())
+
+    total_valid = int(valid.sum())
+    if mapped_count == 0:
+        logger.warning(
+            f"Binary LC GT mapping for {lc_mapping_key} mapped 0/{total_valid} pixels. "
+            f"Unmapped codes: {unmapped_codes[:10]}"
+        )
+    elif unmapped_codes:
+        logger.info(
+            f"Binary LC GT mapping: {mapped_count}/{total_valid} pixels mapped; "
+            f"{len(unmapped_codes)} unmapped codes: {unmapped_codes[:10]}"
         )
 
     return out
@@ -1247,6 +1395,8 @@ def _render_patch_figure(
     model_signature: Optional[str] = None,
     season_windows: Optional[Mapping[str, Tuple[str, str]]] = None,
     ct_mapping_key: str = "CROPTYPE25",
+    lc_mapping_key: str = "LANDCOVER10",
+    cropland_classes: Optional[Sequence[str]] = None,
 ) -> None:
     rgb, ndvi = _compute_rgb_ndvi(ds)
 
@@ -1373,7 +1523,11 @@ def _render_patch_figure(
         head = head_specs[row_key]
 
         # Fetch GT for this row via the config-driven lookup.
-        gt_arr = get_gt_for_row(ds, row_key, pred.shape)
+        gt_arr = get_gt_for_row(
+            ds, row_key, pred.shape,
+            lc_mapping_key=lc_mapping_key,
+            cropland_classes=cropland_classes,
+        )
         if gt_arr is not None and row_key.startswith("CROPTYPE"):
             gt_arr = _map_gt_to_indices(
                 gt_arr,
@@ -1445,16 +1599,27 @@ def _render_patch_figure(
         fig.colorbar(win_im, ax=win_ax, fraction=0.046, pad=0.04)
 
         if row_key.startswith("LANDCOVER"):
-            second_im = second_ax.imshow(
-                second_data, cmap="RdYlGn", vmin=prob_min, vmax=prob_max
-            )
+            if gt_arr is None:
+                empty = np.full(pred.shape, -1, dtype=np.int32)
+                _plot_categorical(
+                    second_ax,
+                    empty,
+                    head,
+                    force_legend=True,
+                    empty_label="No GT",
+                )
+            else:
+                _plot_categorical(
+                    second_ax,
+                    gt_arr.astype(np.int32),
+                    head,
+                    per_class_f1=per_class_f1,
+                )
             second_ax.set_title(
-                "Second-best probability",
+                "LC GT",
                 fontsize=PANEL_TITLE_FONTSIZE,
                 pad=PANEL_TITLE_PAD,
             )
-            second_ax.axis("off")
-            fig.colorbar(second_im, ax=second_ax, fraction=0.046, pad=0.04)
         else:
             if gt_arr is None:
                 empty = np.full(pred.shape, -1, dtype=np.int32)
@@ -1555,6 +1720,13 @@ def run_spatial_inference(
     season_ids = _resolve_season_ids_from_metadata(metadata)
     head_specs = _build_head_specs(metadata, season_ids=season_ids)
     selected_heads = _normalize_heads(heads, valid_keys=list(head_specs.keys()))
+    cropland_classes = _resolve_cropland_classes(metadata)
+    lc_mapping_key = _resolve_lc_mapping_key(metadata)
+    logger.info(
+        "Landcover GT config: lc_mapping_key=%s, cropland_classes=%s",
+        lc_mapping_key,
+        cropland_classes,
+    )
 
     # Derive the season IDs that are actually enabled for this run.
     model_season_ids: List[str] = []
@@ -1682,6 +1854,8 @@ def run_spatial_inference(
             model_signature=model_signature,
             season_windows=season_windows,
             ct_mapping_key=ct_mapping_key,
+            lc_mapping_key=lc_mapping_key,
+            cropland_classes=cropland_classes,
         )
         ds.close()
         processed += 1
