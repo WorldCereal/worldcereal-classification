@@ -966,6 +966,13 @@ class SeasonalInferenceEngine:
         predictors = generate_predictor(prepped.transpose("bands", "t", "x", "y"), epsg)
         num_samples = getattr(predictors, "B", None)
         num_timesteps = getattr(predictors, "T", None)
+        if num_timesteps is not None and num_timesteps > 12:
+            logger.warning(
+                f"Input has {num_timesteps} timesteps but the model was trained "
+                f"on 12.  Positional indices beyond 11 are out-of-distribution "
+                f"and self-attention context will differ drastically.  Consider "
+                f"subsetting the input temporally before calling infer()."
+            )
         logger.info(
             f"Predictors ready (samples={num_samples}, timesteps={num_timesteps}, batch_size={self.batch_size})"
         )
