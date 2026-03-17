@@ -116,7 +116,7 @@ def notebook_logger(
 
     if display_outputs:
         logger.remove()
-        logger.add(_loguru_to_output(log_out), format="{message}")
+        logger.add(_loguru_to_output(log_out), format="{message}", level="INFO")
 
     def _log(message: str) -> None:
         _log_message(log_out, display_outputs, message)
