@@ -1202,10 +1202,7 @@ def _build_head_specs(
         return f"{len(labels)} labels [{preview}{suffix}]"
 
     logger.info(
-        "Building head specs with croptype=%s, landcover=%s, seasons=%s.",
-        _summarize(croptype_classes),
-        _summarize(landcover_classes),
-        list(season_ids),
+        f"Building head specs with croptype={_summarize(croptype_classes)}, landcover={_summarize(landcover_classes)}, seasons={list(season_ids)}."
     )
 
     specs: Dict[str, HeadSpec] = {
@@ -1303,6 +1300,7 @@ def _plot_categorical(
     force_legend: bool = False,
     empty_label: Optional[str] = None,
     fit_legend: bool = False,
+    legend_min_frac: float = 0.01,
 ) -> None:
     n_classes = len(head.class_names)
     masked = np.ma.masked_where((data < 0) | (data >= n_classes), data)
@@ -1314,11 +1312,17 @@ def _plot_categorical(
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    present_classes = (
-        sorted({int(v) for v in np.unique(masked.compressed())})
-        if masked.count() > 0
-        else []
-    )
+    total_valid = int(masked.count()) if masked.count() > 0 else 0
+    min_pixels = int(total_valid * legend_min_frac) if total_valid > 0 else 0
+
+    present_classes: List[int] = []
+    if total_valid > 0:
+        unique_vals, unique_counts = np.unique(masked.compressed(), return_counts=True)
+        for val, cnt in zip(unique_vals, unique_counts):
+            if int(cnt) >= max(1, min_pixels):
+                present_classes.append(int(val))
+        present_classes.sort()
+
     legend_handles: List[Patch] = []
     for idx in present_classes:
         label = head.class_names[idx]
@@ -1560,6 +1564,7 @@ def _render_patch_figure(
     ct_mapping_key: str = "CROPTYPE25",
     lc_mapping_key: str = "LANDCOVER10",
     cropland_classes: Optional[Sequence[str]] = None,
+    legend_min_frac: float = 0.01,
 ) -> None:
     rgb, ndvi = _compute_rgb_ndvi(ds)
 
@@ -1702,12 +1707,14 @@ def _render_patch_figure(
             )
 
         fit_legend = row_key.startswith("CROPTYPE")
+        ct_min_frac = 0.01 if fit_legend else 0.0
         _plot_categorical(
             pred_ax,
             pred,
             head,
             per_class_f1=per_class_f1,
             fit_legend=fit_legend,
+            legend_min_frac=ct_min_frac,
         )
 
         if row_key.startswith("LANDCOVER"):
@@ -1775,6 +1782,7 @@ def _render_patch_figure(
                     force_legend=True,
                     empty_label="No GT",
                     fit_legend=fit_legend,
+                    legend_min_frac=ct_min_frac,
                 )
             else:
                 _plot_categorical(
@@ -1782,6 +1790,7 @@ def _render_patch_figure(
                     gt_arr.astype(np.int32),
                     head,
                     fit_legend=fit_legend,
+                    legend_min_frac=ct_min_frac,
                 )
             second_ax.set_title(
                 "GT",
@@ -1845,6 +1854,7 @@ def run_spatial_inference(
     debug: bool = False,
     debug_seed: Optional[int] = None,
     ct_mapping_key: str = "CROPTYPE25",
+    legend_min_frac: float = 0.01,
 ) -> Path:
     """Run local spatial inference over patch files and write 4x3 panel PNGs.
 
@@ -1937,7 +1947,7 @@ def run_spatial_inference(
         _log_gt_value_counts(ds, "WORLDCEREAL_SEASON1_GT")
         _log_gt_value_counts(ds, "WORLDCEREAL_SEASON2_GT")
         if debug_crop is not None:
-            out_png = output_dir / continent / f"{nc_path.stem}__{debug_crop.label}.png"
+            out_png = output_dir / continent / f"{nc_path.stem}_{debug_crop.label}.png"
             if out_png.exists() and not overwrite:
                 logger.info(f"Skipping existing output: {out_png}")
                 skipped += 1
@@ -2001,6 +2011,7 @@ def run_spatial_inference(
             ct_mapping_key=ct_mapping_key,
             lc_mapping_key=lc_mapping_key,
             cropland_classes=cropland_classes,
+            legend_min_frac=legend_min_frac,
         )
         ds.close()
         processed += 1
@@ -2089,6 +2100,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         debug=args.debug,
         debug_seed=args.debug_seed,
         ct_mapping_key=args.ct_mapping_key,
+        legend_min_frac=args.legend_min_frac if hasattr(args, "legend_min_frac") else 0.01,
     )
     return 0
 
