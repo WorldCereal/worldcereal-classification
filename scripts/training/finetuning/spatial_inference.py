@@ -621,6 +621,122 @@ def _compute_metrics(
     return acc, macro, per_class
 
 
+def _compute_ndvi_timeseries(ds: xr.Dataset) -> Tuple[np.ndarray, np.ndarray]:
+    """Return ``(dates, ndvi_cube)`` where *ndvi_cube* has shape ``(T, Y, X)``."""
+    time_dim = _find_time_dim(ds)
+    red_name = _pick_var(ds, ["S2-L2A-B04", "B04", "B4", "red"])
+    nir_name = _pick_var(ds, ["S2-L2A-B08", "B08", "B8", "nir"])
+    if red_name is None or nir_name is None:
+        raise ValueError("Cannot compute NDVI time series: missing red/NIR bands.")
+    red = ds[red_name].astype("float32")
+    nir = ds[nir_name].astype("float32")
+    ndvi = (nir - red) / (nir + red + 1e-6)
+    # Ensure shape (T, Y, X)
+    ndvi_np = ndvi.transpose(time_dim, "y", "x").values
+    dates = pd.to_datetime(ds[time_dim].values)
+    return np.asarray(dates), np.clip(ndvi_np, -1.0, 1.0)
+
+
+def _collect_gt_union(
+    ds: xr.Dataset,
+    head_specs: Dict[str, HeadSpec],
+    row_layout: Sequence[str],
+    target_shape: Tuple[int, int],
+    ct_mapping_key: str,
+) -> Tuple[Optional[np.ndarray], Optional[HeadSpec]]:
+    """Build a GT index array from the annual season or S1∪S2 union.
+
+    Returns ``(gt_indices, head_spec)`` or ``(None, None)`` when no GT is available.
+    For a two-season model the S2 GT overwrites S1 wherever both are valid,
+    so pixels with any season GT are included.
+    """
+    ct_keys = [k for k in row_layout if k.startswith("CROPTYPE")]
+    if not ct_keys:
+        return None, None
+
+    # If there is one season (annual or single), use it directly.
+    if len(ct_keys) == 1:
+        key = ct_keys[0]
+        head = head_specs[key]
+        gt = get_gt_for_row(ds, key, target_shape)
+        if gt is None:
+            return None, None
+        return _map_gt_to_indices(gt, head.class_names, mapping_key=ct_mapping_key), head
+
+    # Multi-season: take the first head's class vocabulary (assumed shared).
+    head = head_specs[ct_keys[0]]
+    merged: Optional[np.ndarray] = None
+    for key in ct_keys:
+        gt_raw = get_gt_for_row(ds, key, target_shape)
+        if gt_raw is None:
+            continue
+        gt_idx = _map_gt_to_indices(gt_raw, head.class_names, mapping_key=ct_mapping_key)
+        if merged is None:
+            merged = gt_idx.copy()
+        else:
+            # Overwrite where the new season has a valid label.
+            valid_new = gt_idx >= 0
+            merged[valid_new] = gt_idx[valid_new]
+    return merged, head
+
+
+def _plot_ndvi_phenology(
+    ax,
+    ds: xr.Dataset,
+    gt_indices: np.ndarray,
+    head: HeadSpec,
+) -> None:
+    """Plot mean NDVI time series per GT class on *ax*."""
+    try:
+        dates, ndvi_cube = _compute_ndvi_timeseries(ds)  # (T, Y, X)
+    except ValueError as exc:
+        ax.text(0.5, 0.5, f"No NDVI data\n({exc})", ha="center", va="center",
+                fontsize=LEGEND_FONTSIZE, transform=ax.transAxes)
+        ax.set_title("NDVI per class", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD)
+        return
+
+    n_times = ndvi_cube.shape[0]
+    present_classes = sorted({int(v) for v in np.unique(gt_indices) if v >= 0 and v < len(head.class_names)})
+
+    if not present_classes:
+        ax.text(0.5, 0.5, "No GT classes", ha="center", va="center",
+                fontsize=LEGEND_FONTSIZE, transform=ax.transAxes)
+        ax.set_title("NDVI per class", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD)
+        return
+
+    for cls_idx in present_classes:
+        mask_2d = gt_indices == cls_idx  # (Y, X)
+        if not np.any(mask_2d):
+            continue
+        # Mean NDVI across all pixels of this class for each timestep.
+        cls_values = ndvi_cube[:, mask_2d]  # (T, N_pixels)
+        mean_curve = np.nanmean(cls_values, axis=1)  # (T,)
+        color = head.class_colors.get(cls_idx, (0.5, 0.5, 0.5, 1.0))
+        n_pixels = int(mask_2d.sum())
+        label = f"{head.class_names[cls_idx]} (n={n_pixels})"
+        ax.plot(dates, mean_curve, color=color[:3], linewidth=2.2, label=label)
+
+    # Format x-axis with month labels.
+    import matplotlib.dates as mdates
+    ax.xaxis.set_major_locator(mdates.MonthLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    ax.tick_params(axis="x", labelsize=max(10, LEGEND_FONTSIZE - 8), rotation=45)
+    ax.tick_params(axis="y", labelsize=max(10, LEGEND_FONTSIZE - 8))
+
+    ax.set_ylim(-0.2, 1.0)
+    ax.set_ylabel("NDVI", fontsize=max(12, LEGEND_FONTSIZE - 4))
+    ax.grid(True, alpha=0.3)
+    ax.legend(
+        loc="upper right",
+        fontsize=max(9, LEGEND_FONTSIZE - 10),
+        frameon=True,
+        framealpha=0.85,
+        facecolor="white",
+        edgecolor="none",
+    )
+    ax.set_title("NDVI per class", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD)
+
+
 def _build_color_map(class_names: Sequence[str]) -> Dict[int, Tuple[float, float, float, float]]:
     """Deterministic class colors with fixed ordering by class index."""
 
@@ -1506,46 +1622,19 @@ def _render_patch_figure(
     axes[0, 1].axis("off")
     fig.colorbar(ndvi_im, ax=axes[0, 1], fraction=0.046, pad=0.04)
 
-    # Use the first croptype head for the reference GT panel.
-    first_ct_key = next((k for k in row_layout if k.startswith("CROPTYPE")), None)
-    if first_ct_key is not None:
-        gt_context = get_gt_for_row(ds, first_ct_key, ndvi.shape)
-        if gt_context is not None:
-            gt_context = _map_gt_to_indices(
-                gt_context,
-                head_specs[first_ct_key].class_names,
-                mapping_key=ct_mapping_key,
-            )
-        context_head = head_specs[first_ct_key]
-        gt_label = _season_for_row(first_ct_key)
+    # -- Per-class NDVI phenology panel (axes[0, 2]) --------------------------
+    gt_union, union_head = _collect_gt_union(
+        ds, head_specs, row_layout, ndvi.shape, ct_mapping_key,
+    )
+    if gt_union is not None and union_head is not None:
+        _plot_ndvi_phenology(axes[0, 2], ds, gt_union, union_head)
     else:
-        gt_context = None
-        context_head = next(iter(head_specs.values()))
-        gt_label = None
-
-    if gt_context is None:
-        empty = np.full(ndvi.shape, -1, dtype=np.int32)
-        _plot_categorical(
-            axes[0, 2],
-            empty,
-            context_head,
-            force_legend=True,
-            empty_label="No GT",
-            fit_legend=True,
+        axes[0, 2].text(
+            0.5, 0.5, "No GT available", ha="center", va="center",
+            fontsize=LEGEND_FONTSIZE, transform=axes[0, 2].transAxes,
         )
         axes[0, 2].set_title(
-            "Reference", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
-        )
-    else:
-        _plot_categorical(
-            axes[0, 2],
-            gt_context.astype(np.int32),
-            context_head,
-            fit_legend=True,
-        )
-        ref_suffix = f" ({gt_label} GT)" if gt_label else ""
-        axes[0, 2].set_title(
-            f"Reference{ref_suffix}", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
+            "NDVI per class", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
         )
 
     cropland_mask = None
