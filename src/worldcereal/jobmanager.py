@@ -165,10 +165,16 @@ def run_worldcereal_task(
         manager.stop_job_thread()
         log_fn(f"{workflow_title} has stopped.")
         raise
+    except Exception as exc:
+        log_fn("----------------------------------")
+        log_fn(f"Workflow '{workflow_title}' failed with error: {exc}")
+        log_fn("----------------------------------")
+        raise
+    else:
+        log_fn("----------------------------------")
+        log_fn("ALL DONE!")
+        log_fn(f"Results stored in {output_dir}")
 
-    log_fn("----------------------------------")
-    log_fn("ALL DONE!")
-    log_fn(f"Results stored in {output_dir}")
     return manager
 
 
