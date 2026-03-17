@@ -116,6 +116,70 @@ _HEAD_GT_CONFIG: Dict[str, Dict[str, Any]] = {
 
 
 NO_CROP_VALUE = 254
+NODATA_VALUE = 65535  # uint16 sentinel for missing data; matches inference.NODATA_VALUE
+
+# Band-name prefixes per sensor group, matching GFMAP naming in NetCDF patches.
+_SENSOR_BAND_PREFIXES: Dict[str, Tuple[str, ...]] = {
+    "s1": ("S1-SIGMA0-", "SAR-"),
+    "s2": ("S2-L2A-", "OPTICAL-"),
+    "meteo": ("AGERA5-", "METEO-"),
+}
+
+
+def _read_disabled_sensors(metadata: Mapping[str, Any]) -> Dict[str, bool]:
+    """Read sensor-disable flags from the model's run_config.
+
+    Returns a dict with keys ``s1``, ``s2``, ``meteo`` (each ``True`` if disabled).
+    """
+    args_cfg = metadata.get("run_config", {}).get("args", {})
+    if not isinstance(args_cfg, Mapping):
+        return {"s1": False, "s2": False, "meteo": False}
+    return {
+        "s1": bool(args_cfg.get("disable_s1", False)),
+        "s2": bool(args_cfg.get("disable_s2", False)),
+        "meteo": bool(args_cfg.get("disable_meteo", False)),
+    }
+
+
+def _mask_disabled_sensors(
+    ds: xr.Dataset,
+    disabled: Mapping[str, bool],
+) -> xr.Dataset:
+    """Set all bands of disabled sensors to *NODATA_VALUE* in *ds* (in-place).
+
+    This mirrors the training-time masking so that ``mask_tokens()`` in the
+    Presto encoder drops the corresponding tokens, keeping the inference
+    distribution aligned with what the finetuned heads expect.
+    """
+    sensors_to_blank = [name for name, off in disabled.items() if off]
+    if not sensors_to_blank:
+        return ds
+
+    all_vars = list(ds.data_vars)
+    blanked_count: Dict[str, int] = {s: 0 for s in sensors_to_blank}
+
+    for sensor in sensors_to_blank:
+        prefixes = _SENSOR_BAND_PREFIXES.get(sensor, ())
+        for var in all_vars:
+            if any(var.startswith(pfx) for pfx in prefixes):
+                ds[var] = xr.where(True, NODATA_VALUE, ds[var]).astype(ds[var].dtype)
+                blanked_count[sensor] += 1
+
+    for sensor in sensors_to_blank:
+        n = blanked_count[sensor]
+        if n > 0:
+            logger.info(
+                f"Inference: blanked {n} {sensor.upper()} band(s) to NODATA "
+                f"(mirroring --disable_{sensor} training flag)."
+            )
+        else:
+            logger.warning(
+                f"Inference: --disable_{sensor} was set during training but no "
+                f"matching bands found in dataset (prefixes={_SENSOR_BAND_PREFIXES.get(sensor)})."
+            )
+
+    return ds
+
 
 # Class names that represent "not a crop" in croptype vocabularies.
 _NO_CROP_CLASS_NAMES = frozenset({
@@ -1877,6 +1941,13 @@ def run_spatial_inference(
     metadata = _load_model_metadata(model_dir)
     model_zip = _resolve_model_zip(model_dir, metadata)
     model_signature = _infer_model_signature(metadata, model_zip, model_dir=model_dir)
+    disabled_sensors = _read_disabled_sensors(metadata)
+    if any(disabled_sensors.values()):
+        active = [s.upper() for s, off in disabled_sensors.items() if off]
+        logger.info(
+            f"Model was trained with disabled sensor(s): {', '.join(active)}. "
+            f"Will blank those bands at inference time."
+        )
     season_ids = _resolve_season_ids_from_metadata(metadata)
     head_specs = _build_head_specs(metadata, season_ids=season_ids)
     selected_heads = _normalize_heads(heads, valid_keys=list(head_specs.keys()))
@@ -1944,6 +2015,7 @@ def run_spatial_inference(
 
         logger.info(f"Running patch: {nc_path}")
         ds = xr.open_dataset(nc_path, mask_and_scale=True)
+        ds = _mask_disabled_sensors(ds, disabled_sensors)
         ds, debug_crop = _apply_debug_crop(ds, enabled=debug, rng=rng, label=nc_path.stem)
         # Temporary GT diagnostics (after cropping, before any transformations)
         _log_gt_value_counts(ds, "WORLDCEREAL_SEASON1_GT")
