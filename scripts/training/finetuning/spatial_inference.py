@@ -116,6 +116,22 @@ _HEAD_GT_CONFIG: Dict[str, Dict[str, Any]] = {
 
 
 NO_CROP_VALUE = 254
+
+# Class names that represent "not a crop" in croptype vocabularies.
+_NO_CROP_CLASS_NAMES = frozenset({
+    "no_crop", "no_temporary_crop", "not_crop", "no_cropland",
+    "non_crop", "non_cropland", "ignore",
+})
+
+
+def _find_no_crop_indices(class_names: Sequence[str]) -> List[int]:
+    """Return class indices whose name indicates a non-crop class."""
+    return [
+        idx for idx, name in enumerate(class_names)
+        if name.strip().lower() in _NO_CROP_CLASS_NAMES
+    ]
+
+
 DEBUG_CROP_SIZE = 256
 PANEL_TITLE_FONTSIZE = 40
 LEGEND_FONTSIZE = 26
@@ -496,6 +512,7 @@ def get_gt_for_row(
     *,
     lc_mapping_key: Optional[str] = None,
     cropland_classes: Optional[Sequence[str]] = None,
+    ct_mapping_key: Optional[str] = None,
 ) -> Optional[np.ndarray]:
     """Get ground-truth array per output row, if present and interpretable.
 
@@ -548,6 +565,7 @@ def get_gt_for_row(
                 continue
             binary = _map_gt_to_binary_landcover(
                 ewoc_gt, lc_mapping_key, cropland_classes,
+                ct_mapping_key=ct_mapping_key,
             )
             if np.any(binary >= 0):
                 logger.info(
@@ -577,6 +595,7 @@ def _compute_metrics(
     valid = _valid_mask_for_gt(gt, fill_values)
     valid &= np.isfinite(pred)
     valid &= (gt < num_classes)
+    valid &= (pred < num_classes)
 
     if not np.any(valid):
         return None, None, None
@@ -584,9 +603,13 @@ def _compute_metrics(
     gt_v = gt[valid].astype(np.int64)
     pred_v = pred[valid].astype(np.int64)
 
+    # Only include classes that appear in GT or predictions for macro-F1,
+    # so absent classes don't drag the average down with zero-division F1=0.
+    present_labels = np.unique(np.concatenate([gt_v, pred_v]))
+
     acc = float(accuracy_score(gt_v, pred_v))
     macro = float(
-        f1_score(gt_v, pred_v, average="macro", labels=np.arange(num_classes), zero_division=0)
+        f1_score(gt_v, pred_v, average="macro", labels=present_labels, zero_division=0)
     )
     per_class = f1_score(
         gt_v,
@@ -846,12 +869,16 @@ def _map_gt_to_binary_landcover(
     gt: np.ndarray,
     lc_mapping_key: str,
     cropland_classes: Sequence[str],
+    ct_mapping_key: Optional[str] = None,
 ) -> np.ndarray:
     """Map EWOC codes in *gt* to binary landcover (0=no_cropland, 1=cropland).
 
-    1. Map each EWOC code to its LANDCOVER10 class name using *lc_mapping_key*.
+    1. Map each EWOC code to its landcover class name using *lc_mapping_key*.
     2. If the class name is in *cropland_classes* → 1, else → 0.
-    3. Unmapped / invalid pixels → -1.
+    3. For codes unmapped by the landcover mapping, fall back to
+       *ct_mapping_key*: codes that map to a ``no_crop`` variant →
+       0 (no_cropland); codes that map to any other crop class → 1.
+    4. Still-unmapped / invalid pixels → -1.
     """
     if gt.size == 0:
         return gt.astype(np.int32, copy=False)
@@ -867,7 +894,27 @@ def _map_gt_to_binary_landcover(
     code_to_binary: Dict[int, int] = {}
     for code, label in mapping.items():
         label_lower = str(label).strip().lower()
+        # Explicit ignore entries should not be mapped.
+        if label_lower in ("ignore",):
+            continue
         code_to_binary[int(code)] = 1 if label_lower in cropland_set else 0
+
+    # Croptype-mapping fallback: use no_crop semantics for codes missing
+    # from the landcover mapping.
+    ct_mapping: Dict[int, str] = {}
+    if ct_mapping_key:
+        try:
+            ct_mapping = _load_mapping_for_key(ct_mapping_key)
+        except Exception:  # noqa: BLE001
+            ct_mapping = {}
+    for code, label in ct_mapping.items():
+        if int(code) in code_to_binary:
+            continue  # already resolved by landcover mapping
+        label_lower = str(label).strip().lower()
+        if label_lower in _NO_CROP_CLASS_NAMES:
+            code_to_binary[int(code)] = 0  # no_crop → no_cropland
+        elif label_lower not in ("ignore",):
+            code_to_binary[int(code)] = 1  # actual crop → cropland
 
     out = np.full(gt.shape, -1, dtype=np.int32)
     valid = np.isfinite(gt)
@@ -1375,9 +1422,9 @@ def _format_season_months(
         start_raw, end_raw = season_windows[season_id]
         start = pd.to_datetime(start_raw)
         end = pd.to_datetime(end_raw)
-        start_label = start.strftime("%b")
-        end_label = end.strftime("%b")
-        return start_label if start_label == end_label else f"{start_label} - {end_label}"
+        start_label = start.strftime("%b %Y")
+        end_label = end.strftime("%b %Y")
+        return f"{start_label} - {end_label}"
     except Exception:  # noqa: BLE001
         return None
 
@@ -1527,6 +1574,7 @@ def _render_patch_figure(
             ds, row_key, pred.shape,
             lc_mapping_key=lc_mapping_key,
             cropland_classes=cropland_classes,
+            ct_mapping_key=ct_mapping_key,
         )
         if gt_arr is not None and row_key.startswith("CROPTYPE"):
             gt_arr = _map_gt_to_indices(
@@ -1538,14 +1586,27 @@ def _render_patch_figure(
         per_class_f1: Optional[np.ndarray] = None
         acc: Optional[float] = None
         macro: Optional[float] = None
+
         if gt_arr is not None:
             fill_values: List[float] = []
             gt_cfg = _HEAD_GT_CONFIG.get(row_key, {})
             gt_var = gt_cfg.get("gt_var")
             if gt_var and gt_var in ds:
                 fill_values = _extract_fill_values(ds[gt_var])
+
+            pred_for_metrics = pred
+            # For croptype rows, map gated predictions (NO_CROP_VALUE=254)
+            # to the no_crop class index so the LC gating decision is
+            # evaluated as a "no_crop" prediction by the CT head.
+            if row_key.startswith("CROPTYPE"):
+                no_crop_indices = _find_no_crop_indices(head.class_names)
+                if no_crop_indices:
+                    no_crop_idx = no_crop_indices[0]
+                    pred_for_metrics = pred.copy()
+                    pred_for_metrics[pred_for_metrics == NO_CROP_VALUE] = no_crop_idx
+
             acc, macro, per_class_f1 = _compute_metrics(
-                pred,
+                pred_for_metrics,
                 gt_arr,
                 num_classes=len(head.class_names),
                 fill_values=fill_values,
@@ -1561,16 +1622,17 @@ def _render_patch_figure(
         )
 
         if row_key.startswith("LANDCOVER"):
-            row_title = "LC output"
+            row_title = "LANDCOVER"
+            if acc is not None and macro is not None:
+                row_title += f" — Acc={acc:.3f}"
         else:
             season_id = _season_for_row(row_key)
             season_months = _format_season_months(season_windows, season_id)
             season_suffix = f" ({season_months})" if season_months else ""
-            row_title = f"CT {head.display_name}{season_suffix}"
-
-        if acc is not None and macro is not None:
-            row_title += f" — Acc={acc:.3f} MacroF1={macro:.3f}"
-        title_loc = "left" if row_key.startswith("CROPTYPE") else "center"
+            row_title = f"{head.display_name}{season_suffix}"
+            if acc is not None:
+                row_title += f" — Acc={acc:.3f}"
+        title_loc = "left"
         pred_ax.set_title(
             row_title,
             fontsize=PANEL_TITLE_FONTSIZE,
@@ -1589,12 +1651,7 @@ def _render_patch_figure(
         win_im = win_ax.imshow(
             win_data, cmap="RdYlGn", vmin=prob_min, vmax=prob_max
         )
-        if row_key.startswith("LANDCOVER"):
-            win_ax.set_title(
-                "Winning probability", fontsize=PANEL_TITLE_FONTSIZE, pad=PANEL_TITLE_PAD
-            )
-        else:
-            win_ax.set_title("")
+        win_ax.set_title("")
         win_ax.axis("off")
         fig.colorbar(win_im, ax=win_ax, fraction=0.046, pad=0.04)
 
@@ -1613,10 +1670,9 @@ def _render_patch_figure(
                     second_ax,
                     gt_arr.astype(np.int32),
                     head,
-                    per_class_f1=per_class_f1,
                 )
             second_ax.set_title(
-                "LC GT",
+                "GT",
                 fontsize=PANEL_TITLE_FONTSIZE,
                 pad=PANEL_TITLE_PAD,
             )
