@@ -83,6 +83,11 @@ train = [
   "pystac-client==0.8.3",
   "seaborn"
 ]
+finetune = [
+  "office365-rest-python-client",
+  "openpyxl"
+]
+
 notebooks = [
   "folium>=0.12",
   "ipykernel",

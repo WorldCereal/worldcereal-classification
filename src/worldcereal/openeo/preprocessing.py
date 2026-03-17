@@ -347,27 +347,48 @@ def raw_datacube_DEM(
     connection: Connection,
     backend_context: BackendContext,
     fetch_type: FetchType,
-    spatial_extent: Optional[SpatialContext] = None,
+    dem_collection: Optional[Dict[str, str]] = None,
 ) -> DataCube:
     """Method to get the DEM datacube from the backend.
     If running on CDSE backend, the slope is also loaded from the global
     slope collection and merged with the DEM cube.
+
+    Parameters
+    ----------
+    connection : Connection
+        OpenEO connection instance.
+    backend_context : BackendContext
+        GFMAP Backend context to use for extraction.
+    fetch_type : FetchType
+        GFMAP Fetch type to use for extraction.
+    dem_collection : Optional[Dict[str, str]], optional
+        Dictionary with `collection_name` and `band_name` keys to specify
+        a custom DEM collection to use. By default None, which uses the
+        default COPERNICUS_30 collection.
 
     Returns
     -------
     DataCube
         openEO datacube with the DEM data (and slope if available).
     """
+    if dem_collection is None:
+        dem_collection = {"collection_name": "COPERNICUS_30", "band_name": "COP-DEM"}
+    else:
+        assert "collection_name" in dem_collection and "band_name" in dem_collection, (
+            "custom `dem_collection` must have 'collection_name' and 'band_name' keys."
+        )
 
     extractor = build_generic_extractor(
         backend_context=backend_context,
-        bands=["COP-DEM"],
+        bands=[dem_collection["band_name"]],
         fetch_type=fetch_type,
-        collection_name="COPERNICUS_30",
+        collection_name=dem_collection["collection_name"],
     )
 
     cube = extractor.get_cube(connection, None, None)
     cube = cube.rename_labels(dimension="bands", target=["elevation"])
+    if dem_collection["collection_name"] == "COPERNICUS_90":
+        cube = cube.min_time()
 
     if backend_context.backend in [Backend.CDSE, Backend.CDSE_STAGING]:
         # On CDSE we can load the slope from a global slope collection
@@ -433,7 +454,7 @@ def precomposited_datacube_METEO(
     elif compositing_window == "dekad":
         # Load precomposited dekadal meteo data
         cube = connection.load_stac(
-            url="https://stac.openeo.vito.be/collections/agera5_dekad",
+            url="https://stac.openeo.vito.be/collections/agera5_dekadal_composite",
             temporal_extent=temporal_extent,
             bands=["precipitation-flux", "temperature-mean"],
         )
@@ -462,6 +483,7 @@ def worldcereal_preprocessed_inputs(
     optical_mask_method: Literal[
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
+    dem_collection: Optional[Dict[str, str]] = None,
 ) -> DataCube:
     # First validate the temporal context
     if validate_temporal_context:
@@ -524,6 +546,7 @@ def worldcereal_preprocessed_inputs(
         connection=connection,
         backend_context=backend_context,
         fetch_type=fetch_type,
+        dem_collection=dem_collection,
     )
 
     # Explicitly resample DEM with bilinear interpolation and based on S2 grid

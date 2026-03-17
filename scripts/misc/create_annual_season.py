@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
-date = "20251030"
+date = "20260310"
 basedir = Path(
     f"/vitodata/worldcereal/data/cropcalendars/Phase_II/worldcereal_cropcalendars/_PUBLISHED/{date}"
 )

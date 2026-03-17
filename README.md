@@ -45,14 +45,17 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 
 If you prefer to install the package locally, you can create the environment using **Conda** or **pip**.
 
+- **Conda**<br>
 First clone the repository:
 ```bash
 git clone https://github.com/WorldCereal/worldcereal-classification.git
 cd worldcereal-classification
 ```
 Next, install the package locally:
-- for Conda: `conda env create -f environment.yml`
-- for Pip: `pip install .[train,notebooks]`
+`conda env create -f environment.yml`
+
+- **Pip**<br>
+`pip install "worldcereal[train,notebooks] @ git+https://github.com/worldcereal/worldcereal-classification.git"`
 
 WorldCereal requires Python 3.10 or newer.
 
