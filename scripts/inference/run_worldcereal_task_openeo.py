@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import geopandas as gpd
-from shapely.geometry import box
 from openeo_gfmap import TemporalContext
+from shapely.geometry import box
 
 from worldcereal.job import WorldCerealTask
 from worldcereal.job_params import WorldCerealJobParams, build_job_params_from_args
