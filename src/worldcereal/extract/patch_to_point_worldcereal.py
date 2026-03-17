@@ -20,7 +20,6 @@ from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
-from worldcereal.openeo.masking import scl_mask_erode_dilate
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
@@ -436,10 +435,8 @@ def create_job_patch_to_point_worldcereal(
     job_options: dict,
     period="month",
     optical_mask_method: Literal[
-        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+        "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
-    erode_r: int = 3,
-    dilate_r: int = 21,
 ):
     """Creates an OpenEO BatchJob from the given row information."""
 
@@ -465,8 +462,6 @@ def create_job_patch_to_point_worldcereal(
         s1_orbit_state=s1_orbit_state,
         period=period,
         optical_mask_method=optical_mask_method,
-        erode_r=erode_r,
-        dilate_r=dilate_r,
     )
 
     # Do spatial aggregation
@@ -580,10 +575,8 @@ def worldcereal_preprocessed_inputs_from_patches(
     s1_orbit_state: Optional[str] = None,
     period: Optional[str] = "month",
     optical_mask_method: Literal[
-        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+        "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
-    erode_r: int = 3,
-    dilate_r: int = 21,
 ):
     assert period in ["month", "dekad"], "period must be either 'month' or 'dekad'"
 
@@ -655,16 +648,10 @@ def worldcereal_preprocessed_inputs_from_patches(
         )
     elif optical_mask_method == "mask_scl_raw_values":
         s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_raw_scl_values)
-    elif optical_mask_method == "satio":
-        # Compute satio-based mask
-        scl_dilated_mask = scl_mask_erode_dilate(
-            s2_raw.filter_bands(["S2-L2A-SCL"]), erode_r=erode_r, dilate_r=dilate_r
-        )
-        s2 = s2_raw.mask(scl_dilated_mask)
     else:
         raise ValueError(
             f"Unknown optical_mask_method: {optical_mask_method}. "
-            f"Supported methods are 'mask_scl_dilation', 'mask_scl_raw_values', and 'satio'."
+            f"Supported methods are 'mask_scl_dilation' and 'mask_scl_raw_values'."
         )
 
     s2 = median_compositing(s2, period=period)

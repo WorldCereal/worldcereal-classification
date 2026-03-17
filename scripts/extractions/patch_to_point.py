@@ -112,7 +112,7 @@ def main(
     only_flagged_samples: bool = False,
     parallel_jobs: int = 1,
     optical_mask_method: Literal[
-        "mask_scl_dilation", "satio", "mask_scl_raw_values"
+        "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
 ):
     """
@@ -139,11 +139,10 @@ def main(
         (This is useful for very large and dense datasets like USDA).
     parallel_jobs : int, optional
         Number of local parallel jobs to run concurrently. Default is 1.
-    optical_mask_method : Literal["mask_scl_dilation", "satio", "mask_scl_raw_values"], optional
+    optical_mask_method : Literal["mask_scl_dilation", "mask_scl_raw_values"], optional
         Method to use for optical masking. Default is 'mask_scl_dilation' which uses the default precomputed mask with large erosion/dilation radius.
         This method is the fastest.
-        'satio' allows to configure custom erode/dilation radius but can make the whole process a lot slower as the mask is computed on-the-fly.
-        A proxy between speed and quality is 'mask_scl_raw_values' which uses the raw SCL values for masking without erosion/dilation.
+        'mask_scl_raw_values' uses the raw SCL values for masking without erosion/dilation.
         This option is available for patch-to-point only.
 
     Returns
@@ -237,11 +236,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--optical-mask-method",
         type=str,
-        choices=["mask_scl_dilation", "satio", "mask_scl_raw_values"],
+        choices=["mask_scl_dilation", "mask_scl_raw_values"],
         default="mask_scl_dilation",
         help="Method to use for optical masking. Default is 'mask_scl_dilation' which uses the default precomputed mask with large erosion/dilation radius. "
-        "This method is the fastest. 'satio' allows to configure custom erode/dilation radius but can make the whole process a lot slower as the mask is computed on-the-fly. "
-        "A proxy between speed and quality is 'mask_scl_raw_values' which uses the raw SCL values for masking without erosion/dilation. This option is available for patch-to-point only.",
+        "This method is the fastest. "
+        "'mask_scl_raw_values' uses the raw SCL values for masking without erosion/dilation. This option is available for patch-to-point only.",
     )
     parser.add_argument(
         "--ref-ids",

@@ -164,7 +164,6 @@ def test_worldcereal_preprocessed_inputs_from_patches_no_s1_graph():
     "optical_mask_method, expected_band_label, expected_process_id",
     [
         ("mask_scl_raw_values", "S2-L2A-SCL_DILATED_MASK", "or"),
-        ("satio", "S2-L2A-SCL_DILATED_MASK", "apply_kernel"),
     ],
 )
 def test_worldcereal_preprocessed_inputs_graph_non_default_optical_mask_options(
@@ -195,7 +194,6 @@ def test_worldcereal_preprocessed_inputs_graph_non_default_optical_mask_options(
     "optical_mask_method, expected_process_id",
     [
         ("mask_scl_raw_values", "apply_dimension"),
-        ("satio", "apply_kernel"),
     ],
 )
 def test_worldcereal_preprocessed_inputs_from_patches_graph_non_default_optical_mask_options(
