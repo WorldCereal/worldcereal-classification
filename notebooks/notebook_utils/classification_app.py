@@ -182,8 +182,6 @@ class WorldCerealClassificationApp:
             "visualize": tab9,
         }
 
-        self._app_height = "1200px"
-
         self.tabs = widgets.Tab(children=[])
         self.tabs.layout = widgets.Layout(width="100%", max_width="100%")
 
@@ -206,8 +204,6 @@ class WorldCerealClassificationApp:
         self.tabs_container.layout = widgets.Layout(
             width="100%",
             max_width="100%",
-            height=self._app_height,
-            overflow="auto",
             align_items="stretch",
         )
         self.tabs.observe(self._on_tab_change, names="selected_index")
