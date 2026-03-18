@@ -14,7 +14,11 @@ import geopandas as gpd
 from openeo_gfmap import TemporalContext
 from shapely.geometry import box
 
-from worldcereal.job import WorldCerealTask
+from worldcereal.job import (
+    DEFAULT_INFERENCE_JOB_OPTIONS,
+    DEFAULT_INPUTS_JOB_OPTIONS,
+    WorldCerealTask,
+)
 from worldcereal.job_params import WorldCerealJobParams, build_job_params_from_args
 from worldcereal.jobmanager import (
     DEFAULT_BASE_DELAY,
@@ -468,9 +472,20 @@ if __name__ == "__main__":
             end_date=args.end_date,
         )
 
-    job_options = parse_job_options_from_args(args)
-
     task = args.task
+
+    # Parse job options with task-specific defaults
+    if task in [WorldCerealTask.EMBEDDINGS, WorldCerealTask.INPUTS]:
+        default_job_options = DEFAULT_INPUTS_JOB_OPTIONS.copy()
+    elif task == WorldCerealTask.CLASSIFICATION:
+        default_job_options = DEFAULT_INFERENCE_JOB_OPTIONS.copy()
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+    job_options = parse_job_options_from_args(
+        args,
+        default_options=default_job_options,
+    )
+
     embeddings_parameters = None
     scale_uint16 = True
     product_type = None

@@ -21,17 +21,22 @@ DEFAULT_JOB_OPTIONS: Dict[str, Union[str, int, None]] = {
 }
 
 
-def parse_job_options_from_args(args) -> Dict[str, Union[str, int, None]]:
+def parse_job_options_from_args(
+    args,
+    default_options: Dict[str, Union[str, int, None]] = DEFAULT_JOB_OPTIONS,
+) -> Dict[str, Union[str, int, None]]:
     """
     Parse openEO job options from command line arguments.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Command line arguments.If no custom job options are provided, defaults are used (see DEFAULT_JOB_OPTIONS).
+        Command line arguments.If no custom job options are provided, defaults are used (see default_options).
         Recognized keys:
             driver-memory, driver-memoryOverhead, executor-cores, executor-memory,
             executor-memoryOverhead, max-executors, image-name, etl_organization_id.
+    default_options : dict
+        A dictionary of default job options to use if no custom options are provided.
     Returns
     -------
     dict [str, Union[str, int, None]]
@@ -55,11 +60,11 @@ def parse_job_options_from_args(args) -> Dict[str, Union[str, int, None]]:
             f"Using custom job options for the following parameters: {list(parsed_job_options.keys())}"
         )
         job_options = {
-            k: (v if v is not None else DEFAULT_JOB_OPTIONS[k])
+            k: (v if v is not None else default_options[k])
             for k, v in parsed_job_options.items()
         }
     else:
         logger.info("No custom job options provided, using defaults.")
-        job_options = DEFAULT_JOB_OPTIONS.copy()
+        job_options = default_options.copy()
 
     return job_options
