@@ -50,6 +50,7 @@ from typing import (
 import geopandas as gpd
 import openeo
 import pandas as pd
+import requests
 from loguru import logger
 from openeo import BatchJob
 from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
@@ -78,6 +79,37 @@ from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 from worldcereal.seasons import get_season_dates_for_extent
 from worldcereal.utils.production_grid import create_production_grid, ensure_utm_grid
+
+
+def _is_retryable_error(exc: BaseException) -> bool:
+    """Return True only for transient network/connection/rate-limit errors.
+
+    Structural errors (wrong parameters, auth configuration, process graph
+    building failures, etc.) are not retryable and should fail immediately.
+    """
+    retryable_types = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+        openeo.rest.OpenEoApiError,
+    )
+    if isinstance(exc, retryable_types):
+        return True
+    # Also retry on HTTP 429 / 503 wrapped in other transports
+    msg = str(exc).lower()
+    if any(
+        token in msg
+        for token in (
+            "429",
+            "503",
+            "too many requests",
+            "service unavailable",
+            "connection",
+            "timeout",
+        )
+    ):
+        return True
+    return False
 
 
 def run_worldcereal_task(
@@ -237,6 +269,8 @@ class WorldCerealJobManager(MultiBackendJobManager):
             )
             self.job_db = self._create_job_database()
 
+        self._thread_exception: Optional[Exception] = None
+
     def add_default_backend(self, parallel_jobs: int = 2) -> None:
         """Register the default backend connection for job submission."""
         backend = self.backend_context.backend
@@ -244,6 +278,15 @@ class WorldCerealJobManager(MultiBackendJobManager):
         self.add_backend(
             backend.value, connection=connection, parallel_jobs=parallel_jobs
         )
+
+    def _job_update_loop(self, job_db, start_job, stats=None):
+        """Override to capture background thread exceptions so they surface in the main thread."""
+        try:
+            super()._job_update_loop(job_db=job_db, start_job=start_job, stats=stats)
+        except Exception as exc:
+            self._thread_exception = exc
+            logger.error(f"Background job thread error: {exc}")
+            raise
 
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
         """Dispatch post-processing for completed jobs based on task type."""
@@ -872,6 +915,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
                         job_db=job_db,
                     )
                 else:
+                    self._thread_exception = None
                     self.start_job_thread(start_job=start_job, job_db=job_db)
                     while self._thread and self._thread.is_alive():
                         try:
@@ -879,10 +923,20 @@ class WorldCerealJobManager(MultiBackendJobManager):
                             status_callback(status_df)
                         except pd.errors.EmptyDataError:
                             pass
-                        time.sleep(self._poll_sleep)
+                        # Sleep in 1-second increments so a thread error surfaces
+                        # immediately instead of waiting the full poll interval.
+                        for _ in range(self._poll_sleep):
+                            if self._thread_exception is not None or not (
+                                self._thread and self._thread.is_alive()
+                            ):
+                                break
+                            time.sleep(1)
+                    # Re-raise any exception captured from the background thread.
+                    if self._thread_exception is not None:
+                        raise self._thread_exception
                 break
             except Exception as exc:
-                if attempt < max_retries:
+                if attempt < max_retries and _is_retryable_error(exc):
                     attempt += 1
                     backoff = min(base_delay * 2**attempt, max_delay)
                     jitter = random.uniform(-0.2 * backoff, 0.2 * backoff)
@@ -892,7 +946,8 @@ class WorldCerealJobManager(MultiBackendJobManager):
                     )
                     time.sleep(delay)
                     continue
-                logger.error(f"Max retries reached. Last error: {exc}")
+                if _is_retryable_error(exc):
+                    logger.error(f"Max retries reached. Last error: {exc}")
                 raise
 
         return job_db
