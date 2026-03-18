@@ -538,6 +538,7 @@ def create_inference_process_graph(
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     row: Optional[pd.Series] = None,
+    optical_mask_method: Literal["mask_scl_dilation", "mask_scl_raw_values"] = "mask_scl_dilation",
 ) -> List[openeo.DataCube]:
     """Wrapper function that creates the inference openEO process graph.
 
@@ -608,6 +609,7 @@ def create_inference_process_graph(
         tile_size=tile_size,
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
+        optical_mask_method=optical_mask_method,
         # disable_meteo=True,
     )
 
@@ -651,6 +653,7 @@ def create_embeddings_process_graph(
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
     scale_uint16: bool = True,
+    optical_mask_method: Literal["mask_scl_dilation", "mask_scl_raw_values"] = "mask_scl_dilation",
 ) -> openeo.DataCube:
     """Create an OpenEO process graph for generating embeddings.
 
@@ -701,6 +704,7 @@ def create_embeddings_process_graph(
         tile_size=tile_size,
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
+        optical_mask_method=optical_mask_method,
         # disable_meteo=True,
     )
 
@@ -734,6 +738,7 @@ def create_inputs_process_graph(
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: Literal["mask_scl_dilation", "mask_scl_raw_values"] = "mask_scl_dilation",
 ) -> openeo.DataCube:
     """Wrapper function that creates the inputs openEO process graph.
 
@@ -788,6 +793,7 @@ def create_inputs_process_graph(
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
         # disable_meteo=True,
     )
 
@@ -1040,6 +1046,7 @@ def collect_inputs(
     tile_size: Optional[int] = 128,
     job_options: Optional[dict] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: Literal["mask_scl_dilation", "mask_scl_raw_values"] = "mask_scl_dilation",
 ):
     """Function to retrieve preprocessed inputs that are being
     used in the generation of WorldCereal products.
@@ -1076,6 +1083,7 @@ def collect_inputs(
         tile_size=tile_size,
         validate_temporal_context=False,
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
     )
 
     # Spatial filtering
