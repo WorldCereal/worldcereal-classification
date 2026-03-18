@@ -290,6 +290,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
 
     def on_job_done(self, job: BatchJob, row: pd.Series) -> None:
         """Dispatch post-processing for completed jobs based on task type."""
+        logger.info(f"Job {job.job_id} finished with status: finished")
         if self.task == WorldCerealTask.INPUTS:
             self._on_job_done_inputs(job, row)
             return
@@ -325,6 +326,11 @@ class WorldCerealJobManager(MultiBackendJobManager):
         result_metadata_path = output_dir / f"result_{job.job_id}.json"
         job_metadata_path.write_text(json.dumps(job_metadata), encoding="utf-8")
         result_metadata_path.write_text(json.dumps(result_metadata), encoding="utf-8")
+
+    def on_job_error(self, job: BatchJob, row: pd.Series) -> None:
+        """Log failed jobs and delegate to the parent handler."""
+        logger.warning(f"Job {job.job_id} finished with status: error")
+        super().on_job_error(job, row)
 
     def _on_job_done_inputs(self, job: BatchJob, row: pd.Series) -> None:
         """Post-processing hook for completed inputs jobs."""
@@ -1108,10 +1114,12 @@ class WorldCerealJobManager(MultiBackendJobManager):
         if job_options:
             resolved_options.update(job_options)
 
-        return inputs.create_job(
+        job = inputs.create_job(
             title=f"WorldCereal collect inputs for {row.tile_name}",
             job_options=resolved_options,
         )
+        logger.info(f"Job launched with ID = {job.job_id} (inputs, tile: {row.tile_name})")
+        return job
 
     def _create_embeddings_job(
         self,
@@ -1147,10 +1155,12 @@ class WorldCerealJobManager(MultiBackendJobManager):
         if job_options:
             resolved_options.update(job_options)
 
-        return embeddings.create_job(
+        job = embeddings.create_job(
             title=f"WorldCereal embeddings for {row.tile_name}",
             job_options=resolved_options,
         )
+        logger.info(f"Job launched with ID = {job.job_id} (embeddings, tile: {row.tile_name})")
+        return job
 
     def _create_inference_job(
         self,
@@ -1190,9 +1200,11 @@ class WorldCerealJobManager(MultiBackendJobManager):
         if job_options is not None:
             inference_job_options.update(job_options)
 
-        return connection.create_job(
+        job = connection.create_job(
             inference_result,
             title=f"WorldCereal [{product_type.value}] job_{row.tile_name}",
             description="Job that performs end-to-end WorldCereal inference",
             additional=inference_job_options,
         )
+        logger.info(f"Job launched with ID = {job.job_id} (classification [{product_type.value}], tile: {row.tile_name})")
+        return job
