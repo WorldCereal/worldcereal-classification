@@ -111,6 +111,13 @@ def _validate_classification_flags(
         if args.enforce_cropland_gate
         else False if args.disable_cropland_gate else None
     )
+
+    if args.class_probabilities and (not enable_croptype_head):
+        raise ValueError(
+            "--class-probabilities flag only valid for crop type "
+            "classification. Enable the croptype head to use it."
+        )
+
     return enable_cropland_head, enable_croptype_head, enforce_cropland_gate
 
 
