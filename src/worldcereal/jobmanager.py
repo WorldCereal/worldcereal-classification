@@ -223,6 +223,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         temporal_extent: Optional[TemporalContext] = None,
         year: Optional[int] = None,
         season_specifications: Optional[Dict[str, TemporalContext]] = None,
+        product_type: Optional[WorldCerealProductType] = None,
         poll_sleep: int = 60,
     ) -> None:
         """Initialize the job manager and prepare or resume the job database."""
@@ -248,6 +249,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
                     )
         self._temporal_extent = temporal_extent
         self._season_specifications = season_specifications
+        self._product_type = product_type
         self._year = year
         self.prepared_grid: Optional[gpd.GeoDataFrame] = None
         self.job_db: Optional[CsvJobDatabase] = None
@@ -854,8 +856,23 @@ class WorldCerealJobManager(MultiBackendJobManager):
             return resolved
 
         if self._temporal_extent is not None and not self._season_specifications:
+            if self._product_type == WorldCerealProductType.CROPLAND:
+                # For cropland a single full-year season is sufficient;
+                # synthesise it from the provided temporal extent.
+                logger.info(
+                    "No season specifications provided for cropland. "
+                    "Using the temporal extent as a single 'tc-annual' season."
+                )
+                resolved["start_date"] = self._temporal_extent.start_date
+                resolved["end_date"] = self._temporal_extent.end_date
+                resolved = self._apply_season_specifications(
+                    resolved, {"tc-annual": self._temporal_extent}
+                )
+                return resolved
             raise ValueError(
-                "Temporal extent is provided without season specifications. Cannot continue."
+                "Temporal extent is provided without season specifications. "
+                "Please supply season_specifications, or provide a 'year' to "
+                "allow crop-calendar inference."
             )
         if self._temporal_extent is None and self._season_specifications:
             raise ValueError(
@@ -1118,7 +1135,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
             title=f"WorldCereal collect inputs for {row.tile_name}",
             job_options=resolved_options,
         )
-        logger.info(f"Job launched with ID = {job.job_id} (inputs, tile: {row.tile_name})")
+        logger.info(
+            f"Job launched with ID = {job.job_id} (inputs, tile: {row.tile_name})"
+        )
         return job
 
     def _create_embeddings_job(
@@ -1159,7 +1178,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
             title=f"WorldCereal embeddings for {row.tile_name}",
             job_options=resolved_options,
         )
-        logger.info(f"Job launched with ID = {job.job_id} (embeddings, tile: {row.tile_name})")
+        logger.info(
+            f"Job launched with ID = {job.job_id} (embeddings, tile: {row.tile_name})"
+        )
         return job
 
     def _create_inference_job(
@@ -1206,5 +1227,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             description="Job that performs end-to-end WorldCereal inference",
             additional=inference_job_options,
         )
-        logger.info(f"Job launched with ID = {job.job_id} (classification [{product_type.value}], tile: {row.tile_name})")
+        logger.info(
+            f"Job launched with ID = {job.job_id} (classification [{product_type.value}], tile: {row.tile_name})"
+        )
         return job

@@ -420,6 +420,7 @@ def split_job_params(
     elif task == WorldCerealTask.CLASSIFICATION:
         product_type = _normalize_product_type(resolved["product_type"])
         manager_init["season_specifications"] = resolved["season_specifications"]
+        manager_init["product_type"] = product_type
         job_kwargs["product_type"] = product_type
         job_kwargs["seasonal_preset"] = resolved["seasonal_preset"]
 
