@@ -3280,11 +3280,11 @@ class WorldCerealClassificationApp:
             description_width="350px",
         )
         export_probs_checkbox = widgets.Checkbox(
-            value=True,
+            value=False,
             description="Export class probabilities",
         )
         croptype_postprocess_enabled = widgets.Checkbox(
-            value=True,
+            value=False,
             description="Enable for crop type",
             description_width="500px",
         )
@@ -3300,7 +3300,7 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="220px"),
         )
         cropland_postprocess_enabled = widgets.Checkbox(
-            value=True,
+            value=False,
             description="Enable for cropland",
             description_width="500px",
         )
