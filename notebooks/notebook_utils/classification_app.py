@@ -3389,6 +3389,14 @@ class WorldCerealClassificationApp:
                 "none" if is_cropland else "block"
             )
 
+            # export_class_probabilities requires the croptype head — hide and
+            # force False when the user has selected the cropland product.
+            if is_cropland:
+                export_probs_checkbox.value = False
+                export_probs_checkbox.layout.display = "none"
+            else:
+                export_probs_checkbox.layout.display = "block"
+
         _update_product_controls()
         product_type_dropdown.observe(_update_product_controls, names="value")
 
@@ -3753,16 +3761,12 @@ class WorldCerealClassificationApp:
             self.tab8_results = output_dir
             if status_message is not None:
                 status_message.value = "<i>Processing finished.</i>"
-            with log_out:
-                print("\n\nProcessing finished. Outputs saved to: " f"{output_dir}\n")
             if generate_button is not None:
                 generate_button.disabled = False
             self._update_tab9_state()
-        except Exception as exc:
+        except Exception:  # noqa: BLE001
             if status_message is not None:
                 status_message.value = "<i>Processing failed. Check logs below.</i>"
-            with log_out:
-                print(f"Map generation failed: {exc}")
             if generate_button is not None:
                 generate_button.disabled = False
 
