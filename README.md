@@ -121,7 +121,7 @@ run_worldcereal_task(WorldCerealTask.CLASSIFICATION, croptype_params)
 
 ## Documentation
 
-Comprehensive documentation is available at the following link: https://worldcereal.github.io/worldcereal-documentation/
+Comprehensive documentation of the classification module is available at the following link: https://worldcereal.github.io/worldcereal-documentation/processing/overview.html
 
 ## Support
 Questions, suggestions, feedback? Use [our forum](https://forum.esa-worldcereal.org/) to get in touch with us and the rest of the community!
