@@ -801,10 +801,9 @@
                     },
                     "season": {
                       "enforce_cropland_gate": true,
-                      "season_ids": [
-                        "tc-s1",
-                        "tc-s2"
-                      ],
+                      "season_ids": {
+                        "from_parameter": "season_ids"
+                      },
                       "season_windows": {
                         "from_parameter": "season_windows"
                       },
@@ -884,71 +883,9 @@
     "filterbands1": {
       "process_id": "filter_bands",
       "arguments": {
-        "bands": [
-          "cropland_classification",
-          "probability_cropland",
-          "probability_other",
-          "croptype_classification:tc-s1",
-          "croptype_classification:tc-s2",
-          "croptype_probability:tc-s1",
-          "croptype_probability:tc-s2",
-          "croptype_probability:tc-s1:wheat",
-          "croptype_probability:tc-s1:spring_wheat",
-          "croptype_probability:tc-s1:barley",
-          "croptype_probability:tc-s1:spring_barley",
-          "croptype_probability:tc-s1:rye",
-          "croptype_probability:tc-s1:spring_rye",
-          "croptype_probability:tc-s1:oats",
-          "croptype_probability:tc-s1:spring_oats",
-          "croptype_probability:tc-s1:triticale",
-          "croptype_probability:tc-s1:spring_triticale",
-          "croptype_probability:tc-s1:maize",
-          "croptype_probability:tc-s1:sorghum",
-          "croptype_probability:tc-s1:rice",
-          "croptype_probability:tc-s1:millet",
-          "croptype_probability:tc-s1:vegetables_fruits",
-          "croptype_probability:tc-s1:sugarbeet",
-          "croptype_probability:tc-s1:dry_pulses_legumes",
-          "croptype_probability:tc-s1:sunflower",
-          "croptype_probability:tc-s1:soy_soybeans",
-          "croptype_probability:tc-s1:rapeseed_rape",
-          "croptype_probability:tc-s1:other_oilseed",
-          "croptype_probability:tc-s1:potatoes",
-          "croptype_probability:tc-s1:other_root_tuber",
-          "croptype_probability:tc-s1:fibre_crops",
-          "croptype_probability:tc-s1:herb_spice_medicinal_crops",
-          "croptype_probability:tc-s1:flower_crops",
-          "croptype_probability:tc-s1:grass_fodder_crops",
-          "croptype_probability:tc-s1:no_temporary_crop",
-          "croptype_probability:tc-s2:wheat",
-          "croptype_probability:tc-s2:spring_wheat",
-          "croptype_probability:tc-s2:barley",
-          "croptype_probability:tc-s2:spring_barley",
-          "croptype_probability:tc-s2:rye",
-          "croptype_probability:tc-s2:spring_rye",
-          "croptype_probability:tc-s2:oats",
-          "croptype_probability:tc-s2:spring_oats",
-          "croptype_probability:tc-s2:triticale",
-          "croptype_probability:tc-s2:spring_triticale",
-          "croptype_probability:tc-s2:maize",
-          "croptype_probability:tc-s2:sorghum",
-          "croptype_probability:tc-s2:rice",
-          "croptype_probability:tc-s2:millet",
-          "croptype_probability:tc-s2:vegetables_fruits",
-          "croptype_probability:tc-s2:sugarbeet",
-          "croptype_probability:tc-s2:dry_pulses_legumes",
-          "croptype_probability:tc-s2:sunflower",
-          "croptype_probability:tc-s2:soy_soybeans",
-          "croptype_probability:tc-s2:rapeseed_rape",
-          "croptype_probability:tc-s2:other_oilseed",
-          "croptype_probability:tc-s2:potatoes",
-          "croptype_probability:tc-s2:other_root_tuber",
-          "croptype_probability:tc-s2:fibre_crops",
-          "croptype_probability:tc-s2:herb_spice_medicinal_crops",
-          "croptype_probability:tc-s2:flower_crops",
-          "croptype_probability:tc-s2:grass_fodder_crops",
-          "croptype_probability:tc-s2:no_temporary_crop"
-        ],
+        "bands": {
+          "from_parameter": "classification_bands"
+        },
         "data": {
           "from_node": "reducedimension3"
         }
@@ -987,7 +924,21 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "cropland-croptype_2020-11-01_2021-10-31"
+          "filename_prefix": {
+            "from_parameter": "filename_prefix"
+          }
+        }
+      }
+    },
+    "exportworkspace1": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult1"
+        },
+        "merge": "classification",
+        "workspace": {
+          "from_parameter": "workspace"
         }
       }
     },
@@ -1046,7 +997,21 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "ndvi_2020-11-01_2021-10-31"
+          "filename_prefix": {
+            "from_parameter": "filename_prefix"
+          }
+        }
+      }
+    },
+    "exportworkspace2": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult2"
+        },
+        "merge": "ndvi",
+        "workspace": {
+          "from_parameter": "workspace"
         }
       }
     },
@@ -1221,7 +1186,21 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "embeddings_2020-11-01_2021-10-31"
+          "filename_prefix": {
+            "from_parameter": "filename_prefix"
+          }
+        }
+      }
+    },
+    "exportworkspace3": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult3"
+        },
+        "merge": "embeddings",
+        "workspace": {
+          "from_parameter": "workspace"
         }
       }
     },
@@ -1244,7 +1223,21 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "embeddings-scale_2020-11-01_2021-10-31"
+          "filename_prefix": {
+            "from_parameter": "filename_prefix"
+          }
+        }
+      }
+    },
+    "exportworkspace4": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult4"
+        },
+        "merge": "embeddings_scale",
+        "workspace": {
+          "from_parameter": "workspace"
         }
       },
       "result": true
@@ -1430,32 +1423,58 @@
       "default": 5
     },
     {
+      "name": "season_ids",
+      "description": "List of season ids to run the inference for. Must match the keys of the season_windows parameter.",
+      "schema": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 2,
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    {
       "name": "season_windows",
       "description": "Season windows for each season",
       "schema": {
         "type": "object",
-        "properties": {
-          "tc-s1": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "date"
-            }
-          },
-          "tc-s2": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "date"
-            }
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date"
           }
         },
-        "required": [
-          "tc-s1",
-          "tc-s2"
-        ],
-        "additionalProperties": false
+        "minProperties": 1,
+        "maxProperties": 2
       }
+    },
+    {
+      "name": "classification_bands",
+      "description": "List of names of the output classification bands.",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "workspace",
+      "description": "The workspace in which the results will be exported.",
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "description": "Prefix for the output filenames.",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
     }
   ]
 }
