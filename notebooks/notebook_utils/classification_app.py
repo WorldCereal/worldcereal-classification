@@ -4150,7 +4150,7 @@ class WorldCerealClassificationApp:
             load_title.layout.display = "none"
             load_input.layout.display = "none"
             load_button.layout.display = "none"
-            load_output.layout.display = "block"
+            load_output.layout.display = "none"
         else:
             load_title.layout.display = "block"
             load_input.layout.display = "block"
@@ -4211,7 +4211,7 @@ class WorldCerealClassificationApp:
             load_title.layout.display = "none"
             load_input.layout.display = "none"
             load_button.layout.display = "none"
-            load_output.layout.display = "block"
+            load_output.layout.display = "none"
         else:
             load_title.layout.display = "block"
             load_input.layout.display = "block"
@@ -4283,11 +4283,9 @@ class WorldCerealClassificationApp:
                     with model_output:
                         model_output.clear_output()
                         print(f"Model archive: {self.head_package_path}")
-                for widget in [load_title, load_input, load_button]:
+                for widget in [load_title, load_input, load_button, load_output]:
                     if widget is not None:
                         widget.layout.display = "none"
-                if load_output is not None:
-                    load_output.layout.display = "block"
             else:
                 if status_message is not None:
                     status_message.value = not_ready_msg
