@@ -431,7 +431,7 @@ def split_job_params(
     log_context = manager_init.copy()
     log_context.update(job_kwargs)
     # specific modifications for more readable logs
-    log_context["output_folder"] = str(log_context["output_dir"])
+    log_context["output_dir"] = str(log_context["output_dir"])
     log_context["temporal_extent"] = _temporal_extent_label(
         log_context["temporal_extent"]
     )
