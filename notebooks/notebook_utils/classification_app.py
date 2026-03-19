@@ -3089,10 +3089,21 @@ class WorldCerealClassificationApp:
                 print("Torch head archive must be a .zip file.")
                 return
             if self.cdse_connection is None:
-                print(
-                    "CDSE authentication required. Use the Authenticate button in the CDSE authentication section above."
-                )
-                return
+                if not self._needs_cdse_authentication():
+                    # A cached refresh token exists — reconnect silently using it
+                    try:
+                        from openeo_gfmap.backend import cdse_connection
+
+                        print("Reconnecting to CDSE using cached refresh token...")
+                        self.cdse_connection = cdse_connection()
+                    except Exception as _auth_exc:
+                        self.cdse_connection = None
+                        print(f"Auto-reconnect failed: {_auth_exc}")
+                if self.cdse_connection is None:
+                    print(
+                        "CDSE authentication required. Use the Authenticate button in the CDSE authentication section above."
+                    )
+                    return
             target_object_name = self.head_package_path.name
             print(f"Uploading torch head archive as {target_object_name} ...")
 
