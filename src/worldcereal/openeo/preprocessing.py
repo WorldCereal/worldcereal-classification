@@ -348,6 +348,7 @@ def raw_datacube_DEM(
     backend_context: BackendContext,
     fetch_type: FetchType,
     dem_collection: Optional[Dict[str, str]] = None,
+    target_epsg: Optional[int] = None,
 ) -> DataCube:
     """Method to get the DEM datacube from the backend.
     If running on CDSE backend, the slope is also loaded from the global
@@ -374,9 +375,9 @@ def raw_datacube_DEM(
     if dem_collection is None:
         dem_collection = {"collection_name": "COPERNICUS_30", "band_name": "COP-DEM"}
     else:
-        assert "collection_name" in dem_collection and "band_name" in dem_collection, (
-            "custom `dem_collection` must have 'collection_name' and 'band_name' keys."
-        )
+        assert (
+            "collection_name" in dem_collection and "band_name" in dem_collection
+        ), "custom `dem_collection` must have 'collection_name' and 'band_name' keys."
 
     extractor = build_generic_extractor(
         backend_context=backend_context,
@@ -401,6 +402,12 @@ def raw_datacube_DEM(
         if "t" not in slope.metadata.dimension_names():
             slope.metadata = slope.metadata.add_dimension("t", "2020-01-01", "temporal")
         slope = slope.min_time()
+
+        # Ensure slope is in the same projection as DEM, if target_epsg is provided.
+        if target_epsg is not None:
+            slope = slope.resample_spatial(
+                resolution=0, projection=target_epsg
+            )  # resolution=0 leaves resolution unchanged
 
         # Note that when slope is available we use it as the base cube
         # to merge DEM with, as it comes at 20m resolution.
@@ -547,6 +554,7 @@ def worldcereal_preprocessed_inputs(
         backend_context=backend_context,
         fetch_type=fetch_type,
         dem_collection=dem_collection,
+        target_epsg=target_epsg,
     )
 
     # Explicitly resample DEM with bilinear interpolation and based on S2 grid

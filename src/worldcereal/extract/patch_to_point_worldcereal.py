@@ -651,7 +651,9 @@ def worldcereal_preprocessed_inputs_from_patches(
             dimension="bands", process=optimized_mask_precomputed
         )
     elif optical_mask_method == "mask_scl_raw_values":
-        s2 = s2_raw.apply_dimension(dimension="bands", process=optimized_mask_raw_scl_values)
+        s2 = s2_raw.apply_dimension(
+            dimension="bands", process=optimized_mask_raw_scl_values
+        )
     else:
         raise ValueError(
             f"Unknown optical_mask_method: {optical_mask_method}. "

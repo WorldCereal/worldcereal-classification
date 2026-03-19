@@ -28,7 +28,7 @@ def scl_mask_erode_dilate(
     It involves an erosion step followed by a dilation step.
 
     Args:
-        ...
+        scl_cube (openeo.DataCube): The SCL data cube.
         erode_r (int, optional): Erosion radius (pixels). Defaults to 3.
         dilate_r (int, optional): Dilation radius (pixels). Defaults to 13.
 

@@ -1,8 +1,5 @@
 """Perform cropland and croptype mapping inference using local execution of UDFs.
 
-Make sure you test this script on Python version 3.9+, and have worldcereal
-dependencies installed with the presto wheel file and its dependencies.
-
 This script tests both cropland and croptype mapping workflows by calling
 the UDF functions directly without running batch jobs on OpenEO.
 """

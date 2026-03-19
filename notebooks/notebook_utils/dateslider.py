@@ -31,6 +31,7 @@ class date_slider:
         display_interval=2,
         title="Select growing season window:",
         max_window_months: int = 12,
+        min_window_months: int = 1,
         default_window_months: int = 6,
         *,
         year_selector: bool = True,
@@ -41,9 +42,10 @@ class date_slider:
     ):
         self.show_year = show_year
         self.max_window_months = max(1, max_window_months)
+        self.min_window_months = max(1, min(min_window_months, self.max_window_months))
         self.processing_months = 12
         self.default_window_months = max(
-            1, min(default_window_months, self.max_window_months)
+            self.min_window_months, min(default_window_months, self.max_window_months)
         )
         self.display_interval = max(1, display_interval)
         self._title = title
@@ -269,14 +271,18 @@ class date_slider:
             clamped_end = start + pd.DateOffset(months=self.max_window_months - 1)
             self.interval_slider.value = (start, clamped_end)
             return
+        if months_selected < self.min_window_months:
+            clamped_end = start + pd.DateOffset(months=self.min_window_months - 1)
+            self.interval_slider.value = (start, clamped_end)
+            return
 
         self._update_summary(start, end)
 
     def get_selected_dates(self):
         logger.info(
             "Processing period derived from season window: {} to {}",
-            self._processing_period.start,
-            self._processing_period.stop,
+            self._processing_period.start_date,
+            self._processing_period.end_date,
         )
         return self._processing_period
 
@@ -311,20 +317,28 @@ class date_slider:
         )
 
         season_range = [
-            season_start.strftime("%d %b %Y")
-            if self.show_year
-            else season_start.strftime("%d %b"),
-            season_end.strftime("%d %b %Y")
-            if self.show_year
-            else season_end.strftime("%d %b"),
+            (
+                season_start.strftime("%d %b %Y")
+                if self.show_year
+                else season_start.strftime("%d %b")
+            ),
+            (
+                season_end.strftime("%d %b %Y")
+                if self.show_year
+                else season_end.strftime("%d %b")
+            ),
         ]
         processing_range = [
-            processing_start.strftime("%d %b %Y")
-            if self.show_year
-            else processing_start.strftime("%d %b"),
-            processing_end.strftime("%d %b %Y")
-            if self.show_year
-            else processing_end.strftime("%d %b"),
+            (
+                processing_start.strftime("%d %b %Y")
+                if self.show_year
+                else processing_start.strftime("%d %b")
+            ),
+            (
+                processing_end.strftime("%d %b %Y")
+                if self.show_year
+                else processing_end.strftime("%d %b")
+            ),
         ]
 
         self.html_text.value = (
