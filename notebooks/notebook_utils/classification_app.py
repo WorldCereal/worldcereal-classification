@@ -3232,7 +3232,7 @@ class WorldCerealClassificationApp:
             "<b>Product</b>:<br>"
             "   - Select whether to generate a <b>cropland</b> or <b>croptype</b> product.<br>"
             "     Cropland outputs a binary cropland mask; croptype produces a multi-class crop type map.<br>"
-            "     NOTE: The WorldCereal default model for now only supports the cropland product.<br><br>"
+            "     Available options depend on which heads are present in the active model.<br><br>"
             "<b>Land cover mapping</b>:<br>"
             "   - Generate cropland product:<br>"
             "     In case you selected croptype product, you can choose here whether to also export the cropland product as a separate layer in the output map.<br>"
@@ -3259,12 +3259,8 @@ class WorldCerealClassificationApp:
             tooltip="Required. Keep it short and avoid spaces and special characters.",
         )
 
-        product_type_options = [("Cropland", "cropland")]
-        if self.workflow_mode != "apply-default-model":
-            product_type_options.append(("Croptype", "croptype"))
-
         product_type_dropdown = widgets.Dropdown(
-            options=product_type_options,
+            options=[("Cropland", "cropland"), ("Croptype", "croptype")],
             value="cropland",
             description="Product type:",
             layout=widgets.Layout(width="240px"),
@@ -3634,11 +3630,6 @@ class WorldCerealClassificationApp:
             else "cropland"
         )
         self.tab8_product_type = product_type
-
-        if self.workflow_mode == "apply-default-model" and product_type != "cropland":
-            with log_out:
-                print("Default-model workflow supports cropland only for now.")
-            return
 
         # model selection
         # seasonal model taken from provided presto model package (if any)
@@ -4342,8 +4333,12 @@ class WorldCerealClassificationApp:
         season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
 
         if product_type_dropdown is not None:
+            if self.workflow_mode == "apply-default-model":
+                supported = self._get_supported_product_types()
+            else:
+                supported = ["cropland", "croptype"]
             options = [("Cropland", "cropland")]
-            if self.workflow_mode != "apply-default-model":
+            if "croptype" in supported:
                 options.append(("Croptype", "croptype"))
             product_type_dropdown.options = options
             allowed_values = {value for _, value in options}
@@ -4581,6 +4576,37 @@ class WorldCerealClassificationApp:
             else:
                 self.presto_model_package["presto_local_path"] = presto_model
         return True
+
+    def _get_supported_product_types(self) -> List[str]:
+        """Return the product types supported by the active default seasonal model.
+
+        Loads the model manifest from the seasonal model zip (served from the
+        local cache when available) and inspects the ``heads`` section.  Falls
+        back to ``["cropland", "croptype"]`` if the manifest cannot be read,
+        so the UI is never accidentally over-restricted.
+        """
+        from worldcereal.job import _get_artifact_manifest
+        from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+
+        seasonal_url = (
+            self.presto_model_package.get("seasonal_model_path")
+            if self.presto_model_package
+            else None
+        ) or DEFAULT_SEASONAL_MODEL_URL
+
+        try:
+            manifest = _get_artifact_manifest(seasonal_url)
+            head_names = {h.get("name") for h in manifest.get("heads", [])}
+            products: List[str] = []
+            if "landcover" in head_names:
+                products.append("cropland")
+            if "croptype" in head_names:
+                products.append("croptype")
+            return products or ["cropland", "croptype"]
+        except Exception:
+            raise RuntimeError(
+                "Failed to load model manifest to determine supported product types. "
+            )
 
     def _infer_product_type_from_dir(
         self, results_dir: Optional[Path]
