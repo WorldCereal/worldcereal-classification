@@ -2606,6 +2606,7 @@ class WorldCerealClassificationApp:
             "The seasonal torch head is a lightweight classifier trained on top of the Presto embeddings.<br><br>"
             "The following <b>parameters</b> need to be set:<br>"
             "<b>Head task</b>: <code>croptype</code> for multi-class crop type prediction or <code>landcover</code> for land-cover training.<br>"
+            "   For now only training of crop type heads is supported, but land cover training will be added in the near future.<br>"
             "<b>Head type</b>: <code>linear</code> uses a single linear layer, <code>mlp</code> adds a small MLP head for extra capacity.<br>"
             "<b>Epochs</b>: maximum number of training epochs for the head.<br>"
             "<b>LR</b>: learning rate (float); only adjust if you know what you're doing.<br>"
@@ -2619,7 +2620,8 @@ class WorldCerealClassificationApp:
             "Keep this directory around: the zip bundle will be uploaded to CDSE in the next step and the config is reused whenever you redeploy or troubleshoot the head.<br><br>"
         )
         head_task_dropdown = widgets.Dropdown(
-            options=["croptype", "landcover"],
+            # options=["croptype", "landcover"],
+            options=["croptype"],  # for now only crop type training is supported
             value="croptype",
             description="Head task:",
             layout=widgets.Layout(width="240px"),
