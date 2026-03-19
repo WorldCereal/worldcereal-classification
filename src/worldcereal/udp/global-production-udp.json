@@ -1253,9 +1253,9 @@
     "python-memory": "disable",
     "soft-errors": 0.1,
     "udf-dependency-archives": [
-      "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip#feature_deps",
-      "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl#prometheolib",
-      "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/worldcereal/worldcereal-2.5.0-py3-none-any.whl#worldcereallib"
+      "https://s3.waw3-1.cloudferro.com/project_dependencies/torch_deps_python311.zip#feature_deps",
+      "https://s3.waw3-1.cloudferro.com/project_dependencies/prometheo-0.0.3-py3-none-any.whl#prometheolib",
+      "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/worldcereal-2.5.0-py3-none-any.whl#worldcereallib"
     ],
     "export-workspace-enable-merge": true,
     "stac-version-experimental": "1.1"
