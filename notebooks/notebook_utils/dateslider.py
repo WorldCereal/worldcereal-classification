@@ -31,6 +31,7 @@ class date_slider:
         display_interval=2,
         title="Select growing season window:",
         max_window_months: int = 12,
+        min_window_months: int = 1,
         default_window_months: int = 6,
         *,
         year_selector: bool = True,
@@ -41,9 +42,10 @@ class date_slider:
     ):
         self.show_year = show_year
         self.max_window_months = max(1, max_window_months)
+        self.min_window_months = max(1, min(min_window_months, self.max_window_months))
         self.processing_months = 12
         self.default_window_months = max(
-            1, min(default_window_months, self.max_window_months)
+            self.min_window_months, min(default_window_months, self.max_window_months)
         )
         self.display_interval = max(1, display_interval)
         self._title = title
@@ -267,6 +269,10 @@ class date_slider:
         months_selected = self._get_month_span(start, end)
         if months_selected > self.max_window_months:
             clamped_end = start + pd.DateOffset(months=self.max_window_months - 1)
+            self.interval_slider.value = (start, clamped_end)
+            return
+        if months_selected < self.min_window_months:
+            clamped_end = start + pd.DateOffset(months=self.min_window_months - 1)
             self.interval_slider.value = (start, clamped_end)
             return
 
