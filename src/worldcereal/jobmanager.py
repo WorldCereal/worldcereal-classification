@@ -1135,8 +1135,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
             title=f"WorldCereal collect inputs for {row.tile_name}",
             job_options=resolved_options,
         )
+        time_now = time.strftime("%H:%M:%S")
         logger.info(
-            f"Job launched with ID = {job.job_id} (inputs, tile: {row.tile_name})"
+            f"{time_now} - Job launched with ID = {job.job_id} (inputs, tile: {row.tile_name})"
         )
         return job
 
