@@ -498,8 +498,7 @@ class SeasonalModelBundle:
         enable_cropland_head: bool = True,
     ) -> None:
 
-        from worldcereal.utils.models import (DEFAULT_CACHE_ROOT,
-                                              ensure_cache_dir)
+        from worldcereal.utils.models import DEFAULT_CACHE_ROOT, ensure_cache_dir
 
         torch = _lazy_import_torch()
 
@@ -607,8 +606,10 @@ class SeasonalModelBundle:
         Validates backbone compatibility, replaces head architecture if needed,
         and loads the custom weights.
         """
-        from worldcereal.utils.models import (load_model_artifact,
-                                              resolve_checkpoint_path)
+        from worldcereal.utils.models import (
+            load_model_artifact,
+            resolve_checkpoint_path,
+        )
 
         torch = _lazy_import_torch()
         artifact = load_model_artifact(source, cache_root=self.cache_root)
