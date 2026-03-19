@@ -936,7 +936,7 @@
         "data": {
           "from_node": "saveresult1"
         },
-        "merge": "classification",
+        "merge": "worldcereal_global_production_classification",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1009,7 +1009,7 @@
         "data": {
           "from_node": "saveresult2"
         },
-        "merge": "ndvi",
+        "merge": "worldcereal_global_production_ndvi",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1198,7 +1198,7 @@
         "data": {
           "from_node": "saveresult3"
         },
-        "merge": "embeddings",
+        "merge": "worldcereal_global_production_embeddings",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1235,7 +1235,7 @@
         "data": {
           "from_node": "saveresult4"
         },
-        "merge": "embeddings_scale",
+        "merge": "worldcereal_global_production_embeddings_scale",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1245,9 +1245,9 @@
   },
   "id": "worldcereal_global_production_inference",
   "default_job_options": {
-    "driver-memory": "4g",
-    "executor-memory": "2g",
-    "executor-memoryOverhead": "3g",
+    "driver-memory": "8g",
+    "executor-memory": "4g",
+    "executor-memoryOverhead": "4g",
     "executor-request-cores": "1800m",
     "max-executors": 20,
     "python-memory": "disable",
@@ -1256,7 +1256,9 @@
       "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/torch_deps_python311.zip#feature_deps",
       "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/prometheo-0.0.3-py3-none-any.whl#prometheolib",
       "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/worldcereal/worldcereal-2.5.0-py3-none-any.whl#worldcereallib"
-    ]
+    ],
+    "export-workspace-enable-merge": true,
+    "stac-version-experimental": "1.1"
   },
   "parameters": [
     {
