@@ -18,6 +18,7 @@ This module provides an interactive widget-based interface for:
 
 import json
 import platform
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -3640,10 +3641,13 @@ class WorldCerealClassificationApp:
             return
 
         # model selection
+        # seasonal model taken from provided presto model package (if any)
+        custom_seasonal_model_url = (
+            self.presto_model_package.get("seasonal_model_path")
+            if self.presto_model_package
+            else None
+        )
         if self.workflow_mode == "apply-default-model":
-            # no custom models are passed
-            custom_seasonal_model_url = None
-            selected_model_url = None
             landcover_head_zip = None
             croptype_head_zip = None
             if product_type == "cropland":
@@ -3653,29 +3657,22 @@ class WorldCerealClassificationApp:
                 enable_cropland_head = True
                 enable_croptype_head = True
         else:
-            # seasonal model taken from provided presto model package (if any)
-            custom_seasonal_model_url = (
-                self.presto_model_package.get("seasonal_model_path")
-                if self.presto_model_package
-                else None
-            )
-            selected_model_url = self.tab7_model_url
             if product_type == "cropland":
                 # if cropland product only,
                 # we assume the user wants to use the custom trained model for cropland mapping
-                landcover_head_zip = selected_model_url
+                landcover_head_zip = self.tab7_model_url
                 croptype_head_zip = None
                 enable_croptype_head = False
             else:
                 # if croptype product, we assume the user wants to use the custom trained model for crop type mapping
                 # and we use the seasonal model for landcover task
                 landcover_head_zip = custom_seasonal_model_url
-                croptype_head_zip = selected_model_url
+                croptype_head_zip = self.tab7_model_url
                 enable_croptype_head = True
-            # save model URL's for later use
-            self.tab8_seasonal_model_url = custom_seasonal_model_url
-            self.tab8_landcover_head_url = landcover_head_zip
-            self.tab8_croptype_head_url = croptype_head_zip
+        # save model URL's for later use
+        self.tab8_seasonal_model_url = custom_seasonal_model_url
+        self.tab8_landcover_head_url = landcover_head_zip
+        self.tab8_croptype_head_url = croptype_head_zip
 
         with log_out:
             print("Using the following models:")
@@ -3684,13 +3681,13 @@ class WorldCerealClassificationApp:
             )
             if enable_cropland_head:
                 print(
-                    f"- Cropland head: {landcover_head_zip or 'Default WorldCereal cropland head'}"
+                    f"- Cropland head: {landcover_head_zip or 'Default cropland head contained in seasonal model'}"
                 )
             else:
                 print("- Cropland head: Not used")
             if enable_croptype_head:
                 print(
-                    f"- Crop type head: {croptype_head_zip or 'Default WorldCereal crop type head'}"
+                    f"- Crop type head: {croptype_head_zip or 'Default crop type head contained in seasonal model'}"
                 )
             else:
                 print("- Crop type head: Not used")
@@ -3706,7 +3703,9 @@ class WorldCerealClassificationApp:
             if self.head_package_path is not None
             else "default-model"
         )
-        output_dir = Path("./runs") / f"{model_name}_{run_suffix}_{season_extent}"
+        output_dir = (
+            Path("./runs") / f"{product_type}_{model_name}_{run_suffix}_{season_extent}"
+        )
         if output_dir.exists():
             with log_out:
                 print(
@@ -3714,6 +3713,22 @@ class WorldCerealClassificationApp:
                 )
             return
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save model metadata so Tab 9 can always resolve the correct LUTs
+        presto_model_path = (
+            self.presto_model_package.get("presto_local_path")
+            or self.presto_model_package.get("presto_remote_path")
+            if self.presto_model_package
+            else None
+        )
+        self._save_model_metadata(
+            output_dir=output_dir,
+            product_type=product_type,
+            seasonal_model=custom_seasonal_model_url,
+            landcover_head=landcover_head_zip,
+            croptype_head=croptype_head_zip,
+            presto_model=presto_model_path,
+        )
 
         # Get processing spatial extent
         aoi_gdf = aoi_map.get_gdf()
@@ -3750,7 +3765,6 @@ class WorldCerealClassificationApp:
                     "enable_croptype_postprocess": croptype_pp_enabled,
                     "croptype_postprocess_method": croptype_pp_method,
                     "croptype_postprocess_kernel_size": croptype_pp_kernel,
-                    "target_epsg": 4326,
                     "simplify_logging": True,
                 },
                 plot_out=plot_out,
@@ -3759,6 +3773,11 @@ class WorldCerealClassificationApp:
             )
 
             self.tab8_results = output_dir
+            results_out = self.tab9_widgets.get("results_output")
+            if results_out is not None:
+                with results_out:
+                    results_out.clear_output()
+                    print(f"Results folder: {output_dir}")
             if status_message is not None:
                 status_message.value = "<i>Processing finished.</i>"
             if generate_button is not None:
@@ -3779,7 +3798,7 @@ class WorldCerealClassificationApp:
         header = widgets.HTML(value="<h2>Visualize Map</h2>")
 
         status_message = widgets.HTML(
-            value="<i>Please generate a map in Tab 8 or load a results folder below.</i>"
+            value="<i>Please generate a map using previous steps or load a results folder below.</i>"
         )
 
         results_title = widgets.HTML(
@@ -3788,7 +3807,7 @@ class WorldCerealClassificationApp:
         results_input = widgets.Text(
             value="",
             description="Results folder:",
-            placeholder="/path/to/runs/Presto...",
+            placeholder="/path/to/runs/...",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         results_button = widgets.Button(
@@ -3928,19 +3947,17 @@ class WorldCerealClassificationApp:
             if not path.is_dir():
                 print("Results path must be a folder.")
                 return
+            if not (path / "model_metadata.json").exists():
+                print(
+                    "No model_metadata.json found in this folder.\n"
+                    "Only results folders generated by this application are supported."
+                )
+                return
             self.tab8_results = path
             self.tab9_merged_paths = {}
+            self._load_model_metadata(path)
             print(f"Results folder loaded: {path}")
-            if self.head_output_path is not None:
-                print(
-                    "Found the model that was used to generate these results, you can proceed!"
-                )
-            else:
-                print("\n\n")
-                print("!! Model used to generate these results is unkonwn\n")
-                print(
-                    "Visit the Deploy Model tab to provide the path to your model .zip file before proceeding!!"
-                )
+            print("Model configuration restored from results folder.")
 
         if status_message is not None:
             status_message.value = "<i>Results folder loaded. Ready to merge tiles.</i>"
@@ -3958,7 +3975,7 @@ class WorldCerealClassificationApp:
             results_dir = self.tab8_results
             if results_dir is None:
                 print(
-                    "No results folder available. Generate a map in Tab 8 or load a folder above."
+                    "No results folder available. Generate a map using previous steps or load a folder above."
                 )
                 return
             if not results_dir.exists():
@@ -4015,10 +4032,25 @@ class WorldCerealClassificationApp:
                 }
                 model_overrides = {"model": _model_cfg} if _model_cfg else None
                 preset = DEFAULT_SEASONAL_WORKFLOW_PRESET
-                product_type = WorldCerealProductType(self.tab8_product_type)
+                if self.tab8_product_type:
+                    product_type = WorldCerealProductType(self.tab8_product_type)
+                elif self.tab8_results:
+                    product_type = WorldCerealProductType(
+                        self._infer_product_type_from_dir(self.tab8_results)
+                    )
+                else:
+                    raise ValueError(
+                        "Cannot determine product type for visualization. Please provide a valid results folder or select a product type in the previous tab."
+                    )
+
                 luts = resolve_workflow_luts(
                     preset=preset, overrides=model_overrides, product_type=product_type
                 )
+                # for cropland, we use default visualization parameters
+                if "cropland" in luts:
+                    del luts["cropland"]
+                    if len(luts) == 0:
+                        luts = None
 
             except Exception as exc:
                 print(f"Failed retrieving product LUTs: {exc}")
@@ -4246,7 +4278,7 @@ class WorldCerealClassificationApp:
             if self.workflow_mode == "apply-custom-model":
                 not_ready_msg = "<i>No model available. Load a torch head archive (.zip) using the button below to continue.</i>"
             else:
-                not_ready_msg = "<i>No trained model available. Finish training a model in Tab 6 first or load a torch head archive (.zip) using the button below to continue.</i>"
+                not_ready_msg = "<i>No trained model available. Finish training a model using previous steps first or load a torch head archive (.zip) using the button below to continue.</i>"
 
             is_ready = (
                 self.head_package_path is not None and self.head_package_path.exists()
@@ -4383,7 +4415,7 @@ class WorldCerealClassificationApp:
             elif has_results:
                 status_message.value = "<i>Ready to merge tiles.</i>"
             else:
-                status_message.value = "<i>Please generate a map in Tab 8 or load a results folder below.</i>"
+                status_message.value = "<i>Please generate a map using previous steps or load a results folder below.</i>"
 
         if self.tab8_results is not None:
             results_title.layout.display = "none"
@@ -4394,7 +4426,7 @@ class WorldCerealClassificationApp:
             results_title.layout.display = "block"
             results_input.layout.display = "block"
             results_button.layout.display = "block"
-            results_output.layout.display = "block"
+            results_output.layout.display = "none"
 
     def _needs_cdse_authentication(self) -> bool:
         if self.cdse_auth_cleared:
@@ -4479,6 +4511,92 @@ class WorldCerealClassificationApp:
         except ValueError:
             return False
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _save_model_metadata(
+        self,
+        output_dir: Path,
+        product_type: str,
+        seasonal_model: Optional[str],
+        landcover_head: Optional[str],
+        croptype_head: Optional[str],
+        presto_model: Optional[str] = None,
+    ) -> None:
+        """Save model metadata to *output_dir* and copy any local model files.
+
+        Writes ``model_metadata.json`` so that the visualisation step can
+        always locate the correct models when the results folder is loaded in
+        a later session.  Local file paths are copied to a ``models/``
+        sub-directory; remote URLs are stored as-is.
+        """
+        models_dir = output_dir / "models"
+
+        def _resolve(url: Optional[str]) -> Optional[str]:
+            if url is None:
+                return None
+            if self._is_valid_url(url):
+                return url
+            src = Path(url)
+            if src.is_file():
+                models_dir.mkdir(parents=True, exist_ok=True)
+                dst = models_dir / src.name
+                shutil.copy2(src, dst)
+                return str(dst.resolve())
+            return url
+
+        metadata = {
+            "product_type": product_type,
+            "seasonal_model": _resolve(seasonal_model),
+            "landcover_head": _resolve(landcover_head),
+            "croptype_head": _resolve(croptype_head),
+            "presto_model": _resolve(presto_model),
+        }
+        with open(output_dir / "model_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+
+    def _load_model_metadata(self, results_dir: Path) -> bool:
+        """Restore model configuration from a previously saved results folder.
+
+        Reads ``model_metadata.json`` from *results_dir* and populates the
+        instance's model-URL state variables and ``tab8_product_type``.
+        Returns ``True`` when the file was found and successfully parsed,
+        ``False`` otherwise.
+        """
+        metadata_path = results_dir / "model_metadata.json"
+        if not metadata_path.exists():
+            return False
+        try:
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+        except Exception:
+            return False
+        self.tab8_product_type = metadata.get("product_type")
+        self.tab8_seasonal_model_url = metadata.get("seasonal_model")
+        self.tab8_landcover_head_url = metadata.get("landcover_head")
+        self.tab8_croptype_head_url = metadata.get("croptype_head")
+        presto_model = metadata.get("presto_model")
+        if presto_model is not None and self.presto_model_package is not None:
+            # restore whichever key is appropriate based on whether it's a URL or a path
+            if self._is_valid_url(presto_model):
+                self.presto_model_package["presto_remote_path"] = presto_model
+            else:
+                self.presto_model_package["presto_local_path"] = presto_model
+        return True
+
+    def _infer_product_type_from_dir(
+        self, results_dir: Optional[Path]
+    ) -> Optional[str]:
+        """Infer product type from the results folder name.
+
+        Folder names follow the pattern:
+            {product_type}_{model_name}_{run_suffix}_{season_extent}
+        The first underscore-separated segment is the product type.
+        Returns None when the type cannot be recognised.
+        """
+        if results_dir is None:
+            return None
+        first_part = results_dir.name.split("_")[0].lower()
+        valid = {pt.value for pt in WorldCerealProductType}
+        return first_part if first_part in valid else None
 
     def _format_season_window_label(
         self, season_window: Optional[TemporalContext]
