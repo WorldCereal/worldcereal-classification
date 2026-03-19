@@ -17,8 +17,11 @@ from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-from worldcereal.openeo.inference import (SeasonalInferenceEngine,
-                                          get_expected_timesteps_from_artifact)
+
+from worldcereal.openeo.inference import (
+    SeasonalInferenceEngine,
+    get_expected_timesteps_from_artifact,
+)
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.utils.models import load_model_artifact
 
