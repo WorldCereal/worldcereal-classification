@@ -1179,8 +1179,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
             title=f"WorldCereal embeddings for {row.tile_name}",
             job_options=resolved_options,
         )
+        time_now = time.strftime("%H:%M:%S")
         logger.info(
-            f"Job launched with ID = {job.job_id} (embeddings, tile: {row.tile_name})"
+            f"{time_now} - Job launched with ID = {job.job_id} (embeddings, tile: {row.tile_name})"
         )
         return job
 
@@ -1228,7 +1229,8 @@ class WorldCerealJobManager(MultiBackendJobManager):
             description="Job that performs end-to-end WorldCereal inference",
             additional=inference_job_options,
         )
+        time_now = time.strftime("%H:%M:%S")
         logger.info(
-            f"Job launched with ID = {job.job_id} (classification [{product_type.value}], tile: {row.tile_name})"
+            f"{time_now} - Job launched with ID = {job.job_id} (classification [{product_type.value}], tile: {row.tile_name})"
         )
         return job
