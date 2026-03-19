@@ -410,6 +410,9 @@ def create_inference_process_graph(
     seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
     workflow_config: Optional[WorldCerealWorkflowConfig] = None,
     row: Optional[pd.Series] = None,
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
 ) -> List[openeo.DataCube]:
     """Wrapper function that creates the inference openEO process graph.
 
@@ -476,6 +479,7 @@ def create_inference_process_graph(
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
+        optical_mask_method=optical_mask_method,
         compositing_window=compositing_window,
         connection=connection,
     )
@@ -518,6 +522,9 @@ def create_embeddings_process_graph(
     target_epsg: Optional[int] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     scale_uint16: bool = True,
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
     connection: Optional[openeo.Connection] = None,
 ) -> openeo.DataCube:
     """Create an OpenEO process graph for generating embeddings.
@@ -568,6 +575,7 @@ def create_embeddings_process_graph(
         backend_context=backend_context,
         tile_size=tile_size,
         target_epsg=target_epsg,
+        optical_mask_method=optical_mask_method,
         compositing_window=compositing_window,
         connection=connection,
     )
@@ -599,6 +607,9 @@ def create_inputs_process_graph(
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
     connection: Optional[openeo.Connection] = None,
 ) -> openeo.DataCube:
     """Wrapper function that creates the inputs openEO process graph.
@@ -651,6 +662,7 @@ def create_inputs_process_graph(
         tile_size=tile_size,
         target_epsg=target_epsg,
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
         connection=connection,
     )
 
@@ -674,6 +686,9 @@ def _get_preprocessed_inputs(
     tile_size: Optional[int] = 128,
     target_epsg: Optional[int] = None,
     compositing_window: Literal["month", "dekad"] = "month",
+    optical_mask_method: Literal[
+        "mask_scl_dilation", "mask_scl_raw_values"
+    ] = "mask_scl_dilation",
     connection: Optional[openeo.Connection] = None,
 ) -> openeo.DataCube:
     if connection is None:
@@ -688,6 +703,7 @@ def _get_preprocessed_inputs(
         s1_orbit_state=s1_orbit_state,
         target_epsg=target_epsg,
         compositing_window=compositing_window,
+        optical_mask_method=optical_mask_method,
     )
 
     return inputs.filter_bbox(dict(spatial_extent))

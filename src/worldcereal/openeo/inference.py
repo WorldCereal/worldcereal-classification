@@ -498,10 +498,7 @@ class SeasonalModelBundle:
         enable_cropland_head: bool = True,
     ) -> None:
 
-        from worldcereal.utils.models import (
-            DEFAULT_CACHE_ROOT,
-            ensure_cache_dir,
-        )
+        from worldcereal.utils.models import DEFAULT_CACHE_ROOT, ensure_cache_dir
 
         torch = _lazy_import_torch()
 
@@ -879,6 +876,50 @@ def _normalize_provided_masks(
 
 
 # ---------------------------------------------------------------------------
+# Model metadata helpers
+# ---------------------------------------------------------------------------
+
+_FREQ_TO_TIMESTEPS: Dict[str, int] = {"month": 12, "dekad": 36}
+
+
+def get_expected_timesteps_from_artifact(
+    artifact: "ModelArtifact",
+) -> Optional[int]:
+    """Derive the number of timesteps the model was trained with.
+
+    Resolution order:
+
+    1. ``run_config["dataset"]["num_timesteps"]`` – explicit training value.
+    2. ``manifest["experiment"]["timestep_freq"]`` – derive from composite
+       frequency (``"month"`` → 12, ``"dekad"`` → 36).
+
+    Returns ``None`` when neither source is available.
+    """
+    # 1. Direct value from run_config
+    run_config = getattr(artifact, "run_config", None)
+    if isinstance(run_config, Mapping):
+        dataset_cfg = run_config.get("dataset")
+        if isinstance(dataset_cfg, Mapping):
+            val = dataset_cfg.get("num_timesteps")
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+
+    # 2. Derive from timestep_freq in manifest
+    manifest = getattr(artifact, "manifest", None)
+    if isinstance(manifest, Mapping):
+        experiment = manifest.get("experiment")
+        if isinstance(experiment, Mapping):
+            freq = experiment.get("timestep_freq")
+            if freq in _FREQ_TO_TIMESTEPS:
+                return _FREQ_TO_TIMESTEPS[freq]
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Inference engine
 # ---------------------------------------------------------------------------
 
@@ -981,6 +1022,15 @@ class SeasonalInferenceEngine:
         predictors = generate_predictor(prepped.transpose("bands", "t", "x", "y"), epsg)
         num_samples = getattr(predictors, "B", None)
         num_timesteps = getattr(predictors, "T", None)
+        expected_timesteps = self._get_expected_timesteps()
+        if num_timesteps is not None and expected_timesteps is not None and num_timesteps > expected_timesteps:
+            raise ValueError(
+                f"Input has {num_timesteps} timesteps but the model was trained "
+                f"with {expected_timesteps}.  Positional indices beyond "
+                f"{expected_timesteps - 1} are out-of-distribution and "
+                f"self-attention context will differ drastically.  Subset "
+                f"the input temporally before calling infer()."
+            )
         logger.info(
             f"Predictors ready (samples={num_samples}, timesteps={num_timesteps}, batch_size={self.batch_size})"
         )
@@ -1009,6 +1059,25 @@ class SeasonalInferenceEngine:
         )
 
         return _dataset_to_multiband_array(dataset)
+
+    def _get_expected_timesteps(self) -> Optional[int]:
+        """Derive the number of timesteps the model was trained with.
+
+        Delegates to :func:`get_expected_timesteps_from_artifact` and falls
+        back to the encoder's positional-embedding capacity when the
+        artifact metadata is incomplete.
+        """
+        result = get_expected_timesteps_from_artifact(
+            self.bundle.base_artifact
+        )
+        if result is not None:
+            return result
+
+        # Fallback: positional embedding capacity
+        try:
+            return self.bundle.model.encoder.pos_embed.shape[1]
+        except AttributeError:
+            return None
 
     def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
         if "bands" not in arr.dims:
