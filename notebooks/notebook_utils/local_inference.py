@@ -17,9 +17,10 @@ from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-
-from worldcereal.openeo.inference import SeasonalInferenceEngine
+from worldcereal.openeo.inference import (SeasonalInferenceEngine,
+                                          get_expected_timesteps_from_artifact)
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+from worldcereal.utils.models import load_model_artifact
 
 
 def _parse_season_arg(season):
@@ -366,26 +367,36 @@ def run_seasonal_inference(
 
     ds = ds.fillna(fillna_value)
 
+    # --- Resolve expected timesteps from model artifact ---
+    artifact = load_model_artifact(seasonal_model_zip, cache_root=cache_root)
+    expected_timesteps = get_expected_timesteps_from_artifact(artifact)
+    if expected_timesteps is None:
+        logger.warning(
+            "Could not determine expected timesteps from model artifact; "
+            "defaulting to 12."
+        )
+        expected_timesteps = 12
+    logger.info(f"Model expects {expected_timesteps} timesteps.")
+
     # --- Temporal subsetting ---
-    # Ensure the dataset is trimmed to a 12-month window matching the
-    # requested season(s).  Presto was trained on exactly 12 timesteps;
-    # feeding more (e.g. 29 from a multi-year patch) produces
+    # Ensure the dataset is trimmed to match the model's training regime.
+    # Feeding more timesteps than the model was trained with produces
     # out-of-distribution embeddings and garbage predictions.
     if season_windows:
         union_window = compute_temporal_subset_window(season_windows)
         if union_window is not None:
             t_count = ds.sizes.get("t", 0)
-            if t_count > 12:
+            if t_count > expected_timesteps:
                 logger.info(
                     f"Temporal subsetting: input has {t_count} timesteps; "
-                    f"subsetting to ≤12 using union season window {union_window}."
+                    f"subsetting to ≤{expected_timesteps} using union season window {union_window}."
                 )
                 ds = subset_ds_temporally(
                     ds,
                     union_window,
                     min_coverage=0.5,
                     nodata_value=fillna_value,
-                    max_timesteps=12,
+                    max_timesteps=expected_timesteps,
                     prefer_tail=True,
                 )
                 logger.info(
@@ -397,11 +408,11 @@ def run_seasonal_inference(
                 # so that _build_masks_from_windows does not reject windows
                 # that now fall outside the trimmed data.
                 season_windows = _clamp_season_windows_to_ds(season_windows, ds)
-    elif ds.sizes.get("t", 0) > 12:
-        logger.warning(
+    elif ds.sizes.get("t", 0) > expected_timesteps:
+        raise ValueError(
             f"Input has {ds.sizes['t']} timesteps but no season_windows were "
-            f"provided for temporal subsetting.  Model expects 12 timesteps; "
-            f"predictions may be unreliable."
+            f"provided for temporal subsetting.  Model expects {expected_timesteps} "
+            f"timesteps; provide season_windows or pre-subset the data."
         )
 
     if epsg is None:
