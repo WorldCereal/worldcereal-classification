@@ -1,4 +1,4 @@
-from typing import Dict, Union
+from typing import Any, Dict
 
 try:
     from loguru import logger
@@ -9,7 +9,7 @@ except ImportError:
     logger = logging.getLogger(__name__)  # type: ignore
 
 
-DEFAULT_JOB_OPTIONS: Dict[str, Union[str, int, None]] = {
+DEFAULT_JOB_OPTIONS: Dict[str, Any] = {
     "driver-memory": "12G",
     "driver-memoryOverhead": "2G",
     "executor-cores": 2,
@@ -23,8 +23,8 @@ DEFAULT_JOB_OPTIONS: Dict[str, Union[str, int, None]] = {
 
 def parse_job_options_from_args(
     args,
-    default_options: Dict[str, Union[str, int, None]] = DEFAULT_JOB_OPTIONS,
-) -> Dict[str, Union[str, int, None]]:
+    default_options: Dict[str, Any] = DEFAULT_JOB_OPTIONS,
+) -> Dict[str, Any]:
     """
     Parse openEO job options from command line arguments.
 
