@@ -239,13 +239,12 @@ def _clamp_season_windows_to_ds(
         clamped_s = max(s, ds_start)
         clamped_e = min(e, ds_end)
         if clamped_e < clamped_s:
-            logger.warning(
+            raise ValueError(
                 f"Season '{sid}' window ({s.strftime('%Y-%m-%d')}, {e.strftime('%Y-%m-%d')}) "
                 f"does not overlap with subset timestamps "
-                f"({ds_start.strftime('%Y-%m-%d')} to {ds_end.strftime('%Y-%m-%d')}); "
-                f"falling back to full subset range."
+                f"({ds_start.strftime('%Y-%m-%d')} to {ds_end.strftime('%Y-%m-%d')}). "
+                f"Check that the season windows match the available data."
             )
-            clamped_s, clamped_e = ds_start, ds_end
         elif clamped_s != s or clamped_e != e:
             logger.info(
                 f"Clamped season '{sid}' window from "
