@@ -3733,7 +3733,12 @@ class WorldCerealClassificationApp:
         )
 
         # Get processing spatial extent
-        aoi_gdf = aoi_map.get_gdf()
+        try:
+            aoi_gdf = aoi_map.get_gdf()
+        except Exception as e:
+            with log_out:
+                print(f"Failed to get AOI: {e}")
+            return
 
         # Run processing on main thread to keep logs visible in output widgets.
         try:
