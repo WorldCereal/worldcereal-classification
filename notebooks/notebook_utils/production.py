@@ -6,6 +6,14 @@ from rasterio.io import MemoryFile
 from rasterio.merge import merge
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 
+# Web Mercator defined as a self-contained PROJ4 string.
+# Using a full PROJ4 string instead of "EPSG:3857" means PROJ does not need
+# to consult proj.db to resolve the CRS parameters.
+_WEB_MERCATOR_PROJ4 = (
+    "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 "
+    "+x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs"
+)
+
 
 def merge_maps(outdir: Path) -> dict[str, Path]:
     """Merge all product maps in the output directory into .tif files.
@@ -30,11 +38,10 @@ def merge_maps(outdir: Path) -> dict[str, Path]:
 
     def _merge_tifs(product_name: str, product_tifs: list[str]) -> Path:
         reprojected_tifs = []
+        dst_crs = rasterio.CRS.from_proj4(_WEB_MERCATOR_PROJ4)
         with rasterio.Env(CPL_LOG="ERROR"):
             for tif in product_tifs:
-                # reproject to EPSG:3857 if not already in that CRS
                 with rasterio.open(tif) as src:
-                    dst_crs = "EPSG:3857"
                     transform, width, height = calculate_default_transform(
                         src.crs, dst_crs, src.width, src.height, *src.bounds
                     )
