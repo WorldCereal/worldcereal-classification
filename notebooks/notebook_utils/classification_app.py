@@ -4432,12 +4432,12 @@ class WorldCerealClassificationApp:
             results_title.layout.display = "none"
             results_input.layout.display = "none"
             results_button.layout.display = "none"
-            results_output.layout.display = "block"
+            results_output.layout.display = "none"
         else:
             results_title.layout.display = "block"
             results_input.layout.display = "block"
             results_button.layout.display = "block"
-            results_output.layout.display = "none"
+            results_output.layout.display = "block"
 
     def _needs_cdse_authentication(self) -> bool:
         if self.cdse_auth_cleared:
