@@ -486,8 +486,7 @@ class SeasonalModelBundle:
         enable_cropland_head: bool = True,
     ) -> None:
 
-        from worldcereal.utils.models import (DEFAULT_CACHE_ROOT,
-                                              ensure_cache_dir)
+        from worldcereal.utils.models import DEFAULT_CACHE_ROOT, ensure_cache_dir
 
         torch = _lazy_import_torch()
 
@@ -1425,17 +1424,17 @@ class SeasonalInferenceEngine:
                 and cropland_mask_bool is not None
             )
             if gate_applicable:
-                assert cropland_mask_bool is not None, (
-                    "Cropland mask required when gating is enabled"
-                )
+                assert (
+                    cropland_mask_bool is not None
+                ), "Cropland mask required when gating is enabled"
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
-                assert cropland_mask_bool is not None, (
-                    "Cropland mask required when gating is enabled"
-                )
+                assert (
+                    cropland_mask_bool is not None
+                ), "Cropland mask required when gating is enabled"
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
@@ -2227,63 +2226,47 @@ def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
 
     from worldcereal.utils.models import load_model_artifact
 
-    try:
-        context_map = dict(context or {})
-        season_ids = _resolve_effective_season_ids(context_map)
-        export_probs = False
-        export_embeddings = False
-        export_ndvi = False
-        croptype_classes: Optional[Sequence[str]] = None
-        croptype_enabled = True
-        cropland_enabled = True
+    context_map = dict(context or {})
+    season_ids = _resolve_effective_season_ids(context_map)
+    export_probs = False
+    export_embeddings = False
+    export_ndvi = False
+    croptype_classes: Optional[Sequence[str]] = None
+    croptype_enabled = True
+    cropland_enabled = True
+    config = _extract_udf_configuration(context_map)
+    export_probs = config.get("export_class_probabilities", False)
+    export_embeddings = config.get("export_embeddings", False)
+    export_ndvi = config.get("export_ndvi", False)
+    croptype_enabled = config.get("enable_croptype_head", True)
+    cropland_enabled = config.get("enable_cropland_head", True)
 
-        try:
-            config = _extract_udf_configuration(context_map)
-            export_probs = config.get("export_class_probabilities", False)
-            export_embeddings = config.get("export_embeddings", False)
-            export_ndvi = config.get("export_ndvi", False)
-            croptype_enabled = config.get("enable_croptype_head", True)
-            cropland_enabled = config.get("enable_cropland_head", True)
-
-            if cropland_enabled or croptype_enabled:
-                cache_root = config.get("cache_root")
-                base_artifact = load_model_artifact(
-                    config["seasonal_model_zip"], cache_root=cache_root
-                )
-                base_heads = base_artifact.manifest.get("heads", [])
-
-                def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
-                    override_source = config.get(key)
-                    if override_source:
-                        return load_model_artifact(
-                            override_source, cache_root=cache_root
-                        ).manifest.get("heads", [])
-                    return base_heads
-
-                if croptype_enabled:
-                    croptype_heads = _heads_for_override("croptype_head_zip")
-                    croptype_classes = _select_head_spec(
-                        croptype_heads, "croptype"
-                    ).class_names
-
-            if export_probs and croptype_enabled and not croptype_classes:
-                logger.warning(
-                    "apply_metadata: export_class_probabilities enabled but croptype class names are unavailable; leaving metadata unchanged."
-                )
-                return metadata
-        except Exception as exc:
-            logger.warning(f"Metadata configuration fallback: {exc}")
-
-        labels = _expected_udf_band_labels(
-            season_ids,
-            export_class_probabilities=export_probs,
-            croptype_classes=croptype_classes,
-            croptype_enabled=croptype_enabled,
-            cropland_enabled=cropland_enabled,
-            export_embeddings=export_embeddings,
-            export_ndvi=export_ndvi,
+    if cropland_enabled or croptype_enabled:
+        cache_root = config.get("cache_root")
+        base_artifact = load_model_artifact(
+            config["seasonal_model_zip"], cache_root=cache_root
         )
-        return metadata.rename_labels(dimension="bands", target=labels)
-    except Exception as exc:  # pragma: no cover - metadata best-effort
-        logger.warning(f"apply_metadata fallback: {exc}")
-        return metadata
+        base_heads = base_artifact.manifest.get("heads", [])
+
+        def _heads_for_override(key: str) -> List[Mapping[str, Any]]:
+            override_source = config.get(key)
+            if override_source:
+                return load_model_artifact(
+                    override_source, cache_root=cache_root
+                ).manifest.get("heads", [])
+            return base_heads
+
+        if croptype_enabled:
+            croptype_heads = _heads_for_override("croptype_head_zip")
+            croptype_classes = _select_head_spec(croptype_heads, "croptype").class_names
+
+    labels = _expected_udf_band_labels(
+        season_ids,
+        export_class_probabilities=export_probs,
+        croptype_classes=croptype_classes,
+        croptype_enabled=croptype_enabled,
+        cropland_enabled=cropland_enabled,
+        export_embeddings=export_embeddings,
+        export_ndvi=export_ndvi,
+    )
+    return metadata.rename_labels(dimension="bands", target=labels)

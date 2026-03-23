@@ -1,11 +1,12 @@
 import json
+import time
 from pathlib import Path
-from typing import Callable, Union
+from typing import Callable, Optional, Union
 
 import openeo
 import pandas as pd
 import pystac
-from openeo.extra.job_management import MultiBackendJobManager
+from openeo.extra.job_management import CsvJobDatabase, MultiBackendJobManager
 
 from worldcereal.extract.utils import pipeline_log
 
@@ -21,6 +22,36 @@ class ExtractionJobManager(MultiBackendJobManager):
         super().__init__(poll_sleep=poll_sleep, root_dir=root_dir)
         self.output_path_generator = output_path_generator
         self.post_job_action = post_job_action
+
+    def run_jobs(
+        self,
+        start_job: Callable,
+        job_db: CsvJobDatabase,
+        status_callback: Optional[Callable[[pd.DataFrame], None]] = None,
+    ) -> dict:
+
+        if job_db is None:
+            raise ValueError("job_db must be provided")
+
+        # If no status callback is provided,
+        # we use the default implementation from the MultiBackendJobManager.
+        if status_callback is None:
+            return super().run_jobs(
+                start_job=start_job,
+                job_db=job_db,
+            )
+
+        # This is the path we use when running from notebooks
+        self.start_job_thread(start_job=start_job, job_db=job_db)
+        while self._thread and self._thread.is_alive():
+            try:
+                status_df = job_db.read()
+                status_callback(status_df)
+            except pd.errors.EmptyDataError:
+                pass
+            time.sleep(self.poll_sleep)
+
+        return {}
 
     def _download_job_products(self, job: openeo.BatchJob, row: pd.Series) -> dict:
         job_products = {}
@@ -67,9 +98,9 @@ class ExtractionJobManager(MultiBackendJobManager):
                 asset_name = list(item.assets.values())[0].title
                 asset_path = job_products[f"{job.job_id}_{asset_name}"][0]
 
-                assert len(item.assets.values()) == 1, (
-                    "Each item should only contain one asset"
-                )
+                assert (
+                    len(item.assets.values()) == 1
+                ), "Each item should only contain one asset"
                 for asset in item.assets.values():
                     asset.href = str(
                         asset_path
