@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any, Dict
 
 DEFAULT_SEASONAL_MODEL_URL = (
-    "https://s3.waw3-1.cloudferro.com/swift/v1/project_dependencies/worldcereal/"
+    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
     "presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-"
     "balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip"
 )
