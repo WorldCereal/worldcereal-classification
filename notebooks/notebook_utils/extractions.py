@@ -809,7 +809,7 @@ def retrieve_extractions_extent(
     # Download the file holding all extents of publicly available WorldCereal reference datasets with satellite extractions
     local_file = Path("./download/worldcereal_public_extractions_extent.parquet")
     local_file.parent.mkdir(parents=True, exist_ok=True)
-    url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/worldcereal_public_extractions_extent.parquet"
+    url = "https://s3.waw3-1.cloudferro.com/geoparquet/worldcereal_public_extractions_extent.parquet"
     urllib.request.urlretrieve(url, local_file)
 
     # Read with geopandas
