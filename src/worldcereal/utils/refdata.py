@@ -304,7 +304,7 @@ def query_public_extractions(
 
     logger.info("Querying extractions...")
 
-    all_extractions_url = "https://s3.waw3-1.cloudferro.com/geoparquet/"
+    all_extractions_url = "https://s3.waw3-1.cloudferro.com/swift/v1/geoparquet/"
     f = requests.get(all_extractions_url)
     all_dataset_names = f.text.split("\n")
     matching_dataset_names = [
