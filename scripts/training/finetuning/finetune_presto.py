@@ -134,26 +134,52 @@ def _series_from_column(
     return pd.Series(default, index=df.index, dtype=float)
 
 
-def _combine_quality_outlier(
-    quality: pd.Series,
-    outlier: pd.Series,
-    quality_weight: float,
-    outlier_weight: float,
-) -> pd.Series:
-    # Auto-detect 0–100 scale and rescale to 0–1
-    if quality.max() > 1.0:
-        quality = quality / 100.0
-    if outlier.max() > 1.0:
-        outlier = outlier / 100.0
-    quality_clipped = quality.clip(0.0, 1.0)
-    outlier_clipped = outlier.clip(0.0, 1.0)
-    denom = float(quality_weight + outlier_weight)
-    if denom <= 0.0:
-        return outlier_clipped
-    combined = (
-        quality_clipped * quality_weight + outlier_clipped * outlier_weight
-    ) / denom
-    return combined.clip(0.0, 1.0)
+def _normalize_score(series: pd.Series) -> pd.Series:
+    """Rescale 0-100 scores to 0-1 and clip to [0, 1]."""
+    if series.max() > 1.0:
+        series = series / 100.0
+    return series.clip(0.0, 1.0)
+
+
+def _drop_zero_quality_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_cols: Sequence[str],
+) -> pd.DataFrame:
+    """Hard-exclude samples where any quality score is exactly 0.
+
+    A quality score of 0 typically indicates a fundamentally bad sample
+    (e.g. road intersection) that should never contribute to training,
+    regardless of other scoring mechanisms.
+    """
+    if df.empty:
+        return df
+
+    present_cols = [col for col in quality_cols if col in df.columns]
+    if not present_cols:
+        logger.info(
+            f"{split_name}: no quality columns found ({quality_cols}); "
+            "skipping zero-quality exclusion."
+        )
+        return df
+
+    zero_mask = pd.Series(False, index=df.index)
+    for col in present_cols:
+        scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
+        zero_mask = zero_mask | (scores == 0.0)
+
+    n_dropped = int(zero_mask.sum())
+    if n_dropped > 0:
+        logger.warning(
+            f"{split_name}: dropping {n_dropped} samples with zero quality "
+            f"score in columns {present_cols}."
+        )
+        df = df[~zero_mask].copy()
+    else:
+        logger.info(
+            f"{split_name}: no samples with zero quality score found."
+        )
+    return df
 
 
 def _attach_sample_weights(
@@ -161,16 +187,17 @@ def _attach_sample_weights(
     split_name: str,
     quality_score_col: str,
     outlier_score_col: str,
-    quality_weight: float,
-    outlier_weight: float,
     output_col: str,
 ) -> pd.DataFrame:
-    quality_score = _series_from_column(df, quality_score_col, default=1.0)
-    outlier_score = _series_from_column(df, outlier_score_col, default=1.0)
-    base_weight = _combine_quality_outlier(
-        quality_score, outlier_score, quality_weight, outlier_weight
-    )
-    combined = base_weight.astype(float)
+    """Compute per-sample weight as the product of quality and outlier scores.
+
+    Each score independently modulates the sample weight:
+    score=1 means no effect, score<1 means proportional down-weighting.
+    """
+    quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
+    outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
+    combined = (quality * outlier).clip(0.0, 1.0)
+
     updated = df.copy()
     updated[output_col] = combined
 
@@ -876,8 +903,11 @@ def main(args):
     logger.info(f"Number of validation samples: {len(val_df)}")
     logger.info(f"Number of test samples: {len(test_df)}")
 
-    quality_weight = args.sample_weight_quality
-    outlier_weight = args.sample_weight_outlier
+    # Hard-exclude samples with zero quality scores (e.g. road intersections)
+    quality_cols = ["quality_score_lc", "quality_score_ct"]
+    train_df = _drop_zero_quality_samples(train_df, "train", quality_cols)
+    val_df = _drop_zero_quality_samples(val_df, "val", quality_cols)
+    test_df = _drop_zero_quality_samples(test_df, "test", quality_cols)
 
     # Remove small classes from train_df; make sure to keep the same classes in val/test for consistency
     train_df, removed_lc_classes = remove_small_classes(
@@ -908,8 +938,6 @@ def main(args):
         split_name="train",
         quality_score_col="quality_score_lc",
         outlier_score_col="LC10_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_lc",
     )
     val_df = _attach_sample_weights(
@@ -917,8 +945,6 @@ def main(args):
         split_name="val",
         quality_score_col="quality_score_lc",
         outlier_score_col="LC10_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_lc",
     )
     test_df = _attach_sample_weights(
@@ -926,8 +952,6 @@ def main(args):
         split_name="test",
         quality_score_col="quality_score_lc",
         outlier_score_col="LC10_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_lc",
     )
 
@@ -936,8 +960,6 @@ def main(args):
         split_name="train",
         quality_score_col="quality_score_ct",
         outlier_score_col="CT25_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_ct",
     )
     val_df = _attach_sample_weights(
@@ -945,8 +967,6 @@ def main(args):
         split_name="val",
         quality_score_col="quality_score_ct",
         outlier_score_col="CT25_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_ct",
     )
     test_df = _attach_sample_weights(
@@ -954,8 +974,6 @@ def main(args):
         split_name="test",
         quality_score_col="quality_score_ct",
         outlier_score_col="CT25_confidence_nonoutlier",
-        quality_weight=quality_weight,
-        outlier_weight=outlier_weight,
         output_col="sample_weight_ct",
     )
 
@@ -1679,18 +1697,6 @@ def parse_args(arg_list=None):
             "Enable sample-level weighting using quality/confidence scores. "
             "Outlier weighting is always applied when confidence_nonoutlier columns are available."
         ),
-    )
-    parser.add_argument(
-        "--sample_weight_quality",
-        type=float,
-        default=1.0,
-        help="Relative weight for quality scores when combining with outlier scores.",
-    )
-    parser.add_argument(
-        "--sample_weight_outlier",
-        type=float,
-        default=1.0,
-        help="Relative weight for outlier scores when combining with quality scores.",
     )
     parser.add_argument(
         "--outlier_mode",
