@@ -141,6 +141,111 @@ def _normalize_score(series: pd.Series) -> pd.Series:
     return series.clip(0.0, 1.0)
 
 
+# HOTFIX: map-sampled datasets have quality_score_lc erroneously set to 0.
+# Until the upstream bug is fixed, copy quality_score_ct → quality_score_lc
+# for these ref_ids so they are not wrongly dropped or down-weighted.
+_MAP_SAMPLED_REF_IDS: frozenset = frozenset((
+    "2024_ARG_INTA-SUMMER_POINT_110",
+    "2022_ARG_INTA-SUMMER_POINT_110",
+    "2023_ARG_INTA-SUMMER_POINT_110",
+    "2020_ARG_INTA-SUMMER_POINT_110",
+    "2020_ARG_INTA-WINTER_POINT_110",
+    "2022_ARG_INTA-WINTER_POINT_110",
+    "2021_ARG_INTA-SUMMER_POINT_110",
+    "2021_ARG_INTA-WINTER_POINT_110",
+    "2023_ARG_INTA-WINTER_POINT_110",
+    "2017_BRA_MAPBIOMAS-ZHENG_POINT_110",
+    "2018_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2018_BRA_MAPBIOMAS-ZHENG_POINT_110",
+    "2019_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2019_BRA_MAPBIOMAS-ZHENG_POINT_110",
+    "2020_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2021_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2022_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2023_BRA_MAPBIOMAS-SONG_POINT_110",
+    "2017_CHN_YOU-HAN-SHEN-RICE_POINT_110",
+    "2018_CHN_LIU-ZANG_POINT_110",
+    "2018_CHN_YOU-HAN-SHEN-RICE_POINT_110",
+    "2019_CHN_LIU-ZANG_POINT_110",
+    "2019_CHN_YOU-HAN-SHEN-RICE_POINT_110",
+    "2019_CHN_YOU-LI-LI_POINT_110",
+    "2019_CHN_YOU-MEI-SOYBEAN_POINT_110",
+    "2020_CHN_DONG-HU-LIU-YANG_POINT_110",
+    "2020_CHN_KANG_POINT_110",
+    "2020_CHN_LIU-ZANG_POINT_110",
+    "2021_CHN_HU-LIU-YANG_POINT_110",
+    "2021_CHN_KANG_POINT_110",
+    "2021_CHN_LIU-ZANG_POINT_110",
+    "2022_CHN_HU-LIU-YANG_POINT_110",
+    "2018_VNM_HAN-JAXA-LI_POINT_110",
+    "2019_VNM_HAN-JAXA-LI-SUN_POINT_110",
+    "2020_VNM_JAXA-LI_POINT_110",
+    "2021_VNM_GINTING-LI_POINT_110",
+    "2017_CHL_HAN_POINT_110",
+    "2018_CHL_HAN_POINT_110",
+    "2019_CHL_HAN_POINT_110",
+    "2018_CRI_CENAT-OILPALMS_POINT_110",
+    "2018_CRI_CENAT-PINEAPPLES_POINT_110",
+    "2019_CRI_CENAT-OILPALMS_POINT_110",
+    "2019_CRI_CENAT-PINEAPPLES_POINT_110",
+    "2021_IDN_GINTING-LI_POINT_110",
+    "2018_JPN_CARRASCO-HAN-JAXA-LI_POINT_110",
+    "2019_JPN_CARRASCO-HAN-JAXA-LI_POINT_110",
+    "2020_JPN_JAXA-LI_POINT_110",
+    "2020_JPN_JAXA-OKINAWA_POINT_110",
+    "2022_JPN_JAXA-LI_POINT_110",
+    "2023_JPN_LI-SONG_POINT_110",
+    "2021_KHM_GINTING-LI_POINT_110",
+    "2018_KOR_HAN-JO-LI_POINT_110",
+    "2019_KOR_HAN-JO-LI_POINT_110",
+    "2020_KOR_JO-LI_POINT_110",
+    "2021_KOR_JO-LI_POINT_110",
+    "2023_KOR_LI-SONG_POINT_110",
+    "2021_LAO_GINTING-LI_POINT_110",
+    "2021_MMR_GINTING-LI_POINT_110",
+    "2021_MYS_GINTING-LI_POINT_110",
+    "2021_PHL_GINTING-LI_POINT_110",
+    "2019_THA_BOKU_POINT_110",
+    "2021_THA_GINTING-LI_POINT_110",
+    "2022_URY_SIT-OAN_POINT_110",
+    "2022_URY_SONG-OAN_POINT_110",
+    "2024_HND_ICF-FAO_POINT_110",
+))
+
+
+def _hotfix_map_sampled_lc_quality(
+    df: pd.DataFrame,
+    split_name: str,
+) -> pd.DataFrame:
+    """Copy quality_score_ct → quality_score_lc for map-sampled ref_ids.
+
+    Map-sampled datasets currently have quality_score_lc erroneously set to 0
+    while quality_score_ct is correct.  This hotfix prevents those samples from
+    being dropped or unfairly down-weighted until the upstream bug is fixed.
+    """
+    if df.empty or "ref_id" not in df.columns:
+        return df
+    if "quality_score_lc" not in df.columns or "quality_score_ct" not in df.columns:
+        return df
+
+    mask = df["ref_id"].isin(_MAP_SAMPLED_REF_IDS)
+    n_affected = int(mask.sum())
+    if n_affected == 0:
+        logger.info(
+            f"{split_name}: no map-sampled ref_ids found; "
+            "skipping LC quality hotfix."
+        )
+        return df
+
+    updated = df.copy()
+    updated.loc[mask, "quality_score_lc"] = updated.loc[mask, "quality_score_ct"]
+    logger.warning(
+        f"{split_name}: HOTFIX applied — copied quality_score_ct → quality_score_lc "
+        f"for {n_affected} samples across map-sampled ref_ids."
+    )
+    return updated
+
+
 def _drop_zero_quality_samples(
     df: pd.DataFrame,
     split_name: str,
@@ -1019,6 +1124,12 @@ def main(args):
     logger.info(f"Number of training samples: {len(train_df)}")
     logger.info(f"Number of validation samples: {len(val_df)}")
     logger.info(f"Number of test samples: {len(test_df)}")
+
+    # HOTFIX: map-sampled datasets have quality_score_lc erroneously set to 0.
+    # Copy quality_score_ct into quality_score_lc so they are not wrongly dropped.
+    train_df = _hotfix_map_sampled_lc_quality(train_df, "train")
+    val_df = _hotfix_map_sampled_lc_quality(val_df, "val")
+    test_df = _hotfix_map_sampled_lc_quality(test_df, "test")
 
     # Hard-exclude samples with zero quality scores (e.g. road intersections)
     quality_cols = ["quality_score_lc", "quality_score_ct"]
