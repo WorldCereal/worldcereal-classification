@@ -210,6 +210,123 @@ def _attach_sample_weights(
     return updated
 
 
+def _filter_low_weight_eval_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    *,
+    weight_cols: Sequence[str] = ("sample_weight_lc", "sample_weight_ct"),
+    hard_floor: float = 0.5,
+    percentile: float = 20.0,
+    min_class_samples: int = 10,
+    label_columns: Sequence[str] = ("landcover_label", "croptype_label"),
+) -> pd.DataFrame:
+    """Remove low-quality samples from val/test using a hybrid filter.
+
+    A sample is *marked for removal* when **both** conditions hold:
+      1. Its combined weight is below the ``percentile``-th percentile
+         within its ref_id  (relatively bad within its dataset).
+      2. Its combined weight is below ``hard_floor``
+         (absolutely bad by a global standard).
+
+    Before actually removing, a **class safety net** ensures that no
+    label in ``label_columns`` drops below ``min_class_samples``.
+    """
+    if df.empty:
+        return df
+
+    present_weight_cols = [c for c in weight_cols if c in df.columns]
+    if not present_weight_cols:
+        logger.info(
+            f"{split_name}: weight columns {list(weight_cols)} not found; "
+            "skipping low-weight eval filtering."
+        )
+        return df
+
+    # Combined weight = minimum across task-specific weights
+    w = df[present_weight_cols].min(axis=1)
+
+    # Per-ref_id percentile threshold
+    ref_col = "ref_id" if "ref_id" in df.columns else None
+    if ref_col:
+        pct_threshold = df.assign(_w=w).groupby(ref_col)["_w"].transform(
+            lambda s: np.percentile(s, percentile)
+        )
+    else:
+        pct_threshold = np.percentile(w, percentile)
+
+    # Mark: relatively bad AND absolutely bad
+    remove_mask = (w < pct_threshold) & (w < hard_floor)
+
+    # Class safety net: protect classes that would drop below min_class_samples
+    present_label_cols = [c for c in label_columns if c in df.columns]
+    if present_label_cols and remove_mask.any():
+        protected = pd.Series(False, index=df.index)
+        for label_col in present_label_cols:
+            labels = df[label_col].dropna()
+            remaining_counts = (
+                df.loc[~remove_mask & df[label_col].notna(), label_col]
+                .value_counts()
+            )
+            for cls_name in labels.unique():
+                if remaining_counts.get(cls_name, 0) < min_class_samples:
+                    # Protect all samples of this class from removal
+                    class_mask = (df[label_col] == cls_name) & remove_mask
+                    n_protected = int(class_mask.sum())
+                    if n_protected > 0:
+                        protected = protected | class_mask
+                        logger.warning(
+                            f"{split_name}: protecting {n_protected} sample(s) "
+                            f"of class '{cls_name}' (col={label_col}) from removal "
+                            f"to keep >= {min_class_samples} samples."
+                        )
+        remove_mask = remove_mask & ~protected
+
+    n_removed = int(remove_mask.sum())
+    if n_removed == 0:
+        logger.info(
+            f"{split_name}: no samples removed by low-weight eval filter "
+            f"(floor={hard_floor}, pct={percentile})."
+        )
+        return df
+
+    # --- Detailed logging ---
+    removed_df = df[remove_mask]
+    logger.warning(
+        f"{split_name}: removing {n_removed}/{len(df)} samples "
+        f"({100 * n_removed / len(df):.1f}%) with low combined weight "
+        f"(floor={hard_floor}, percentile={percentile})."
+    )
+
+    # Per-ref_id breakdown
+    if ref_col:
+        ref_counts = removed_df[ref_col].value_counts().sort_values(ascending=False)
+        champion_ref = ref_counts.index[0]
+        champion_count = int(ref_counts.iloc[0])
+        logger.warning(
+            f"{split_name}: top ref_id for removals: '{champion_ref}' "
+            f"({champion_count} samples). "
+            f"Total ref_ids affected: {len(ref_counts)}."
+        )
+        # Log up to top 15 ref_ids
+        top_refs = ref_counts.head(15)
+        logger.warning(
+            f"{split_name}: per-ref_id removal counts (top 15):\n"
+            + top_refs.to_string()
+        )
+
+    # Weight distribution of removed samples
+    removed_weights = w[remove_mask]
+    logger.info(
+        f"{split_name}: removed samples weight stats: "
+        f"min={removed_weights.min():.4f}, "
+        f"max={removed_weights.max():.4f}, "
+        f"mean={removed_weights.mean():.4f}, "
+        f"median={removed_weights.median():.4f}"
+    )
+
+    return df[~remove_mask].copy()
+
+
 def _build_head_manifest(
     *,
     experiment_name: str,
@@ -977,6 +1094,22 @@ def main(args):
         output_col="sample_weight_ct",
     )
 
+    # Optional: filter low-weight samples from val/test sets
+    if args.eval_weight_floor is not None:
+        _filter_kwargs = dict(
+            weight_cols=("sample_weight_lc", "sample_weight_ct"),
+            hard_floor=args.eval_weight_floor,
+            percentile=args.eval_weight_percentile,
+            min_class_samples=args.eval_min_class_samples,
+            label_columns=("landcover_label", "croptype_label"),
+        )
+        val_df = _filter_low_weight_eval_samples(
+            val_df, "val", **_filter_kwargs,
+        )
+        test_df = _filter_low_weight_eval_samples(
+            test_df, "test", **_filter_kwargs,
+        )
+
     # Write the processed dataframes after all manipulations have already been done
     train_df.to_parquet(train_df_path)
     val_df.to_parquet(val_df_path)
@@ -1696,6 +1829,37 @@ def parse_args(arg_list=None):
         help=(
             "Enable sample-level weighting using quality/confidence scores. "
             "Outlier weighting is always applied when confidence_nonoutlier columns are available."
+        ),
+    )
+    parser.add_argument(
+        "--eval_weight_floor",
+        type=float,
+        default=None,
+        help=(
+            "Hard floor for combined sample weight in val/test sets. "
+            "Samples below both this floor AND the per-ref_id percentile threshold "
+            "are removed. Set to None (default) to disable eval filtering entirely. "
+            "Suggested value: 0.5."
+        ),
+    )
+    parser.add_argument(
+        "--eval_weight_percentile",
+        type=float,
+        default=20.0,
+        help=(
+            "Within each ref_id, samples below this percentile of combined weight "
+            "are candidates for removal (only if also below --eval_weight_floor). "
+            "Default: 20.0 (bottom 20%%)."
+        ),
+    )
+    parser.add_argument(
+        "--eval_min_class_samples",
+        type=int,
+        default=10,
+        help=(
+            "Minimum number of samples per class that must remain in val/test after "
+            "low-weight filtering. Classes that would drop below this count are "
+            "protected from removal. Default: 10."
         ),
     )
     parser.add_argument(
