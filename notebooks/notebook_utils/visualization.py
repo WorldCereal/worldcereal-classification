@@ -57,10 +57,22 @@ def generate_distinct_colors(n, min_distance=100):
         (186, 186, 186),
         (255, 255, 255),
     ]  # grey is reserved for no-cropland, white for no data
+    max_attempts = 10_000
     while len(colors) < n + 2:  # +2 for no-cropland and no-data
-        new_color = generate_random_color()
-        if all(color_distance(new_color, c) > min_distance for c in colors):
-            colors.append(new_color)
+        found = False
+        for _ in range(max_attempts):
+            new_color = generate_random_color()
+            if all(color_distance(new_color, c) > min_distance for c in colors):
+                colors.append(new_color)
+                found = True
+                break
+        if not found:
+            if min_distance <= 10:
+                # Last resort: just append whatever color, ignoring distance
+                colors.append(generate_random_color())
+            else:
+                # Relax the distance requirement and retry
+                min_distance = max(10, min_distance - 10)
     return colors[2:]
 
 
