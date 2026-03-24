@@ -1247,7 +1247,7 @@
   "default_job_options": {
     "driver-memory": "8g",
     "executor-memory": "4g",
-    "executor-memoryOverhead": "4g",
+    "executor-memoryOverhead": "6g",
     "executor-request-cores": "1800m",
     "max-executors": 20,
     "python-memory": "disable",
