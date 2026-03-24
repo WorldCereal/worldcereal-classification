@@ -786,7 +786,9 @@
                   "workflow_config": {
                     "description": "Phase II multitask seasonal backbone with dual landcover/croptype heads",
                     "model": {
-                      "seasonal_model_zip": "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip",
+                      "seasonal_model_zip": {
+                        "from_parameter": "model_url"
+                      },
                       "landcover_head_zip": null,
                       "croptype_head_zip": null,
                       "export_embeddings": true,
