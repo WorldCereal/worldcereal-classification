@@ -1872,14 +1872,21 @@ def _render_patch_figure(
     plt.close(fig)
 
 
+# All head keys the system can produce, regardless of training config.
+_ALL_KNOWN_HEAD_KEYS: frozenset = frozenset(
+    ["LANDCOVER"] + list(_SEASON_TO_HEAD.values())
+)
+
+
 def _normalize_heads(
     heads: Optional[Sequence[str]],
     valid_keys: Optional[Sequence[str]] = None,
 ) -> List[str]:
     """Parse ``--heads`` CLI values into valid head keys.
 
-    *valid_keys* should come from ``head_specs.keys()`` so it adapts to
-    the model's actual season configuration.
+    Accepts any recognised head key (LANDCOVER, CROPTYPE_S1, CROPTYPE_S2,
+    CROPTYPE_ANNUAL) even if the model was not trained with that season.
+    *valid_keys* is used only as the default when *heads* is not provided.
     """
     default = list(valid_keys) if valid_keys else ["LANDCOVER", "CROPTYPE_S1", "CROPTYPE_S2"]
     if not heads:
@@ -1890,8 +1897,13 @@ def _normalize_heads(
             token = token.strip()
             if token:
                 parsed.append(token.upper())
-    allowed = set(default)
-    selected = [token for token in parsed if token in allowed]
+    unknown = [t for t in parsed if t not in _ALL_KNOWN_HEAD_KEYS]
+    if unknown:
+        logger.warning(
+            f"Ignoring unknown head key(s): {unknown}. "
+            f"Valid keys: {sorted(_ALL_KNOWN_HEAD_KEYS)}"
+        )
+    selected = [t for t in parsed if t in _ALL_KNOWN_HEAD_KEYS]
     return selected if selected else default
 
 
@@ -1948,8 +1960,8 @@ def run_spatial_inference(
             f"Model was trained with disabled sensor(s): {', '.join(active)}. "
             f"Will blank those bands at inference time."
         )
-    season_ids = _resolve_season_ids_from_metadata(metadata)
-    head_specs = _build_head_specs(metadata, season_ids=season_ids)
+    training_season_ids = _resolve_season_ids_from_metadata(metadata)
+    head_specs = _build_head_specs(metadata, season_ids=training_season_ids)
     selected_heads = _normalize_heads(heads, valid_keys=list(head_specs.keys()))
     cropland_classes = _resolve_cropland_classes(metadata)
     lc_mapping_key = _resolve_lc_mapping_key(metadata)
@@ -1958,6 +1970,9 @@ def run_spatial_inference(
     )
 
     # Derive the season IDs that are actually enabled for this run.
+    # The user may request seasons the model was *not* trained with;
+    # architecturally this is fine because the croptype head is a shared
+    # MLP that classifies any season-pooled embedding.
     model_season_ids: List[str] = []
     for hk in selected_heads:
         sid = _head_key_to_season_id(hk)
@@ -1965,11 +1980,31 @@ def run_spatial_inference(
             model_season_ids.append(sid)
     if not model_season_ids:
         # Fallback: use whatever the model was trained with.
-        model_season_ids = list(season_ids)
+        model_season_ids = list(training_season_ids)
+
+    # Build head specs for any extra seasons requested at inference time.
+    extra_seasons = set(model_season_ids) - set(training_season_ids)
+    if extra_seasons:
+        logger.warning(
+            f"Inference seasons {sorted(extra_seasons)} differ from training "
+            f"seasons {list(training_season_ids)}. The shared croptype head "
+            f"will generalise across season masks, but predictions may be "
+            f"less reliable for seasons unseen during training."
+        )
+        extra_specs = _build_head_specs(metadata, season_ids=sorted(extra_seasons))
+        for key, spec in extra_specs.items():
+            if key not in head_specs:
+                head_specs[key] = spec
+
+    # Keep only the heads the user actually requested so that
+    # training-only heads (e.g. CROPTYPE_ANNUAL when running S1/S2)
+    # are not included in the extraction and rendering loops.
+    head_specs = {k: v for k, v in head_specs.items() if k in selected_heads}
 
     logger.info(
-        f"Resolved model seasons: {model_season_ids}  "
-        f"(head keys: {[_season_id_to_head_key(s) for s in model_season_ids]})"
+        f"Resolved inference seasons: {model_season_ids}  "
+        f"(head keys: {[_season_id_to_head_key(s) for s in model_season_ids]}, "
+        f"training seasons: {list(training_season_ids)})"        
     )
 
     patch_items = list_patches(patches_dir, continents)
