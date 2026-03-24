@@ -6,7 +6,7 @@ the UDF functions directly without running batch jobs on OpenEO.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import xarray as xr
@@ -14,35 +14,12 @@ from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-from worldcereal.openeo.inference import (SeasonalInferenceEngine,
-                                          get_expected_timesteps_from_artifact)
 
 from worldcereal.openeo.inference import (
     SeasonalInferenceEngine,
     get_expected_timesteps_from_artifact,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
-from worldcereal.utils.models import load_model_artifact
-
-
-def _parse_season_arg(season):
-    """Extract (start_date_str, end_date_str) from various season representations.
-
-    Accepts:
-    - A ``TemporalContext``-like object with ``.start_date`` / ``.end_date``
-    - A ``(start_str, end_str)`` tuple or list
-    - A ``dict`` with keys ``start_date`` and ``end_date``
-    """
-    if hasattr(season, "start_date") and hasattr(season, "end_date"):
-        return str(season.start_date), str(season.end_date)
-    if isinstance(season, (tuple, list)) and len(season) == 2:
-        return str(season[0]), str(season[1])
-    if isinstance(season, dict):
-        return str(season["start_date"]), str(season["end_date"])
-    raise TypeError(
-        f"Cannot interpret season argument of type {type(season).__name__}. "
-        "Expected a TemporalContext, a (start, end) tuple, or a dict."
-    )
 from worldcereal.utils.models import load_model_artifact
 
 
@@ -73,28 +50,9 @@ def subset_ds_temporally(
     nodata_value: int = NODATAVALUE,
     max_timesteps: int = 12,
     prefer_tail: bool = True,
-    ds,
-    season,
-    min_coverage: float = 1.0,
-    nodata_value: int = NODATAVALUE,
-    max_timesteps: int = 12,
-    prefer_tail: bool = True,
 ):
     """
     Subsets a dataset temporally based on a given season.
-
-    This function extracts a subset of the dataset ``ds`` that matches the
-    temporal context defined by ``season``.  The season provides a start and
-    end date; the function ensures that the subset spans at most
-    ``max_timesteps`` monthly slots, even if the raw season window is wider
-    (e.g. 13 months for an annual season).
-
-    When the season window contains more than ``max_timesteps`` months the
-    window is trimmed.  By default (``prefer_tail=True``) the **first**
-    month(s) are dropped — keeping the later months which tend to carry
-    more discriminative crop phenology.
-
-    Parameters
 
     This function extracts a subset of the dataset ``ds`` that matches the
     temporal context defined by ``season``.  The season provides a start and
@@ -126,22 +84,6 @@ def subset_ds_temporally(
         months are still missing, they are filled with *nodata_value*.
         Set to 0.0 to accept any coverage.  Analogous to
         ``eval_min_season_coverage`` in the training pipeline.
-        The input dataset containing a time dimension ``t`` to be subset.
-    season : TemporalContext | tuple[str, str] | dict
-        Season specification.  Accepted forms:
-
-        * A ``TemporalContext`` (or any object with ``.start_date`` /
-          ``.end_date`` string attributes).
-        * A ``(start_date_str, end_date_str)`` tuple.
-        * A ``dict`` with keys ``"start_date"`` and ``"end_date"``.
-    min_coverage : float, optional
-        Minimum fraction of the ``max_timesteps`` monthly slots that must
-        be present in the dataset (default 1.0 = all months required).
-        When the actual coverage is below this threshold a ``ValueError``
-        is raised.  When coverage is at or above the threshold but some
-        months are still missing, they are filled with *nodata_value*.
-        Set to 0.0 to accept any coverage.  Analogous to
-        ``eval_min_season_coverage`` in the training pipeline.
     nodata_value : int, optional
         Fill value for missing timestamps.  Default is ``NODATAVALUE``
         (65535).
@@ -151,32 +93,15 @@ def subset_ds_temporally(
         When the month sequence exceeds ``max_timesteps``, keep the **last**
         months (drop the head) if *True* (default), or keep the **first**
         months (drop the tail) if *False*.
-        Fill value for missing timestamps.  Default is ``NODATAVALUE``
-        (65535).
-    max_timesteps : int, optional
-        Maximum number of monthly slots to keep (default 12).
-    prefer_tail : bool, optional
-        When the month sequence exceeds ``max_timesteps``, keep the **last**
-        months (drop the head) if *True* (default), or keep the **first**
-        months (drop the tail) if *False*.
 
-    Returns
     Returns
     -------
     xarray.Dataset
         Temporal subset with at most ``max_timesteps`` monthly slots.
-        Temporal subset with at most ``max_timesteps`` monthly slots.
 
-    Raises
     Raises
     ------
     ValueError
-        If the fraction of available months is below ``min_coverage``.
-    """
-
-    start_str, end_str = _parse_season_arg(season)
-    start_dt = parse(start_str)
-    end_dt = parse(end_str)
         If the fraction of available months is below ``min_coverage``.
     """
 
@@ -187,7 +112,6 @@ def subset_ds_temporally(
     # Does the season wrap over year end?
     wrap = (end_dt.month, end_dt.day) <= (start_dt.month, start_dt.day)
 
-    # Full month sequence for the season (may be >12 for annual seasons)
     # Full month sequence for the season (may be >12 for annual seasons)
     months = (
         (list(range(start_dt.month, 13)) + list(range(1, end_dt.month + 1)))
@@ -212,32 +136,13 @@ def subset_ds_temporally(
             )
         months = trimmed
 
-    # Trim to max_timesteps, preferring tail or head as requested
-    if len(months) > max_timesteps:
-        dropped = len(months) - max_timesteps
-        if prefer_tail:
-            trimmed = months[dropped:]
-            logger.info(
-                f"Season has {len(months)} months; dropping first {dropped} "
-                f"month(s) {months[:dropped]} to keep {max_timesteps} (prefer_tail=True)."
-            )
-        else:
-            trimmed = months[:max_timesteps]
-            logger.info(
-                f"Season has {len(months)} months; dropping last {dropped} "
-                f"month(s) {months[max_timesteps:]} to keep {max_timesteps} (prefer_tail=False)."
-            )
-        months = trimmed
-
     t_index = ds.t.to_index()
 
-    # Find the first year in ds that can provide the complete window
     # Find the first year in ds that can provide the complete window
     selected = None
     for y in sorted(set(t_index.year)):
         if wrap:
             expected = [
-                pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
                 pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
                 for m in months
             ]
@@ -249,11 +154,9 @@ def subset_ds_temporally(
 
     if selected is None:
         # Partial mode: find best year and check coverage against threshold
-        # Partial mode: find best year and check coverage against threshold
         y = min(t_index.year)
         if wrap:
             expected = [
-                pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
                 pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
                 for m in months
             ]
@@ -274,99 +177,10 @@ def subset_ds_temporally(
                 f"missing {', '.join(ts.strftime('%Y-%m') for ts in missing)}; "
                 f"filling with nodata_value={nodata_value}."
             )
-        coverage = len(present) / len(expected) if expected else 0.0
-        if coverage < min_coverage:
-            raise ValueError(
-                f"Temporal coverage {coverage:.0%} ({len(present)}/{len(expected)} months) "
-                f"is below min_coverage={min_coverage:.0%} for the season pattern."
-            )
-        if missing:
-            logger.warning(
-                f"Partial temporal subset: coverage={coverage:.0%} "
-                f"({len(present)}/{len(expected)} months present); "
-                f"missing {', '.join(ts.strftime('%Y-%m') for ts in missing)}; "
-                f"filling with nodata_value={nodata_value}."
-            )
         # Reindex will insert missing timestamps with nodata_value
         selected = ds.sel(t=present).reindex(t=expected, fill_value=nodata_value)
 
     return selected
-
-
-def compute_temporal_subset_window(
-    season_windows: Mapping[str, object],
-) -> Optional[object]:
-    """Derive a single season window that covers all requested seasons.
-
-    Given a mapping of ``{season_id: (start_date_str, end_date_str)}``,
-    this function returns a ``(earliest_start, latest_end)`` tuple that
-    spans all seasons.  The caller should then pass this to
-    ``subset_ds_temporally`` which will handle trimming to 12 months.
-
-    Returns *None* when ``season_windows`` is empty or *None*.
-    """
-    if not season_windows:
-        return None
-
-    earliest_start: Optional[pd.Timestamp] = None
-    latest_end: Optional[pd.Timestamp] = None
-
-    for _sid, window in season_windows.items():
-        start_str, end_str = _parse_season_arg(window)
-        s = pd.Timestamp(start_str)
-        e = pd.Timestamp(end_str)
-        if earliest_start is None or s < earliest_start:
-            earliest_start = s
-        if latest_end is None or e > latest_end:
-            latest_end = e
-
-    if earliest_start is None or latest_end is None:
-        return None
-
-    return (earliest_start.strftime("%Y-%m-%d"), latest_end.strftime("%Y-%m-%d"))
-
-
-def _clamp_season_windows_to_ds(
-    season_windows: Mapping[str, object],
-    ds: xr.Dataset,
-) -> Dict[str, Tuple[str, str]]:
-    """Clamp season windows so they don't extend beyond the dataset timestamps.
-
-    After ``subset_ds_temporally`` trims the dataset, the original season
-    windows may reference months that were dropped.  This function clamps
-    each window's start/end to the dataset's actual timestamp range so that
-    ``_build_masks_from_windows`` does not reject them.
-    """
-    t_vals = pd.to_datetime(ds.t.values)
-    ds_start = t_vals.min()
-    ds_end = t_vals.max()
-
-    clamped: Dict[str, Tuple[str, str]] = {}
-    for sid, window in season_windows.items():
-        start_str, end_str = _parse_season_arg(window)
-        s = pd.Timestamp(start_str)
-        e = pd.Timestamp(end_str)
-        clamped_s = max(s, ds_start)
-        clamped_e = min(e, ds_end)
-        if clamped_e < clamped_s:
-            raise ValueError(
-                f"Season '{sid}' window ({s.strftime('%Y-%m-%d')}, {e.strftime('%Y-%m-%d')}) "
-                f"does not overlap with subset timestamps "
-                f"({ds_start.strftime('%Y-%m-%d')} to {ds_end.strftime('%Y-%m-%d')}). "
-                f"Check that the season windows match the available data."
-            )
-        elif clamped_s != s or clamped_e != e:
-            logger.info(
-                f"Clamped season '{sid}' window from "
-                f"({s.strftime('%Y-%m-%d')}, {e.strftime('%Y-%m-%d')}) to "
-                f"({clamped_s.strftime('%Y-%m-%d')}, {clamped_e.strftime('%Y-%m-%d')}) "
-                f"to match subset timestamps."
-            )
-        clamped[sid] = (
-            clamped_s.strftime("%Y-%m-%d"),
-            clamped_e.strftime("%Y-%m-%d"),
-        )
-    return clamped
 
 
 def compute_temporal_subset_window(
@@ -668,6 +482,7 @@ def classification_to_geotiff(
     import json
 
     import rasterio
+
     # ignore import error for rioxarray if not used
     import rioxarray  # noqa: F401
 
