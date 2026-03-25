@@ -1,7 +1,6 @@
 import gc
 from pathlib import Path
-from typing import (Any, Dict, List, Literal, Mapping, Optional, Sequence,
-                    Tuple, Union)
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import duckdb
 import numpy as np
@@ -16,13 +15,19 @@ from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
-from worldcereal.train.backbone import (build_presto_backbone,
-                                        resolve_seasonal_encoder)
-from worldcereal.train.datasets import (SeasonCalendarMode,
-                                        SensorMaskingConfig,
-                                        WorldCerealTrainingDataset)
-from worldcereal.utils.refdata import (DATA_DIR, get_class_mappings,
-                                       map_classes, split_df)
+
+from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
+from worldcereal.train.datasets import (
+    SeasonCalendarMode,
+    SensorMaskingConfig,
+    WorldCerealTrainingDataset,
+)
+from worldcereal.utils.refdata import (
+    DATA_DIR,
+    get_class_mappings,
+    map_classes,
+    split_df,
+)
 from worldcereal.utils.timeseries import process_parquet
 
 _ATTR_KEYS_ALLOW_PARTIAL_NONE = {

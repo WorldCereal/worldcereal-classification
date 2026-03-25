@@ -2,8 +2,17 @@ import json
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import (Any, Callable, List, Literal, Mapping, Optional, Sequence,
-                    Tuple, Union)
+from typing import (
+    Any,
+    Callable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,10 +36,13 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
+
 from worldcereal.train.data import collate_fn
-from worldcereal.train.datasets import (SensorMaskingConfig,
-                                        WorldCerealLabelledDataset,
-                                        _is_missing_value)
+from worldcereal.train.datasets import (
+    SensorMaskingConfig,
+    WorldCerealLabelledDataset,
+    _is_missing_value,
+)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
