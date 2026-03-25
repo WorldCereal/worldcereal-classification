@@ -210,6 +210,8 @@ _MAP_SAMPLED_REF_IDS: frozenset = frozenset((
     "2022_URY_SIT-OAN_POINT_110",
     "2022_URY_SONG-OAN_POINT_110",
     "2024_HND_ICF-FAO_POINT_110",
+    # other datasets where lc score was detected to be 0 while ct score present
+    "2020_SEN_GUMMA_POINT_110",
 ))
 
 
@@ -251,11 +253,15 @@ def _drop_zero_quality_samples(
     split_name: str,
     quality_cols: Sequence[str],
 ) -> pd.DataFrame:
-    """Hard-exclude samples where any quality score is exactly 0.
+    """Hard-exclude samples where *all* quality scores are exactly 0.
 
-    A quality score of 0 typically indicates a fundamentally bad sample
-    (e.g. road intersection) that should never contribute to training,
-    regardless of other scoring mechanisms.
+    Samples with only one score at 0 (e.g. landcover-only datasets with
+    ``quality_score_ct == 0``) are kept — the non-zero score is sufficient
+    for the relevant task head.
+
+    A quality score of 0 across the board typically indicates a
+    fundamentally bad sample (e.g. road intersection) that should never
+    contribute to training.
     """
     if df.empty:
         return df
@@ -268,21 +274,22 @@ def _drop_zero_quality_samples(
         )
         return df
 
-    zero_mask = pd.Series(False, index=df.index)
+    # Drop only when ALL quality scores are 0
+    all_zero = pd.Series(True, index=df.index)
     for col in present_cols:
         scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
-        zero_mask = zero_mask | (scores == 0.0)
+        all_zero = all_zero & (scores == 0.0)
 
-    n_dropped = int(zero_mask.sum())
+    n_dropped = int(all_zero.sum())
     if n_dropped > 0:
         logger.warning(
-            f"{split_name}: dropping {n_dropped} samples with zero quality "
-            f"score in columns {present_cols}."
+            f"{split_name}: dropping {n_dropped} samples where all quality "
+            f"scores are zero in columns {present_cols}."
         )
-        df = df[~zero_mask].copy()
+        df = df[~all_zero].copy()
     else:
         logger.info(
-            f"{split_name}: no samples with zero quality score found."
+            f"{split_name}: no samples with all-zero quality scores found."
         )
     return df
 
