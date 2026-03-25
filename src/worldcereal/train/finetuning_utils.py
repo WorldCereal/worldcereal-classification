@@ -1911,16 +1911,18 @@ def run_finetuning(
                 )
             setattr(model, "_last_validation_context", validation_context)
 
+            _best_loss_value = best_loss if best_loss is not None else early_stop_loss
+
             if on_validation_improved is not None:
                 try:
-                    on_validation_improved(epoch + 1, model, best_loss)
+                    on_validation_improved(epoch + 1, model, _best_loss_value)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
             checkpoint_model = deepcopy(model)
-            _save_best(epoch + 1, checkpoint_model, best_loss)
+            _save_best(epoch + 1, checkpoint_model, _best_loss_value)
 
         _val_loss_str = (
             f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"
