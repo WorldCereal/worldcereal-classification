@@ -1203,6 +1203,16 @@ class WorldCerealDataset(Dataset):
             start_dt, end_dt = self._season_context_for(
                 season_name, row, target_year, lat, lon
             )
+        except ValueError as exc:
+            # Nodata DOY values for this season at this location — treat as
+            # "season not available" rather than crashing.  Return an all-zeros
+            # mask so the sample is simply not supervised for this season.
+            sample_id = row.get("sample_id", "n/a")
+            logger.debug(
+                f"Season '{season_name}' unavailable for sample {sample_id}: {exc}. "
+                f"Returning empty mask."
+            )
+            return np.zeros_like(composite_dates, dtype=bool), False
         except Exception as exc:  # pragma: no cover - guard rare failures
             sample_id = row.get("sample_id", "n/a")
             raise RuntimeError(
