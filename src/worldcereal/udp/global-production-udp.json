@@ -925,7 +925,7 @@
         "format": "GTiff",
         "options": {
           "filename_prefix": {
-            "from_parameter": "filename_prefix"
+            "from_parameter": "filename_prefix_classification"
           }
         }
       }
@@ -936,7 +936,7 @@
         "data": {
           "from_node": "saveresult1"
         },
-        "merge": "worldcereal_global_production_classification",
+        "merge": "worldcereal_global_production_classification/collection.json",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -998,7 +998,7 @@
         "format": "GTiff",
         "options": {
           "filename_prefix": {
-            "from_parameter": "filename_prefix"
+            "from_parameter": "filename_prefix_ndvi"
           }
         }
       }
@@ -1009,7 +1009,7 @@
         "data": {
           "from_node": "saveresult2"
         },
-        "merge": "worldcereal_global_production_ndvi",
+        "merge": "worldcereal_global_production_ndvi/collection.json",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1187,7 +1187,7 @@
         "format": "GTiff",
         "options": {
           "filename_prefix": {
-            "from_parameter": "filename_prefix"
+            "from_parameter": "filename_prefix_embeddings"
           }
         }
       }
@@ -1198,7 +1198,7 @@
         "data": {
           "from_node": "saveresult3"
         },
-        "merge": "worldcereal_global_production_embeddings",
+        "merge": "worldcereal_global_production_embeddings/collection.json",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1224,7 +1224,7 @@
         "format": "GTiff",
         "options": {
           "filename_prefix": {
-            "from_parameter": "filename_prefix"
+            "from_parameter": "filename_prefix_embeddings_scale"
           }
         }
       }
@@ -1235,7 +1235,7 @@
         "data": {
           "from_node": "saveresult4"
         },
-        "merge": "worldcereal_global_production_embeddings_scale",
+        "merge": "worldcereal_global_production_embeddings_scale/collection.json",
         "workspace": {
           "from_parameter": "workspace"
         }
@@ -1256,7 +1256,10 @@
       "https://s3.waw3-1.cloudferro.com/project_dependencies/torch_deps_python311.zip#feature_deps",
       "https://s3.waw3-1.cloudferro.com/project_dependencies/prometheo-0.0.3-py3-none-any.whl#prometheolib",
       "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/worldcereal-2.6.1-py3-none-any.whl#worldcereallib"
-    ]
+    ],
+    "export-workspace-enable-merge": true,
+    "stac-version-experimental": "1.1",
+    "omit-derived-from-links": true
   },
   "parameters": [
     {
@@ -1468,8 +1471,35 @@
       }
     },
     {
-      "name": "filename_prefix",
-      "description": "Prefix for the output filenames.",
+      "name": "filename_prefix_classification",
+      "description": "Filename for the classification output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_ndvi",
+      "description": "Filename for the NDVI output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_embeddings",
+      "description": "Filename for the embeddings output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_embeddings_scale",
+      "description": "Filename for the embeddings scale output. Must be different from the other three!",
       "schema": {
         "type": "string"
       },
