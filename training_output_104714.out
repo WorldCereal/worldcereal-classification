@@ -1,0 +1,240 @@
+2026-03-24 20:03:04 | INFO     | prometheo.utils - Logging setup complete. Logging to: /home/vito/butskoc/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003/logs/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003.log and console.
+2026-03-24 20:03:04 | INFO     | __main__ - Generating train/val/test DataFrames from source parquet files.
+2026-03-24 20:03:04 | INFO     | worldcereal.train.data - Reading dataset
+2026-03-24 20:03:04 | INFO     | worldcereal.train.data - Using provided wide parquet output path: /home/vito/butskoc/projects/worldcereal/merged_319_wide.parquet
+2026-03-24 20:03:04 | INFO     | worldcereal.train.data - Loading wide parquet file from /home/vito/butskoc/projects/worldcereal/merged_319_wide.parquet ...
+2026-03-24 20:03:23 | INFO     | worldcereal.train.data - Region filter requested: ['Northern Africa', 'Middle Africa', 'Western Africa', 'Eastern Africa', 'Southern Africa']
+2026-03-24 20:03:24 | INFO     | worldcereal.train.data - Enriching samples with region labels using administrative boundaries.
+2026-03-24 20:03:25 | WARNING  | worldcereal.train.data - Region enrichment left 5 samples without a region assignment.
+2026-03-24 20:03:26 | INFO     | worldcereal.train.data - Discarding samples based on: /home/vito/butskoc/projects/worldcereal/data/balanced_splits/ignore_split_h3l5.csv. 518982 samples will be removed from the dataset.
+2026-03-24 20:03:32 | INFO     | worldcereal.train.data - Filtered dataset to 191115 samples in regions: ['Northern Africa', 'Middle Africa', 'Western Africa', 'Eastern Africa', 'Southern Africa']
+2026-03-24 20:03:33 | INFO     | worldcereal.train.data - Controlled `train/val` vs `test` split based on: /home/vito/butskoc/projects/worldcereal/data/balanced_splits/test_split_h3l5.csv
+2026-03-24 20:03:34 | INFO     | worldcereal.utils.refdata - Using 119898 train and 71217 val samples
+2026-03-24 20:03:34 | INFO     | worldcereal.train.data - Controlled `train` vs `val` split based on: /home/vito/butskoc/projects/worldcereal/data/balanced_splits/val_split_h3l5.csv
+2026-03-24 20:03:36 | INFO     | worldcereal.utils.refdata - Using 68151 train and 51747 val samples
+2026-03-24 20:03:36 | INFO     | __main__ - Saving train, val, and test DataFrames to parquet files ...
+2026-03-24 20:03:36 | WARNING  | __main__ - Dropping 341 samples from train split with outlier categories <= 'drop_candidate'
+2026-03-24 20:03:37 | WARNING  | __main__ - Dropping 276 samples from val split with outlier categories <= 'drop_candidate'
+2026-03-24 20:03:37 | WARNING  | __main__ - Dropping 382 samples from test split with outlier categories <= 'drop_candidate'
+2026-03-24 20:03:37 | INFO     | __main__ - Number of training samples: 67810
+2026-03-24 20:03:37 | INFO     | __main__ - Number of validation samples: 51471
+2026-03-24 20:03:37 | INFO     | __main__ - Number of test samples: 70835
+2026-03-24 20:03:37 | WARNING  | __main__ - train: HOTFIX applied — copied quality_score_ct → quality_score_lc for 7224 samples across map-sampled ref_ids.
+2026-03-24 20:03:37 | WARNING  | __main__ - val: HOTFIX applied — copied quality_score_ct → quality_score_lc for 7956 samples across map-sampled ref_ids.
+2026-03-24 20:03:37 | WARNING  | __main__ - test: HOTFIX applied — copied quality_score_ct → quality_score_lc for 4887 samples across map-sampled ref_ids.
+2026-03-24 20:03:37 | WARNING  | __main__ - train: dropping 1649 samples where all quality scores are zero in columns ['quality_score_lc', 'quality_score_ct'].
+2026-03-24 20:03:37 | WARNING  | __main__ - val: dropping 465 samples where all quality scores are zero in columns ['quality_score_lc', 'quality_score_ct'].
+2026-03-24 20:03:37 | WARNING  | __main__ - test: dropping 859 samples where all quality scores are zero in columns ['quality_score_lc', 'quality_score_ct'].
+2026-03-24 20:03:37 | WARNING  | worldcereal.train.data - The following classes have fewer than 200 samples and will be removed for stratified splitting: ['wetlands', 'temporary_grasses']. Samples removed: 321
+2026-03-24 20:03:37 | WARNING  | worldcereal.train.data - The following classes have fewer than 200 samples and will be removed for stratified splitting: ['vegetables', 'other_oilseed', 'soy_soybeans', 'tobacco', 'fibre_crops', 'beet', 'triticale', 'oats']. Samples removed: 912
+2026-03-24 20:03:37 | WARNING  | __main__ - Removing 381 validation and 500 test samples with landcover classes ['wetlands', 'temporary_grasses'] removed from training split
+2026-03-24 20:03:37 | WARNING  | __main__ - Removing 908 validation and 2016 test samples with croptype classes ['vegetables', 'other_oilseed', 'soy_soybeans', 'tobacco', 'fibre_crops', 'beet', 'triticale', 'oats'] removed from training split
+2026-03-24 20:03:37 | INFO     | __main__ - train sample_weight_lc stats: {'min': 0.007999999821186066, 'max': 1.0, 'mean': 0.8214332706992518}
+2026-03-24 20:03:37 | INFO     | __main__ - val sample_weight_lc stats: {'min': 0.007999999821186066, 'max': 1.0, 'mean': 0.8191021345316036}
+2026-03-24 20:03:37 | INFO     | __main__ - test sample_weight_lc stats: {'min': 0.007999999821186066, 'max': 1.0, 'mean': 0.8129240102709878}
+2026-03-24 20:03:37 | INFO     | __main__ - train sample_weight_ct stats: {'min': 0.0, 'max': 0.98, 'mean': 0.4023110214391325}
+2026-03-24 20:03:37 | INFO     | __main__ - val sample_weight_ct stats: {'min': 0.0, 'max': 0.98, 'mean': 0.4483623307922843}
+2026-03-24 20:03:37 | INFO     | __main__ - test sample_weight_ct stats: {'min': 0.0, 'max': 0.98, 'mean': 0.4014457456270383}
+2026-03-24 20:03:39 | INFO     | worldcereal.train.datasets - Sensor masking enabled for this dataset with config: SensorMaskingConfig(enable=True, s1_full_dropout_prob=0.05, s1_timestep_dropout_prob=0.05, s2_cloud_timestep_prob=0.1, s2_cloud_block_prob=0.05, s2_cloud_block_min=2, s2_cloud_block_max=3, meteo_timestep_dropout_prob=0.05, dem_dropout_prob=0.01, seed=42)
+2026-03-24 20:03:39 | INFO     | __main__ - Narrowed landcover head from 10 to 8 classes (dropped {'wetlands', 'temporary_grasses'})
+2026-03-24 20:03:39 | INFO     | __main__ - Narrowed croptype head from 24 to 12 classes (dropped {'other_oilseed', 'triticale', 'grass_fodder_crops', 'barley', 'soy_soybeans', 'oats', 'tobacco', 'vegetables', 'beet', 'rapeseed_rape', 'rye', 'fibre_crops'})
+2026-03-24 20:03:39 | INFO     | __main__ - Using seasonal head with landcover key LANDCOVER10 (8 classes) and croptype key CROPTYPE24 (12 classes)
+2026-03-24 20:03:39 | INFO     | __main__ - Using loss function: SeasonalMultiTaskLoss()
+2026-03-24 20:03:41 | INFO     | __main__ - Using constant LR 1.00e-02 for the first 3 epoch(s) while the encoder is frozen
+2026-03-24 20:03:41 | INFO     | __main__ - LR schedule: head_lr=1.00e-02, full_lr=1.00e-03, head_only_epochs=3, warmup_epochs=2, warmup_start_factor=0.10, gamma=0.990
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - Normalizing weights to mean = 1
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - Clipping weights to range (0.1, 10.0)
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - Normalizing weights to mean = 1
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - Clipping weights to range (0.1, 10.0)
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - DualHeadBatchSampler: N=64928, LC pool=64928, CT pool=36532, batch_size=4096 (LC half=2048, CT half=2048), num_batches=16
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - DualHeadBatchSampler LC class distribution: Counter({'temporary_crops': 28813, 'grasslands': 10906, 'trees': 8969, 'shrubland': 7304, 'bare_sparsely_vegetated': 3709, 'built_up': 2264, 'water': 2193, 'permanent_crops': 770})
+2026-03-24 20:03:41 | INFO     | worldcereal.train.datasets - DualHeadBatchSampler CT class distribution: Counter({'no_crop': 14082, 'maize': 10143, 'dry_pulses_legumes': 3661, 'sorghum': 1749, 'sugar_cane': 1284, 'millet': 1227, 'wheat': 1121, 'cassava': 993, 'groundnuts': 885, 'rice': 624, 'potatoes': 543, 'sunflower': 220})
+2026-03-24 20:03:41 | INFO     | __main__ - Starting finetuning...
+2026-03-24 20:03:41 | INFO     | prometheo.finetune - Using output dir: /marvin/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - TensorBoard logging enabled at /home/vito/butskoc/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003/tensorboard
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.pos_embed
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S1.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S1.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_RGB.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_RGB.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_Red_Edge.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_Red_Edge.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_NIR_10m.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_NIR_10m.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_NIR_20m.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_NIR_20m.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_SWIR.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.S2_SWIR.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.ERA5.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.ERA5.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.SRTM.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.SRTM.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.NDVI.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.eo_patch_embed.NDVI.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.dw_embed.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.latlon_embed.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.latlon_embed.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.norm1.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.norm1.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.attn.qkv.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.attn.qkv.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.attn.proj.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.attn.proj.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.norm2.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.norm2.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.mlp.fc1.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.mlp.fc1.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.mlp.fc2.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.0.mlp.fc2.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.norm1.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.norm1.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.attn.qkv.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.attn.qkv.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.attn.proj.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.attn.proj.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.norm2.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.norm2.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.mlp.fc1.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.mlp.fc1.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.mlp.fc2.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.blocks.1.mlp.fc2.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.norm.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.norm.bias
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.month_embed.weight
+2026-03-24 20:03:41 | INFO     | worldcereal.train.finetuning_utils - Freezing layer: backbone.encoder.channel_embed.weight
+2026-03-24 20:05:25 | INFO     | worldcereal.train.finetuning_utils - Epoch 1: improvement detected via loss=4.0260, lc_f1=0.4290, ct_f1=0.1910
+2026-03-24 20:06:16 | INFO     | __main__ - Landcover summary (epoch001) on test set: macro F1=0.388, precision=0.430, recall=0.494
+2026-03-24 20:06:16 | INFO     | __main__ - Croptype summary (epoch001) on test set: macro F1=0.158, precision=0.132, recall=0.343
+2026-03-24 20:07:55 | INFO     | worldcereal.train.finetuning_utils - Epoch 2: improvement detected via loss=3.9342, lc_f1=0.5011
+2026-03-24 20:08:47 | INFO     | __main__ - Landcover summary (epoch002) on test set: macro F1=0.450, precision=0.448, recall=0.535
+2026-03-24 20:08:47 | INFO     | __main__ - Croptype summary (epoch002) on test set: macro F1=0.161, precision=0.133, recall=0.373
+2026-03-24 20:10:32 | INFO     | worldcereal.train.finetuning_utils - Epoch 3: improvement detected via loss=3.8354
+2026-03-24 20:11:22 | INFO     | __main__ - Landcover summary (epoch003) on test set: macro F1=0.428, precision=0.430, recall=0.560
+2026-03-24 20:11:22 | INFO     | __main__ - Croptype summary (epoch003) on test set: macro F1=0.174, precision=0.159, recall=0.386
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S1.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S1.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_RGB.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_RGB.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_Red_Edge.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_Red_Edge.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_NIR_10m.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_NIR_10m.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_NIR_20m.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_NIR_20m.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_SWIR.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.S2_SWIR.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.ERA5.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.ERA5.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.SRTM.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.SRTM.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.NDVI.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.eo_patch_embed.NDVI.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.dw_embed.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.latlon_embed.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.latlon_embed.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.norm1.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.norm1.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.attn.qkv.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.attn.qkv.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.attn.proj.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.attn.proj.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.norm2.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.norm2.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.mlp.fc1.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.mlp.fc1.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.mlp.fc2.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.0.mlp.fc2.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.norm1.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.norm1.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.attn.qkv.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.attn.qkv.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.attn.proj.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.attn.proj.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.norm2.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.norm2.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.mlp.fc1.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.mlp.fc1.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.mlp.fc2.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.blocks.1.mlp.fc2.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.norm.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.norm.bias
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Unfreezing layer: backbone.encoder.channel_embed.weight
+2026-03-24 20:11:22 | INFO     | worldcereal.train.finetuning_utils - Patience counter reset at encoder unfreeze (epoch 4): was 0/20.
+2026-03-24 20:13:03 | INFO     | worldcereal.train.finetuning_utils - Epoch 4: improvement detected via loss=3.8036, lc_f1=0.5422, ct_f1=0.2724
+2026-03-24 20:13:53 | INFO     | __main__ - Landcover summary (epoch004) on test set: macro F1=0.494, precision=0.475, recall=0.601
+2026-03-24 20:13:53 | INFO     | __main__ - Croptype summary (epoch004) on test set: macro F1=0.249, precision=0.257, recall=0.456
+2026-03-24 20:15:37 | INFO     | worldcereal.train.finetuning_utils - Epoch 5: improvement detected via loss=3.3882, lc_f1=0.6022, ct_f1=0.3362
+2026-03-24 20:16:28 | INFO     | __main__ - Landcover summary (epoch005) on test set: macro F1=0.568, precision=0.541, recall=0.666
+2026-03-24 20:16:28 | INFO     | __main__ - Croptype summary (epoch005) on test set: macro F1=0.271, precision=0.274, recall=0.449
+2026-03-24 20:18:12 | INFO     | worldcereal.train.finetuning_utils - Epoch 6: improvement detected via loss=3.3342, lc_f1=0.6071, ct_f1=0.3764
+2026-03-24 20:19:03 | INFO     | __main__ - Landcover summary (epoch006) on test set: macro F1=0.564, precision=0.530, recall=0.677
+2026-03-24 20:19:03 | INFO     | __main__ - Croptype summary (epoch006) on test set: macro F1=0.305, precision=0.311, recall=0.481
+2026-03-24 20:20:43 | INFO     | worldcereal.train.finetuning_utils - Epoch 7: improvement detected via loss=3.2192, lc_f1=0.6511
+2026-03-24 20:21:33 | INFO     | __main__ - Landcover summary (epoch007) on test set: macro F1=0.614, precision=0.585, recall=0.700
+2026-03-24 20:21:34 | INFO     | __main__ - Croptype summary (epoch007) on test set: macro F1=0.309, precision=0.312, recall=0.513
+2026-03-24 20:23:12 | INFO     | worldcereal.train.finetuning_utils - Epoch 8: improvement detected via loss=3.0693
+2026-03-24 20:24:05 | INFO     | __main__ - Landcover summary (epoch008) on test set: macro F1=0.608, precision=0.595, recall=0.702
+2026-03-24 20:24:05 | INFO     | __main__ - Croptype summary (epoch008) on test set: macro F1=0.303, precision=0.300, recall=0.495
+2026-03-24 20:25:50 | INFO     | worldcereal.train.finetuning_utils - Epoch 9: improvement detected via loss=2.9036, lc_f1=0.6665, ct_f1=0.3889
+2026-03-24 20:26:39 | INFO     | __main__ - Landcover summary (epoch009) on test set: macro F1=0.630, precision=0.608, recall=0.711
+2026-03-24 20:26:40 | INFO     | __main__ - Croptype summary (epoch009) on test set: macro F1=0.329, precision=0.319, recall=0.523
+2026-03-24 20:28:23 | INFO     | worldcereal.train.finetuning_utils - Epoch 10: improvement detected via loss=2.9008, lc_f1=0.6811, ct_f1=0.4052
+2026-03-24 20:29:14 | INFO     | __main__ - Landcover summary (epoch010) on test set: macro F1=0.639, precision=0.620, recall=0.712
+2026-03-24 20:29:14 | INFO     | __main__ - Croptype summary (epoch010) on test set: macro F1=0.342, precision=0.328, recall=0.542
+2026-03-24 20:32:42 | INFO     | worldcereal.train.finetuning_utils - Epoch 12: improvement detected via loss=2.7894, lc_f1=0.6845, ct_f1=0.4220
+2026-03-24 20:33:37 | INFO     | __main__ - Landcover summary (epoch012) on test set: macro F1=0.646, precision=0.614, recall=0.720
+2026-03-24 20:33:37 | INFO     | __main__ - Croptype summary (epoch012) on test set: macro F1=0.362, precision=0.350, recall=0.531
+2026-03-24 20:35:20 | INFO     | worldcereal.train.finetuning_utils - Epoch 13: improvement detected via loss=2.7720, ct_f1=0.4235
+2026-03-24 20:36:10 | INFO     | __main__ - Landcover summary (epoch013) on test set: macro F1=0.635, precision=0.607, recall=0.723
+2026-03-24 20:36:11 | INFO     | __main__ - Croptype summary (epoch013) on test set: macro F1=0.364, precision=0.352, recall=0.556
+2026-03-24 20:39:36 | INFO     | worldcereal.train.finetuning_utils - Epoch 15: improvement detected via loss=2.6339, lc_f1=0.6971, ct_f1=0.4445
+2026-03-24 20:40:27 | INFO     | __main__ - Landcover summary (epoch015) on test set: macro F1=0.653, precision=0.625, recall=0.725
+2026-03-24 20:40:28 | INFO     | __main__ - Croptype summary (epoch015) on test set: macro F1=0.383, precision=0.367, recall=0.544
+2026-03-24 20:45:34 | INFO     | worldcereal.train.finetuning_utils - Epoch 18: improvement detected via loss=2.5964, ct_f1=0.4480
+2026-03-24 20:46:26 | INFO     | __main__ - Landcover summary (epoch018) on test set: macro F1=0.640, precision=0.609, recall=0.723
+2026-03-24 20:46:26 | INFO     | __main__ - Croptype summary (epoch018) on test set: macro F1=0.387, precision=0.368, recall=0.543
+2026-03-24 20:49:52 | INFO     | worldcereal.train.finetuning_utils - Epoch 20: improvement detected via loss=2.5263
+2026-03-24 20:50:42 | INFO     | __main__ - Landcover summary (epoch020) on test set: macro F1=0.652, precision=0.617, recall=0.728
+2026-03-24 20:50:42 | INFO     | __main__ - Croptype summary (epoch020) on test set: macro F1=0.401, precision=0.377, recall=0.564
+2026-03-24 20:52:28 | INFO     | worldcereal.train.finetuning_utils - Epoch 21: improvement detected via lc_f1=0.7021, ct_f1=0.4527
+2026-03-24 20:57:36 | INFO     | worldcereal.train.finetuning_utils - Epoch 24: improvement detected via ct_f1=0.4585
+2026-03-24 21:01:05 | INFO     | worldcereal.train.finetuning_utils - Epoch 26: improvement detected via loss=2.5090, lc_f1=0.7029
+2026-03-24 21:01:55 | INFO     | __main__ - Landcover summary (epoch026) on test set: macro F1=0.655, precision=0.621, recall=0.723
+2026-03-24 21:01:56 | INFO     | __main__ - Croptype summary (epoch026) on test set: macro F1=0.398, precision=0.367, recall=0.566
+2026-03-24 21:05:21 | INFO     | worldcereal.train.finetuning_utils - Epoch 28: improvement detected via loss=2.4952, ct_f1=0.4677
+2026-03-24 21:06:12 | INFO     | __main__ - Landcover summary (epoch028) on test set: macro F1=0.654, precision=0.620, recall=0.728
+2026-03-24 21:06:12 | INFO     | __main__ - Croptype summary (epoch028) on test set: macro F1=0.411, precision=0.383, recall=0.582
+2026-03-24 21:07:57 | INFO     | worldcereal.train.finetuning_utils - Epoch 29: improvement detected via loss=2.4878
+2026-03-24 21:08:47 | INFO     | __main__ - Landcover summary (epoch029) on test set: macro F1=0.650, precision=0.623, recall=0.728
+2026-03-24 21:08:48 | INFO     | __main__ - Croptype summary (epoch029) on test set: macro F1=0.416, precision=0.386, recall=0.573
+2026-03-24 21:15:49 | INFO     | worldcereal.train.finetuning_utils - Epoch 33: improvement detected via lc_f1=0.7101
+2026-03-24 21:17:37 | INFO     | worldcereal.train.finetuning_utils - Epoch 34: improvement detected via loss=2.4699, lc_f1=0.7131, ct_f1=0.4729
+2026-03-24 21:18:27 | INFO     | __main__ - Landcover summary (epoch034) on test set: macro F1=0.666, precision=0.640, recall=0.728
+2026-03-24 21:18:28 | INFO     | __main__ - Croptype summary (epoch034) on test set: macro F1=0.415, precision=0.389, recall=0.585
+2026-03-24 21:20:12 | INFO     | worldcereal.train.finetuning_utils - Epoch 35: improvement detected via lc_f1=0.7189
+2026-03-24 21:21:53 | INFO     | worldcereal.train.finetuning_utils - Epoch 36: improvement detected via loss=2.4548
+2026-03-24 21:22:43 | INFO     | __main__ - Landcover summary (epoch036) on test set: macro F1=0.649, precision=0.618, recall=0.726
+2026-03-24 21:22:43 | INFO     | __main__ - Croptype summary (epoch036) on test set: macro F1=0.415, precision=0.389, recall=0.565
+2026-03-24 21:29:43 | INFO     | worldcereal.train.finetuning_utils - Epoch 40: improvement detected via loss=2.4417, ct_f1=0.4856
+2026-03-24 21:30:36 | INFO     | __main__ - Landcover summary (epoch040) on test set: macro F1=0.669, precision=0.641, recall=0.722
+2026-03-24 21:30:36 | INFO     | __main__ - Croptype summary (epoch040) on test set: macro F1=0.433, precision=0.404, recall=0.573
+2026-03-24 21:34:05 | INFO     | worldcereal.train.finetuning_utils - Epoch 42: improvement detected via lc_f1=0.7196
+2026-03-24 21:39:21 | INFO     | worldcereal.train.finetuning_utils - Epoch 45: improvement detected via lc_f1=0.7209
+2026-03-24 21:42:49 | INFO     | worldcereal.train.finetuning_utils - Epoch 47: improvement detected via lc_f1=0.7243
+2026-03-24 21:44:31 | INFO     | worldcereal.train.finetuning_utils - Epoch 48: improvement detected via loss=2.4280, ct_f1=0.4861
+2026-03-24 21:45:23 | INFO     | __main__ - Landcover summary (epoch048) on test set: macro F1=0.674, precision=0.647, recall=0.726
+2026-03-24 21:45:24 | INFO     | __main__ - Croptype summary (epoch048) on test set: macro F1=0.433, precision=0.406, recall=0.560
+2026-03-24 21:50:37 | INFO     | worldcereal.train.finetuning_utils - Epoch 51: improvement detected via ct_f1=0.4864
+2026-03-24 21:52:20 | INFO     | worldcereal.train.finetuning_utils - Epoch 52: improvement detected via loss=2.4043, ct_f1=0.4899
+2026-03-24 21:53:09 | INFO     | __main__ - Landcover summary (epoch052) on test set: macro F1=0.660, precision=0.631, recall=0.728
+2026-03-24 21:53:10 | INFO     | __main__ - Croptype summary (epoch052) on test set: macro F1=0.450, precision=0.419, recall=0.564
+2026-03-24 22:05:21 | INFO     | worldcereal.train.finetuning_utils - Epoch 59: improvement detected via lc_f1=0.7245
+2026-03-24 22:08:55 | INFO     | worldcereal.train.finetuning_utils - Epoch 61: improvement detected via lc_f1=0.7259
+2026-03-24 22:12:20 | INFO     | worldcereal.train.finetuning_utils - Epoch 63: improvement detected via lc_f1=0.7299
+2026-03-24 22:46:43 | INFO     | worldcereal.train.finetuning_utils - Early stopping!
+2026-03-24 22:46:43 | INFO     | __main__ - Saved run configuration to /home/vito/butskoc/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003/run_config.json
+2026-03-24 22:46:43 | INFO     | __main__ - Saved head manifest to /home/vito/butskoc/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003/head_manifest.json
+2026-03-24 22:47:33 | INFO     | __main__ - Landcover summary (FINAL) on test set: macro F1=0.660, precision=0.631, recall=0.728
+2026-03-24 22:47:33 | INFO     | __main__ - Croptype summary (FINAL) on test set: macro F1=0.450, precision=0.419, recall=0.564
+2026-03-24 22:47:34 | INFO     | __main__ - Packaged presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003.pt and presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003_encoder.pt into /home/vito/butskoc/projects/worldcereal/models/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003/presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-Africa-AnnualSeason-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603242003.zip
+2026-03-24 22:47:34 | INFO     | __main__ - Finetuning completed!

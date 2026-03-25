@@ -1,0 +1,46 @@
+2026-03-24 22:47:43.510 | WARNING  | __main__:_build_head_specs:1259 - Overriding landcover class labels ['temporary_crops', 'temporary_grasses', 'bare_sparsely_vegetated', 'permanent_crops', 'built_up', 'grasslands', 'wetlands', 'shrubland', 'trees', 'water'] -> ['no_cropland', 'cropland'] because local inference emits a binary cropland head.
+2026-03-24 22:47:43.511 | INFO     | __main__:_build_head_specs:1273 - Building head specs with croptype=24 labels [wheat, barley, rye, oats, triticale...], landcover=2 labels [no_cropland, cropland], seasons=['tc-s1', 'tc-s2'].
+2026-03-24 22:47:43.512 | INFO     | __main__:run_spatial_inference:1968 - Landcover GT config: lc_mapping_key=LANDCOVER10, cropland_classes=['temporary_crops']
+2026-03-24 22:47:43.512 | INFO     | __main__:run_spatial_inference:2004 - Resolved inference seasons: ['tc-s1', 'tc-s2']  (head keys: ['CROPTYPE_S1', 'CROPTYPE_S2'], training seasons: ['tc-s1', 'tc-s2'])
+2026-03-24 22:47:46.401 | INFO     | __main__:run_spatial_inference:2021 - Spatial inference starting with model=presto-prometheo-dualtask-SeasonalMultiTaskLoss-LC10-CT24-WesternEurope-OutlierScoreEnabled-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202603031518.zip, patches=9, device=cuda, debug_crop=off
+Spatial inference:   0%|          | 0/9 [00:00<?, ?patch/s]2026-03-24 22:47:46.402 | INFO     | __main__:run_spatial_inference:2051 - Running patch: /home/vito/butskoc/projects/worldcereal/data/GLOBAL_TEST_PATCHES/30D/WITH_REFDATA/Western_Europe/patch_4327258_2022_with_refdata.nc
+2026-03-24 22:47:46.637 | WARNING  | __main__:_log_gt_value_counts:1158 - GT band WORLDCEREAL_SEASON1_GT: shape=(1004, 752) finite=442522 unique=33 top=['2001020022.0:123255', '1201000010.0:94159', '1115000000.0:83113', '2501000000.0:31596', '2001020021.0:20065', '1111040000.0:14594', '1201030000.0:14003', '1111020010.0:9941', '1201000000.0:7722', '1101020012.0:4966']
+2026-03-24 22:47:46.671 | WARNING  | __main__:_log_gt_value_counts:1158 - GT band WORLDCEREAL_SEASON2_GT: shape=(1004, 752) finite=442522 unique=33 top=['2001020022.0:123255', '1201000010.0:94159', '1115000000.0:83113', '2501000000.0:31596', '2001020021.0:20065', '1111040000.0:14594', '1201030000.0:14003', '1111020010.0:9941', '1201000000.0:7722', '1101020012.0:4966']
+2026-03-24 22:47:54.407 | INFO     | worldcereal_notebook_local_inference:run_seasonal_inference:378 - Model expects 12 timesteps.
+2026-03-24 22:47:54.408 | INFO     | worldcereal_notebook_local_inference:run_seasonal_inference:389 - Temporal subsetting: input has 28 timesteps; subsetting to ≤12 using union season window ('2021-11-19', '2022-09-03').
+2026-03-24 22:47:54.666 | INFO     | worldcereal_notebook_local_inference:run_seasonal_inference:401 - After temporal subset: 11 timesteps (2021-11 to 2022-09).
+2026-03-24 22:47:54.667 | INFO     | worldcereal_notebook_local_inference:_clamp_season_windows_to_ds:249 - Clamped season 'tc-s2' window from (2022-04-14, 2022-09-03) to (2022-04-14, 2022-09-01) to match subset timestamps.
+/home/vito/butskoc/.conda/envs/worldcereal-py311/lib/python3.11/site-packages/xarray/core/duck_array_ops.py:234: RuntimeWarning: invalid value encountered in cast
+  return data.astype(dtype, **kwargs)
+2026-03-24 22:47:55.050 | INFO     | worldcereal.openeo.inference:_update_cropland_gate:701 - Cropland gating enabled for classes: ['temporary_crops']
+2026-03-24 22:47:55.051 | INFO     | worldcereal.openeo.inference:__init__:969 - SeasonalInferenceEngine initialized (device=cuda, batch_size=2048, default_seasons=['tc-s1', 'tc-s2'], export_probs=True, croptype_enabled=True, cropland_enabled=True, cropland_postprocess=False, croptype_postprocess=False)
+2026-03-24 22:47:55.051 | INFO     | worldcereal.openeo.inference:infer:990 - Seasonal inference request received (epsg=32632, enforce_gate=True, dims={'bands': 18, 't': 11, 'y': 1004, 'x': 752})
+2026-03-24 22:47:56.575 | INFO     | worldcereal.openeo.inference:_log_input_statistics:1184 - Input cube statistics: shape=(18, 11, 752, 1004), total_values=149491584, NaN_count=0 (0.00%)
+2026-03-24 22:47:58.942 | INFO     | worldcereal.openeo.inference:infer:1017 - Predictors ready (samples=755008, timesteps=None, batch_size=2048)
+2026-03-24 22:47:58.948 | INFO     | worldcereal.openeo.inference:infer:1027 - Season masks resolved for ['tc-s1', 'tc-s2'] (shape=(755008, 2, 11))
+2026-03-24 22:47:58.948 | INFO     | worldcereal.openeo.inference:_run_batches:1229 - Running seasonal heads on 755008 samples (~369 batches)
+2026-03-24 22:51:07.606 | INFO     | worldcereal.openeo.inference:_run_batches:1270 - Finished running 369 predictor batches (landcover=369, croptype=369, embeddings=369)
+2026-03-24 22:51:08.005 | INFO     | worldcereal.openeo.inference:infer:1031 - Batch inference complete; formatting outputs for 2 seasons
+2026-03-24 22:51:11.247 | WARNING  | __main__:_load_class_mappings_from_sharepoint:867 - Failed to load class mappings from SharePoint: 'WORLDCEREAL_SP_TENANT_ID'
+Spatial inference:   0%|          | 0/9 [03:24<?, ?patch/s]
+Traceback (most recent call last):
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 2218, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 2199, in main
+    run_spatial_inference(
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 2109, in run_spatial_inference
+    _render_patch_figure(
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 1700, in _render_patch_figure
+    gt_union, union_head = _collect_gt_union(
+                           ^^^^^^^^^^^^^^^^^^
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 737, in _collect_gt_union
+    gt_idx = _map_gt_to_indices(gt_raw, head.class_names, mapping_key=ct_mapping_key)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 942, in _map_gt_to_indices
+    mapping = _load_mapping_for_key(mapping_key)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vito/butskoc/worldcereal_finetuning/worldcereal-classification/scripts/training/finetuning/spatial_inference.py", line 917, in _load_mapping_for_key
+    raise ValueError(
+ValueError: Class mapping for CROPTYPE24 not found in local paths or SharePoint.
+srun: error: sasdsnode04: task 0: Exited with exit code 1

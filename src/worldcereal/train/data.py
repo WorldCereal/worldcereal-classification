@@ -1,6 +1,7 @@
 import gc
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
+from typing import (Any, Dict, List, Literal, Mapping, Optional, Sequence,
+                    Tuple, Union)
 
 import duckdb
 import numpy as np
@@ -15,17 +16,13 @@ from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
-
-from worldcereal.train.backbone import (
-    build_presto_backbone,
-    resolve_seasonal_encoder,
-)
-from worldcereal.train.datasets import (
-    SeasonCalendarMode,
-    SensorMaskingConfig,
-    WorldCerealTrainingDataset,
-)
-from worldcereal.utils.refdata import get_class_mappings, map_classes, split_df
+from worldcereal.train.backbone import (build_presto_backbone,
+                                        resolve_seasonal_encoder)
+from worldcereal.train.datasets import (SeasonCalendarMode,
+                                        SensorMaskingConfig,
+                                        WorldCerealTrainingDataset)
+from worldcereal.utils.refdata import (DATA_DIR, get_class_mappings,
+                                       map_classes, split_df)
 from worldcereal.utils.timeseries import process_parquet
 
 _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
@@ -35,6 +32,104 @@ _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
     "anomaly_flag",
     "confidence_nonoutlier",
 }
+
+_BOUNDARIES_PATH = (
+    DATA_DIR
+    / "world-administrative-boundaries"
+    / "world-administrative-boundaries.geoparquet"
+)
+
+
+def _normalize_region_filter(
+    region_filter: Optional[Union[str, Sequence[str]]],
+) -> Optional[List[str]]:
+    if region_filter is None:
+        return None
+    if isinstance(region_filter, str):
+        tokens = [token.strip() for token in region_filter.split(",") if token.strip()]
+    else:
+        tokens = [str(token).strip() for token in region_filter if str(token).strip()]
+    if not tokens or any(token.lower() == "all" for token in tokens):
+        return None
+    return tokens
+
+
+def _attach_regions_from_boundaries(
+    df: pd.DataFrame,
+    *,
+    boundaries_path: Path,
+    target_mask: Optional[pd.Series] = None,
+) -> pd.DataFrame:
+    try:
+        import geopandas as gpd
+    except Exception as exc:  # noqa: BLE001
+        raise ImportError(
+            "Region enrichment requires geopandas. Install it or disable region filtering."
+        ) from exc
+
+    if "lat" not in df.columns or "lon" not in df.columns:
+        raise ValueError("Region enrichment requires 'lat' and 'lon' columns.")
+
+    if not boundaries_path.exists():
+        raise FileNotFoundError(
+            f"Administrative boundaries file not found at {boundaries_path}."
+        )
+
+    world_df = gpd.read_parquet(boundaries_path)
+    if "region" not in world_df.columns:
+        raise ValueError(
+            "Administrative boundaries file is missing the required 'region' column."
+        )
+
+    world_df = world_df[["region", "geometry"]].copy()
+
+    result = df.copy()
+    if "region" in result.columns:
+        result["region"] = result["region"]
+    else:
+        result["region"] = pd.NA
+
+    lat = pd.to_numeric(result["lat"], errors="coerce")
+    lon = pd.to_numeric(result["lon"], errors="coerce")
+    valid_coords = lat.between(-90, 90) & lon.between(-180, 180)
+
+    if target_mask is not None:
+        valid_mask = valid_coords & target_mask.fillna(False)
+    else:
+        valid_mask = valid_coords
+
+    invalid_count = int((~valid_coords).sum())
+    if invalid_count:
+        logger.warning(
+            f"{invalid_count} samples have invalid lat/lon; region will be empty for those."
+        )
+
+    if valid_mask.any():
+        coords = pd.DataFrame(
+            {"lon": lon[valid_mask], "lat": lat[valid_mask]},
+            index=result.index[valid_mask],
+        )
+        gdf = gpd.GeoDataFrame(
+            coords,
+            geometry=gpd.GeoSeries.from_xy(coords["lon"], coords["lat"]),
+            crs="EPSG:4326",
+        )
+        joined = gpd.sjoin_nearest(
+            gdf.to_crs("EPSG:3857"),
+            world_df.to_crs("EPSG:3857"),
+            how="left",
+        )
+        joined = joined[~joined.index.duplicated(keep="first")]
+        region_series = joined["region"].reindex(coords.index)
+        result.loc[coords.index, "region"] = region_series
+
+    missing = int(result["region"].isna().sum())
+    if missing:
+        logger.warning(
+            f"Region enrichment left {missing} samples without a region assignment."
+        )
+
+    return result
 
 
 def _ensure_label_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -136,7 +231,7 @@ def train_val_test_split(
         )
 
         # Remove classes with too few samples for stratification
-        df = remove_small_classes(
+        df, _ = remove_small_classes(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
@@ -220,7 +315,7 @@ def spatial_train_val_test_split(
 
     # Remove classes with too few samples
     if stratify_label and stratify_label in df.columns:
-        df = remove_small_classes(
+        df, _ = remove_small_classes(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
@@ -675,7 +770,7 @@ def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):
             logger.error(
                 "Some classes still have too few samples after removal. Consider increasing your dataset or lowering min_samples_per_split."
             )
-    return df
+    return df, minor_classes
 
 
 def duckdb_type_from_series(s: pd.Series) -> str:
@@ -766,9 +861,11 @@ def get_training_dfs_from_parquet(
     max_timesteps_trim: Union[str, int, tuple] = "auto",
     use_valid_time: bool = True,
     finetune_classes: str = "CROPLAND2",
-    class_mappings: Dict[str, Dict[str, str]] = get_class_mappings(),
+    class_mappings: Optional[Dict[str, Dict[str, str]]] = None,
     val_samples_file: Optional[Union[Path, str]] = None,
     test_samples_file: Optional[Union[Path, str]] = None,
+    ignore_samples_file: Optional[Union[Path, str]] = None,
+    region_filter: Optional[Union[str, Sequence[str]]] = None,
     debug: bool = False,
     overwrite: bool = False,
     wide_parquet_output_path: Optional[Union[Path, str]] = None,
@@ -803,6 +900,13 @@ def get_training_dfs_from_parquet(
         Path to a CSV file containing sample IDs for controlled validation set selection.
         If provided, the test set will be constructed using these sample IDs.
         If None, a random train/test split will be performed.
+    test_samples_file : Optional[Union[Path, str]], default=None
+        Path to a CSV file containing sample IDs for controlled test set selection.
+    ignore_samples_file : Optional[Union[Path, str]], default=None
+        Path to a CSV file containing sample IDs to exclude.
+    region_filter : Optional[Union[str, Sequence[str]]], default=None
+        Optional region or list of regions to keep (comma-separated string or list).
+        Use "all" or None to keep all samples.
     debug : bool, default=False
         If True, a maximum of one file will be processed for quick testing.
     overwrite : bool, default=False
@@ -821,7 +925,11 @@ def get_training_dfs_from_parquet(
     """
     logger.info("Reading dataset")
 
+    if class_mappings is None:
+        class_mappings = get_class_mappings()
+
     is_tempfile = False  # <-- track if we must clean up
+    existing_wide_parquet = False
     if wide_parquet_output_path is None:
         import tempfile
 
@@ -836,6 +944,7 @@ def get_training_dfs_from_parquet(
         )
     else:
         wide_parquet_output_path = Path(wide_parquet_output_path)
+        existing_wide_parquet = wide_parquet_output_path.exists() and not overwrite
         logger.info(
             f"Using provided wide parquet output path: {wide_parquet_output_path}"
         )
@@ -861,6 +970,8 @@ def get_training_dfs_from_parquet(
         "start_date",
         "end_date",
         "ref_id",
+        "CTY25_confidence_nonoutlier",
+        "LC10_confidence_nonoutlier",
     ]
     INT_COLS = [
         "extract",
@@ -884,7 +995,7 @@ def get_training_dfs_from_parquet(
         "AGERA5-PRECIP",
         "AGERA5-TMEAN",
     ]
-    FLOAT_COLS = ["lon", "lat"]
+    FLOAT_COLS = ["lon", "lat", "CTY25_anomaly_flag", "LC10_anomaly_flag"]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():
@@ -977,8 +1088,83 @@ def get_training_dfs_from_parquet(
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
+    normalized_regions = _normalize_region_filter(region_filter)
+    if normalized_regions is not None:
+        logger.info(f"Region filter requested: {normalized_regions}")
+
+    if "region" in df.columns:
+        region_series = df["region"]
+        region_missing_mask = region_series.isna() | region_series.astype(
+            str
+        ).str.strip().eq("")
+    else:
+        region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
+
+    should_enrich_regions = region_missing_mask.any() and (
+        existing_wide_parquet or normalized_regions is not None
+    )
+
+    if should_enrich_regions:
+        logger.info(
+            "Enriching samples with region labels using administrative boundaries."
+        )
+        df = _attach_regions_from_boundaries(
+            df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
+        )
+        # if not is_tempfile:
+        #     df.to_parquet(wide_parquet_output_path, index=False)
+        # logger.info(
+        #     f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
+        # )
+    elif normalized_regions is not None and "region" not in df.columns:
+        raise ValueError(
+            "Region filtering requested but no region labels were found or generated."
+        )
+
+    if ignore_samples_file is not None:
+        ignore_samples_df = pd.read_csv(ignore_samples_file)
+        logger.info(
+            f"Discarding samples based on: {ignore_samples_file}. {len(ignore_samples_df)} samples will be removed from the dataset."
+        )
+        df = df[~df["sample_id"].isin(ignore_samples_df.sample_id.tolist())]
+    else:
+        logger.info(
+            "No ignore_samples_file provided; skipping explicit sample exclusion step."
+        )
+
+    if normalized_regions is not None:
+        if "region" not in df.columns:
+            raise ValueError(
+                "Region filtering requested but 'region' column is missing."
+            )
+        region_keys = [region.casefold() for region in normalized_regions]
+        region_series = df["region"].fillna("").astype(str).str.casefold()
+        mask = region_series.isin(region_keys)
+        available_regions = set(region_series.unique())
+        missing_regions = [
+            region
+            for region in normalized_regions
+            if region.casefold() not in available_regions
+        ]
+        if missing_regions:
+            logger.warning(
+                f"Requested regions not present in the dataset: {missing_regions}"
+            )
+        filtered = df.loc[mask].copy()
+        if filtered.empty:
+            available = sorted(df["region"].dropna().unique().tolist())
+            raise ValueError(
+                "Region filtering removed all samples. "
+                f"Requested regions: {normalized_regions}. "
+                f"Available regions in this dataset: {available}"
+            )
+        logger.info(
+            f"Filtered dataset to {len(filtered)} samples in regions: {normalized_regions}"
+        )
+        df = filtered
+
     # Remove classes with too few samples for stratification
-    df = remove_small_classes(df, min_samples=10)
+    df, _ = remove_small_classes(df, min_samples=10)
 
     if test_samples_file is not None:
         logger.info(
@@ -998,7 +1184,7 @@ def get_training_dfs_from_parquet(
 
     # train_df, val_df = split_df(train_df, val_size=0.2)
     # Remove classes with too few samples for stratification, now on trainval_df
-    trainval_df = remove_small_classes(trainval_df, min_samples=5)
+    trainval_df, _ = remove_small_classes(trainval_df, min_samples=5)
 
     if val_samples_file is not None:
         logger.info(f"Controlled `train` vs `val` split based on: {val_samples_file}")

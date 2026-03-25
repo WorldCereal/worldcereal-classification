@@ -2,17 +2,8 @@ import json
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import (Any, Callable, List, Literal, Mapping, Optional, Sequence,
+                    Tuple, Union)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,13 +27,10 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
-
 from worldcereal.train.data import collate_fn
-from worldcereal.train.datasets import (
-    SensorMaskingConfig,
-    WorldCerealLabelledDataset,
-    _is_missing_value,
-)
+from worldcereal.train.datasets import (SensorMaskingConfig,
+                                        WorldCerealLabelledDataset,
+                                        _is_missing_value)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
@@ -452,11 +440,15 @@ class SeasonalMultiTaskLoss(nn.Module):
 
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
-        # Landcover pathway (supervise whenever a valid label exists)
+        # Landcover pathway – only activate for samples explicitly routed to the LC
+        # head (tasks[idx] == landcover_task_name).  When the DualHeadBatchSampler is
+        # used, CT-assigned samples carry label_task="croptype" so they are excluded
+        # here, preventing cropland-class contamination of the LC supervision signal.
         landcover_indices = [
             idx
             for idx in range(batch_size)
-            if landcover_labels[idx] is not None
+            if tasks[idx] == self.landcover_task_name
+            and landcover_labels[idx] is not None
             and not _is_missing_value(landcover_labels[idx])
             and str(landcover_labels[idx]) in self._lc_to_idx
         ]
@@ -633,6 +625,9 @@ def prepare_training_datasets(
     masking_config: Optional[SensorMaskingConfig] = None,
     label_jitter=0,
     label_window=0,
+    train_min_season_coverage: float = 0.5,
+    eval_min_season_coverage: Optional[float] = None,
+    season_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -671,6 +666,25 @@ def prepare_training_datasets(
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
         Expanding true label in the neighboring window. If 0, no windowing is applied.
+    train_min_season_coverage : float, default=0.5
+        Minimum fraction of a season's composite slots that must be present in
+        the selected 12-timestamp window for that season to contribute to the
+        crop-type supervision signal in the **training** split. With augmentation
+        enabled, the window can shift so that a season is only partially inside
+        the window; a value of 0.5 retains the season as long as at least half
+        its slots are available.
+    eval_min_season_coverage : float or None, default=None
+        Minimum fraction of a season's composite slots required for the
+        **validation and test** splits.  When ``None`` (default), falls back to
+        ``train_min_season_coverage``.  The previous hard-coded value of 1.0
+        works for seasonal windows that fit within the data's timestep count
+        (e.g. tc-s1/tc-s2 at ~6 months), but is unreachable for annual windows
+        that span more timesteps than the data provides (e.g. 13 monthly slots
+        vs 12-month data), causing nearly all samples to be silently dropped.
+    season_ids : Optional[Sequence[str]], default=None
+        Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
+        or ``("annual",)``).  When ``None`` the dataset falls back to
+        ``GLOBAL_SEASON_IDS``.
 
     Returns
     -------
@@ -690,6 +704,13 @@ def prepare_training_datasets(
         masking_config=masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
+        min_season_coverage=train_min_season_coverage,
+        season_ids=season_ids,
+    )
+    effective_eval_coverage = (
+        eval_min_season_coverage
+        if eval_min_season_coverage is not None
+        else train_min_season_coverage
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -704,6 +725,8 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for validation
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
+        min_season_coverage=effective_eval_coverage,
+        season_ids=season_ids,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -718,6 +741,8 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for testing
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
+        min_season_coverage=effective_eval_coverage,
+        season_ids=season_ids,
     )
     return train_ds, val_ds, test_ds
 
@@ -1376,6 +1401,7 @@ def run_finetuning(
     unfreeze_epoch: Optional[int] = None,
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
+    val_loss_ema_alpha: float = 0.0,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -1397,6 +1423,9 @@ def run_finetuning(
     best_loss = None
     best_model_dict = None
     epochs_since_improvement = 0
+    ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
+    best_lc_f1: float = -1.0  # Best landcover macro F1 seen so far
+    best_ct_f1: float = -1.0  # Best croptype macro F1 seen so far
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1526,6 +1555,18 @@ def run_finetuning(
                 ):
                     param.requires_grad = True
                     logger.info(f"Unfreezing layer: {name}")
+            # Reset patience counter so early stopping has a full budget for the
+            # full-model optimization regime (frozen-phase epochs don't consume it).
+            logger.info(
+                f"Patience counter reset at encoder unfreeze (epoch {epoch + 1}): "
+                f"was {epochs_since_improvement}/{hyperparams.patience}."
+            )
+            epochs_since_improvement = 0
+            best_lc_f1 = -1.0
+            best_ct_f1 = -1.0
+            if val_loss_ema_alpha > 0.0:
+                ema_val_loss = None  # Restart EMA for the new optimization regime.
+                logger.info("EMA val loss and F1 bests reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -1702,14 +1743,10 @@ def run_finetuning(
 
         if tb_writer is not None:
             global_step = epoch + 1
-            tb_writer.add_scalars(
-                "loss",
-                {
-                    "train": train_loss[-1],
-                    "val": current_val_loss,
-                },
-                global_step,
-            )
+            _loss_scalars: dict[str, float] = {"train": train_loss[-1], "val": current_val_loss}
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None:
+                _loss_scalars["val_ema"] = ema_val_loss
+            tb_writer.add_scalars("loss", _loss_scalars, global_step)
             tb_writer.add_scalar(
                 "learning_rate", scheduler.get_last_lr()[0], global_step
             )
@@ -1773,6 +1810,7 @@ def run_finetuning(
             "epoch": epoch + 1,
             "train_loss": train_loss[-1],
             "val_loss": current_val_loss,
+            "val_loss_ema": ema_val_loss,
             "task_losses": {
                 "train": train_task_loss_avgs,
                 "val": val_task_loss_avgs,
@@ -1789,11 +1827,61 @@ def run_finetuning(
                 f"Failed to append validation metrics history at epoch {epoch + 1}: {exc}"
             )
 
-        improved = best_loss is None or current_val_loss < best_loss
-        if improved:
-            best_loss = current_val_loss
-            best_model_dict = deepcopy(model.state_dict())
+        # ------ EMA smoothing of val loss for early stopping (Direction B) ------
+        if val_loss_ema_alpha > 0.0:
+            if ema_val_loss is None:
+                ema_val_loss = current_val_loss  # warm-start on first observation
+            else:
+                ema_val_loss = (
+                    val_loss_ema_alpha * current_val_loss
+                    + (1.0 - val_loss_ema_alpha) * ema_val_loss
+                )
+        # Metric used for early-stopping and best-model selection.
+        # Equals EMA-smoothed loss when val_loss_ema_alpha > 0, otherwise raw val loss.
+        early_stop_loss = (
+            ema_val_loss
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
+            else current_val_loss
+        )
+
+        # --- Relaxed improvement: patience resets if ANY signal improves ---
+        loss_improved = best_loss is None or early_stop_loss < best_loss
+        cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
+        cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
+        lc_f1_improved = cur_lc_f1 > best_lc_f1 and cur_lc_f1 > 0
+        ct_f1_improved = cur_ct_f1 > best_ct_f1 and cur_ct_f1 > 0
+        any_improved = loss_improved or lc_f1_improved or ct_f1_improved
+
+        # Always update best-seen values for each signal independently
+        if loss_improved:
+            best_loss = early_stop_loss
+        if lc_f1_improved:
+            best_lc_f1 = cur_lc_f1
+        if ct_f1_improved:
+            best_ct_f1 = cur_ct_f1
+
+        if any_improved:
             epochs_since_improvement = 0
+            # Log which signal(s) triggered the improvement
+            triggers = []
+            if loss_improved:
+                triggers.append(f"loss={early_stop_loss:.4f}")
+            if lc_f1_improved:
+                triggers.append(f"lc_f1={cur_lc_f1:.4f}")
+            if ct_f1_improved:
+                triggers.append(f"ct_f1={cur_ct_f1:.4f}")
+            logger.info(
+                f"Epoch {epoch + 1}: improvement detected via {', '.join(triggers)}"
+            )
+        else:
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= hyperparams.patience:
+                logger.info("Early stopping!")
+                break
+
+        # Checkpoint is saved only when loss improves (primary metric).
+        if loss_improved:
+            best_model_dict = deepcopy(model.state_dict())
 
             validation_context = {
                 "epoch": epoch + 1,
@@ -1821,17 +1909,25 @@ def run_finetuning(
 
             checkpoint_model = deepcopy(model)
             _save_best(epoch + 1, checkpoint_model, best_loss)
-        else:
-            epochs_since_improvement += 1
-            if epochs_since_improvement >= hyperparams.patience:
-                logger.info("Early stopping!")
-                break
 
+        _val_loss_str = (
+            f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"
+            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
+            else f"{current_val_loss:.4f}"
+        )
+        _f1_str = ""
+        if best_lc_f1 > 0 or best_ct_f1 > 0:
+            _f1_str = (
+                f" | F1 lc={cur_lc_f1:.3f}"
+                f"{'↑' if lc_f1_improved else ''}"
+                f" ct={cur_ct_f1:.3f}"
+                f"{'↑' if ct_f1_improved else ''}"
+            )
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
-            f"Val Loss: {current_val_loss:.4f} | "
-            f"Best Loss: {best_loss:.4f}"
+            f"Val Loss: {_val_loss_str} | "
+            f"Best: {best_loss:.4f}{_f1_str}"
         )
 
         description += (
