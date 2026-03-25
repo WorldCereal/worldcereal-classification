@@ -688,7 +688,7 @@ def prepare_training_datasets(
     eval_min_season_coverage : float or None, default=None
         Minimum fraction of a season's composite slots required for the
         **validation and test** splits.  When ``None`` (default), falls back to
-        ``train_min_season_coverage``.  The previous hard-coded value of 1.0
+        1.0 (full coverage required).  The previous hard-coded value of 1.0
         works for seasonal windows that fit within the data's timestep count
         (e.g. tc-s1/tc-s2 at ~6 months), but is unreachable for annual windows
         that span more timesteps than the data provides (e.g. 13 monthly slots
@@ -722,7 +722,7 @@ def prepare_training_datasets(
     effective_eval_coverage = (
         eval_min_season_coverage
         if eval_min_season_coverage is not None
-        else train_min_season_coverage
+        else 1.0
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
