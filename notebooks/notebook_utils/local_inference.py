@@ -1,5 +1,8 @@
 """Perform cropland and croptype mapping inference using local execution of UDFs.
 
+Make sure you test this script on Python version 3.9+, and have worldcereal
+dependencies installed with the presto wheel file and its dependencies.
+
 This script tests both cropland and croptype mapping workflows by calling
 the UDF functions directly without running batch jobs on OpenEO.
 """
@@ -14,11 +17,8 @@ from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
-
-from worldcereal.openeo.inference import (
-    SeasonalInferenceEngine,
-    get_expected_timesteps_from_artifact,
-)
+from worldcereal.openeo.inference import (SeasonalInferenceEngine,
+                                          get_expected_timesteps_from_artifact)
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.utils.models import load_model_artifact
 
@@ -482,7 +482,6 @@ def classification_to_geotiff(
     import json
 
     import rasterio
-
     # ignore import error for rioxarray if not used
     import rioxarray  # noqa: F401
 
