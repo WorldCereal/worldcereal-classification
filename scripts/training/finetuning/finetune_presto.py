@@ -988,10 +988,9 @@ def main(args):
     if args.explicit_training_dataframe:
         wide_parquet_output_path = Path(args.explicit_training_dataframe)
     elif not debug:
-        # wide_parquet_output_path = Path(
-        #     "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
-        # )
-        wide_parquet_output_path = None
+        wide_parquet_output_path = Path(
+            "/projects/worldcereal/merged_319_wide.parquet"
+        )
     else:
         wide_parquet_output_path = None
 
@@ -1045,9 +1044,6 @@ def main(args):
             overwrite=False,
         )
         logger.info("Saving train, val, and test DataFrames to parquet files ...")
-        # train_df.to_parquet(train_df_path)
-        # val_df.to_parquet(val_df_path)
-        # test_df.to_parquet(test_df_path)
 
     if "drop" in args.outlier_mode:
         train_df = _drop_outliers(
@@ -2091,13 +2087,14 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--eval_min_season_coverage",
         type=float,
-        default=None,
+        default=1.0,
         help=(
             "Minimum fraction of a season's composite slots required for val/test "
-            "splits.  When omitted, uses the same value as --train_min_season_coverage. "
-            "The previous hard-coded value of 1.0 is unreachable for annual seasons "
-            "that span more composite slots than the data's timestep count (e.g. 13 "
-            "monthly slots vs 12-month data). Default: None (= train value)."
+            "splits.  When omitted, uses the default value of 1.0 (which can cause "
+            "issues for annual seasons while calendars allow for annual seasons to be >12 months)."
+            "If set to a value less than 1.0, this allows seasons that are not fully covered "
+            "by the 12-timestamp window to be included in evaluation, which can be helpful for "
+            "annual seasons that may span more than 12 months in some regions according to the crop calendar."
         ),
     )
 
