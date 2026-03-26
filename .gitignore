@@ -9,6 +9,7 @@ tmp
 *.vrt
 *.pkl
 *.mep2
+*.tif
 *.tig
 *.jp2
 *.npy
