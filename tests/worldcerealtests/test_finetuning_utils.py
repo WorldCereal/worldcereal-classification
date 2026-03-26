@@ -7,18 +7,13 @@ import torch
 from prometheo.predictors import NODATAVALUE, Predictors
 from torch import nn
 from torch.utils.data import Dataset
-
 from worldcereal.train.data import get_training_dfs_from_parquet
-from worldcereal.train.datasets import (
-    WorldCerealLabelledDataset,
-    # MaskingMode,
-    # MaskingStrategy,
-)
-from worldcereal.train.finetuning_utils import (
-    _select_representative_season,
-    evaluate_finetuned_model,
-    prepare_training_datasets,
-)
+from worldcereal.train.datasets import \
+    WorldCerealLabelledDataset  # MaskingMode,; MaskingStrategy,
+from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
+                                                _select_representative_season,
+                                                evaluate_finetuned_model,
+                                                prepare_training_datasets)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 from worldcereal.utils.refdata import get_class_mappings
 
@@ -570,6 +565,189 @@ class TestSeasonalEvaluation(unittest.TestCase):
         self.assertFalse(gate_mask.any())
         self.assertEqual(results["croptype"]["gate_rejections"], 0)
         self.assertEqual(results["croptype"]["num_samples"], 2)
+
+
+class TestSeasonalMultiTaskLoss(unittest.TestCase):
+    """Unit tests for the SeasonalMultiTaskLoss forward pass."""
+
+    def setUp(self):
+        self.lc_classes = ["temporary_crops", "water"]
+        self.ct_classes = ["wheat", "maize"]
+        self.loss_fn = SeasonalMultiTaskLoss(
+            landcover_classes=self.lc_classes,
+            croptype_classes=self.ct_classes,
+        )
+        # Shared season mask: 1 season, 2 timesteps, season active at t=0
+        self.base_mask = np.array([[True, False]], dtype=bool)
+        self.base_in = np.array([True], dtype=bool)
+
+    def _make_output(self, batch, n_seasons=1, n_lc=2, n_ct=2, emb_dim=4):
+        """Build a SeasonalHeadOutput with random logits."""
+        return SeasonalHeadOutput(
+            global_logits=torch.randn(batch, n_lc),
+            season_logits=torch.randn(batch, n_seasons, n_ct),
+            global_embedding=torch.randn(batch, emb_dim),
+            season_embeddings=torch.randn(batch, n_seasons, emb_dim),
+            season_masks=torch.ones(batch, n_seasons, 2, dtype=torch.bool),
+        )
+
+    def _make_attrs(self, label_tasks, lc_labels, ct_labels):
+        """Build an attrs dict mimicking DataLoader collation."""
+        batch = len(label_tasks)
+        return {
+            "label_task": label_tasks,
+            "landcover_label": lc_labels,
+            "croptype_label": ct_labels,
+            "season_masks": np.tile(self.base_mask, (batch, 1, 1)),
+            "in_seasons": np.tile(self.base_in, (batch, 1)),
+            "valid_position": [0] * batch,
+        }
+
+    def test_lc_only_batch(self):
+        """A batch with only LC-assigned samples should produce LC loss only."""
+        output = self._make_output(2)
+        attrs = self._make_attrs(
+            label_tasks=["landcover", "landcover"],
+            lc_labels=["temporary_crops", "water"],
+            ct_labels=[None, None],
+        )
+        predictors = Predictors(label=torch.zeros(2, 1, 1, 1, 1))
+        loss = self.loss_fn(output, predictors, attrs)
+
+        self.assertGreater(loss.item(), 0.0)
+        self.assertIn("landcover", self.loss_fn.last_task_losses)
+        self.assertNotIn("croptype", self.loss_fn.last_task_losses)
+
+    def test_ct_only_batch(self):
+        """A batch with only CT-assigned samples should produce CT loss only."""
+        output = self._make_output(2)
+        attrs = self._make_attrs(
+            label_tasks=["croptype", "croptype"],
+            lc_labels=["temporary_crops", "water"],
+            ct_labels=["wheat", "maize"],
+        )
+        predictors = Predictors(label=torch.zeros(2, 1, 1, 1, 1))
+        loss = self.loss_fn(output, predictors, attrs)
+
+        self.assertGreater(loss.item(), 0.0)
+        self.assertNotIn("landcover", self.loss_fn.last_task_losses)
+        self.assertIn("croptype", self.loss_fn.last_task_losses)
+
+    def test_mixed_batch(self):
+        """A mixed LC+CT batch should produce both loss branches."""
+        output = self._make_output(4)
+        attrs = self._make_attrs(
+            label_tasks=["landcover", "landcover", "croptype", "croptype"],
+            lc_labels=["temporary_crops", "water", "temporary_crops", "water"],
+            ct_labels=[None, None, "wheat", "maize"],
+        )
+        predictors = Predictors(label=torch.zeros(4, 1, 1, 1, 1))
+        loss = self.loss_fn(output, predictors, attrs)
+
+        self.assertGreater(loss.item(), 0.0)
+        self.assertIn("landcover", self.loss_fn.last_task_losses)
+        self.assertIn("croptype", self.loss_fn.last_task_losses)
+
+    def test_loss_is_differentiable(self):
+        """Loss should propagate gradients back through the logits."""
+        output = self._make_output(2)
+        output.global_logits.requires_grad_(True)
+        output.season_logits.requires_grad_(True)
+        attrs = self._make_attrs(
+            label_tasks=["landcover", "croptype"],
+            lc_labels=["temporary_crops", "water"],
+            ct_labels=[None, "wheat"],
+        )
+        predictors = Predictors(label=torch.zeros(2, 1, 1, 1, 1))
+        loss = self.loss_fn(output, predictors, attrs)
+        loss.backward()
+
+        self.assertIsNotNone(output.global_logits.grad)
+        self.assertIsNotNone(output.season_logits.grad)
+
+    def test_croptype_supervision_stats(self):
+        """last_croptype_supervision should track eligible and supervised counts."""
+        output = self._make_output(3)
+        attrs = self._make_attrs(
+            label_tasks=["landcover", "croptype", "croptype"],
+            lc_labels=["temporary_crops", "water", "temporary_crops"],
+            ct_labels=[None, "wheat", "maize"],
+        )
+        predictors = Predictors(label=torch.zeros(3, 1, 1, 1, 1))
+        self.loss_fn(output, predictors, attrs)
+
+        stats = self.loss_fn.last_croptype_supervision
+        self.assertEqual(stats["eligible_samples"], 2.0)
+        self.assertEqual(stats["supervised_samples"], 2.0)
+        self.assertEqual(stats["missing_representative_season"], 0.0)
+
+    def test_no_season_available_tracks_missing(self):
+        """Samples with no active season should be counted as missing."""
+        output = self._make_output(2, n_seasons=1)
+        # Override season_masks to all-False so no season is active
+        output.season_masks = torch.zeros(2, 1, 2, dtype=torch.bool)
+        attrs = self._make_attrs(
+            label_tasks=["croptype", "croptype"],
+            lc_labels=["temporary_crops", "water"],
+            ct_labels=["wheat", "maize"],
+        )
+        # Also clear in_seasons so the fallback via valid_position finds nothing
+        attrs["in_seasons"] = np.array([[False], [False]], dtype=bool)
+        predictors = Predictors(label=torch.zeros(2, 1, 1, 1, 1))
+        self.loss_fn(output, predictors, attrs)
+
+        stats = self.loss_fn.last_croptype_supervision
+        self.assertEqual(stats["eligible_samples"], 2.0)
+        self.assertEqual(stats["missing_representative_season"], 2.0)
+        self.assertEqual(stats["supervised_samples"], 0.0)
+
+    def test_sample_weights_applied(self):
+        """When sample weight attrs are configured, loss should change."""
+        loss_weighted = SeasonalMultiTaskLoss(
+            landcover_classes=self.lc_classes,
+            croptype_classes=self.ct_classes,
+            task_sample_weight_attrs={"landcover": "quality_score_lc"},
+            sample_weight_clip=(0.1, 10.0),
+        )
+        # Asymmetric logits so per-sample losses differ
+        logits = torch.tensor([[5.0, 1.0], [1.0, 2.0]])
+        output_a = SeasonalHeadOutput(
+            global_logits=logits.clone(),
+            season_logits=None,
+            global_embedding=torch.zeros(2, 4),
+            season_embeddings=torch.zeros(2, 1, 4),
+            season_masks=torch.ones(2, 1, 2, dtype=torch.bool),
+        )
+        output_b = SeasonalHeadOutput(
+            global_logits=logits.clone(),
+            season_logits=None,
+            global_embedding=torch.zeros(2, 4),
+            season_embeddings=torch.zeros(2, 1, 4),
+            season_masks=torch.ones(2, 1, 2, dtype=torch.bool),
+        )
+        base_attrs = {
+            "label_task": ["landcover", "landcover"],
+            "landcover_label": ["temporary_crops", "water"],
+            "croptype_label": [None, None],
+            "season_masks": np.tile(self.base_mask, (2, 1, 1)),
+            "in_seasons": np.tile(self.base_in, (2, 1)),
+            "valid_position": [0, 0],
+        }
+        p = Predictors(label=torch.zeros(2, 1, 1, 1, 1))
+
+        # Uniform weights
+        attrs_uniform = {**base_attrs, "quality_score_lc": [1.0, 1.0]}
+        loss_uniform = loss_weighted(output_a, p, attrs_uniform)
+
+        # Skewed weights — second sample gets 10× the weight
+        attrs_skewed = {**base_attrs, "quality_score_lc": [1.0, 10.0]}
+        loss_skewed = loss_weighted(output_b, p, attrs_skewed)
+
+        # Losses should differ because of different weighting
+        self.assertFalse(
+            torch.allclose(loss_uniform, loss_skewed),
+            "Sample weights should change the loss value",
+        )
 
 
 if __name__ == "__main__":
