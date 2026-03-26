@@ -975,8 +975,6 @@ def get_training_dfs_from_parquet(
         "start_date",
         "end_date",
         "ref_id",
-        "CTY25_confidence_nonoutlier",
-        "LC10_confidence_nonoutlier",
     ]
     INT_COLS = [
         "extract",
@@ -1000,8 +998,16 @@ def get_training_dfs_from_parquet(
         "AGERA5-PRECIP",
         "AGERA5-TMEAN",
     ]
-    FLOAT_COLS = ["lon", "lat", "CTY25_anomaly_flag", "LC10_anomaly_flag"]
+    FLOAT_COLS = ["lon", "lat"]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
+
+    # Columns that may not exist in older data — fill with sensible defaults
+    OPTIONAL_COLS: dict = {
+        "CTY25_confidence_nonoutlier": "1.0",  # no outlier penalty
+        "LC10_confidence_nonoutlier": "1.0",
+        "CTY25_anomaly_flag": 0.0,  # not flagged
+        "LC10_anomaly_flag": 0.0,
+    }
 
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():
         logger.info(
@@ -1021,7 +1027,10 @@ def get_training_dfs_from_parquet(
             _data = pd.read_parquet(f, engine="fastparquet")
             _ref_id = Path(f).stem
             _data["ref_id"] = _ref_id
-            _data = _data[REQUIRED_COLS]
+            for col, default in OPTIONAL_COLS.items():
+                if col not in _data.columns:
+                    _data[col] = default
+            _data = _data[REQUIRED_COLS + list(OPTIONAL_COLS.keys())]
             _data_pivot = process_parquet(
                 _data,
                 freq=timestep_freq,
