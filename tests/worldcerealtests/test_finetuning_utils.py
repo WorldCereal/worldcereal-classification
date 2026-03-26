@@ -750,5 +750,122 @@ class TestSeasonalMultiTaskLoss(unittest.TestCase):
         )
 
 
+class TestSeasonSelectionPartialInSeasons(unittest.TestCase):
+    """Verify _select_representative_season with partial in_seasons flags."""
+
+    def _make_output(self, n_seasons=2, n_timesteps=2):
+        return SeasonalHeadOutput(
+            global_logits=None,
+            season_logits=None,
+            global_embedding=torch.zeros(1, 4),
+            season_embeddings=torch.zeros(1, n_seasons, 4),
+            season_masks=torch.ones(1, n_seasons, n_timesteps, dtype=torch.bool),
+        )
+
+    def test_first_season_only(self):
+        """in_seasons=[True, False] should select only season 0."""
+        output = self._make_output()
+        attrs = {
+            "in_seasons": np.array([[True, False]], dtype=bool),
+            "valid_position": np.array([0]),
+        }
+        selections = _select_representative_season(
+            output, attrs, [0], allow_multiple=True
+        )
+        self.assertEqual(selections[0], [0])
+
+    def test_second_season_only(self):
+        """in_seasons=[False, True] should select only season 1."""
+        output = self._make_output()
+        attrs = {
+            "in_seasons": np.array([[False, True]], dtype=bool),
+            "valid_position": np.array([0]),
+        }
+        selections = _select_representative_season(
+            output, attrs, [0], allow_multiple=True
+        )
+        self.assertEqual(selections[0], [1])
+
+    def test_no_season_active(self):
+        """in_seasons=[False, False] with masks also False should return empty."""
+        output = self._make_output()
+        output.season_masks = torch.zeros(1, 2, 2, dtype=torch.bool)
+        attrs = {
+            "in_seasons": np.array([[False, False]], dtype=bool),
+            "valid_position": np.array([0]),
+        }
+        selections = _select_representative_season(
+            output, attrs, [0], allow_multiple=True
+        )
+        self.assertEqual(selections[0], [])
+
+    def test_mixed_batch_different_patterns(self):
+        """Two samples with different in_seasons patterns in the same batch."""
+        output = SeasonalHeadOutput(
+            global_logits=None,
+            season_logits=None,
+            global_embedding=torch.zeros(2, 4),
+            season_embeddings=torch.zeros(2, 2, 4),
+            season_masks=torch.ones(2, 2, 2, dtype=torch.bool),
+        )
+        attrs = {
+            "in_seasons": np.array([[True, False], [False, True]], dtype=bool),
+            "valid_position": np.array([0, 0]),
+        }
+        selections = _select_representative_season(
+            output, attrs, [0, 1], allow_multiple=True
+        )
+        self.assertEqual(selections[0], [0])  # sample 0: season 0 only
+        self.assertEqual(selections[1], [1])  # sample 1: season 1 only
+
+
+class TestSeasonalLossTwoSeasonPartialCoverage(unittest.TestCase):
+    """Verify SeasonalMultiTaskLoss uses only active season logits for CT loss."""
+
+    def test_ct_loss_uses_only_active_season(self):
+        """With in_seasons=[True, False], only season 0 logits should contribute.
+
+        We set season 0 logits to predict class 0 confidently (low loss) and
+        season 1 logits to predict class 1 confidently (high loss if target=0).
+        If the loss incorrectly uses season 1, the loss would be much higher.
+        """
+        loss_fn = SeasonalMultiTaskLoss(
+            landcover_classes=["temporary_crops", "water"],
+            croptype_classes=["wheat", "maize"],
+        )
+
+        # Season 0: confident wheat (class 0); Season 1: confident maize (class 1)
+        season_logits = torch.tensor([[[5.0, -5.0], [-5.0, 5.0]]])  # [1, 2, 2]
+        output = SeasonalHeadOutput(
+            global_logits=torch.zeros(1, 2),
+            season_logits=season_logits,
+            global_embedding=torch.zeros(1, 4),
+            season_embeddings=torch.zeros(1, 2, 4),
+            season_masks=torch.ones(1, 2, 2, dtype=torch.bool),
+        )
+        attrs = {
+            "label_task": ["croptype"],
+            "landcover_label": ["temporary_crops"],
+            "croptype_label": ["wheat"],  # target = class 0
+            "season_masks": np.ones((1, 2, 2), dtype=bool),
+            "in_seasons": np.array([[True, False]], dtype=bool),  # only season 0
+            "valid_position": [0],
+        }
+        p = Predictors(label=torch.zeros(1, 1, 1, 1, 1))
+        loss_active_only = loss_fn(output, p, attrs)
+
+        # Now flip: only season 1 active (which predicts maize, but target is wheat)
+        attrs_flipped = {**attrs, "in_seasons": np.array([[False, True]], dtype=bool)}
+        loss_wrong_season = loss_fn(output, p, attrs_flipped)
+
+        # Season 0 predicts wheat correctly → low loss
+        # Season 1 predicts maize but target is wheat → high loss
+        self.assertGreater(
+            loss_wrong_season.item(),
+            loss_active_only.item(),
+            "Loss with the wrong season active should be higher",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

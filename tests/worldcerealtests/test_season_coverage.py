@@ -300,6 +300,82 @@ class TestAugmentationResilienceRegression:
         assert int(mask_b.sum()) > 0, "Season B should survive with 100% coverage"
 
 
+class TestTwoSeasonMixedOutcome:
+    """Verify mask shape [2, T] when one season passes coverage and another fails.
+
+    Uses _compute_season_metadata with two manual windows so both are resolved
+    together, producing a stacked (num_seasons, num_timesteps) mask array.
+    """
+
+    def test_passing_and_failing_season_produce_correct_mask_rows(self):
+        """Season A (Jan-Jun) passes, Season B (Jul-Dec) fails → stacked mask check.
+
+        Window: Oct 2021 – Sep 2022 (12 months)
+          Season A 2022 (Jan-Jun): Jan-Jun all covered = 6/6 → passes at 0.6
+          Season B: each annual cycle covers only 3/6 slots < 4 required → fails
+
+        With min_season_coverage=0.6, n_required = max(1, round(6*0.6)) = 4.
+        Only Season A qualifies → masks[0] has True entries, masks[1] all-False.
+        """
+        ds = _minimal_dataset(min_season_coverage=0.6)
+        dates = _monthly_dates(2021, 10, 12)  # Oct 2021 – Sep 2022
+
+        season_a = SeasonWindow(
+            start_month=1, start_day=1, end_month=6, end_day=30, year_offset=0
+        )
+        season_b = SeasonWindow(
+            start_month=7, start_day=1, end_month=12, end_day=31, year_offset=0
+        )
+
+        # Build (N, 3) with (day, month, year) columns
+        timestamps = np.array(
+            [[pd.Timestamp(d).day, pd.Timestamp(d).month, pd.Timestamp(d).year] for d in dates]
+        )
+
+        masks, in_seasons = ds._compute_season_metadata(
+            row={"lat": 45.0, "lon": 5.0},
+            timestamps=timestamps,
+            season_ids=("season_a", "season_b"),
+            season_windows={"season_a": season_a, "season_b": season_b},
+            derive_from_calendar=False,
+            label_datetime=None,
+        )
+
+        assert masks.shape == (2, 12), f"Expected (2, 12), got {masks.shape}"
+        assert int(masks[0].sum()) > 0, "Season A should have passing slots"
+        assert int(masks[1].sum()) == 0, "Season B should be all-False (no cycle passes)"
+
+    def test_in_seasons_reflects_per_season_outcome(self):
+        """in_seasons should be [True, False] when only Season A's cycle qualifies."""
+        ds = _minimal_dataset(min_season_coverage=0.5)
+        dates = _monthly_dates(2021, 10, 12)  # Oct 2021 – Sep 2022
+        label_dt = np.datetime64("2022-03-15", "D")  # inside Jan-Jun 2022
+
+        season_a = SeasonWindow(
+            start_month=1, start_day=1, end_month=6, end_day=30, year_offset=0
+        )
+        season_b = SeasonWindow(
+            start_month=7, start_day=1, end_month=12, end_day=31, year_offset=0
+        )
+
+        timestamps = np.array(
+            [[pd.Timestamp(d).day, pd.Timestamp(d).month, pd.Timestamp(d).year] for d in dates]
+        )
+
+        masks, in_seasons = ds._compute_season_metadata(
+            row={"lat": 45.0, "lon": 5.0},
+            timestamps=timestamps,
+            season_ids=("season_a", "season_b"),
+            season_windows={"season_a": season_a, "season_b": season_b},
+            derive_from_calendar=False,
+            label_datetime=label_dt,
+        )
+
+        assert in_seasons is not None
+        assert bool(in_seasons[0]) is True, "Label is inside Season A → True"
+        assert bool(in_seasons[1]) is False, "Season B has no qualifying cycle → False"
+
+
 # ---------------------------------------------------------------------------
 # 4. _season_mask_from_calendar: threshold applied consistently
 # ---------------------------------------------------------------------------

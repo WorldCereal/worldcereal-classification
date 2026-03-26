@@ -7,15 +7,17 @@ import pandas as pd
 import xarray as xr
 from prometheo.models import Presto
 from prometheo.models.presto.wrapper import load_presto_weights
-from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
-                                  S1_BANDS, S2_BANDS)
-from worldcereal.train.datasets import (WorldCerealDataset,
-                                        WorldCerealLabelledDataset,
-                                        WorldCerealTrainingDataset,
-                                        align_to_composite_window,
-                                        get_dekad_timestamp_components,
-                                        get_monthly_timestamp_components,
-                                        run_model_inference)
+from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, S2_BANDS
+
+from worldcereal.train.datasets import (
+    WorldCerealDataset,
+    WorldCerealLabelledDataset,
+    WorldCerealTrainingDataset,
+    align_to_composite_window,
+    get_dekad_timestamp_components,
+    get_monthly_timestamp_components,
+    run_model_inference,
+)
 
 
 class TestWorldCerealDataset(unittest.TestCase):
@@ -1338,6 +1340,88 @@ class TestRepeatHandling(unittest.TestCase):
         self.assertEqual(len(ds), len(self.df_training) * 4)
         expected = list(range(len(self.df_training))) * 4
         self.assertListEqual(ds.indices, expected)
+
+
+class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
+    """Verify that season_masks.shape[1] == num_timesteps for various sizes."""
+
+    @staticmethod
+    def _build_df(num_samples, num_timesteps):
+        """Build a minimal dataframe with enough timestep columns."""
+        # Extend end_date so that monthly timestamp generation covers all positions.
+        # get_monthly_timestamp_components generates one timestamp per month from
+        # start_date to end_date, so we need at least (num_timesteps + 6) months.
+        total_ts = num_timesteps + 6
+        start = pd.Timestamp("2021-01-01")
+        end = start + pd.DateOffset(months=total_ts)
+        data = {
+            "lat": [45.0] * num_samples,
+            "lon": [5.0] * num_samples,
+            "start_date": [str(start.date())] * num_samples,
+            "end_date": [str(end.date())] * num_samples,
+            "valid_time": ["2021-07-01"] * num_samples,
+            "available_timesteps": [total_ts] * num_samples,
+            "valid_position": [num_timesteps // 2] * num_samples,
+        }
+        # Need enough timestep columns: num_timesteps + 6 for augmentation headroom
+        total_ts = num_timesteps + 6
+        for ts in range(total_ts):
+            for tpl in [
+                "OPTICAL-B02-ts{}-10m", "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m", "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m", "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m", "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m", "OPTICAL-B12-ts{}-20m",
+                "SAR-VH-ts{}-20m", "SAR-VV-ts{}-20m",
+                "METEO-precipitation_flux-ts{}-100m",
+                "METEO-temperature_mean-ts{}-100m",
+            ]:
+                data[tpl.format(ts)] = [1000] * num_samples
+        data["DEM-alt-20m"] = [100] * num_samples
+        data["DEM-slo-20m"] = [5] * num_samples
+        df = pd.DataFrame(data)
+        df["finetune_class"] = ["cropland"] * num_samples
+        df["label_task"] = ["landcover"] * num_samples
+        df["landcover_label"] = ["lc_a"] * num_samples
+        df["croptype_label"] = ["ct_a"] * num_samples
+        return df
+
+    def test_season_mask_shape_8_timesteps(self):
+        """With num_timesteps=8, season_masks should have shape (S, 8)."""
+        df = self._build_df(2, 8)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            num_timesteps=8, season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 8)
+        # Default 2 seasons (tc-s1, tc-s2)
+        self.assertEqual(masks.shape[0], 2)
+
+    def test_season_mask_shape_18_timesteps(self):
+        """With num_timesteps=18, season_masks should have shape (S, 18)."""
+        df = self._build_df(2, 18)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            num_timesteps=18, season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 18)
+        self.assertEqual(masks.shape[0], 2)
+
+    def test_season_mask_shape_default_12_timesteps(self):
+        """With default num_timesteps=12, season_masks should have shape (S, 12)."""
+        df = self._build_df(2, 12)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 12)
+        self.assertEqual(masks.shape[0], 2)
 
 
 if __name__ == "__main__":
