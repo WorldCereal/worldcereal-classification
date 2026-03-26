@@ -28,10 +28,6 @@ For every dual-season grid point whose S1∪S2 bounding-box union exceeds
   • S2 ends later (95 % of cases) → clamp ``s1_sos_doy``
   • S1 ends later ( 5 % of cases) → clamp ``s2_sos_doy``
 
-Edge-case guard: if ``annual_sos_doy == 0`` (pre-existing source data quirk —
-the ANNUAL_SOS raster had nodata at that cell) the SOS is set to DOY=1 (Jan 1)
-instead, which gives a valid 364-day union.
-
 Single-season points and points already within 365 days are not touched.
 
 TIF patching
@@ -79,11 +75,6 @@ TIF_NAMES: dict[str, str] = {
 PARQUET_NAME = "seasonality_lookup.parquet"
 ORIG_SUBDIR  = "orig_files"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Union-span helpers (row-wise, handles year-wrapping)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _d(doy: int, yr: int) -> date:
     return date(yr, 1, 1) + timedelta(days=int(doy) - 1)
 
@@ -111,11 +102,6 @@ def compute_union_spans(df: pd.DataFrame) -> np.ndarray:
             )
     return spans
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Backup helper
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _backup(src: Path, orig_dir: Path) -> None:
     """Copy *src* into *orig_dir* if it hasn't been backed up yet."""
     orig_dir.mkdir(parents=True, exist_ok=True)
@@ -126,10 +112,6 @@ def _backup(src: Path, orig_dir: Path) -> None:
     else:
         print(f"    backup already exists, skipping → {dest}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Compute clamping masks from the parquet (shared by both targets)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_clamp_masks(
     df: pd.DataFrame,
@@ -175,11 +157,6 @@ def _compute_clamp_masks(
     df.drop(columns=["_union_days"], inplace=True)
     return dual_mask, s2_anchored, s2_normal, s2_zero, s1_anchored, s1_normal, s1_zero
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Parquet clamping
-# ─────────────────────────────────────────────────────────────────────────────
-
 def clamp_parquet(folder: Path) -> None:
     parquet_path = folder / PARQUET_NAME
     orig_dir     = folder / ORIG_SUBDIR
@@ -217,7 +194,7 @@ def clamp_parquet(folder: Path) -> None:
     still_over = (df["_check"] > 365) & dual_mask
     print(f"  Points still > 365 days: {still_over.sum():,}  (should be 0)")
     if still_over.sum() > 0:
-        print("  ❌  Verification failed — aborting.")
+        print(" Verification failed — aborting.")
         sys.exit(1)
     df.drop(columns=["_check"], inplace=True)
 
@@ -227,18 +204,13 @@ def clamp_parquet(folder: Path) -> None:
     for c in DOY_COLS:
         out[c] = out[c].astype(np.uint16)
     out.to_parquet(parquet_path, index=False, engine="pyarrow")
-    print(f"  ✅  Written → {parquet_path}  ({out.shape[0]:,} rows)")
+    print(f"  Written → {parquet_path}  ({out.shape[0]:,} rows)")
 
     n_changed = s2_anchored.sum() + s1_anchored.sum()
     print(f"\n  Points clamped: {n_changed:,} ({100*n_changed/dual_mask.sum():.1f}% of dual-season)")
     print(f"    └ s1_sos clamped (S2 ends later): {s2_anchored.sum():>6,}")
     print(f"    └ s2_sos clamped (S1 ends later): {s1_anchored.sum():>6,}")
     print(f"    └ annual_sos=0 guard (→ DOY=1):   {s2_zero.sum()+s1_zero.sum():>6,}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TIF clamping
-# ─────────────────────────────────────────────────────────────────────────────
 
 def clamp_tifs(folder: Path) -> None:
     """Patch the six crop-calendar TIFs in *folder* with the same clamp logic.
@@ -349,17 +321,13 @@ def clamp_tifs(folder: Path) -> None:
         profile.update(dtype=rasterio.int16)
         with rasterio.open(tif_path, "w", **profile) as dst:
             dst.write(arrays[col], 1)
-        print(f"  ✅  Written → {tif_path}")
+        print(f" Written → {tif_path}")
 
     print(f"\n  Points clamped: {n_changed:,}")
     print(f"    └ S1_SOS pixels updated (S2 ends later): {s2_anchored.sum():>6,}")
     print(f"    └ S2_SOS pixels updated (S1 ends later): {s1_anchored.sum():>6,}")
     print(f"    └ annual_sos=0 guard (→ DOY=1):          {s2_zero.sum()+s1_zero.sum():>6,}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
