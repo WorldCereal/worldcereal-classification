@@ -268,6 +268,37 @@ class TestWorldCerealDataset(unittest.TestCase):
         )
         self.assertEqual(len(sampler), 7)
 
+    def test_getitem_lc_virtual_index(self):
+        """Feeding an LC virtual index [N, 2N) should override label_task to 'landcover'."""
+        N = len(self.binary_ds)
+        # Pick a sample whose dataframe label_task is 'croptype'
+        croptype_rows = self.df.index[self.df["label_task"] == "croptype"].tolist()
+        self.assertTrue(len(croptype_rows) > 0, "Need at least one croptype row")
+        real_idx = croptype_rows[0]
+        virtual_idx = N + real_idx  # LC virtual range
+
+        _, attrs = self.binary_ds[virtual_idx]
+        self.assertEqual(attrs["label_task"], "landcover")
+
+    def test_getitem_ct_virtual_index(self):
+        """Feeding a CT virtual index [2N, 3N) should override label_task to 'croptype'."""
+        N = len(self.binary_ds)
+        # Pick a sample whose dataframe label_task is 'landcover'
+        lc_rows = self.df.index[self.df["label_task"] == "landcover"].tolist()
+        self.assertTrue(len(lc_rows) > 0, "Need at least one landcover row")
+        real_idx = lc_rows[0]
+        virtual_idx = 2 * N + real_idx  # CT virtual range
+
+        _, attrs = self.binary_ds[virtual_idx]
+        self.assertEqual(attrs["label_task"], "croptype")
+
+    def test_getitem_natural_index(self):
+        """Natural index [0, N) should preserve label_task from the dataframe."""
+        for i in range(len(self.binary_ds)):
+            _, attrs = self.binary_ds[i]
+            expected = self.df.iloc[i]["label_task"]
+            self.assertEqual(attrs["label_task"], expected)
+
     def test_getitem(self):
         """Test __getitem__ returns correct type."""
         item = self.base_ds[0]
