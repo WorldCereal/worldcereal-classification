@@ -7,13 +7,17 @@ import torch
 from prometheo.predictors import NODATAVALUE, Predictors
 from torch import nn
 from torch.utils.data import Dataset
+
 from worldcereal.train.data import get_training_dfs_from_parquet
-from worldcereal.train.datasets import \
-    WorldCerealLabelledDataset  # MaskingMode,; MaskingStrategy,
-from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
-                                                _select_representative_season,
-                                                evaluate_finetuned_model,
-                                                prepare_training_datasets)
+from worldcereal.train.datasets import (
+    WorldCerealLabelledDataset,  # MaskingMode,; MaskingStrategy,
+)
+from worldcereal.train.finetuning_utils import (
+    SeasonalMultiTaskLoss,
+    _select_representative_season,
+    evaluate_finetuned_model,
+    prepare_training_datasets,
+)
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 from worldcereal.utils.refdata import get_class_mappings
 
