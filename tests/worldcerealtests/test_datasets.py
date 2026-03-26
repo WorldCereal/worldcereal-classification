@@ -1,5 +1,4 @@
 import unittest
-from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -8,19 +7,15 @@ import pandas as pd
 import xarray as xr
 from prometheo.models import Presto
 from prometheo.models.presto.wrapper import load_presto_weights
-from prometheo.predictors import DEM_BANDS, METEO_BANDS, NODATAVALUE, S1_BANDS, S2_BANDS
-
-from worldcereal.train.datasets import (
-    WorldCerealDataset,
-    WorldCerealLabelledDataset,
-    WorldCerealTrainingDataset,
-    _spatial_bins_from_latlon,
-    align_to_composite_window,
-    get_class_weights,
-    get_dekad_timestamp_components,
-    get_monthly_timestamp_components,
-    run_model_inference,
-)
+from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
+                                  S1_BANDS, S2_BANDS)
+from worldcereal.train.datasets import (WorldCerealDataset,
+                                        WorldCerealLabelledDataset,
+                                        WorldCerealTrainingDataset,
+                                        align_to_composite_window,
+                                        get_dekad_timestamp_components,
+                                        get_monthly_timestamp_components,
+                                        run_model_inference)
 
 
 class TestWorldCerealDataset(unittest.TestCase):
@@ -228,73 +223,50 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertTrue(np.any(inputs["meteo"] != NODATAVALUE))
         self.assertTrue(np.any(inputs["dem"] != NODATAVALUE))
 
-    def test_task_balanced_sampler_combines_weights(self):
-        """Ensure the sampler composes task, class, sample, and spatial weights."""
+    def test_dual_head_batch_sampler_structure(self):
+        """Ensure DualHeadBatchSampler produces valid batches with LC/CT split."""
 
-        class_column_map = {
-            "landcover": "landcover_label",
-            "croptype": "croptype_label",
-        }
-
+        batch_size = 4
         spatial_bin_size = 0.2
 
-        sampler = self.binary_ds.get_task_balanced_sampler(
-            class_column_map=class_column_map,
-            task_weight_method="balanced",
+        sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=batch_size,
+            landcover_column="landcover_label",
+            croptype_column="croptype_label",
             class_weight_method="balanced",
             spatial_bin_size_degrees=spatial_bin_size,
             spatial_weight_method="log",
-            normalize=True,
+            num_batches=10,
         )
 
-        weights = sampler.weights.double().cpu().numpy()
-        self.assertEqual(weights.shape[0], self.num_samples)
+        N = len(self.binary_ds)
+        lc_lo, lc_hi = N, 2 * N  # LC virtual range [N, 2N)
+        ct_lo, ct_hi = 2 * N, 3 * N  # CT virtual range [2N, 3N)
 
-        df = self.binary_ds.dataframe
-        tasks = df["label_task"].astype(str).to_numpy()
+        batches = list(sampler)
+        self.assertEqual(len(batches), 10)
 
-        # landcover supervises every sample when croptype labels exist
-        effective_task_counts = Counter(tasks)
-        if {"landcover", "croptype"}.issubset(effective_task_counts):
-            effective_task_counts["landcover"] = len(tasks)
-        task_weights = get_class_weights(
-            tasks,
-            method="balanced",
-            normalize=True,
-            counts_override=effective_task_counts,
+        for batch in batches:
+            self.assertEqual(len(batch), batch_size)
+            lc_count = sum(1 for idx in batch if lc_lo <= idx < lc_hi)
+            ct_count = sum(1 for idx in batch if ct_lo <= idx < ct_hi)
+            # Each batch should have exactly half LC and half CT
+            self.assertEqual(lc_count, batch_size // 2)
+            self.assertEqual(ct_count, batch_size - batch_size // 2)
+            # All indices should be in the virtual range
+            for idx in batch:
+                self.assertTrue(
+                    lc_lo <= idx < lc_hi or ct_lo <= idx < ct_hi,
+                    f"Index {idx} is outside virtual ranges "
+                    f"LC=[{lc_lo}, {lc_hi}) CT=[{ct_lo}, {ct_hi})",
+                )
+
+    def test_dual_head_batch_sampler_len(self):
+        """Ensure __len__ returns the configured number of batches."""
+        sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=4, num_batches=7
         )
-        expected_task = np.array([task_weights[t] for t in tasks], dtype=np.float64)
-
-        expected_class = np.ones_like(expected_task)
-        for task_name, column in class_column_map.items():
-            mask = tasks == task_name
-            if not np.any(mask):
-                continue
-            class_values = df.loc[mask, column].astype(str).to_numpy()
-            class_weights = get_class_weights(
-                class_values,
-                method="balanced",
-                clip_range=(0.1, 10.0),
-                normalize=True,
-            )
-            expected_class[mask] = np.array(
-                [class_weights[val] for val in class_values], dtype=np.float64
-            )
-
-        spatial_bins = _spatial_bins_from_latlon(df["lat"], df["lon"], spatial_bin_size)
-        spatial_weights = get_class_weights(
-            spatial_bins,
-            method="log",
-            clip_range=(0.1, 10.0),
-            normalize=True,
-        )
-        expected_spatial = np.array(
-            [spatial_weights[str(bin_id)] for bin_id in spatial_bins], dtype=np.float64
-        )
-
-        expected = expected_task * expected_class * expected_spatial
-
-        np.testing.assert_allclose(weights, expected, rtol=1e-6, atol=1e-6)
+        self.assertEqual(len(sampler), 7)
 
     def test_getitem(self):
         """Test __getitem__ returns correct type."""
