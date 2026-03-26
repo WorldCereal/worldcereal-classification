@@ -31,7 +31,7 @@ class date_slider:
         display_interval=2,
         title="Select growing season window:",
         max_window_months: int = 12,
-        min_window_months: int = 1,
+        min_window_months: int = 3,
         default_window_months: int = 6,
         *,
         year_selector: bool = True,

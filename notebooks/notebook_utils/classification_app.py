@@ -3282,7 +3282,7 @@ class WorldCerealClassificationApp:
             description="Export class probabilities",
         )
         croptype_postprocess_enabled = widgets.Checkbox(
-            value=False,
+            value=True,
             description="Enable for crop type",
             description_width="500px",
         )
@@ -3298,7 +3298,7 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="220px"),
         )
         cropland_postprocess_enabled = widgets.Checkbox(
-            value=False,
+            value=True,
             description="Enable for cropland",
             description_width="500px",
         )
@@ -3501,6 +3501,7 @@ class WorldCerealClassificationApp:
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
+        # Get all relevant widgets and parameters from the UI
         status_message = self.tab8_widgets.get("status_message")
         aoi_map = self.tab8_widgets.get("aoi_map")
         season_slider_obj = self.tab8_widgets.get("season_slider")
@@ -3592,36 +3593,6 @@ class WorldCerealClassificationApp:
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
-        croptype_pp_enabled = (
-            croptype_postprocess_enabled.value
-            if croptype_postprocess_enabled is not None
-            else True
-        )
-        croptype_pp_method = (
-            croptype_postprocess_method.value
-            if croptype_postprocess_method is not None
-            else "majority_vote"
-        )
-        croptype_pp_kernel = (
-            croptype_postprocess_kernel.value
-            if croptype_postprocess_kernel is not None
-            else 3
-        )
-        cropland_pp_enabled = (
-            cropland_postprocess_enabled.value
-            if cropland_postprocess_enabled is not None
-            else True
-        )
-        cropland_pp_method = (
-            cropland_postprocess_method.value
-            if cropland_postprocess_method is not None
-            else "majority_vote"
-        )
-        cropland_pp_kernel = (
-            cropland_postprocess_kernel.value
-            if cropland_postprocess_kernel is not None
-            else 3
-        )
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 20
         )
@@ -3665,6 +3636,45 @@ class WorldCerealClassificationApp:
         self.tab8_seasonal_model_url = custom_seasonal_model_url
         self.tab8_landcover_head_url = landcover_head_zip
         self.tab8_croptype_head_url = croptype_head_zip
+
+        # Extract post-processing settings based on user choices, product type and enabled heads
+        croptype_pp_enabled = (
+            croptype_postprocess_enabled.value
+            if croptype_postprocess_enabled is not None
+            else True
+        )
+        croptype_pp_method = (
+            croptype_postprocess_method.value
+            if croptype_postprocess_method is not None
+            else "majority_vote"
+        )
+        croptype_pp_kernel = (
+            croptype_postprocess_kernel.value
+            if croptype_postprocess_kernel is not None
+            else 3
+        )
+        cropland_pp_enabled = (
+            cropland_postprocess_enabled.value
+            if cropland_postprocess_enabled is not None
+            else True
+        )
+        cropland_pp_method = (
+            cropland_postprocess_method.value
+            if cropland_postprocess_method is not None
+            else "majority_vote"
+        )
+        cropland_pp_kernel = (
+            cropland_postprocess_kernel.value
+            if cropland_postprocess_kernel is not None
+            else 3
+        )
+        if product_type == "cropland":
+            # If only cropland product is selected, disable crop type postprocessing
+            croptype_pp_enabled = False
+        else:
+            # if croptype product requested without cropland output nor cropland masking, disable cropland postprocessing
+            if (not enable_cropland_head) and (not mask_cropland):
+                cropland_pp_enabled = False
 
         with log_out:
             print("Using the following models:")
