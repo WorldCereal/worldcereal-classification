@@ -1198,7 +1198,7 @@ class WorldCerealExtractionsApp:
             unique_crop_groups = sorted(unique_samples["sampling_label"].unique())
 
             stats_table = [
-                ["Total Samples", f"{total_samples:,}"],
+                ["Total Samples", f"{total_samples}"],
                 ["Unique Crop Types", f"{total_crop_types}"],
             ]
 
@@ -1232,8 +1232,8 @@ class WorldCerealExtractionsApp:
                 display_table.append(
                     [
                         row["label_full"][:50],  # Truncate long names
-                        f"{row['count']:,}",
-                        f"{row['percentage']:.1f}%",
+                        f"{row['count']}",
+                        f"{row['percentage']}%",
                     ]
                 )
 
