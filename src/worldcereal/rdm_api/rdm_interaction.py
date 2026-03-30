@@ -466,7 +466,7 @@ class RdmInteraction:
 
         # compile list of columns to request
         # ref_id is not part of the parquet files, so should be ignored here
-        columns_str = ", ".join([c for c in columns if c != "ref_id"])
+        columns_str = ", ".join([c for c in columns if c not in ("ref_id", "geometry")])
 
         optional_temporal = (
             f"AND valid_time BETWEEN '{temporal_extent.start_date}' AND '{temporal_extent.end_date}'"

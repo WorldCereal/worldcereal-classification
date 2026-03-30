@@ -35,9 +35,7 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 | :point_up:    | Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. Did you choose "Terrascope" by accident? Then go to File > Hub Control Panel > Stop my server, and click the link below once again.  |
 |---------------|:------------------------|
 
-- For a cropland map generation demo without any model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_default_cropland.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
-
-- For a crop type map generation demo with model training: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_custom_croptype.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20croptype%20demo-Terrascope-brightgreen" alt="Run croptype demo" valign="middle"></a>
+- Access our classification app here: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_classification_app.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
 
 - For a demo on how to interact with the WorldCereal Reference Data Module (RDM): <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_RDM_demo.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20RDM%20demo-Terrascope-brightgreen" alt="Run RDM demo" valign="middle"></a>
 
@@ -57,73 +55,73 @@ Next, install the package locally:
 - **Pip**<br>
 `pip install "worldcereal[train,notebooks] @ git+https://github.com/worldcereal/worldcereal-classification.git"`
 
-WorldCereal requires Python 3.10 or newer.
+WorldCereal requires Python 3.11 or newer.
 
 ## Usage Example
-In its most simple form, a cropland mask can be generated with just few lines of code, triggering an openEO job on CDSE and downloading the result locally:
+In its most simple form, a cropland mask can be generated with just a few lines of code, triggering an openEO job on CDSE and downloading the result locally:
 
 ```python
-from openeo_gfmap import BoundingBoxExtent, TemporalContext
-from worldcereal.job import generate_map
-from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
+import geopandas as gpd
+from openeo_gfmap import TemporalContext
+from shapely.geometry import box
 
-# Specify the spatial extent
-spatial_extent = BoundingBoxExtent(
-    west=44.432274,
-    south=51.317362,
-    east=44.698802,
-    north=51.428224,
-    epsg=4326
+from worldcereal.job import WorldCerealTask
+from worldcereal.job_params import WorldCerealJobParams
+from worldcereal.jobmanager import run_worldcereal_task
+from worldcereal.parameters import WorldCerealProductType
+
+# Define the area of interest as a bounding box (minx, miny, maxx, maxy, EPSG:4326)
+aoi_gdf = gpd.GeoDataFrame(
+    geometry=[box(44.432274, 51.317362, 44.698802, 51.428224)],
+    crs="EPSG:4326",
 )
+aoi_gdf["id"] = "aoi" 
 
-# Specify the temporal extent (this has to be one year)
-temporal_extent = TemporalContext('2022-11-01', '2023-10-31')
+# Specify the temporal extent (for cropland, this has to be a full year)
+temporal_extent = TemporalContext("2022-11-01", "2023-10-31")
 
-# Launch processing job (result will automatically be downloaded)
-results = generate_map(spatial_extent, temporal_extent, output_dir='.')
+# Build the job parameters
+params: WorldCerealJobParams = {
+    "aoi_gdf": aoi_gdf,
+    "output_dir": "./worldcereal_output",
+    "temporal_extent": temporal_extent,
+    "product_type": WorldCerealProductType.CROPLAND,
+}
 
-# Optional: tweak workflow overrides
-from worldcereal.openeo.workflow_config import (
-    WorldCerealWorkflowConfig,
-    SeasonSection,
-    ModelSection,
-)
+# Submit and monitor the job; results are downloaded automatically
+run_worldcereal_task(WorldCerealTask.CLASSIFICATION, params)
 
-workflow_cfg = WorldCerealWorkflowConfig(
-    model=ModelSection(
-        croptype_head_zip="abfs://path/to/custom_croptype_head.zip",  # replace with your asset URI
-        enable_croptype_head=True,
-    ),
-    season=SeasonSection(
-        export_class_probabilities=True,
-        season_ids=["tc-s1", "tc-s2"],
-        season_windows={
-            "tc-s1": ("2020-12-01", "2021-07-31"),
-            "tc-s2": ("2021-04-01", "2021-10-31"),
-        },
-    ),
-    postprocess={
-        "cropland": {"enabled": True, "method": "majority_vote", "kernel_size": 5},
-        "croptype": {
-            "enabled": True,
-            "method": "smooth_probabilities",
-        },
-    },
-)
+```
 
-prob_results = generate_map(
-    spatial_extent,
-    temporal_extent,
-    output_dir='.',
-    workflow_config=workflow_cfg,
-)
+This can easily be extended to also generate a crop type map based on your custom crop type model trained with the WorldCereal system (see our classification app for a detailed walkthrough):
 
-# Prefer chained setters? WorldCerealWorkflowConfig.builder() offers the same knobs.
+```python
+# For crop type classification you must supply at least one season window that
+# covers the growing season of interest.  Each window is a TemporalContext
+# keyed by an arbitrary season identifier.
+season_specifications = {
+    "tc-s1": TemporalContext("2022-11-01", "2023-04-30"),
+}
+
+# You can point to your own crop-type head (a .zip artifact) trained with the
+# WorldCereal training utilities.  Leave croptype_head_zip out (or set it to
+# None) to use the default model.
+croptype_params: WorldCerealJobParams = {
+    "aoi_gdf": aoi_gdf,
+    "output_dir": "./worldcereal_output_croptype",
+    "temporal_extent": temporal_extent,
+    "product_type": WorldCerealProductType.CROPTYPE,
+    "season_specifications": season_specifications,
+    "croptype_head_zip": "/path/to/your/custom_croptype_head.zip",
+}
+
+run_worldcereal_task(WorldCerealTask.CLASSIFICATION, croptype_params)
+
 ```
 
 ## Documentation
 
-Comprehensive documentation is available at the following link: https://worldcereal.github.io/worldcereal-documentation/
+Comprehensive documentation of the classification module is available at the following link: https://worldcereal.github.io/worldcereal-documentation/processing/overview.html
 
 ## Support
 Questions, suggestions, feedback? Use [our forum](https://forum.esa-worldcereal.org/) to get in touch with us and the rest of the community!

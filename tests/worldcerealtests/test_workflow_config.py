@@ -5,6 +5,8 @@ def test_workflow_config_builder_serializes_sections():
     cfg = (
         WorldCerealWorkflowConfigBuilder()
         .export_class_probabilities(True)
+        .export_embeddings(True)
+        .export_ndvi(True)
         .disable_croptype_head()
         .disable_cropland_head()
         .batch_size(512)
@@ -20,6 +22,8 @@ def test_workflow_config_builder_serializes_sections():
     assert cfg_dict["season"]["composite_frequency"] == "dekad"
     assert cfg_dict["model"]["enable_croptype_head"] is False
     assert cfg_dict["model"]["enable_cropland_head"] is False
+    assert cfg_dict["model"]["export_embeddings"] is True
+    assert cfg_dict["model"]["export_ndvi"] is True
     assert cfg_dict["runtime"]["batch_size"] == 512
     assert cfg_dict["runtime"]["device"] == "cuda:0"
     assert cfg_dict["season"]["season_ids"] == ["tc-s1", "tc-s2"]

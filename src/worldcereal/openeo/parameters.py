@@ -6,9 +6,9 @@ from copy import deepcopy
 from typing import Any, Dict
 
 DEFAULT_SEASONAL_MODEL_URL = (
-    "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/"
-    "PhaseII/MultiTask/presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment%3DTrue-"
-    "balance%3DTrue-timeexplicit%3DTrue-masking%3Denabled-run%3D202601240103.zip"
+    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
+    "presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-"
+    "balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip"
 )
 
 DEFAULT_SEASONAL_WORKFLOW_PRESET = "phase_ii_multitask"
@@ -36,6 +36,7 @@ SEASONAL_WORKFLOW_PRESETS: SeasonalWorkflowPresets = {
             "seasonal_model_zip": DEFAULT_SEASONAL_MODEL_URL,
             "landcover_head_zip": None,
             "croptype_head_zip": None,
+            "export_embeddings": False,
         },
         "runtime": {
             "cache_root": None,

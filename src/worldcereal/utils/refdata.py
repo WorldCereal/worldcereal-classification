@@ -18,11 +18,17 @@ from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
 from worldcereal.train import MIN_EDGE_BUFFER
+from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
+
+SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
+SHAREPOINT_FILE_URL = (
+    "Research and Development/Legend/WorldCereal_LC_CT_legend_v2_class_mappings.xlsx"
+)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
-def get_class_mappings() -> Dict:
+def get_class_mappings(source: Literal["sharepoint", "local"] = "local") -> Dict:
     """Method to get the WorldCereal class mappings for downstream task.
 
     Returns
@@ -30,10 +36,20 @@ def get_class_mappings() -> Dict:
     Dict
         the resulting dictionary with the class mappings
     """
-    resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
-    CLASS_MAPPINGS = json.loads(resource.read_text(encoding="utf-8"))
+    if source == "local":
+        resource = importlib.resources.files(croptype_mappings) / "class_mappings.json"  # type: ignore[attr-defined]
+        class_mappings = json.loads(resource.read_text(encoding="utf-8"))
+    elif source == "sharepoint":
+        legend = get_excel_from_sharepoint(
+            site_url=SHAREPOINT_SITE_URL,
+            file_server_relative_url=SHAREPOINT_FILE_URL,
+            sheet_name=0,
+        )
+        class_mappings = build_class_mappings(legend)
+    else:
+        raise ValueError(f"Unsupported source for class mappings: {source}")
 
-    return CLASS_MAPPINGS
+    return class_mappings
 
 
 def get_legend() -> pd.DataFrame:
@@ -346,9 +362,8 @@ AND ewoc_code IN ({ct_list_str})
             collateral_condition = collateral_query_part.replace(
                 "AND ", "WHERE " if not cropland_condition else "AND ", 1
             )
-
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{url}')
 {spatial_condition}
 {cropland_condition}
@@ -492,11 +507,10 @@ AND ewoc_code > 1100000000
         cropland_filter_query_part += f"""
 {prefix} ewoc_code IN ({ct_list_str})
 """
-
     main_query = "SET TimeZone = 'UTC';\n"
     for i, tpath in enumerate(private_collection_paths):
         query = f"""
-SELECT *, ST_AsText(ST_MakeValid(geometry)) AS geom_text
+SELECT * EXCLUDE (geometry), ST_AsText(ST_MakeValid(geometry)) AS geom_text
 FROM read_parquet('{tpath}')
 {spatial_query_part}
 {cropland_filter_query_part}
