@@ -130,6 +130,12 @@ def _drop_outliers(
 def _series_from_column(
     df: pd.DataFrame, column: Optional[str], default: float = 1.0
 ) -> pd.Series:
+    """Return a numeric Series from *column*, falling back to *default*.
+
+    If *column* is ``None`` or absent from *df*, a constant Series filled
+    with *default* is returned so that downstream arithmetic (e.g.
+    multiplicative sample weighting) always has a valid operand.
+    """
     if column and column in df.columns:
         return pd.to_numeric(df[column], errors="coerce").fillna(default).astype(float)
     return pd.Series(default, index=df.index, dtype=float)
