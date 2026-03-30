@@ -21,7 +21,7 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-from worldcereal.train import GLOBAL_SEASON_IDS
+from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER
 from worldcereal.train.backbone import checkpoint_fingerprint
 from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
                                     remove_small_classes)
@@ -725,9 +725,12 @@ def _filter_temporally_invalid_rows(
     )
 
     if augment:
-        # Mirrors _get_center_point for non-ssl branch where np.random.randint is used.
-        min_center = np.maximum(half, valid_pos + 1 - half)
-        max_center = np.minimum(available - half, valid_pos - 1 + half)
+        # Mirrors WorldCerealDataset._get_center_point (non-ssl path).
+        # TODO: refactor _get_center_point into a static/classmethod so this
+        #       pre-check can call it directly instead of duplicating the logic.
+        edge = max(1, MIN_EDGE_BUFFER)
+        min_center = np.maximum(half, valid_pos + edge - half)
+        max_center = np.minimum(available - half, valid_pos - edge + half)
         jitter_valid = (available == num_timesteps) | (min_center <= max_center)
         valid_mask = base_valid & jitter_valid
     else:
