@@ -138,23 +138,23 @@ def subset_ds_temporally(
 
     t_index = ds.t.to_index()
 
-    # Find the first year in ds that can provide the complete window
+    # Use the season's own start year as the anchor — iterating over all years
+    # in the dataset would silently pick the wrong year (e.g. 2022 data for a
+    # 2023 season window) whenever the month numbers happen to match.
+    y = start_dt.year
     selected = None
-    for y in sorted(set(t_index.year)):
-        if wrap:
-            expected = [
-                pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
-                for m in months
-            ]
-        else:
-            expected = [pd.Timestamp(datetime(y, m, 1)) for m in months]
-        if all(ts in t_index for ts in expected):
-            selected = ds.sel(t=expected)
-            break
+    if wrap:
+        expected = [
+            pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
+            for m in months
+        ]
+    else:
+        expected = [pd.Timestamp(datetime(y, m, 1)) for m in months]
+    if all(ts in t_index for ts in expected):
+        selected = ds.sel(t=expected)
 
     if selected is None:
-        # Partial mode: find best year and check coverage against threshold
-        y = min(t_index.year)
+        # Partial mode: check coverage against threshold using the same anchor year
         if wrap:
             expected = [
                 pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
