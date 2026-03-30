@@ -286,7 +286,9 @@ def _drop_zero_quality_samples(
         )
         return df
 
-    # Drop only when ALL quality scores are 0
+    # Drop only when ALL quality scores are 0.
+    # fillna(1.0): treat missing scores as "not zero" so a NaN alone
+    # never causes a sample to be dropped — only explicit zeroes count.
     all_zero = pd.Series(True, index=df.index)
     for col in present_cols:
         scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
