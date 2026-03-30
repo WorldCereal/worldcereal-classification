@@ -638,7 +638,7 @@ def prepare_training_datasets(
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
-    eval_min_season_coverage: Optional[float] = None,
+    eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
@@ -685,14 +685,15 @@ def prepare_training_datasets(
         enabled, the window can shift so that a season is only partially inside
         the window; a value of 0.5 retains the season as long as at least half
         its slots are available.
-    eval_min_season_coverage : float or None, default=None
+    eval_min_season_coverage : float, default=1.0
         Minimum fraction of a season's composite slots required for the
-        **validation and test** splits.  When ``None`` (default), falls back to
-        1.0 (full coverage required).  The previous hard-coded value of 1.0
+        **validation and test** splits.  The default of 1.0 (full coverage)
         works for seasonal windows that fit within the data's timestep count
-        (e.g. tc-s1/tc-s2 at ~6 months), but is unreachable for annual windows
-        that span more timesteps than the data provides (e.g. 13 monthly slots
-        vs 12-month data), causing nearly all samples to be silently dropped.
+        (e.g. tc-s1/tc-s2 at ~6 months), but may be unreachable for annual
+        seasons or shorter seasons that span more timesteps than the data
+        provides (e.g. 13 monthly slots vs 12-month data), causing nearly
+        all samples to be silently dropped.  Lower this value (e.g. 0.8)
+        when evaluating on such seasons.
     season_ids : Optional[Sequence[str]], default=None
         Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
         or ``("annual",)``).  When ``None`` the dataset falls back to
@@ -719,11 +720,6 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
     )
-    effective_eval_coverage = (
-        eval_min_season_coverage
-        if eval_min_season_coverage is not None
-        else 1.0
-    )
     val_ds = WorldCerealLabelledDataset(
         val_df,
         num_timesteps=num_timesteps,
@@ -737,7 +733,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for validation
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
-        min_season_coverage=effective_eval_coverage,
+        min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
     )
     test_ds = WorldCerealLabelledDataset(
@@ -753,7 +749,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for testing
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
-        min_season_coverage=effective_eval_coverage,
+        min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
     )
     return train_ds, val_ds, test_ds
@@ -1911,18 +1907,16 @@ def run_finetuning(
                 )
             setattr(model, "_last_validation_context", validation_context)
 
-            _best_loss_value = best_loss if best_loss is not None else early_stop_loss
-
             if on_validation_improved is not None:
                 try:
-                    on_validation_improved(epoch + 1, model, _best_loss_value)
+                    on_validation_improved(epoch + 1, model, best_loss)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
             checkpoint_model = deepcopy(model)
-            _save_best(epoch + 1, checkpoint_model, _best_loss_value)
+            _save_best(epoch + 1, checkpoint_model, best_loss)
 
         _val_loss_str = (
             f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"

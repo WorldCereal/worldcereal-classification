@@ -760,7 +760,7 @@ def main(args):
     # With augmentation the window shifts randomly so a lower threshold prevents spurious
     # loss of croptype supervision signal.
     train_min_season_coverage: float = args.train_min_season_coverage
-    eval_min_season_coverage: Optional[float] = args.eval_min_season_coverage
+    eval_min_season_coverage: float = args.eval_min_season_coverage
 
     # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
     season_ids: Optional[Tuple[str, ...]] = (
@@ -1994,12 +1994,12 @@ def parse_args(arg_list=None):
         type=float,
         default=1.0,
         help=(
-            "Minimum fraction of a season's composite slots required for val/test "
-            "splits.  When omitted, uses the default value of 1.0 (which can cause "
-            "issues for annual seasons while calendars allow for annual seasons to be >12 months)."
-            "If set to a value less than 1.0, this allows seasons that are not fully covered "
-            "by the 12-timestamp window to be included in evaluation, which can be helpful for "
-            "annual seasons that may span more than 12 months in some regions according to the crop calendar."
+            "Minimum fraction of a season's composite slots required for "
+            "val/test splits.  Default 1.0 requires full coverage, which "
+            "works well for seasons that fit within the 12 selected "
+            "timestamps.  Lower this (e.g. 0.8) when evaluating on annual "
+            "seasons whose calendars exceed 12 months, or shorter seasons "
+            "that are not fully captured by the selected timestamp window."
         ),
     )
 
