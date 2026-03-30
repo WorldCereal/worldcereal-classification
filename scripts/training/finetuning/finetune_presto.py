@@ -5,7 +5,8 @@ import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
+                    cast)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,25 +21,17 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-
 from worldcereal.train import GLOBAL_SEASON_IDS
 from worldcereal.train.backbone import checkpoint_fingerprint
-from worldcereal.train.data import (
-    collate_fn,
-    get_training_dfs_from_parquet,
-    remove_small_classes,
-)
+from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
+                                    remove_small_classes)
 from worldcereal.train.datasets import SensorMaskingConfig
-from worldcereal.train.finetuning_utils import (
-    SeasonalMultiTaskLoss,
-    evaluate_finetuned_model,
-    prepare_training_datasets,
-    run_finetuning,
-)
-from worldcereal.train.seasonal_head import (
-    SeasonalFinetuningHead,
-    WorldCerealSeasonalModel,
-)
+from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
+                                                evaluate_finetuned_model,
+                                                prepare_training_datasets,
+                                                run_finetuning)
+from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
+                                             WorldCerealSeasonalModel)
 from worldcereal.utils.refdata import get_class_mappings
 
 CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
@@ -80,6 +73,7 @@ def _is_ignore_label(value) -> bool:
     try:
         return str(value).strip().lower() == "ignore"
     except Exception:  # noqa: BLE001
+        logger.warning(f"Could not parse label value {value!r} as string; treating as non-ignore.")
         return False
 
 
