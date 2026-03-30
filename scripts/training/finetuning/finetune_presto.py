@@ -142,8 +142,13 @@ def _series_from_column(
 
 
 def _normalize_score(series: pd.Series) -> pd.Series:
-    """Rescale 0-100 scores to 0-1 and clip to [0, 1]."""
-    if series.max() > 1.0:
+    """Rescale 0-100 integer scores to 0-1 and clip to [0, 1].
+
+    Uses a threshold of 1.5 to distinguish genuine 0-100 encoded scores
+    from values already in [0, 1] that may slightly exceed 1.0 due to
+    floating-point noise.  The final clip handles any residual overshoot.
+    """
+    if series.max() > 1.5:
         series = series / 100.0
     return series.clip(0.0, 1.0)
 
