@@ -273,13 +273,9 @@ def _filter_low_weight_eval_samples(
     w = df[present_weight_cols].min(axis=1)
 
     # Per-ref_id percentile threshold
-    ref_col = "ref_id" if "ref_id" in df.columns else None
-    if ref_col:
-        pct_threshold = df.assign(_w=w).groupby(ref_col)["_w"].transform(
-            lambda s: np.percentile(s, percentile)
-        )
-    else:
-        pct_threshold = np.percentile(w, percentile)
+    pct_threshold = df.assign(_w=w).groupby("ref_id")["_w"].transform(
+        lambda s: np.percentile(s, percentile)
+    )
 
     # Mark: relatively bad AND absolutely bad
     remove_mask = (w < pct_threshold) & (w < hard_floor)
@@ -325,21 +321,20 @@ def _filter_low_weight_eval_samples(
     )
 
     # Per-ref_id breakdown
-    if ref_col:
-        ref_counts = removed_df[ref_col].value_counts().sort_values(ascending=False)
-        champion_ref = ref_counts.index[0]
-        champion_count = int(ref_counts.iloc[0])
-        logger.warning(
-            f"{split_name}: top ref_id for removals: '{champion_ref}' "
-            f"({champion_count} samples). "
-            f"Total ref_ids affected: {len(ref_counts)}."
-        )
-        # Log up to top 15 ref_ids
-        top_refs = ref_counts.head(15)
-        logger.warning(
-            f"{split_name}: per-ref_id removal counts (top 15):\n"
-            + top_refs.to_string()
-        )
+    ref_counts = removed_df["ref_id"].value_counts().sort_values(ascending=False)
+    champion_ref = ref_counts.index[0]
+    champion_count = int(ref_counts.iloc[0])
+    logger.warning(
+        f"{split_name}: top ref_id for removals: '{champion_ref}' "
+        f"({champion_count} samples). "
+        f"Total ref_ids affected: {len(ref_counts)}."
+    )
+    # Log up to top 15 ref_ids
+    top_refs = ref_counts.head(15)
+    logger.warning(
+        f"{split_name}: per-ref_id removal counts (top 15):\n"
+        + top_refs.to_string()
+    )
 
     # Weight distribution of removed samples
     removed_weights = w[remove_mask]
