@@ -1530,7 +1530,6 @@ def main(args):
         "landcover_weight": args.seasonal_loss_landcover_weight,
         "croptype_weight": args.seasonal_loss_croptype_weight,
         "cropland_class_names": cropland_class_names,
-        "sample_weight_strategy": args.sample_weight_strategy,
         "sample_weight_mapping": sample_weight_mapping,
     }
     run_config = {
@@ -1839,19 +1838,6 @@ def parse_args(arg_list=None):
         type=float,
         default=10.0,
         help="Upper bound applied to sampler weights when balancing is enabled.",
-    )
-    parser.add_argument(
-        "--sample_weight_strategy",
-        type=str,
-        default="quality",
-        choices=["none", "quality"],
-        help=(
-            "Controls which score components are multiplied into the per-sample "
-            "loss weight.  'quality' uses quality_score × confidence_nonoutlier; "
-            "'none' uses confidence_nonoutlier only (quality factor set to 1.0). "
-            "Note: this is soft weighting only — it does not remove samples.  "
-            "Use --outlier_mode for hard removal of anomaly-flagged samples."
-        ),
     )
     parser.add_argument(
         "--eval_weight_floor",
