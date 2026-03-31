@@ -387,12 +387,7 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
     if not table.index.is_unique:
         raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
 
-    # Keep all DOY columns registered in SEASONALITY_COLUMN_MAP that exist in
-    # the parquet. This allows newer lookup parquets (with annual columns) to work
-    # without breaking backward compatibility with older 4-column files.
-    all_known_cols = {col for pair in SEASONALITY_COLUMN_MAP.values() for col in pair}
-    keep_cols = sorted(col for col in all_known_cols if col in table.columns)
-    _SEASONALITY_LOOKUP_TABLE = table[keep_cols].sort_index()
+    _SEASONALITY_LOOKUP_TABLE = table[list(SEASONALITY_LOOKUP_COLUMNS)].sort_index()
     return _SEASONALITY_LOOKUP_TABLE
 
 
