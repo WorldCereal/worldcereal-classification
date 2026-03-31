@@ -1965,7 +1965,7 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--val_loss_ema_alpha",
         type=float,
-        default=0.0,
+        default=0.3,
         help=(
             "Exponential moving average alpha for smoothing val loss used in early stopping "
             "and best-model selection. 0.0 disables smoothing (raw val loss is used directly). "
