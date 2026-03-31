@@ -763,12 +763,11 @@ def main(args):
     eval_min_season_coverage: float = args.eval_min_season_coverage
 
     # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
-    season_ids: Optional[Tuple[str, ...]] = (
-        tuple(args.season_ids) if args.season_ids else None
-    )
+    season_ids: Tuple[str, ...] = tuple(args.season_ids)
+    is_default_seasons = season_ids == GLOBAL_SEASON_IDS
     logger.info(
-        f"Season IDs: {season_ids or GLOBAL_SEASON_IDS}"
-        + (" (default)" if season_ids is None else " (custom)")
+        f"Season IDs: {season_ids}"
+        + (" (default)" if is_default_seasons else " (custom)")
     )
 
     # Presto freezing settings
@@ -1510,7 +1509,7 @@ def main(args):
         "time_explicit": time_explicit,
         "label_jitter": label_jitter,
         "label_window": label_window,
-        "season_ids": list(season_ids) if season_ids else list(GLOBAL_SEASON_IDS),
+        "season_ids": list(season_ids),
         "train_min_season_coverage": train_min_season_coverage,
         "eval_min_season_coverage": eval_min_season_coverage,
         "masking": masking_payload,
@@ -2011,7 +2010,7 @@ def parse_args(arg_list=None):
         "--season_ids",
         type=str,
         nargs="*",
-        default=None,
+        default=GLOBAL_SEASON_IDS,
         help=(
             "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'tc-annual'). "
             "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2). "
