@@ -1458,14 +1458,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
     def __getitem__(self, idx):
-        # ---------------------------------------------------------------------------
-        # Virtual-index decoding for DualHeadBatchSampler
-        # The sampler encodes task assignment into the index to avoid mutating the
-        # dataframe across worker processes:
-        #   [N, 2N)  → LC-assigned  (real_idx = idx - N,   label_task = "landcover")
-        #   [2N, 3N) → CT-assigned  (real_idx = idx - 2N,  label_task = "croptype")
-        #   [0, N)   → natural idx  (val/test: label_task read from the dataframe)
-        # ---------------------------------------------------------------------------
+        # During dual-task training the DualHeadBatchSampler tells each sample
+        # which head it should supervise (landcover or croptype) by shifting its
+        # index: indices in [N..2N) are landcover, [2N..3N) are croptype.
+        # We decode the real row index and the intended task here, so the
+        # dataframe itself never needs to be mutated (important for multi-worker
+        # data loading).  Plain [0..N) indices are used during validation/test.
         n = len(self.dataframe)
         if idx >= 2 * n:
             real_idx = idx - 2 * n
@@ -1475,7 +1473,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             task_override = "landcover"
         else:
             real_idx = idx
-            task_override = None  # use label_task stored in the dataframe row
+            task_override = None
 
         row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
