@@ -629,9 +629,8 @@ def _filter_temporally_invalid_rows(
         # Mirrors WorldCerealDataset._get_center_point (non-ssl path).
         # TODO: refactor _get_center_point into a static/classmethod so this
         #       pre-check can call it directly instead of duplicating the logic.
-        edge = max(1, MIN_EDGE_BUFFER)
-        min_center = np.maximum(half, valid_pos + edge - half)
-        max_center = np.minimum(available - half, valid_pos - edge + half)
+        min_center = np.maximum(half, valid_pos + MIN_EDGE_BUFFER - half)
+        max_center = np.minimum(available - half, valid_pos - MIN_EDGE_BUFFER + half)
         jitter_valid = (available == num_timesteps) | (min_center <= max_center)
         valid_mask = base_valid & jitter_valid
     else:
