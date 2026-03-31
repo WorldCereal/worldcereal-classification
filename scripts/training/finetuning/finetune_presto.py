@@ -1773,7 +1773,7 @@ def parse_args(arg_list=None):
             "Northern America, Melanesia, None, Southern Asia,"
             "Australia and New Zealand, Southern Africa"
         ),
-    )
+    )eval
 
     # Task setup
     parser.add_argument("--initial_mapping", type=str, default="LANDCOVER10")
@@ -1853,8 +1853,11 @@ def parse_args(arg_list=None):
         default="quality",
         choices=["none", "quality"],
         help=(
-            "Enable sample-level weighting using quality/confidence scores. "
-            "Outlier weighting is always applied when confidence_nonoutlier columns are available."
+            "Controls which score components are multiplied into the per-sample "
+            "loss weight.  'quality' uses quality_score × confidence_nonoutlier; "
+            "'none' uses confidence_nonoutlier only (quality factor set to 1.0). "
+            "Note: this is soft weighting only — it does not remove samples.  "
+            "Use --outlier_mode for hard removal of anomaly-flagged samples."
         ),
     )
     parser.add_argument(
