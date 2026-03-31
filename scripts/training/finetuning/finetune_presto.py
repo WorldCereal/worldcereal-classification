@@ -1691,7 +1691,7 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--croptype_classes_key",
         type=str,
-        default="CROPTYPE2",
+        default="CROPTYPE24",
         help="Class mapping key used for crop-type targets in the dual-head configuration.",
     )
     parser.add_argument(
@@ -1772,7 +1772,7 @@ def parse_args(arg_list=None):
             "Northern America, Melanesia, None, Southern Asia,"
             "Australia and New Zealand, Southern Africa"
         ),
-    )eval
+    )
 
     # Task setup
     parser.add_argument("--initial_mapping", type=str, default="LANDCOVER10")
