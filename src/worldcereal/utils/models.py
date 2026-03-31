@@ -6,7 +6,6 @@ import logging
 import shutil
 import tempfile
 import urllib.parse
-import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +16,8 @@ from typing import (
     Optional,
     Sequence,
 )
+
+import httpx
 
 try:
     from loguru import logger
@@ -63,11 +64,11 @@ def _download_artifact(source: str, cache_root: Path) -> Path:
         if target.exists():
             return target
         logger.info(f"Downloading seasonal model artifact from {source}")
-        with (
-            urllib.request.urlopen(source) as resp,
-            open(target, "wb") as fh,
-        ):  # nosec: B310
-            shutil.copyfileobj(resp, fh)
+        with httpx.Client(http2=True) as client:
+            response = client.get(source)
+            logger.debug(f"HTTP version: {response.http_version}")
+            response.raise_for_status()
+            target.write_bytes(response.content)
         return target
     path = Path(source)
     if not path.exists():
