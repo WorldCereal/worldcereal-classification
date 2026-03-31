@@ -1907,6 +1907,11 @@ def run_finetuning(
                 )
             setattr(model, "_last_validation_context", validation_context)
 
+            # best_loss is guaranteed non-None here: on the first epoch
+            # best_loss is None → loss_improved is True → best_loss is set
+            # before we ever reach this block.
+            assert best_loss is not None
+
             if on_validation_improved is not None:
                 try:
                     on_validation_improved(epoch + 1, model, best_loss)
