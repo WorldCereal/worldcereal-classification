@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import duckdb
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -65,13 +66,6 @@ def _attach_regions_from_boundaries(
     boundaries_path: Path,
     target_mask: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
-    try:
-        import geopandas as gpd
-    except Exception as exc:  # noqa: BLE001
-        raise ImportError(
-            "Region enrichment requires geopandas. Install it or disable region filtering."
-        ) from exc
-
     if "lat" not in df.columns or "lon" not in df.columns:
         raise ValueError("Region enrichment requires 'lat' and 'lon' columns.")
 
