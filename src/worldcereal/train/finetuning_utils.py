@@ -1432,8 +1432,6 @@ def run_finetuning(
     best_model_dict = None
     epochs_since_improvement = 0
     ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
-    best_lc_f1: float = -1.0  # Best landcover macro F1 seen so far
-    best_ct_f1: float = -1.0  # Best croptype macro F1 seen so far
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1570,11 +1568,9 @@ def run_finetuning(
                 f"was {epochs_since_improvement}/{hyperparams.patience}."
             )
             epochs_since_improvement = 0
-            best_lc_f1 = -1.0
-            best_ct_f1 = -1.0
             if val_loss_ema_alpha > 0.0:
                 ema_val_loss = None  # Restart EMA for the new optimization regime.
-                logger.info("EMA val loss and F1 bests reset at encoder unfreeze.")
+                logger.info("EMA val loss reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -1852,34 +1848,16 @@ def run_finetuning(
             else current_val_loss
         )
 
-        # --- Relaxed improvement: patience resets if ANY signal improves ---
+        # --- Early stopping: patience resets only when loss improves ---
         loss_improved = best_loss is None or early_stop_loss < best_loss
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
-        lc_f1_improved = cur_lc_f1 > best_lc_f1 and cur_lc_f1 > 0
-        ct_f1_improved = cur_ct_f1 > best_ct_f1 and cur_ct_f1 > 0
-        any_improved = loss_improved or lc_f1_improved or ct_f1_improved
 
-        # Always update best-seen values for each signal independently
         if loss_improved:
             best_loss = early_stop_loss
-        if lc_f1_improved:
-            best_lc_f1 = cur_lc_f1
-        if ct_f1_improved:
-            best_ct_f1 = cur_ct_f1
-
-        if any_improved:
             epochs_since_improvement = 0
-            # Log which signal(s) triggered the improvement
-            triggers = []
-            if loss_improved:
-                triggers.append(f"loss={early_stop_loss:.4f}")
-            if lc_f1_improved:
-                triggers.append(f"lc_f1={cur_lc_f1:.4f}")
-            if ct_f1_improved:
-                triggers.append(f"ct_f1={cur_ct_f1:.4f}")
             logger.info(
-                f"Epoch {epoch + 1}: improvement detected via {', '.join(triggers)}"
+                f"Epoch {epoch + 1}: val loss improved to {early_stop_loss:.4f}"
             )
         else:
             epochs_since_improvement += 1
@@ -1929,13 +1907,8 @@ def run_finetuning(
             else f"{current_val_loss:.4f}"
         )
         _f1_str = ""
-        if best_lc_f1 > 0 or best_ct_f1 > 0:
-            _f1_str = (
-                f" | F1 lc={cur_lc_f1:.3f}"
-                f"{'↑' if lc_f1_improved else ''}"
-                f" ct={cur_ct_f1:.3f}"
-                f"{'↑' if ct_f1_improved else ''}"
-            )
+        if cur_lc_f1 > 0 or cur_ct_f1 > 0:
+            _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
