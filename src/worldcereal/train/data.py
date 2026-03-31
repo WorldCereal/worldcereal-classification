@@ -1021,9 +1021,16 @@ def get_training_dfs_from_parquet(
             _data = pd.read_parquet(f, engine="fastparquet")
             _ref_id = Path(f).stem
             _data["ref_id"] = _ref_id
+            filled_optional = []
             for col, default in OPTIONAL_COLS.items():
                 if col not in _data.columns:
                     _data[col] = default
+                    filled_optional.append(col)
+            if filled_optional:
+                logger.warning(
+                    f"{_ref_id}: filled missing optional columns with defaults: "
+                    f"{', '.join(f'{c}={OPTIONAL_COLS[c]}' for c in filled_optional)}"
+                )
             _data = _data[REQUIRED_COLS + list(OPTIONAL_COLS.keys())]
             _data_pivot = process_parquet(
                 _data,
