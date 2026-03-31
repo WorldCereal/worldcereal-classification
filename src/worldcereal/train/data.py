@@ -1126,11 +1126,11 @@ def get_training_dfs_from_parquet(
         df = _attach_regions_from_boundaries(
             df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
         )
-        # if not is_tempfile:
-        #     df.to_parquet(wide_parquet_output_path, index=False)
-        # logger.info(
-        #     f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
-        # )
+        if not is_tempfile:
+            df.to_parquet(wide_parquet_output_path, index=False)
+        logger.info(
+            f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
+        )
     elif normalized_regions is not None and "region" not in df.columns:
         raise ValueError(
             "Region filtering requested but no region labels were found or generated."
