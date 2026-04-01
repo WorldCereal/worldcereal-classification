@@ -75,7 +75,6 @@ POSTPROCESS_KERNEL_SIZE=3 # only used if method is "majority_vote"
 --year "${YEAR}" \
 --product "${PRODUCT}" \
 --output_folder "${OUTPUT_FOLDER}" \
---parallel_jobs "${PARALLEL_JOBS}" \
 --restart_failed \
 --enable-cropland-postprocess \
 --enable-croptype-postprocess \
