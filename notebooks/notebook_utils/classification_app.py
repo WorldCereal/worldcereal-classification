@@ -1271,7 +1271,7 @@ class WorldCerealClassificationApp:
         load_input = widgets.Text(
             value="",
             description="Path:",
-            placeholder="./training_extractions/extractions_YYYYMMDD-HHMMSS.parquet",
+            placeholder="./training_extractions/extractions_{aoi}_{YYYYMMDD-HHMMSS}.parquet",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         load_button = widgets.Button(
@@ -1476,7 +1476,8 @@ class WorldCerealClassificationApp:
                 self._geometry_to_wkt(df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
             except Exception as exc:
-                print(f"Failed to save extractions: {exc}")
+                print(f"Error: failed to save extractions: {exc}")
+                raise
 
     def _on_tab2_load_extractions(self, _=None) -> None:
         """Load extractions from a parquet file on disk into Tab 2."""
@@ -1660,7 +1661,7 @@ class WorldCerealClassificationApp:
         tab3_load_input = widgets.Text(
             value="",
             description="Path:",
-            placeholder="./training_extractions/extractions_YYYYMMDD-HHMMSS.parquet",
+            placeholder="./training_extractions/extractions_{aoi}_{YYYYMMDD-HHMMSS}.parquet",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         tab3_load_button = widgets.Button(
@@ -2095,10 +2096,11 @@ class WorldCerealClassificationApp:
                 name_parts = [p for p in [aoi_part, season_part, timestamp] if p]
                 filename = "extractions_aligned_" + "_".join(name_parts) + ".parquet"
                 out_path = out_dir / filename
-                df.to_parquet(out_path, index=False)
+                self._geometry_to_wkt(df).to_parquet(out_path, index=False)
                 print(f"Aligned extractions saved to: {out_path}")
             except Exception as exc:
-                print(f"Warning: could not save aligned extractions: {exc}")
+                print(f"Error: could not save aligned extractions: {exc}")
+                raise
 
     def _on_tab4_load_aligned(self, _=None) -> None:
         """Load aligned extractions from a parquet file on disk into Tab 4."""
@@ -2117,10 +2119,10 @@ class WorldCerealClassificationApp:
                 print(f"File not found: {path}")
                 return
             try:
-                df = pd.read_parquet(path)
+                df = self._wkt_to_geometry(pd.read_parquet(path))
             except Exception as exc:
                 print(f"Failed to load file: {exc}")
-                return
+                raise
             required = {"sample_id", "ref_id", "ewoc_code"}
             missing = required - set(df.columns)
             if missing:
@@ -2396,7 +2398,7 @@ class WorldCerealClassificationApp:
         load_aligned_input = widgets.Text(
             value="",
             description="Path:",
-            placeholder="./training_extractions_aligned/extractions_aligned_YYYYMMDD-HHMMSS.parquet",
+            placeholder="./training_extractions_aligned/extractions_aligned_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_{YYYYMMDD-HHMMSS}.parquet",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         load_aligned_button = widgets.Button(
@@ -2520,7 +2522,7 @@ class WorldCerealClassificationApp:
         load_input = widgets.Text(
             value="",
             description="Full path to your training dataframe:",
-            placeholder="/path/to/training_df_season-YYYYMMDD-YYYYMMDD_cl-x_YYYYMMDD-HHMMSS.csv",
+            placeholder="./training_dataframe/trainingdf_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_cl-{n}_{YYYYMMDD-HHMMSS}.csv",
             layout=widgets.Layout(width="100%"),
             description_width="250px",
             tooltip="Provide the full path to a previously saved training dataframe resulting from steps 1-4.",
@@ -3166,7 +3168,7 @@ class WorldCerealClassificationApp:
         load_input = widgets.Text(
             value="",
             description="Full path to embeddings:",
-            placeholder="/path/to/embeddings_YYYYMMDD-HHMMSS.csv",
+            placeholder="./embeddings/embeddings_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_cl-{n}_{YYYYMMDD-HHMMSS}.csv",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         load_button = widgets.Button(
