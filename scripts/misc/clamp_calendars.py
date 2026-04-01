@@ -313,7 +313,7 @@ def clamp_tifs(folder: Path) -> None:
     for col in modified_cols:
         _backup(folder / TIF_NAMES[col], orig_dir)
 
-    print(f"\n  Writing updated TIFs …")
+    print("\n  Writing updated TIFs …")
     for col, tif_name in tifs_to_write.items():
         tif_path = folder / tif_name
         profile  = profiles[col]
