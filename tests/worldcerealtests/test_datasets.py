@@ -1,5 +1,4 @@
 import unittest
-from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -14,9 +13,7 @@ from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
     WorldCerealTrainingDataset,
-    _spatial_bins_from_latlon,
     align_to_composite_window,
-    get_class_weights,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
     run_model_inference,
@@ -228,73 +225,81 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertTrue(np.any(inputs["meteo"] != NODATAVALUE))
         self.assertTrue(np.any(inputs["dem"] != NODATAVALUE))
 
-    def test_task_balanced_sampler_combines_weights(self):
-        """Ensure the sampler composes task, class, sample, and spatial weights."""
+    def test_dual_head_batch_sampler_structure(self):
+        """Ensure DualHeadBatchSampler produces valid batches with LC/CT split."""
 
-        class_column_map = {
-            "landcover": "landcover_label",
-            "croptype": "croptype_label",
-        }
-
+        batch_size = 4
         spatial_bin_size = 0.2
 
-        sampler = self.binary_ds.get_task_balanced_sampler(
-            class_column_map=class_column_map,
-            task_weight_method="balanced",
+        sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=batch_size,
+            landcover_column="landcover_label",
+            croptype_column="croptype_label",
             class_weight_method="balanced",
             spatial_bin_size_degrees=spatial_bin_size,
             spatial_weight_method="log",
-            normalize=True,
+            num_batches=10,
         )
 
-        weights = sampler.weights.double().cpu().numpy()
-        self.assertEqual(weights.shape[0], self.num_samples)
+        N = len(self.binary_ds)
+        lc_lo, lc_hi = N, 2 * N  # LC virtual range [N, 2N)
+        ct_lo, ct_hi = 2 * N, 3 * N  # CT virtual range [2N, 3N)
 
-        df = self.binary_ds.dataframe
-        tasks = df["label_task"].astype(str).to_numpy()
+        batches = list(sampler)
+        self.assertEqual(len(batches), 10)
 
-        # landcover supervises every sample when croptype labels exist
-        effective_task_counts = Counter(tasks)
-        if {"landcover", "croptype"}.issubset(effective_task_counts):
-            effective_task_counts["landcover"] = len(tasks)
-        task_weights = get_class_weights(
-            tasks,
-            method="balanced",
-            normalize=True,
-            counts_override=effective_task_counts,
+        for batch in batches:
+            self.assertEqual(len(batch), batch_size)
+            lc_count = sum(1 for idx in batch if lc_lo <= idx < lc_hi)
+            ct_count = sum(1 for idx in batch if ct_lo <= idx < ct_hi)
+            # Each batch should have exactly half LC and half CT
+            self.assertEqual(lc_count, batch_size // 2)
+            self.assertEqual(ct_count, batch_size - batch_size // 2)
+            # All indices should be in the virtual range
+            for idx in batch:
+                self.assertTrue(
+                    lc_lo <= idx < lc_hi or ct_lo <= idx < ct_hi,
+                    f"Index {idx} is outside virtual ranges "
+                    f"LC=[{lc_lo}, {lc_hi}) CT=[{ct_lo}, {ct_hi})",
+                )
+
+    def test_dual_head_batch_sampler_len(self):
+        """Ensure __len__ returns the configured number of batches."""
+        sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=4, num_batches=7
         )
-        expected_task = np.array([task_weights[t] for t in tasks], dtype=np.float64)
+        self.assertEqual(len(sampler), 7)
 
-        expected_class = np.ones_like(expected_task)
-        for task_name, column in class_column_map.items():
-            mask = tasks == task_name
-            if not np.any(mask):
-                continue
-            class_values = df.loc[mask, column].astype(str).to_numpy()
-            class_weights = get_class_weights(
-                class_values,
-                method="balanced",
-                clip_range=(0.1, 10.0),
-                normalize=True,
-            )
-            expected_class[mask] = np.array(
-                [class_weights[val] for val in class_values], dtype=np.float64
-            )
+    def test_getitem_lc_virtual_index(self):
+        """Feeding an LC virtual index [N, 2N) should override label_task to 'landcover'."""
+        N = len(self.binary_ds)
+        # Pick a sample whose dataframe label_task is 'croptype'
+        croptype_rows = self.df.index[self.df["label_task"] == "croptype"].tolist()
+        self.assertTrue(len(croptype_rows) > 0, "Need at least one croptype row")
+        real_idx = croptype_rows[0]
+        virtual_idx = N + real_idx  # LC virtual range
 
-        spatial_bins = _spatial_bins_from_latlon(df["lat"], df["lon"], spatial_bin_size)
-        spatial_weights = get_class_weights(
-            spatial_bins,
-            method="log",
-            clip_range=(0.1, 10.0),
-            normalize=True,
-        )
-        expected_spatial = np.array(
-            [spatial_weights[str(bin_id)] for bin_id in spatial_bins], dtype=np.float64
-        )
+        _, attrs = self.binary_ds[virtual_idx]
+        self.assertEqual(attrs["label_task"], "landcover")
 
-        expected = expected_task * expected_class * expected_spatial
+    def test_getitem_ct_virtual_index(self):
+        """Feeding a CT virtual index [2N, 3N) should override label_task to 'croptype'."""
+        N = len(self.binary_ds)
+        # Pick a sample whose dataframe label_task is 'landcover'
+        lc_rows = self.df.index[self.df["label_task"] == "landcover"].tolist()
+        self.assertTrue(len(lc_rows) > 0, "Need at least one landcover row")
+        real_idx = lc_rows[0]
+        virtual_idx = 2 * N + real_idx  # CT virtual range
 
-        np.testing.assert_allclose(weights, expected, rtol=1e-6, atol=1e-6)
+        _, attrs = self.binary_ds[virtual_idx]
+        self.assertEqual(attrs["label_task"], "croptype")
+
+    def test_getitem_natural_index(self):
+        """Natural index [0, N) should preserve label_task from the dataframe."""
+        for i in range(len(self.binary_ds)):
+            _, attrs = self.binary_ds[i]
+            expected = self.df.iloc[i]["label_task"]
+            self.assertEqual(attrs["label_task"], expected)
 
     def test_getitem(self):
         """Test __getitem__ returns correct type."""
@@ -1335,6 +1340,88 @@ class TestRepeatHandling(unittest.TestCase):
         self.assertEqual(len(ds), len(self.df_training) * 4)
         expected = list(range(len(self.df_training))) * 4
         self.assertListEqual(ds.indices, expected)
+
+
+class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
+    """Verify that season_masks.shape[1] == num_timesteps for various sizes."""
+
+    @staticmethod
+    def _build_df(num_samples, num_timesteps):
+        """Build a minimal dataframe with enough timestep columns."""
+        # Extend end_date so that monthly timestamp generation covers all positions.
+        # get_monthly_timestamp_components generates one timestamp per month from
+        # start_date to end_date, so we need at least (num_timesteps + 6) months.
+        total_ts = num_timesteps + 6
+        start = pd.Timestamp("2021-01-01")
+        end = start + pd.DateOffset(months=total_ts)
+        data = {
+            "lat": [45.0] * num_samples,
+            "lon": [5.0] * num_samples,
+            "start_date": [str(start.date())] * num_samples,
+            "end_date": [str(end.date())] * num_samples,
+            "valid_time": ["2021-07-01"] * num_samples,
+            "available_timesteps": [total_ts] * num_samples,
+            "valid_position": [num_timesteps // 2] * num_samples,
+        }
+        # Need enough timestep columns: num_timesteps + 6 for augmentation headroom
+        total_ts = num_timesteps + 6
+        for ts in range(total_ts):
+            for tpl in [
+                "OPTICAL-B02-ts{}-10m", "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m", "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m", "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m", "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m", "OPTICAL-B12-ts{}-20m",
+                "SAR-VH-ts{}-20m", "SAR-VV-ts{}-20m",
+                "METEO-precipitation_flux-ts{}-100m",
+                "METEO-temperature_mean-ts{}-100m",
+            ]:
+                data[tpl.format(ts)] = [1000] * num_samples
+        data["DEM-alt-20m"] = [100] * num_samples
+        data["DEM-slo-20m"] = [5] * num_samples
+        df = pd.DataFrame(data)
+        df["finetune_class"] = ["cropland"] * num_samples
+        df["label_task"] = ["landcover"] * num_samples
+        df["landcover_label"] = ["lc_a"] * num_samples
+        df["croptype_label"] = ["ct_a"] * num_samples
+        return df
+
+    def test_season_mask_shape_8_timesteps(self):
+        """With num_timesteps=8, season_masks should have shape (S, 8)."""
+        df = self._build_df(2, 8)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            num_timesteps=8, season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 8)
+        # Default 2 seasons (tc-s1, tc-s2)
+        self.assertEqual(masks.shape[0], 2)
+
+    def test_season_mask_shape_18_timesteps(self):
+        """With num_timesteps=18, season_masks should have shape (S, 18)."""
+        df = self._build_df(2, 18)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            num_timesteps=18, season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 18)
+        self.assertEqual(masks.shape[0], 2)
+
+    def test_season_mask_shape_default_12_timesteps(self):
+        """With default num_timesteps=12, season_masks should have shape (S, 12)."""
+        df = self._build_df(2, 12)
+        ds = WorldCerealLabelledDataset(
+            df, task_type="binary", num_outputs=1,
+            season_calendar_mode="calendar",
+        )
+        _, attrs = ds[0]
+        masks = attrs["season_masks"]
+        self.assertEqual(masks.shape[1], 12)
+        self.assertEqual(masks.shape[0], 2)
 
 
 if __name__ == "__main__":
