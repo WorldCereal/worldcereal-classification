@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+import geopandas as gpd
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
@@ -48,7 +49,9 @@ from notebook_utils.job_manager import run_worldcereal_task_notebook
 from notebook_utils.production import merge_maps
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
-from openeo_gfmap import TemporalContext
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from shapely import wkt as shapely_wkt
+from shapely.geometry import box as shapely_box
 from tabulate import tabulate
 
 from worldcereal.job import WorldCerealTask, resolve_workflow_luts
@@ -101,6 +104,7 @@ class WorldCerealClassificationApp:
 
         # Tab 3 variables
         self.processing_period: Optional[TemporalContext] = None
+        self.tab3_aoi_gdf = None  # GeoDataFrame AOI loaded from file (for seasons display)
         self.season_window: Optional[TemporalContext] = None
         self.season_id: Optional[str] = None
 
@@ -516,30 +520,14 @@ class WorldCerealClassificationApp:
             "If no AOI is selected, the query will consider all available data globally.<br>"
             "       ⚠️ WARNING: This will result in a very large query and may take a long time to complete.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
-            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
-            "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button.<br>"
+            "The app will automatically store the coordinates of the last rectangle you drew on the map and save them to the local <code>./bbox</code> folder.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
-            "Files containing only a single point are not allowed.<br><br>"
-            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
+            "Files containing only a single point are not allowed.<br>"
         )
 
         aoi_map = ui_map(display_ui=False)
-
-        aoi_save_button = widgets.Button(
-            description="Save AOI to file",
-            button_style="info",
-            icon="save",
-            layout=widgets.Layout(width="220px"),
-        )
-        aoi_save_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="60px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
 
         buffer_explanation = self._info_callout(
             "By default we apply a 250 km buffer around your selected AOI to ensure sufficient reference data is retrieved.<br>"
@@ -728,8 +716,6 @@ class WorldCerealClassificationApp:
         self.tab1_widgets = {
             "extent_output": extent_output,
             "aoi_map": aoi_map,
-            "aoi_save_button": aoi_save_button,
-            "aoi_save_output": aoi_save_output,
             "buffer_input": buffer_input,
             "include_public_checkbox": include_public_checkbox,
             "include_private_checkbox": include_private_checkbox,
@@ -762,7 +748,7 @@ class WorldCerealClassificationApp:
         private_path_button.on_click(self._on_private_edit_click)
         crop_only_checkbox.observe(self._on_crop_only_toggle, names="value")
         select_crops_button.on_click(self._on_select_crops_click)
-        aoi_save_button.on_click(self._on_tab1_save_aoi_click)
+        aoi_map.submit_button.on_click(self._auto_save_aoi)
         restore_button.on_click(self._on_tab1_restore_click)
         discard_temp_button.on_click(self._on_tab1_discard_temp_click)
 
@@ -786,8 +772,6 @@ class WorldCerealClassificationApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
-                widgets.HBox([aoi_save_button]),
-                aoi_save_output,
                 buffer_explanation,
                 buffer_input,
                 widgets.HTML("<b>2) Data sources selection:</b>"),
@@ -1098,10 +1082,58 @@ class WorldCerealClassificationApp:
             except Exception as exc:
                 print(f"Failed to save AOI: {exc}")
 
-    def _on_tab1_save_aoi_click(self, _=None) -> None:
+    def _auto_save_aoi(self, _=None) -> None:
+        """Automatically save the current AOI to ./bbox after the user submits it."""
         aoi_map = self.tab1_widgets.get("aoi_map")
-        output = self.tab1_widgets.get("aoi_save_output")
-        self._save_aoi_to_bbox(aoi_map, output)
+        if aoi_map is None:
+            return
+        try:
+            bbox_dir = Path("./bbox")
+            out_path = aoi_map.save_gdf(bbox_dir)
+            # Update the map output widget to confirm the save
+            with aoi_map.output:
+                from IPython.display import HTML as _HTML
+                from IPython.display import display as _display
+                _display(_HTML(f"<i>AOI saved to {out_path}.</i>"))
+        except Exception:
+            pass  # Silent – AOI may not be ready yet (e.g. submit failed)
+
+    def _try_load_aoi_for_seasons(self, aoi_name: str):
+        """Try to load an AOI GeoDataFrame from ./bbox/{aoi_name}.gpkg.
+
+        Returns a GeoDataFrame on success, or None when the file is not found.
+        """
+        if not aoi_name:
+            return None
+        bbox_file = Path("./bbox") / f"{aoi_name}.gpkg"
+        if not bbox_file.exists():
+            return None
+        try:
+            return gpd.read_file(str(bbox_file))
+        except Exception:
+            return None
+
+    def _gdf_to_utm_bbox(self, gdf) -> "Optional[BoundingBoxExtent]":
+        """Convert a GeoDataFrame to a UTM BoundingBoxExtent for seasons retrieval."""
+        try:
+            if gdf is None or gdf.empty:
+                return None
+            if gdf.crs and gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+            bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
+            bounds_gdf = gpd.GeoDataFrame(geometry=[shapely_box(*bounds)], crs="EPSG:4326")
+            crs = bounds_gdf.estimate_utm_crs()
+            epsg = int(crs.to_epsg())
+            bbox_utm = bounds_gdf.to_crs(crs).total_bounds
+            return BoundingBoxExtent(
+                west=float(bbox_utm[0]),
+                south=float(bbox_utm[1]),
+                east=float(bbox_utm[2]),
+                north=float(bbox_utm[3]),
+                epsg=epsg,
+            )
+        except Exception:
+            return None
 
     def _on_save_continue_click(self, button):
         """Save extractions and continue to next step."""
@@ -1124,6 +1156,7 @@ class WorldCerealClassificationApp:
         self.tab1_saved = True
         self.tab2_df = None
         self.append_next_query = False
+        self.tab3_aoi_gdf = None  # reset: AOI comes from Tab 1 map when using this path
         self._update_tab2_state()
 
     def _on_save_add_click(self, button):
@@ -1512,6 +1545,7 @@ class WorldCerealClassificationApp:
             self.tab1_saved = True
             self.tab2_df = None
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
             print(f"Extractions loaded from: {path}")
             nsamples = df["sample_id"].nunique()
             print(f"Total samples: {nsamples:,}")
@@ -1797,6 +1831,7 @@ class WorldCerealClassificationApp:
                 return
             self.tab2_df = self._wkt_to_geometry(df)
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
             print(f"Extractions loaded from: {path}")
             nsamples = df["sample_id"].nunique()
             print(f"Total samples: {nsamples:,}")
@@ -1976,15 +2011,43 @@ class WorldCerealClassificationApp:
     def _on_tab3_retrieve_seasons(self, _=None):
         """Retrieve and display WorldCereal seasons for the AOI."""
         output = self.tab3_widgets["seasons_output"]
-        aoi_map = self.tab1_widgets.get("aoi_map")
 
         with output:
             output.clear_output()
             try:
-                if aoi_map is None:
-                    print("No region of interest specified in Tab 1, cannot continue.")
+                # Multiple different AOIs: ambiguous, cannot display seasons
+                if len(self.tab1_aoi_names) > 1:
+                    print(
+                        "Extractions were collected for multiple different AOIs "
+                        f"({', '.join(self.tab1_aoi_names)}). "
+                        "WorldCereal seasons can only be displayed for a single AOI."
+                    )
                     return
-                spatial_extent = aoi_map.get_bbox(projection="utm")
+
+                spatial_extent = None
+
+                # Case 1: extractions came from Tab 1 — use the interactive map
+                aoi_map = self.tab1_widgets.get("aoi_map")
+                if aoi_map is not None:
+                    try:
+                        spatial_extent = aoi_map.get_bbox(projection="utm")
+                    except Exception:
+                        pass  # map may be empty (e.g. no-AOI global query)
+
+                # Case 2: extractions loaded from file — use the loaded AOI GDF
+                if spatial_extent is None and self.tab3_aoi_gdf is not None:
+                    spatial_extent = self._gdf_to_utm_bbox(self.tab3_aoi_gdf)
+
+                if spatial_extent is None:
+                    print(
+                        "No Area of Interest is available. "
+                        "WorldCereal seasons cannot be displayed without an AOI.\n"
+                        "Make sure to draw and submit an AOI in Tab 1, or ensure "
+                        "the corresponding AOI file exists in the ./bbox folder "
+                        "when loading extractions from disk."
+                    )
+                    return
+
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
@@ -5252,7 +5315,7 @@ class WorldCerealClassificationApp:
         """Return a copy of df with the geometry column serialised to WKT strings."""
         if "geometry" not in df.columns:
             return df
-        df = df.copy()
+        df = pd.DataFrame(df.copy())
         df["geometry"] = df["geometry"].apply(
             lambda g: g.wkt if hasattr(g, "wkt") else g
         )
@@ -5263,8 +5326,7 @@ class WorldCerealClassificationApp:
         """Return a copy of df with WKT strings in the geometry column parsed back to shapely objects."""
         if "geometry" not in df.columns:
             return df
-        from shapely import wkt as shapely_wkt
-        df = df.copy()
+        df = pd.DataFrame(df.copy())
         df["geometry"] = df["geometry"].apply(
             lambda g: shapely_wkt.loads(g) if isinstance(g, str) else g
         )
