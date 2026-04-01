@@ -330,9 +330,7 @@ def _filter_frame_by_manual_windows(
     missing = label_datetimes.isna().sum()
     if missing:
         logger.warning(
-            "%s: Dropping %d samples missing valid_time while enforcing manual season window(s).",
-            context,
-            int(missing),
+            f"{context}: Dropping {int(missing)} samples missing valid_time while enforcing manual season window(s)."
         )
         keep_mask &= label_datetimes.notna()
 
@@ -343,10 +341,7 @@ def _filter_frame_by_manual_windows(
             for season, window in season_windows.items()
         )
         logger.info(
-            "%s: Removed %d samples outside manual season window(s): %s",
-            context,
-            dropped,
-            ranges,
+            f"{context}: Removed {dropped} samples outside manual season window(s): {ranges}"
         )
 
     retained = int(keep_mask.sum())
