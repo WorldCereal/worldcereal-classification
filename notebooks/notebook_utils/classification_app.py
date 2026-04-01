@@ -1115,7 +1115,7 @@ class WorldCerealClassificationApp:
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part()
                 save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
-                self.tab1_df.to_parquet(save_path, index=False)
+                self._geometry_to_wkt(self.tab1_df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
                 self._cleanup_tab1_temp()
                 print("You can proceed to the next step.")
@@ -1144,7 +1144,7 @@ class WorldCerealClassificationApp:
                         else f"query_{timestamp}.parquet"
                     )
                     temp_path = temp_dir / fname
-                    self.tab1_df.to_parquet(temp_path, index=False)
+                    self._geometry_to_wkt(self.tab1_df).to_parquet(temp_path, index=False)
                     print(f"Query results saved to temporary file: {temp_path}")
                     print(
                         "Temporary folder: ./training_extractions_temp/\n"
@@ -1156,8 +1156,8 @@ class WorldCerealClassificationApp:
                     if restore_section is not None:
                         restore_section.layout.display = ""
                 except Exception as exc:
-                    print(f"Warning: could not save to temporary folder: {exc}")
-                    print("Data is still held in memory. Proceed with another query if needed.")
+                    print(f"Error: could not save to temporary folder: {exc}")
+                    raise
             else:
                 print("No extractions to save. Please run a query first.")
         self.append_next_query = True
@@ -1208,7 +1208,7 @@ class WorldCerealClassificationApp:
             except Exception as exc:
                 print(f"Failed to load temporary file {latest.name}: {exc}")
                 return
-            self.tab1_df = df
+            self.tab1_df = self._wkt_to_geometry(df)
             self.tab1_saved = False
             self.append_next_query = True
             # Re-populate AOI name tracking from temp filenames
@@ -1473,7 +1473,7 @@ class WorldCerealClassificationApp:
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part() or self._get_aoi_name_tab1()
                 save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
-                df.to_parquet(save_path, index=False)
+                self._geometry_to_wkt(df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
             except Exception as exc:
                 print(f"Failed to save extractions: {exc}")
@@ -1507,7 +1507,7 @@ class WorldCerealClassificationApp:
                     + ", ".join(missing)
                 )
                 return
-            self.tab1_df = df
+            self.tab1_df = self._wkt_to_geometry(df)
             self.tab1_saved = True
             self.tab2_df = None
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
@@ -1794,7 +1794,7 @@ class WorldCerealClassificationApp:
                     + ", ".join(missing)
                 )
                 return
-            self.tab2_df = df
+            self.tab2_df = self._wkt_to_geometry(df)
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
             print(f"Extractions loaded from: {path}")
             nsamples = df["sample_id"].nunique()
@@ -5244,6 +5244,29 @@ class WorldCerealClassificationApp:
         start = str(season_window.start_date).replace("-", "")
         end = str(season_window.end_date).replace("-", "")
         return f"{start}_{end}"
+
+    @staticmethod
+    def _geometry_to_wkt(df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of df with the geometry column serialised to WKT strings."""
+        if "geometry" not in df.columns:
+            return df
+        df = df.copy()
+        df["geometry"] = df["geometry"].apply(
+            lambda g: g.wkt if hasattr(g, "wkt") else g
+        )
+        return df
+
+    @staticmethod
+    def _wkt_to_geometry(df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of df with WKT strings in the geometry column parsed back to shapely objects."""
+        if "geometry" not in df.columns:
+            return df
+        from shapely import wkt as shapely_wkt
+        df = df.copy()
+        df["geometry"] = df["geometry"].apply(
+            lambda g: shapely_wkt.loads(g) if isinstance(g, str) else g
+        )
+        return df
 
     def _info_callout(self, message: str) -> widgets.Widget:
         """Create a collapsible info callout box for inline documentation."""
