@@ -151,13 +151,19 @@ def run_worldcereal_task(
             "workflow_config": workflow_config,
         }
 
-    log_fn("----- Initializing job manager -----")
-    manager = WorldCerealJobManager(
-        task=task,
-        **manager_init,
-    )
-    log_fn("Job manager initialized!")
-    log_fn("----------------------------------")
+    try:
+        log_fn("----- Initializing job manager -----")
+        manager = WorldCerealJobManager(
+            task=task,
+            **manager_init,
+        )
+        log_fn("Job manager initialized!")
+        log_fn("----------------------------------")
+    except Exception as exc:
+        log_fn("----------------------------------")
+        log_fn(f"Workflow initialization failed with error: {exc}")
+        log_fn("----------------------------------")
+        raise
 
     status_callback = None
     if simplify_logging:
