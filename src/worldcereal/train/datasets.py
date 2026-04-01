@@ -647,7 +647,9 @@ class WorldCerealDataset(Dataset):
             0.5) so that seasons only partially shifted out of the window by
             random augmentation still contribute supervision signal.
         """
-        self.dataframe = dataframe.fillna(NODATAVALUE)
+        self.dataframe = dataframe.copy()
+        numeric_cols = self.dataframe.select_dtypes(include="number").columns
+        self.dataframe[numeric_cols] = self.dataframe[numeric_cols].fillna(NODATAVALUE)
         self.num_timesteps = num_timesteps
 
         if timestep_freq not in ["month", "dekad"]:
