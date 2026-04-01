@@ -221,3 +221,9 @@ notebooks/*/training_data/*
 
 scripts/extractions/extract_patches_s1.sh
 scripts/extractions/extract_patches_s2.sh
+
+# SLURM job output logs
+*_error_*.out
+*_output_*.out
+errorlog.out
+outputlog.out

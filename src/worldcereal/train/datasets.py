@@ -11,9 +11,16 @@ import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from prometheo.predictors import (DEM_BANDS, METEO_BANDS, NODATAVALUE,
-                                  S1_BANDS, S2_BANDS, Predictors)
+from prometheo.predictors import (
+    DEM_BANDS,
+    METEO_BANDS,
+    NODATAVALUE,
+    S1_BANDS,
+    S2_BANDS,
+    Predictors,
+)
 from torch.utils.data import Dataset, Sampler
+
 from worldcereal.seasons import season_doys_to_dates_refyear
 from worldcereal.train import (GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER,
                                SEASONALITY_COLUMN_MAP, SEASONALITY_LAT_RANGE,
@@ -1442,14 +1449,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
     def __getitem__(self, idx):
-        # ---------------------------------------------------------------------------
-        # Virtual-index decoding for DualHeadBatchSampler
-        # The sampler encodes task assignment into the index to avoid mutating the
-        # dataframe across worker processes:
-        #   [N, 2N)  → LC-assigned  (real_idx = idx - N,   label_task = "landcover")
-        #   [2N, 3N) → CT-assigned  (real_idx = idx - 2N,  label_task = "croptype")
-        #   [0, N)   → natural idx  (val/test: label_task read from the dataframe)
-        # ---------------------------------------------------------------------------
+        # During dual-task training the DualHeadBatchSampler tells each sample
+        # which head it should supervise (landcover or croptype) by shifting its
+        # index: indices in [N..2N) are landcover, [2N..3N) are croptype.
+        # We decode the real row index and the intended task here, so the
+        # dataframe itself never needs to be mutated (important for multi-worker
+        # data loading).  Plain [0..N) indices are used during validation/test.
         n = len(self.dataframe)
         if idx >= 2 * n:
             real_idx = idx - 2 * n
@@ -1459,7 +1464,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             task_override = "landcover"
         else:
             real_idx = idx
-            task_override = None  # use label_task stored in the dataframe row
+            task_override = None
 
         row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
         timestep_positions, valid_position = self.get_timestep_positions(row)
@@ -1615,7 +1620,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         landcover_column: str = "landcover_label",
         croptype_column: str = "croptype_label",
         class_weight_method: str = "balanced",
-        clip_range: Optional[Tuple[float, float]] = (0.3, 5.0),
+        clip_range: Optional[Tuple[float, float]] = (0.1, 10.0),
         spatial_bin_size_degrees: Optional[float] = None,
         spatial_weight_method: str = "log",
         num_batches: Optional[int] = None,
@@ -1679,7 +1684,7 @@ class DualHeadBatchSampler(Sampler):
         landcover_column: str = "landcover_label",
         croptype_column: str = "croptype_label",
         class_weight_method: str = "balanced",
-        clip_range: Optional[Tuple[float, float]] = (0.3, 5.0),
+        clip_range: Optional[Tuple[float, float]] = (0.1, 10.0),
         spatial_bin_size_degrees: Optional[float] = None,
         spatial_weight_method: str = "log",
         num_batches: Optional[int] = None,

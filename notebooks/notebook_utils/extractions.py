@@ -758,9 +758,9 @@ def query_extractions(
         # Wrap at 40 characters per line (matches default column width) but do NOT truncate
         wrapped_crop_groups = "\n".join(textwrap.wrap(crop_groups_full, width=40))
         stats_table = [
-            ["Total Samples", f"{total_samples:,}"],
-            ["Total Datasets", f"{total_datasets}"],
-            ["Unique Crop Types", f"{total_crop_types}"],
+            ["Total Samples", total_samples],
+            ["Total Datasets", total_datasets],
+            ["Unique Crop Types", total_crop_types],
             ["Crop Groups", wrapped_crop_groups],
         ]
 
@@ -1529,8 +1529,8 @@ def sample_extractions(
                     {
                         "Source": source,
                         "Dataset": ref_id,
-                        "Available Samples": f"{total_available:,}",
-                        "Sampled": f"{total_sampled_ref:,}",
+                        "Available Samples": total_available,
+                        "Sampled": total_sampled_ref,
                         "Crop Types": f"{crop_types_with_data}/{total_crop_types}",
                     }
                 )
@@ -1549,13 +1549,14 @@ def sample_extractions(
         sampling_efficiency = (
             (total_sampled / total_available * 100) if total_available > 0 else 0
         )
+        sampling_efficiency = round(sampling_efficiency, 2)
 
         stats_table = [
-            ["Total Datasets Processed", f"{total_datasets}"],
-            ["Total Available Samples", f"{total_available:,}"],
-            ["Total Sampled", f"{total_sampled:,}"],
-            ["Unique Crop Types Sampled", f"{unique_crop_types}"],
-            ["Sampling Efficiency", f"{sampling_efficiency:.1f}%"],
+            ["Total Datasets Processed", total_datasets],
+            ["Total Available Samples", total_available],
+            ["Total Sampled", total_sampled],
+            ["Unique Crop Types Sampled", unique_crop_types],
+            ["Sampling Efficiency", f"{sampling_efficiency}%"],
         ]
 
         print("\nOverall Sampling Statistics:")

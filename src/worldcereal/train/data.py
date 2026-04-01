@@ -4,6 +4,7 @@ from typing import (Any, Dict, List, Literal, Mapping, Optional, Sequence,
                     Tuple, Union)
 
 import duckdb
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -16,13 +17,19 @@ from prometheo.utils import device
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
-from worldcereal.train.backbone import (build_presto_backbone,
-                                        resolve_seasonal_encoder)
-from worldcereal.train.datasets import (SeasonCalendarMode,
-                                        SensorMaskingConfig,
-                                        WorldCerealTrainingDataset)
-from worldcereal.utils.refdata import (DATA_DIR, get_class_mappings,
-                                       map_classes, split_df)
+
+from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
+from worldcereal.train.datasets import (
+    SeasonCalendarMode,
+    SensorMaskingConfig,
+    WorldCerealTrainingDataset,
+)
+from worldcereal.utils.refdata import (
+    DATA_DIR,
+    get_class_mappings,
+    map_classes,
+    split_df,
+)
 from worldcereal.utils.timeseries import process_parquet
 
 _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
@@ -60,13 +67,6 @@ def _attach_regions_from_boundaries(
     boundaries_path: Path,
     target_mask: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
-    try:
-        import geopandas as gpd
-    except Exception as exc:  # noqa: BLE001
-        raise ImportError(
-            "Region enrichment requires geopandas. Install it or disable region filtering."
-        ) from exc
-
     if "lat" not in df.columns or "lon" not in df.columns:
         raise ValueError("Region enrichment requires 'lat' and 'lon' columns.")
 
@@ -998,6 +998,14 @@ def get_training_dfs_from_parquet(
     FLOAT_COLS = ["lon", "lat", "CTY25_anomaly_flag", "LC10_anomaly_flag"]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
+    # Columns that may not exist in older data — fill with sensible defaults
+    OPTIONAL_COLS: dict = {
+        "CTY25_confidence_nonoutlier": "1.0",  # no outlier penalty
+        "LC10_confidence_nonoutlier": "1.0",
+        "CTY25_anomaly_flag": 0.0,  # not flagged
+        "LC10_anomaly_flag": 0.0,
+    }
+
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():
         logger.info(
             f"Creating wide parquet file at {wide_parquet_output_path} (overwrite={overwrite})"
@@ -1016,7 +1024,17 @@ def get_training_dfs_from_parquet(
             _data = pd.read_parquet(f, engine="fastparquet")
             _ref_id = Path(f).stem
             _data["ref_id"] = _ref_id
-            _data = _data[REQUIRED_COLS]
+            filled_optional = []
+            for col, default in OPTIONAL_COLS.items():
+                if col not in _data.columns:
+                    _data[col] = default
+                    filled_optional.append(col)
+            if filled_optional:
+                logger.warning(
+                    f"{_ref_id}: filled missing optional columns with defaults: "
+                    f"{', '.join(f'{c}={OPTIONAL_COLS[c]}' for c in filled_optional)}"
+                )
+            _data = _data[REQUIRED_COLS + list(OPTIONAL_COLS.keys())]
             _data_pivot = process_parquet(
                 _data,
                 freq=timestep_freq,
@@ -1111,11 +1129,11 @@ def get_training_dfs_from_parquet(
         df = _attach_regions_from_boundaries(
             df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
         )
-        # if not is_tempfile:
-        #     df.to_parquet(wide_parquet_output_path, index=False)
-        # logger.info(
-        #     f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
-        # )
+        if not is_tempfile:
+            df.to_parquet(wide_parquet_output_path, index=False)
+        logger.info(
+            f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
+        )
     elif normalized_regions is not None and "region" not in df.columns:
         raise ValueError(
             "Region filtering requested but no region labels were found or generated."

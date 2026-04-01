@@ -5,8 +5,7 @@ import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import (Any, Dict, List, Literal, Optional, Sequence, Tuple, Union,
-                    cast)
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,10 +20,14 @@ from prometheo.predictors import NODATAVALUE
 from prometheo.utils import DEFAULT_SEED, device, initialize_logging
 from torch.optim import AdamW, lr_scheduler
 from torch.utils.data import DataLoader
-from worldcereal.train import GLOBAL_SEASON_IDS
+
+from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER
 from worldcereal.train.backbone import checkpoint_fingerprint
-from worldcereal.train.data import (collate_fn, get_training_dfs_from_parquet,
-                                    remove_small_classes)
+from worldcereal.train.data import (
+    collate_fn,
+    get_training_dfs_from_parquet,
+    remove_small_classes,
+)
 from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.train.finetuning_utils import (SeasonalMultiTaskLoss,
                                                 evaluate_finetuned_model,
@@ -73,6 +76,7 @@ def _is_ignore_label(value) -> bool:
     try:
         return str(value).strip().lower() == "ignore"
     except Exception:  # noqa: BLE001
+        logger.warning(f"Could not parse label value {value!r} as string; treating as non-ignore.")
         return False
 
 
@@ -129,123 +133,28 @@ def _drop_outliers(
 def _series_from_column(
     df: pd.DataFrame, column: Optional[str], default: float = 1.0
 ) -> pd.Series:
+    """Return a numeric Series from *column*, falling back to *default*.
+
+    If *column* is ``None`` or absent from *df*, a constant Series filled
+    with *default* is returned so that downstream arithmetic (e.g.
+    multiplicative sample weighting) always has a valid operand.
+    """
     if column and column in df.columns:
         return pd.to_numeric(df[column], errors="coerce").fillna(default).astype(float)
     return pd.Series(default, index=df.index, dtype=float)
 
 
 def _normalize_score(series: pd.Series) -> pd.Series:
-    """Rescale 0-100 scores to 0-1 and clip to [0, 1]."""
-    if series.max() > 1.0:
+    """Rescale 0-100 integer scores to 0-1 and clip to [0, 1].
+
+    Uses a threshold of 1.5 to distinguish genuine 0-100 encoded scores
+    from values already in [0, 1] that may slightly exceed 1.0 due to
+    floating-point noise.  The final clip handles any residual overshoot.
+    """
+    if series.max() > 1.5:
         series = series / 100.0
     return series.clip(0.0, 1.0)
 
-
-# HOTFIX: map-sampled datasets have quality_score_lc erroneously set to 0.
-# Until the upstream bug is fixed, copy quality_score_ct → quality_score_lc
-# for these ref_ids so they are not wrongly dropped or down-weighted.
-_MAP_SAMPLED_REF_IDS: frozenset = frozenset((
-    "2024_ARG_INTA-SUMMER_POINT_110",
-    "2022_ARG_INTA-SUMMER_POINT_110",
-    "2023_ARG_INTA-SUMMER_POINT_110",
-    "2020_ARG_INTA-SUMMER_POINT_110",
-    "2020_ARG_INTA-WINTER_POINT_110",
-    "2022_ARG_INTA-WINTER_POINT_110",
-    "2021_ARG_INTA-SUMMER_POINT_110",
-    "2021_ARG_INTA-WINTER_POINT_110",
-    "2023_ARG_INTA-WINTER_POINT_110",
-    "2017_BRA_MAPBIOMAS-ZHENG_POINT_110",
-    "2018_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2018_BRA_MAPBIOMAS-ZHENG_POINT_110",
-    "2019_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2019_BRA_MAPBIOMAS-ZHENG_POINT_110",
-    "2020_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2021_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2022_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2023_BRA_MAPBIOMAS-SONG_POINT_110",
-    "2017_CHN_YOU-HAN-SHEN-RICE_POINT_110",
-    "2018_CHN_LIU-ZANG_POINT_110",
-    "2018_CHN_YOU-HAN-SHEN-RICE_POINT_110",
-    "2019_CHN_LIU-ZANG_POINT_110",
-    "2019_CHN_YOU-HAN-SHEN-RICE_POINT_110",
-    "2019_CHN_YOU-LI-LI_POINT_110",
-    "2019_CHN_YOU-MEI-SOYBEAN_POINT_110",
-    "2020_CHN_DONG-HU-LIU-YANG_POINT_110",
-    "2020_CHN_KANG_POINT_110",
-    "2020_CHN_LIU-ZANG_POINT_110",
-    "2021_CHN_HU-LIU-YANG_POINT_110",
-    "2021_CHN_KANG_POINT_110",
-    "2021_CHN_LIU-ZANG_POINT_110",
-    "2022_CHN_HU-LIU-YANG_POINT_110",
-    "2018_VNM_HAN-JAXA-LI_POINT_110",
-    "2019_VNM_HAN-JAXA-LI-SUN_POINT_110",
-    "2020_VNM_JAXA-LI_POINT_110",
-    "2021_VNM_GINTING-LI_POINT_110",
-    "2017_CHL_HAN_POINT_110",
-    "2018_CHL_HAN_POINT_110",
-    "2019_CHL_HAN_POINT_110",
-    "2018_CRI_CENAT-OILPALMS_POINT_110",
-    "2018_CRI_CENAT-PINEAPPLES_POINT_110",
-    "2019_CRI_CENAT-OILPALMS_POINT_110",
-    "2019_CRI_CENAT-PINEAPPLES_POINT_110",
-    "2021_IDN_GINTING-LI_POINT_110",
-    "2018_JPN_CARRASCO-HAN-JAXA-LI_POINT_110",
-    "2019_JPN_CARRASCO-HAN-JAXA-LI_POINT_110",
-    "2020_JPN_JAXA-LI_POINT_110",
-    "2020_JPN_JAXA-OKINAWA_POINT_110",
-    "2022_JPN_JAXA-LI_POINT_110",
-    "2023_JPN_LI-SONG_POINT_110",
-    "2021_KHM_GINTING-LI_POINT_110",
-    "2018_KOR_HAN-JO-LI_POINT_110",
-    "2019_KOR_HAN-JO-LI_POINT_110",
-    "2020_KOR_JO-LI_POINT_110",
-    "2021_KOR_JO-LI_POINT_110",
-    "2023_KOR_LI-SONG_POINT_110",
-    "2021_LAO_GINTING-LI_POINT_110",
-    "2021_MMR_GINTING-LI_POINT_110",
-    "2021_MYS_GINTING-LI_POINT_110",
-    "2021_PHL_GINTING-LI_POINT_110",
-    "2019_THA_BOKU_POINT_110",
-    "2021_THA_GINTING-LI_POINT_110",
-    "2022_URY_SIT-OAN_POINT_110",
-    "2022_URY_SONG-OAN_POINT_110",
-    "2024_HND_ICF-FAO_POINT_110",
-    # other datasets where lc score was detected to be 0 while ct score present
-    "2020_SEN_GUMMA_POINT_110",
-))
-
-
-def _hotfix_map_sampled_lc_quality(
-    df: pd.DataFrame,
-    split_name: str,
-) -> pd.DataFrame:
-    """Copy quality_score_ct → quality_score_lc for map-sampled ref_ids.
-
-    Map-sampled datasets currently have quality_score_lc erroneously set to 0
-    while quality_score_ct is correct.  This hotfix prevents those samples from
-    being dropped or unfairly down-weighted until the upstream bug is fixed.
-    """
-    if df.empty or "ref_id" not in df.columns:
-        return df
-    if "quality_score_lc" not in df.columns or "quality_score_ct" not in df.columns:
-        return df
-
-    mask = df["ref_id"].isin(_MAP_SAMPLED_REF_IDS)
-    n_affected = int(mask.sum())
-    if n_affected == 0:
-        logger.info(
-            f"{split_name}: no map-sampled ref_ids found; "
-            "skipping LC quality hotfix."
-        )
-        return df
-
-    updated = df.copy()
-    updated.loc[mask, "quality_score_lc"] = updated.loc[mask, "quality_score_ct"]
-    logger.warning(
-        f"{split_name}: HOTFIX applied — copied quality_score_ct → quality_score_lc "
-        f"for {n_affected} samples across map-sampled ref_ids."
-    )
-    return updated
 
 
 def _drop_zero_quality_samples(
@@ -274,7 +183,9 @@ def _drop_zero_quality_samples(
         )
         return df
 
-    # Drop only when ALL quality scores are 0
+    # Drop only when ALL quality scores are 0.
+    # fillna(1.0): treat missing scores as "not zero" so a NaN alone
+    # never causes a sample to be dropped — only explicit zeroes count.
     all_zero = pd.Series(True, index=df.index)
     for col in present_cols:
         scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
@@ -358,13 +269,9 @@ def _filter_low_weight_eval_samples(
     w = df[present_weight_cols].min(axis=1)
 
     # Per-ref_id percentile threshold
-    ref_col = "ref_id" if "ref_id" in df.columns else None
-    if ref_col:
-        pct_threshold = df.assign(_w=w).groupby(ref_col)["_w"].transform(
-            lambda s: np.percentile(s, percentile)
-        )
-    else:
-        pct_threshold = np.percentile(w, percentile)
+    pct_threshold = df.assign(_w=w).groupby("ref_id")["_w"].transform(
+        lambda s: np.percentile(s, percentile)
+    )
 
     # Mark: relatively bad AND absolutely bad
     remove_mask = (w < pct_threshold) & (w < hard_floor)
@@ -410,21 +317,20 @@ def _filter_low_weight_eval_samples(
     )
 
     # Per-ref_id breakdown
-    if ref_col:
-        ref_counts = removed_df[ref_col].value_counts().sort_values(ascending=False)
-        champion_ref = ref_counts.index[0]
-        champion_count = int(ref_counts.iloc[0])
-        logger.warning(
-            f"{split_name}: top ref_id for removals: '{champion_ref}' "
-            f"({champion_count} samples). "
-            f"Total ref_ids affected: {len(ref_counts)}."
-        )
-        # Log up to top 15 ref_ids
-        top_refs = ref_counts.head(15)
-        logger.warning(
-            f"{split_name}: per-ref_id removal counts (top 15):\n"
-            + top_refs.to_string()
-        )
+    ref_counts = removed_df["ref_id"].value_counts().sort_values(ascending=False)
+    champion_ref = ref_counts.index[0]
+    champion_count = int(ref_counts.iloc[0])
+    logger.warning(
+        f"{split_name}: top ref_id for removals: '{champion_ref}' "
+        f"({champion_count} samples). "
+        f"Total ref_ids affected: {len(ref_counts)}."
+    )
+    # Log up to top 15 ref_ids
+    top_refs = ref_counts.head(15)
+    logger.warning(
+        f"{split_name}: per-ref_id removal counts (top 15):\n"
+        + top_refs.to_string()
+    )
 
     # Weight distribution of removed samples
     removed_weights = w[remove_mask]
@@ -711,9 +617,11 @@ def _filter_temporally_invalid_rows(
     )
 
     if augment:
-        # Mirrors _get_center_point for non-ssl branch where np.random.randint is used.
-        min_center = np.maximum(half, valid_pos + 1 - half)
-        max_center = np.minimum(available - half, valid_pos - 1 + half)
+        # Mirrors WorldCerealDataset._get_center_point (non-ssl path).
+        # TODO: refactor _get_center_point into a static/classmethod so this
+        #       pre-check can call it directly instead of duplicating the logic.
+        min_center = np.maximum(half, valid_pos + MIN_EDGE_BUFFER - half)
+        max_center = np.minimum(available - half, valid_pos - MIN_EDGE_BUFFER + half)
         jitter_valid = (available == num_timesteps) | (min_center <= max_center)
         valid_mask = base_valid & jitter_valid
     else:
@@ -842,15 +750,14 @@ def main(args):
     # With augmentation the window shifts randomly so a lower threshold prevents spurious
     # loss of croptype supervision signal.
     train_min_season_coverage: float = args.train_min_season_coverage
-    eval_min_season_coverage: Optional[float] = args.eval_min_season_coverage
+    eval_min_season_coverage: float = args.eval_min_season_coverage
 
     # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
-    season_ids: Optional[Tuple[str, ...]] = (
-        tuple(args.season_ids) if args.season_ids else None
-    )
+    season_ids: Tuple[str, ...] = tuple(args.season_ids)
+    is_default_seasons = season_ids == GLOBAL_SEASON_IDS
     logger.info(
-        f"Season IDs: {season_ids or GLOBAL_SEASON_IDS}"
-        + (" (default)" if season_ids is None else " (custom)")
+        f"Season IDs: {season_ids}"
+        + (" (default)" if is_default_seasons else " (custom)")
     )
 
     # Presto freezing settings
@@ -981,10 +888,9 @@ def main(args):
     if args.explicit_training_dataframe:
         wide_parquet_output_path = Path(args.explicit_training_dataframe)
     elif not debug:
-        # wide_parquet_output_path = Path(
-        #     "/projects/worldcereal/data/cached_wide_merged/merged_305_wide.parquet"
-        # )
-        wide_parquet_output_path = None
+        wide_parquet_output_path = Path(
+            "/projects/worldcereal/merged_319_wide.parquet"
+        )
     else:
         wide_parquet_output_path = None
 
@@ -1038,9 +944,6 @@ def main(args):
             overwrite=False,
         )
         logger.info("Saving train, val, and test DataFrames to parquet files ...")
-        # train_df.to_parquet(train_df_path)
-        # val_df.to_parquet(val_df_path)
-        # test_df.to_parquet(test_df_path)
 
     if "drop" in args.outlier_mode:
         train_df = _drop_outliers(
@@ -1131,12 +1034,6 @@ def main(args):
     logger.info(f"Number of training samples: {len(train_df)}")
     logger.info(f"Number of validation samples: {len(val_df)}")
     logger.info(f"Number of test samples: {len(test_df)}")
-
-    # HOTFIX: map-sampled datasets have quality_score_lc erroneously set to 0.
-    # Copy quality_score_ct into quality_score_lc so they are not wrongly dropped.
-    train_df = _hotfix_map_sampled_lc_quality(train_df, "train")
-    val_df = _hotfix_map_sampled_lc_quality(val_df, "val")
-    test_df = _hotfix_map_sampled_lc_quality(test_df, "test")
 
     # Hard-exclude samples with zero quality scores (e.g. road intersections)
     quality_cols = ["quality_score_lc", "quality_score_ct"]
@@ -1602,7 +1499,7 @@ def main(args):
         "time_explicit": time_explicit,
         "label_jitter": label_jitter,
         "label_window": label_window,
-        "season_ids": list(season_ids) if season_ids else list(GLOBAL_SEASON_IDS),
+        "season_ids": list(season_ids),
         "train_min_season_coverage": train_min_season_coverage,
         "eval_min_season_coverage": eval_min_season_coverage,
         "masking": masking_payload,
@@ -1629,7 +1526,6 @@ def main(args):
         "landcover_weight": args.seasonal_loss_landcover_weight,
         "croptype_weight": args.seasonal_loss_croptype_weight,
         "cropland_class_names": cropland_class_names,
-        "sample_weight_strategy": args.sample_weight_strategy,
         "sample_weight_mapping": sample_weight_mapping,
     }
     run_config = {
@@ -1784,7 +1680,7 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--croptype_classes_key",
         type=str,
-        default="CROPTYPE2",
+        default="CROPTYPE24",
         help="Class mapping key used for crop-type targets in the dual-head configuration.",
     )
     parser.add_argument(
@@ -1940,16 +1836,6 @@ def parse_args(arg_list=None):
         help="Upper bound applied to sampler weights when balancing is enabled.",
     )
     parser.add_argument(
-        "--sample_weight_strategy",
-        type=str,
-        default="quality",
-        choices=["none", "quality"],
-        help=(
-            "Enable sample-level weighting using quality/confidence scores. "
-            "Outlier weighting is always applied when confidence_nonoutlier columns are available."
-        ),
-    )
-    parser.add_argument(
         "--eval_weight_floor",
         type=float,
         default=None,
@@ -2056,7 +1942,7 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--val_loss_ema_alpha",
         type=float,
-        default=0.0,
+        default=0.3,
         help=(
             "Exponential moving average alpha for smoothing val loss used in early stopping "
             "and best-model selection. 0.0 disables smoothing (raw val loss is used directly). "
@@ -2084,13 +1970,14 @@ def parse_args(arg_list=None):
     parser.add_argument(
         "--eval_min_season_coverage",
         type=float,
-        default=None,
+        default=1.0,
         help=(
-            "Minimum fraction of a season's composite slots required for val/test "
-            "splits.  When omitted, uses the same value as --train_min_season_coverage. "
-            "The previous hard-coded value of 1.0 is unreachable for annual seasons "
-            "that span more composite slots than the data's timestep count (e.g. 13 "
-            "monthly slots vs 12-month data). Default: None (= train value)."
+            "Minimum fraction of a season's composite slots required for "
+            "val/test splits.  Default 1.0 requires full coverage, which "
+            "works well for seasons that fit within the 12 selected "
+            "timestamps.  Lower this (e.g. 0.8) when evaluating on annual "
+            "seasons whose calendars exceed 12 months, or shorter seasons "
+            "that are not fully captured by the selected timestamp window."
         ),
     )
 
@@ -2099,7 +1986,7 @@ def parse_args(arg_list=None):
         "--season_ids",
         type=str,
         nargs="*",
-        default=None,
+        default=GLOBAL_SEASON_IDS,
         help=(
             "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'tc-annual'). "
             "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2). "

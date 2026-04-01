@@ -18,6 +18,23 @@ from typing import (
     Sequence,
 )
 
+
+def _get_url(url: str) -> bytes:
+
+    # We use a dual approach for artifact downloading:
+    # 1. Try httpx with HTTP/2 support, as it is the only approach working in Terrascope notebooks.
+    # 2. Fall back to urllib for environments where httpx is not available or fails (inside openEO backend).
+    try:
+        import httpx
+
+        with httpx.Client(http2=True) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            return response.content
+    except Exception:  # noqa: BLE001
+        with urllib.request.urlopen(url) as resp:  # nosec: B310
+            return resp.read()
+
 try:
     from loguru import logger
 except ImportError:
@@ -63,11 +80,7 @@ def _download_artifact(source: str, cache_root: Path) -> Path:
         if target.exists():
             return target
         logger.info(f"Downloading seasonal model artifact from {source}")
-        with (
-            urllib.request.urlopen(source) as resp,
-            open(target, "wb") as fh,
-        ):  # nosec: B310
-            shutil.copyfileobj(resp, fh)
+        target.write_bytes(_get_url(source))
         return target
     path = Path(source)
     if not path.exists():

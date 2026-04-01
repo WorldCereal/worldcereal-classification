@@ -626,7 +626,7 @@ def prepare_training_datasets(
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
-    eval_min_season_coverage: Optional[float] = None,
+    eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
@@ -673,14 +673,15 @@ def prepare_training_datasets(
         enabled, the window can shift so that a season is only partially inside
         the window; a value of 0.5 retains the season as long as at least half
         its slots are available.
-    eval_min_season_coverage : float or None, default=None
+    eval_min_season_coverage : float, default=1.0
         Minimum fraction of a season's composite slots required for the
-        **validation and test** splits.  When ``None`` (default), falls back to
-        ``train_min_season_coverage``.  The previous hard-coded value of 1.0
+        **validation and test** splits.  The default of 1.0 (full coverage)
         works for seasonal windows that fit within the data's timestep count
-        (e.g. tc-s1/tc-s2 at ~6 months), but is unreachable for annual windows
-        that span more timesteps than the data provides (e.g. 13 monthly slots
-        vs 12-month data), causing nearly all samples to be silently dropped.
+        (e.g. tc-s1/tc-s2 at ~6 months), but may be unreachable for annual
+        seasons or shorter seasons that span more timesteps than the data
+        provides (e.g. 13 monthly slots vs 12-month data), causing nearly
+        all samples to be silently dropped.  Lower this value (e.g. 0.8)
+        when evaluating on such seasons.
     season_ids : Optional[Sequence[str]], default=None
         Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
         or ``("annual",)``).  When ``None`` the dataset falls back to
@@ -707,11 +708,6 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
     )
-    effective_eval_coverage = (
-        eval_min_season_coverage
-        if eval_min_season_coverage is not None
-        else train_min_season_coverage
-    )
     val_ds = WorldCerealLabelledDataset(
         val_df,
         num_timesteps=num_timesteps,
@@ -725,7 +721,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for validation
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
-        min_season_coverage=effective_eval_coverage,
+        min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
     )
     test_ds = WorldCerealLabelledDataset(
@@ -741,7 +737,7 @@ def prepare_training_datasets(
         masking_config=None,  # No masking for testing
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
-        min_season_coverage=effective_eval_coverage,
+        min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
     )
     return train_ds, val_ds, test_ds
@@ -1424,8 +1420,6 @@ def run_finetuning(
     best_model_dict = None
     epochs_since_improvement = 0
     ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
-    best_lc_f1: float = -1.0  # Best landcover macro F1 seen so far
-    best_ct_f1: float = -1.0  # Best croptype macro F1 seen so far
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1562,11 +1556,9 @@ def run_finetuning(
                 f"was {epochs_since_improvement}/{hyperparams.patience}."
             )
             epochs_since_improvement = 0
-            best_lc_f1 = -1.0
-            best_ct_f1 = -1.0
             if val_loss_ema_alpha > 0.0:
                 ema_val_loss = None  # Restart EMA for the new optimization regime.
-                logger.info("EMA val loss and F1 bests reset at encoder unfreeze.")
+                logger.info("EMA val loss reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -1844,34 +1836,16 @@ def run_finetuning(
             else current_val_loss
         )
 
-        # --- Relaxed improvement: patience resets if ANY signal improves ---
+        # --- Early stopping: patience resets only when loss improves ---
         loss_improved = best_loss is None or early_stop_loss < best_loss
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
-        lc_f1_improved = cur_lc_f1 > best_lc_f1 and cur_lc_f1 > 0
-        ct_f1_improved = cur_ct_f1 > best_ct_f1 and cur_ct_f1 > 0
-        any_improved = loss_improved or lc_f1_improved or ct_f1_improved
 
-        # Always update best-seen values for each signal independently
         if loss_improved:
             best_loss = early_stop_loss
-        if lc_f1_improved:
-            best_lc_f1 = cur_lc_f1
-        if ct_f1_improved:
-            best_ct_f1 = cur_ct_f1
-
-        if any_improved:
             epochs_since_improvement = 0
-            # Log which signal(s) triggered the improvement
-            triggers = []
-            if loss_improved:
-                triggers.append(f"loss={early_stop_loss:.4f}")
-            if lc_f1_improved:
-                triggers.append(f"lc_f1={cur_lc_f1:.4f}")
-            if ct_f1_improved:
-                triggers.append(f"ct_f1={cur_ct_f1:.4f}")
             logger.info(
-                f"Epoch {epoch + 1}: improvement detected via {', '.join(triggers)}"
+                f"Epoch {epoch + 1}: val loss improved to {early_stop_loss:.4f}"
             )
         else:
             epochs_since_improvement += 1
@@ -1899,6 +1873,11 @@ def run_finetuning(
                 )
             setattr(model, "_last_validation_context", validation_context)
 
+            # best_loss is guaranteed non-None here: on the first epoch
+            # best_loss is None → loss_improved is True → best_loss is set
+            # before we ever reach this block.
+            assert best_loss is not None
+
             if on_validation_improved is not None:
                 try:
                     on_validation_improved(epoch + 1, model, best_loss)
@@ -1916,13 +1895,8 @@ def run_finetuning(
             else f"{current_val_loss:.4f}"
         )
         _f1_str = ""
-        if best_lc_f1 > 0 or best_ct_f1 > 0:
-            _f1_str = (
-                f" | F1 lc={cur_lc_f1:.3f}"
-                f"{'↑' if lc_f1_improved else ''}"
-                f" ct={cur_ct_f1:.3f}"
-                f"{'↑' if ct_f1_improved else ''}"
-            )
+        if cur_lc_f1 > 0 or cur_ct_f1 > 0:
+            _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
