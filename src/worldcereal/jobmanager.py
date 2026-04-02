@@ -151,13 +151,19 @@ def run_worldcereal_task(
             "workflow_config": workflow_config,
         }
 
-    log_fn("----- Initializing job manager -----")
-    manager = WorldCerealJobManager(
-        task=task,
-        **manager_init,
-    )
-    log_fn("Job manager initialized!")
-    log_fn("----------------------------------")
+    try:
+        log_fn("----- Initializing job manager -----")
+        manager = WorldCerealJobManager(
+            task=task,
+            **manager_init,
+        )
+        log_fn("Job manager initialized!")
+        log_fn("----------------------------------")
+    except Exception as exc:
+        log_fn("----------------------------------")
+        log_fn(f"Workflow initialization failed with error: {exc}")
+        log_fn("----------------------------------")
+        raise
 
     status_callback = None
     if simplify_logging:
@@ -547,9 +553,28 @@ class WorldCerealJobManager(MultiBackendJobManager):
         assert (
             "geometry" in aoi_gdf.columns
         ), "The grid file must contain a geometry column."
-        assert all(
-            aoi_gdf.geometry.type == "Polygon"
-        ), "All geometries in the grid file must be of type Polygon."
+        geom_types = aoi_gdf.geometry.type.unique().tolist()
+        if not all(aoi_gdf.geometry.type == "Polygon"):
+            invalid_types = [t for t in geom_types if t not in ("Polygon", "MultiPolygon")]
+            if invalid_types:
+                raise ValueError(
+                    f"All geometries must be Polygon or MultiPolygon. "
+                    f"Found unsupported geometry types: {invalid_types}"
+                )
+            n_original = len(aoi_gdf)
+            exploded = aoi_gdf.explode(index_parts=False).reset_index(drop=True)
+            n_final = len(exploded)
+            if n_final != n_original:
+                raise ValueError(
+                    f"Cannot convert MultiPolygon geometries to Polygons: "
+                    f"exploding would change the number of features from {n_original} to {n_final}, "
+                    f"which would duplicate attribute values (e.g. tile_name). "
+                    f"Please provide a GeoDataFrame with only Polygon geometries."
+                )
+            aoi_gdf = exploded
+            logger.info(
+                f"Converted {n_original} MultiPolygon feature(s) to Polygons."
+            )
         if aoi_gdf.crs is None:
             raise ValueError("Input GeoDataFrame must have a CRS.")
 
