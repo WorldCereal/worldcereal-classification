@@ -41,8 +41,6 @@ from worldcereal.train.seasonal_head import (
 )
 from worldcereal.utils.refdata import get_class_mappings
 
-CLASS_MAPPINGS = get_class_mappings(source="sharepoint")
-
 
 def _path_to_str(path: Optional[Path]) -> Optional[str]:
     return str(path) if path is not None else None
@@ -80,7 +78,9 @@ def _is_ignore_label(value) -> bool:
     try:
         return str(value).strip().lower() == "ignore"
     except Exception:  # noqa: BLE001
-        logger.warning(f"Could not parse label value {value!r} as string; treating as non-ignore.")
+        logger.warning(
+            f"Could not parse label value {value!r} as string; treating as non-ignore."
+        )
         return False
 
 
@@ -160,7 +160,6 @@ def _normalize_score(series: pd.Series) -> pd.Series:
     return series.clip(0.0, 1.0)
 
 
-
 def _drop_zero_quality_samples(
     df: pd.DataFrame,
     split_name: str,
@@ -203,9 +202,7 @@ def _drop_zero_quality_samples(
         )
         df = df[~all_zero].copy()
     else:
-        logger.info(
-            f"{split_name}: no samples with all-zero quality scores found."
-        )
+        logger.info(f"{split_name}: no samples with all-zero quality scores found.")
     return df
 
 
@@ -273,8 +270,10 @@ def _filter_low_weight_eval_samples(
     w = df[present_weight_cols].min(axis=1)
 
     # Per-ref_id percentile threshold
-    pct_threshold = df.assign(_w=w).groupby("ref_id")["_w"].transform(
-        lambda s: np.percentile(s, percentile)
+    pct_threshold = (
+        df.assign(_w=w)
+        .groupby("ref_id")["_w"]
+        .transform(lambda s: np.percentile(s, percentile))
     )
 
     # Mark: relatively bad AND absolutely bad
@@ -286,10 +285,9 @@ def _filter_low_weight_eval_samples(
         protected = pd.Series(False, index=df.index)
         for label_col in present_label_cols:
             labels = df[label_col].dropna()
-            remaining_counts = (
-                df.loc[~remove_mask & df[label_col].notna(), label_col]
-                .value_counts()
-            )
+            remaining_counts = df.loc[
+                ~remove_mask & df[label_col].notna(), label_col
+            ].value_counts()
             for cls_name in labels.unique():
                 if remaining_counts.get(cls_name, 0) < min_class_samples:
                     # Protect all samples of this class from removal
@@ -332,8 +330,7 @@ def _filter_low_weight_eval_samples(
     # Log up to top 15 ref_ids
     top_refs = ref_counts.head(15)
     logger.warning(
-        f"{split_name}: per-ref_id removal counts (top 15):\n"
-        + top_refs.to_string()
+        f"{split_name}: per-ref_id removal counts (top 15):\n" + top_refs.to_string()
     )
 
     # Weight distribution of removed samples
@@ -361,6 +358,8 @@ def _build_head_manifest(
     croptype_classes: Sequence[str],
     cropland_class_names: Sequence[str],
     seasonal_head_dropout: float,
+    head_type: str,
+    head_hidden_dim: int,
     config_filename: str,
     manifest_filename: str,
 ) -> Dict[str, Any]:
@@ -420,7 +419,9 @@ def _build_head_manifest(
             "time_explicit": time_explicit,
         },
         "backbone": {
+            "head_type": head_type,
             "head_dropout": seasonal_head_dropout,
+            "head_hidden_dim": head_hidden_dim,
         },
         "heads": [landcover_head, croptype_head],
         "artifacts": {
@@ -492,6 +493,7 @@ def _annotate_dual_task_labels(
     landcover_key: str,
     croptype_key: str,
     cropland_class_names: List[str],
+    class_mappings: Dict[str, Any],
 ) -> pd.DataFrame:
     """Attach landcover/croptype labels and task routing metadata to a split dataframe."""
 
@@ -501,7 +503,7 @@ def _annotate_dual_task_labels(
 
     updated = df.copy()
     landcover_map = {
-        int(code): label for code, label in CLASS_MAPPINGS[landcover_key].items()
+        int(code): label for code, label in class_mappings[landcover_key].items()
     }
     updated["landcover_label"] = updated["ewoc_code"].map(landcover_map)
 
@@ -520,7 +522,7 @@ def _annotate_dual_task_labels(
             )
 
     croptype_map = {
-        int(code): label for code, label in CLASS_MAPPINGS[croptype_key].items()
+        int(code): label for code, label in class_mappings[croptype_key].items()
     }
     updated["croptype_label"] = updated["ewoc_code"].map(croptype_map)
 
@@ -729,7 +731,9 @@ def main(args):
     initial_mapping = args.initial_mapping
     augment = args.augment
     time_explicit = args.time_explicit
-    enable_masking = args.enable_masking or args.disable_meteo or args.disable_s1 or args.disable_s2
+    enable_masking = (
+        args.enable_masking or args.disable_meteo or args.disable_s1 or args.disable_s2
+    )
     debug = args.debug
     use_class_balancing = (
         args.use_class_balancing
@@ -756,9 +760,41 @@ def main(args):
     train_min_season_coverage: float = args.train_min_season_coverage
     eval_min_season_coverage: float = args.eval_min_season_coverage
 
-    # Season IDs for crop-type supervision (defaults to GLOBAL_SEASON_IDS)
-    season_ids: Tuple[str, ...] = tuple(args.season_ids)
-    is_default_seasons = season_ids == GLOBAL_SEASON_IDS
+    # Season windows for explicit season definition (mutually exclusive with season_ids)
+    season_windows: Optional[Dict[str, Any]] = None
+    if args.season_windows is not None:
+        if args.season_ids is not None:
+            raise ValueError(
+                "'--season_windows' and '--season_ids' are mutually exclusive. "
+                "Provide one or the other, not both."
+            )
+        try:
+            season_windows = json.loads(args.season_windows)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"'--season_windows' could not be parsed as JSON: {exc}"
+            ) from exc
+        if not isinstance(season_windows, dict):
+            raise ValueError(
+                "'--season_windows' must be a JSON object mapping season names to "
+                "[start_date, end_date] arrays, e.g. "
+                '\'{"tc-s1": ["2021-04-01", "2021-09-30"]}\'.'
+            )
+        logger.info(f"Season windows (custom): {season_windows}")
+
+    # Season IDs for crop-type supervision
+    # Fall back to GLOBAL_SEASON_IDS only when neither --season_ids nor --season_windows
+    # was explicitly provided.
+    if args.season_ids is not None:
+        season_ids: Tuple[str, ...] = tuple(args.season_ids)
+        is_default_seasons = False
+    elif season_windows is None:
+        season_ids = GLOBAL_SEASON_IDS
+        is_default_seasons = True
+    else:
+        # season_windows provided without season_ids: season names come from the windows
+        season_ids = tuple(season_windows.keys())
+        is_default_seasons = False
     logger.info(
         f"Season IDs: {season_ids}"
         + (" (default)" if is_default_seasons else " (custom)")
@@ -814,8 +850,8 @@ def main(args):
     else:
         masking_info = "disabled"
 
-    sensor_disable_tag = ''.join(
-        f'-no{s}' for s in disabled_sensors
+    sensor_disable_tag = "".join(
+        f"-no{s}" for s in disabled_sensors
     )  # e.g. '-noS1-noMETEO'
     experiment_name = f"presto-prometheo-{experiment_tag}-{timestep_freq}-augment={augment}-balance={use_class_balancing}-timeexplicit={time_explicit}-masking={masking_info}{sensor_disable_tag}-run={timestamp_ind}"
     output_dir = f"{base_output_dir}/{experiment_name}"
@@ -892,9 +928,7 @@ def main(args):
     if args.explicit_training_dataframe:
         wide_parquet_output_path = Path(args.explicit_training_dataframe)
     elif not debug:
-        wide_parquet_output_path = Path(
-            "/projects/worldcereal/merged_319_wide.parquet"
-        )
+        wide_parquet_output_path = Path("./wide.parquet")
     else:
         wide_parquet_output_path = None
 
@@ -902,8 +936,8 @@ def main(args):
     pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
     epochs = 100
     batch_size = args.batch_size
-    patience = 20
-    num_workers = 8
+    patience = args.patience
+    num_workers = args.num_workers
 
     # ------------------------------------------
 
@@ -918,6 +952,18 @@ def main(args):
     train_df_path = Path(output_dir) / "train_df.parquet"
     val_df_path = Path(output_dir) / "val_df.parquet"
     test_df_path = Path(output_dir) / "test_df.parquet"
+
+    landcover_key = args.landcover_classes_key
+    croptype_key = args.croptype_classes_key
+
+    # Resolve class mappings: use a user-supplied JSON file if provided,
+    # otherwise fetch from SharePoint (requires credentials).
+    if args.class_mappings_file is not None:
+        logger.info(f"Loading class mappings from file: {args.class_mappings_file}")
+        class_mappings = get_class_mappings(source=args.class_mappings_file)
+    else:
+        logger.info("Fetching class mappings from SharePoint ...")
+        class_mappings = get_class_mappings(source="sharepoint")
 
     # Get / load the train/val/test dataframes
     if (
@@ -939,7 +985,7 @@ def main(args):
             max_timesteps_trim=max_timesteps_trim,
             use_valid_time=use_valid_time,
             finetune_classes=initial_mapping,
-            class_mappings=CLASS_MAPPINGS,
+            class_mappings=class_mappings,
             val_samples_file=val_samples_file,
             test_samples_file=test_samples_file,
             ignore_samples_file=ignore_samples_file,
@@ -966,15 +1012,13 @@ def main(args):
             drop_level=args.outlier_mode,
         )
 
-    landcover_key = args.landcover_classes_key
-    croptype_key = args.croptype_classes_key
-    if landcover_key not in CLASS_MAPPINGS:
+    if landcover_key not in class_mappings:
         raise ValueError(
-            f"Unknown landcover_classes_key '{landcover_key}'. Available keys: {list(CLASS_MAPPINGS)}"
+            f"Unknown landcover_classes_key '{landcover_key}'. Available keys: {list(class_mappings)}"
         )
-    if croptype_key not in CLASS_MAPPINGS:
+    if croptype_key not in class_mappings:
         raise ValueError(
-            f"Unknown croptype_classes_key '{croptype_key}'. Available keys: {list(CLASS_MAPPINGS)}"
+            f"Unknown croptype_classes_key '{croptype_key}'. Available keys: {list(class_mappings)}"
         )
 
     annotated_splits = {}
@@ -989,6 +1033,7 @@ def main(args):
             landcover_key=landcover_key,
             croptype_key=croptype_key,
             cropland_class_names=cropland_class_names,
+            class_mappings=class_mappings,
         )
 
     train_df = annotated_splits["train"]
@@ -1123,10 +1168,14 @@ def main(args):
             label_columns=("landcover_label", "croptype_label"),
         )
         val_df = _filter_low_weight_eval_samples(
-            val_df, "val", **_filter_kwargs,
+            val_df,
+            "val",
+            **_filter_kwargs,
         )
         test_df = _filter_low_weight_eval_samples(
-            test_df, "test", **_filter_kwargs,
+            test_df,
+            "test",
+            **_filter_kwargs,
         )
 
     # Write the processed dataframes after all manipulations have already been done
@@ -1154,6 +1203,7 @@ def main(args):
         train_min_season_coverage=train_min_season_coverage,
         eval_min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
 
     # Construct the finetuning model based on the pretrained model
@@ -1163,11 +1213,11 @@ def main(args):
     #   2. Loss indices stay consistent with head outputs.
     #   3. Confusion matrices only show classes the model can predict.
     landcover_classes_raw = _unique_preserve_order(
-        CLASS_MAPPINGS[landcover_key].values()
+        class_mappings[landcover_key].values()
     )
     landcover_classes_full = _filter_ignore_labels(landcover_classes_raw)
 
-    croptype_classes_raw = _unique_preserve_order(CLASS_MAPPINGS[croptype_key].values())
+    croptype_classes_raw = _unique_preserve_order(class_mappings[croptype_key].values())
     croptype_classes_full = _filter_ignore_labels(croptype_classes_raw)
 
     # Effective classes = those present in training split (preserving taxonomy order)
@@ -1188,9 +1238,7 @@ def main(args):
     landcover_classes = [
         cls for cls in landcover_classes_full if cls in train_lc_labels
     ]
-    croptype_classes = [
-        cls for cls in croptype_classes_full if cls in train_ct_labels
-    ]
+    croptype_classes = [cls for cls in croptype_classes_full if cls in train_ct_labels]
 
     if len(landcover_classes) < len(landcover_classes_full):
         dropped_lc = set(landcover_classes_full) - set(landcover_classes)
@@ -1227,6 +1275,10 @@ def main(args):
         landcover_num_outputs=len(landcover_classes),
         crop_num_outputs=len(croptype_classes),
         dropout=args.seasonal_head_dropout,
+        landcover_head_type=args.head_type,
+        croptype_head_type=args.head_type,
+        landcover_hidden_dim=args.head_hidden_dim,
+        croptype_hidden_dim=args.head_hidden_dim,
     )
     model = WorldCerealSeasonalModel(
         backbone=backbone,
@@ -1449,6 +1501,8 @@ def main(args):
         croptype_classes=croptype_classes,
         cropland_class_names=cropland_class_names,
         seasonal_head_dropout=args.seasonal_head_dropout,
+        head_type=args.head_type,
+        head_hidden_dim=args.head_hidden_dim,
         config_filename=config_path.name,
         manifest_filename=manifest_path.name,
     )
@@ -1504,6 +1558,7 @@ def main(args):
         "label_jitter": label_jitter,
         "label_window": label_window,
         "season_ids": list(season_ids),
+        "season_windows": season_windows,
         "train_min_season_coverage": train_min_season_coverage,
         "eval_min_season_coverage": eval_min_season_coverage,
         "masking": masking_payload,
@@ -1522,6 +1577,8 @@ def main(args):
     }
     model_payload = {
         "pretrained_model_path": pretrained_model_path,
+        "head_type": args.head_type,
+        "head_hidden_dim": args.head_hidden_dim,
         "seasonal_head_dropout": args.seasonal_head_dropout,
         "freeze_layers": freeze_layers,
         "unfreeze_epoch": unfreeze_epoch,
@@ -1688,10 +1745,52 @@ def parse_args(arg_list=None):
         help="Class mapping key used for crop-type targets in the dual-head configuration.",
     )
     parser.add_argument(
+        "--class_mappings_file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a custom JSON file containing class mappings. "
+            "When provided, overrides the default mappings fetched from SharePoint. "
+            "The JSON must be a top-level object mapping class-set keys "
+            '(e.g. "LANDCOVER10") to {ewoc_code: label} dicts, '
+            "identical in structure to the bundled class_mappings.json."
+        ),
+    )
+    parser.add_argument(
+        "--head_type",
+        type=str,
+        default="linear",
+        choices=["linear", "mlp"],
+        help=(
+            "Projection head architecture for both the landcover and crop-type heads. "
+            '"linear" (default): a single fully-connected layer — fast and robust, \''
+            "recommended when training data is limited. "
+            '"mlp": a two-layer MLP with ReLU and dropout — can improve accuracy \''
+            "when sufficient data is available. "
+            "The --head_hidden_dim and --seasonal_head_dropout arguments only "
+            'take effect when head_type is "mlp"; they are silently ignored for '
+            '"linear" heads.'
+        ),
+    )
+    parser.add_argument(
+        "--head_hidden_dim",
+        type=int,
+        default=256,
+        help=(
+            "Hidden layer width for MLP projection heads. "
+            'Only used when --head_type is "mlp"; ignored for linear heads. '
+            "Default: 256."
+        ),
+    )
+    parser.add_argument(
         "--seasonal_head_dropout",
         type=float,
         default=0.0,
-        help="Dropout rate applied inside the seasonal head before projection layers.",
+        help=(
+            "Dropout rate applied inside the MLP projection head. "
+            'Only used when --head_type is "mlp"; ignored for linear heads. '
+            "Default: 0.0 (no dropout)."
+        ),
     )
     parser.add_argument(
         "--seasonal_loss_landcover_weight",
@@ -1770,7 +1869,11 @@ def parse_args(arg_list=None):
     # Task setup
     parser.add_argument("--initial_mapping", type=str, default="LANDCOVER10")
     parser.add_argument("--augment", action="store_true")
-    parser.add_argument("--time_explicit", action="store_true")
+    parser.add_argument(
+        "--time_explicit",
+        type=bool,
+        default=True,
+    )
     parser.add_argument("--enable_masking", action="store_true")
     parser.add_argument(
         "--disable_s1",
@@ -1934,10 +2037,19 @@ def parse_args(arg_list=None):
         help="Relative factor (0-1] of the full finetuning LR to start from during the post-unfreeze warmup stage.",
     )
     parser.add_argument(
-        "--batch_size",
+        "--batch_size", type=int, default=4096, help="Batch size for training."
+    )
+    parser.add_argument(
+        "--num_workers",
         type=int,
-        default=4096,
-        help="Batch size for training."
+        default=8,
+        help="Number of DataLoader worker processes. Default: 8.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=20,
+        help="Early-stopping patience (epochs without validation improvement). Default: 20.",
     )
 
     # Label timing (for time_explicit only)
@@ -1990,11 +2102,26 @@ def parse_args(arg_list=None):
         "--season_ids",
         type=str,
         nargs="*",
-        default=GLOBAL_SEASON_IDS,
+        default=None,
         help=(
             "Season IDs for crop-type supervision (e.g. 'tc-s1 tc-s2' or 'tc-annual'). "
-            "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2). "
-            "Use 'tc-annual' for a single annual season from the crop calendar."
+            "Defaults to GLOBAL_SEASON_IDS (tc-s1, tc-s2) when neither --season_ids nor "
+            "--season_windows is provided. "
+            "Use 'tc-annual' for a single annual season from the crop calendar. "
+            "Mutually exclusive with --season_windows."
+        ),
+    )
+    parser.add_argument(
+        "--season_windows",
+        type=str,
+        default=None,
+        help=(
+            "JSON string mapping season names to [start_date, end_date] pairs that define "
+            "explicit season extents, bypassing crop calendars entirely. "
+            "Dates repeat annually; only month/day (and optional year crossing) is used. "
+            'Example: \'{"tc-s1": ["2021-04-01", "2021-09-30"], \''
+            '\'{"tc-s2": ["2021-10-01", "2022-03-31"]}\'\'. '
+            "Mutually exclusive with --season_ids."
         ),
     )
 
