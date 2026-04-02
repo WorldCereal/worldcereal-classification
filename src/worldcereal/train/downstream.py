@@ -473,34 +473,28 @@ class TorchTrainer:
         }
         return manifest
 
-    def _apply_downstream_mapping(
-        self, trainval_df: pd.DataFrame, test_df: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def _apply_downstream_mapping(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.downstream_classes is not None:
             logger.info(f"Applying downstream class mapping: {self.downstream_classes}")
-            missing_classes = set(trainval_df["finetune_class"].unique()) - set(
+            missing_classes = set(df["finetune_class"].unique()) - set(
                 self.downstream_classes.keys()
             )
             if missing_classes:
                 raise ValueError(
                     f"Downstream mapping missing for classes: {missing_classes}"
                 )
-            for df in (trainval_df, test_df):
-                df["downstream_class"] = df["finetune_class"].map(
-                    self.downstream_classes
-                )
+            df["downstream_class"] = df["finetune_class"].map(self.downstream_classes)
         else:
             logger.info(
                 "No downstream_classes specified, using finetune_classes directly"
             )
             self.downstream_classes = {
-                cls: cls for cls in sorted(trainval_df["finetune_class"].unique())
+                cls: cls for cls in sorted(df["finetune_class"].unique())
             }
-            trainval_df["downstream_class"] = trainval_df["finetune_class"]
-            test_df["downstream_class"] = test_df["finetune_class"]
+            df["downstream_class"] = df["finetune_class"]
 
         self.target_column = "downstream_class"
-        return trainval_df, test_df
+        return df
 
     def _set_loss_function(self) -> None:
         self.classes_list = sorted(self.classes_list)
@@ -636,6 +630,11 @@ class TorchTrainer:
         self.create_config()
         self._ensure_label_columns(self.training_df)
 
+        # Apply downstream class mapping on the full dataset before splitting so that
+        # the derived identity mapping (when downstream_classes is None) includes all
+        # classes present in any split, not just the training split.
+        self.training_df = self._apply_downstream_mapping(self.training_df)
+
         if self.use_spatial_split:
             train_df, val_df, test_df = spatial_train_val_test_split(
                 self.training_df,
@@ -657,11 +656,6 @@ class TorchTrainer:
             raise ValueError("No validation samples available after filtering.")
         if test_df.empty:
             raise ValueError("No test samples available for evaluation.")
-
-        # Apply downstream class mapping to all splits
-        train_df, _ = self._apply_downstream_mapping(train_df, train_df.copy())
-        val_df, _ = self._apply_downstream_mapping(val_df, val_df.copy())
-        test_df, _ = self._apply_downstream_mapping(test_df, test_df.copy())
 
         self.classes_list = sorted(train_df[self.target_column].unique())
         self._set_loss_function()
