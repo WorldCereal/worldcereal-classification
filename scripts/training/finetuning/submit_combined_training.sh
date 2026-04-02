@@ -31,9 +31,9 @@ srun python /home/vito/butskoc/worldcereal_finetuning/worldcereal-classification
     --initial_mapping LANDCOVER10 \
     --landcover_classes_key LANDCOVER10 \
     --croptype_classes_key CROPTYPE24 \
-    --val_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/val_split_h3l5.csv \
-    --test_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/test_split_h3l5.csv \
-    --ignore_samples_file /home/vito/butskoc/projects/worldcereal/data/balanced_splits/ignore_split_h3l5.csv \
+    --val_samples_file /projects/worldcereal/data/balanced_splits/val_split_h3l5.csv \
+    --test_samples_file /projects/worldcereal/data/balanced_splits/test_split_h3l5.csv \
+    --ignore_samples_file /projects/worldcereal/data/balanced_splits/ignore_split_h3l5.csv \
     --timestep_freq month \
     --finetune_regions "Northern Africa, Middle Africa, Western Africa, Eastern Africa, Southern Africa" \
     --time_explicit \
@@ -48,5 +48,5 @@ srun python /home/vito/butskoc/worldcereal_finetuning/worldcereal-classification
     --head_only_training 3 \
     --post_unfreeze_warmup_epochs 2 \
     --log_tensorboard \
-    --explicit_training_dataframe /home/vito/butskoc/projects/worldcereal/merged_319_wide.parquet \
-    --base_output_dir /home/vito/butskoc/projects/worldcereal/models \
+    --wide_parquet_path /projects/worldcereal/merged_319_wide.parquet \
+    --base_output_dir /projects/worldcereal/models

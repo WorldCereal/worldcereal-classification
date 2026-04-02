@@ -63,9 +63,12 @@ ARGS=(
     # Omit to use all available samples.
     # --finetune_regions "Eastern Africa"
 
-    # Optional: path to a pre-merged wide parquet so successive experiments
-    # with the same data skip the potentially slow data preparation step.
-    # --explicit_training_dataframe "./wide.parquet"
+    # Optional: path to the intermediate wide-format parquet (the expensive pivot/merge
+    # step output). If the file already exists it is reused, skipping data preparation.
+    # If it does not exist yet it is created there so future runs can reuse it.
+    # On HPC the shared /projects/worldcereal directory is used automatically
+    # when this is not set.
+    --wide_parquet_path "./wide.parquet"
 
     # --------------------------------------------------------------------------
     # CLASS MAPPINGS

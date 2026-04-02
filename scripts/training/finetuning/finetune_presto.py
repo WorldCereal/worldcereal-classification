@@ -925,11 +925,15 @@ def main(args):
         )
 
     # setup path for processed wide parquet file so that it can be reused across experiments
-    if args.explicit_training_dataframe:
-        wide_parquet_output_path = Path(args.explicit_training_dataframe)
-    elif not debug:
-        wide_parquet_output_path = Path("./wide.parquet")
+    _HPC_WIDE_PARQUET = Path("/projects/worldcereal/merged_319_wide.parquet")
+    if args.wide_parquet_path:
+        wide_parquet_output_path = Path(args.wide_parquet_path)
+    elif not debug and _HPC_WIDE_PARQUET.parent.is_dir():
+        # On HPC the shared /projects/worldcereal directory is available: reuse the
+        # cached wide parquet to speed up successive experiments.
+        wide_parquet_output_path = _HPC_WIDE_PARQUET
     else:
+        # Outside HPC (or in debug mode): data.py will create a temp file automatically.
         wide_parquet_output_path = None
 
     # Training parameters
@@ -953,8 +957,8 @@ def main(args):
     val_df_path = Path(output_dir) / "val_df.parquet"
     test_df_path = Path(output_dir) / "test_df.parquet"
 
-    landcover_key = args.landcover_classes_key
     croptype_key = args.croptype_classes_key
+    landcover_key = args.landcover_classes_key
 
     # Resolve class mappings: use a user-supplied JSON file if provided,
     # otherwise fetch from SharePoint (requires credentials).
@@ -994,6 +998,9 @@ def main(args):
             overwrite=False,
         )
         logger.info("Saving train, val, and test DataFrames to parquet files ...")
+        train_df.to_parquet(train_df_path, index=False)
+        val_df.to_parquet(val_df_path, index=False)
+        test_df.to_parquet(test_df_path, index=False)
 
     if "drop" in args.outlier_mode:
         train_df = _drop_outliers(
@@ -1539,7 +1546,7 @@ def main(args):
     }
     data_sources_payload = {
         "parquet_files": [str(path) for path in parquet_files],
-        "wide_parquet_output_path": _path_to_str(wide_parquet_output_path),
+        "wide_parquet_path": _path_to_str(wide_parquet_output_path),
         "val_samples_file": args.val_samples_file,
         "test_samples_file": args.test_samples_file,
         "ignore_samples_file": args.ignore_samples_file,
@@ -1844,10 +1851,17 @@ def parse_args(arg_list=None):
         help="Explicit list of parquet files to use for training. If not set, uses get_parquet_file_list based on timestep_freq.",
     )
     parser.add_argument(
-        "--explicit_training_dataframe",
+        "--wide_parquet_path",
         type=str,
         default=None,
-        help="Path to cache the merged wide parquet file for reuse across experiments. If not set, uses default location in non-debug mode.",
+        help=(
+            "Path to the merged wide-format parquet file used as the intermediate "
+            "processing cache. If the file already exists at this path it is reused "
+            "(skipping the expensive pivot step); if it does not exist yet it is "
+            "created there so subsequent runs can reuse it. "
+            "On HPC the shared /projects/worldcereal directory is used automatically "
+            "when this argument is not provided."
+        ),
     )
     parser.add_argument(
         "--finetune_regions",
