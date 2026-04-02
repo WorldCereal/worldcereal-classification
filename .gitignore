@@ -45,11 +45,13 @@ MANIFEST
 .vscode
 .history
 .noseids
+.codex
 experimental/**
 
 # By default don't track notebooks
 notebooks/*.ipynb
 notebooks/trainings/*.ipynb
+notebooks/historic_training_notebooks/*.ipynb
 
 # Don't track dependencies
 dependencies/
@@ -203,7 +205,9 @@ notebooks/local_inference/*
 notebooks/preprocessed_inputs/*
 notebooks/results/*
 notebooks/runs/*
-notebooks/training_data/*
+notebooks/training_extractions/*
+notebooks/training_extractions_aligned/*
+notebooks/training_dataframe/*
 
 notebooks/*/bbox/*
 notebooks/*/catboost_info/*
@@ -216,7 +220,12 @@ notebooks/*/local_inference/*
 notebooks/*/preprocessed_inputs/*
 notebooks/*/results/*
 notebooks/*/runs/*
-notebooks/*/training_data/*
+notebooks/*/training_extractions/*
+notebooks/*/training_extractions_aligned/*
+notebooks/*/training_dataframe/*
+
+# output files of scripts
+outputs/*
 
 
 scripts/extractions/extract_patches_s1.sh

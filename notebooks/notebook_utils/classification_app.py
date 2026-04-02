@@ -18,6 +18,7 @@ This module provides an interactive widget-based interface for:
 
 import json
 import platform
+import re
 import shutil
 import time
 from datetime import datetime
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+import geopandas as gpd
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
@@ -47,7 +49,9 @@ from notebook_utils.job_manager import run_worldcereal_task_notebook
 from notebook_utils.production import merge_maps
 from notebook_utils.seasons import retrieve_worldcereal_seasons, valid_time_distribution
 from notebook_utils.visualization import visualize_products
-from openeo_gfmap import TemporalContext
+from openeo_gfmap import BoundingBoxExtent, TemporalContext
+from shapely import wkt as shapely_wkt
+from shapely.geometry import box as shapely_box
 from tabulate import tabulate
 
 from worldcereal.job import WorldCerealTask, resolve_workflow_luts
@@ -95,9 +99,12 @@ class WorldCerealClassificationApp:
         self.tab1_df: Optional[pd.DataFrame] = None  # Tab 1 working results
         self.tab1_saved = False
         self.append_next_query = False
+        self.tab1_aoi_names: List[str] = []  # Accumulated AOI names across queries
+        self.aoi_name_from_file: str = ""  # AOI name parsed from a loaded filename
 
         # Tab 3 variables
         self.processing_period: Optional[TemporalContext] = None
+        self.tab3_aoi_gdf = None  # GeoDataFrame AOI loaded from file (for seasons display)
         self.season_window: Optional[TemporalContext] = None
         self.season_id: Optional[str] = None
 
@@ -506,37 +513,21 @@ class WorldCerealClassificationApp:
         )
 
         aoi_message = widgets.HTML(
-            value="<i>Select an Area of Interest (AOI) on the map below to spatially constrain your query.</i>"
+            value="<i>Select an Area of Interest (AOI) on the map below to spatially constrain your query. Note that you can select another AOI for actual map generation later on.</i>"
         )
 
         aoi_explanation = self._info_callout(
             "If no AOI is selected, the query will consider all available data globally.<br>"
             "       ⚠️ WARNING: This will result in a very large query and may take a long time to complete.<br><br>"
             "You can draw a rectangle using the drawing tools on the left side of the map.<br>"
-            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
-            "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button.<br>"
+            "The app will automatically store the coordinates of the last rectangle you drew on the map and save them to the local <code>./bbox</code> folder.<br><br>"
             "Alternatively, you can also upload a vector file (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
-            "Files containing only a single point are not allowed.<br><br>"
-            "After you have selected your AOI you can save it to the local `./bbox` folder using the Save AOI button below.<br>"
+            "Files containing only a single point are not allowed.<br>"
         )
 
         aoi_map = ui_map(display_ui=False)
-
-        aoi_save_button = widgets.Button(
-            description="Save AOI to file",
-            button_style="info",
-            icon="save",
-            layout=widgets.Layout(width="220px"),
-        )
-        aoi_save_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="60px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
 
         buffer_explanation = self._info_callout(
             "By default we apply a 250 km buffer around your selected AOI to ensure sufficient reference data is retrieved.<br>"
@@ -678,11 +669,53 @@ class WorldCerealClassificationApp:
             )
         )
 
+        # -----------------------------------------------------------------
+        # Restore section — shown automatically when temp query data exists
+        # -----------------------------------------------------------------
+        _temp_dir = Path("./training_extractions_temp")
+        _temp_files = sorted(_temp_dir.glob("*.parquet")) if _temp_dir.exists() else []
+        restore_title = widgets.HTML(
+            value="<h3 style='color: #e67e22; margin: 0 0 4px 0;'>⚠️ Unsaved query data detected</h3>"
+        )
+        restore_info = self._info_callout(
+            "Previously saved query results were found in the temporary folder "
+            "<code>./training_extractions_temp/</code>.<br><br>"
+            "Would you like to restore these results to continue where you left off, "
+            "or discard them and start fresh?"
+        )
+        restore_button = widgets.Button(
+            description="Restore saved queries",
+            button_style="warning",
+            icon="history",
+            layout=widgets.Layout(width="220px", height="40px"),
+        )
+        discard_temp_button = widgets.Button(
+            description="Discard temp data",
+            button_style="danger",
+            icon="trash",
+            layout=widgets.Layout(width="200px", height="40px"),
+        )
+        restore_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="60px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+        restore_section = widgets.VBox(
+            [
+                restore_title,
+                restore_info,
+                widgets.HBox([restore_button, discard_temp_button]),
+                restore_output,
+            ]
+        )
+        restore_section.layout.display = "" if _temp_files else "none"
+
         self.tab1_widgets = {
             "extent_output": extent_output,
             "aoi_map": aoi_map,
-            "aoi_save_button": aoi_save_button,
-            "aoi_save_output": aoi_save_output,
             "buffer_input": buffer_input,
             "include_public_checkbox": include_public_checkbox,
             "include_private_checkbox": include_private_checkbox,
@@ -701,6 +734,10 @@ class WorldCerealClassificationApp:
             "save_add_button": save_add_button,
             "discard_button": discard_button,
             "config_output": config_output,
+            "restore_section": restore_section,
+            "restore_button": restore_button,
+            "discard_temp_button": discard_temp_button,
+            "restore_output": restore_output,
         }
 
         run_query_button.on_click(self._on_run_query_click)
@@ -711,11 +748,14 @@ class WorldCerealClassificationApp:
         private_path_button.on_click(self._on_private_edit_click)
         crop_only_checkbox.observe(self._on_crop_only_toggle, names="value")
         select_crops_button.on_click(self._on_select_crops_click)
-        aoi_save_button.on_click(self._on_tab1_save_aoi_click)
+        aoi_map.submit_button.on_click(self._auto_save_aoi)
+        restore_button.on_click(self._on_tab1_restore_click)
+        discard_temp_button.on_click(self._on_tab1_discard_temp_click)
 
         return widgets.VBox(
             [
                 header,
+                restore_section,
                 status_message,
                 background_info,
                 widgets.HTML(
@@ -732,8 +772,6 @@ class WorldCerealClassificationApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
-                widgets.HBox([aoi_save_button]),
-                aoi_save_output,
                 buffer_explanation,
                 buffer_input,
                 widgets.HTML("<b>2) Data sources selection:</b>"),
@@ -962,6 +1000,77 @@ class WorldCerealClassificationApp:
         self.tab1_widgets["save_add_button"].disabled = False
         self.tab1_widgets["discard_button"].disabled = False
 
+    def _get_aoi_name_tab1(self) -> str:
+        """Return the current sanitized AOI ID from the map widget, or empty string."""
+        aoi_map = self.tab1_widgets.get("aoi_map")
+        if aoi_map is None:
+            return ""
+        gdf = aoi_map.get_gdf()
+        if gdf is None or gdf.empty or "id" not in gdf.columns:
+            return ""
+        aoi_id = str(gdf.iloc[0]["id"]).strip()
+        return aoi_id
+
+    def _accumulate_aoi_name(self) -> None:
+        """Add the current AOI name to the accumulated list (if not already present)."""
+        name = self._get_aoi_name_tab1()
+        if name and name not in self.tab1_aoi_names:
+            self.tab1_aoi_names.append(name)
+
+    def _get_aoi_filename_part(self) -> str:
+        """Return AOI name(s) for use in filenames.
+
+        Prefers names accumulated from Tab 1 queries; falls back to the name
+        parsed from a previously loaded file.
+        """
+        if self.tab1_aoi_names:
+            return "-".join(self.tab1_aoi_names)
+        return self.aoi_name_from_file
+
+    def _parse_aoi_from_filename(self, path: Path) -> str:
+        """Extract an AOI name from an extractions filename.
+
+        Handles patterns like:
+          extractions_<aoi>_<timestamp>.parquet
+          extractions_aligned_<aoi>_<seasonId>_<YYYYMMDD-YYYYMMDD>_<timestamp>.parquet
+          trainingdf_<aoi>_<seasonId>_<YYYYMMDD-YYYYMMDD>_cl-<n>_<timestamp>.csv
+          embeddings_<aoi>_<seasonId>_<YYYYMMDD-YYYYMMDD>_cl-<n>_<timestamp>.csv
+        Returns empty string when no AOI segment can be found.
+        """
+        stem = path.stem
+        # Strip known prefixes
+        for prefix in ("extractions_aligned_", "extractions_", "trainingdf_", "embeddings_", "query_"):
+            if stem.startswith(prefix):
+                stem = stem[len(prefix):]
+                break
+        parts = stem.split("_")
+        # Detect YYYYMMDD-YYYYMMDD date range segment (season window, 17 chars)
+        date_range_re = re.compile(r"^\d{8}-\d{8}$")
+        date_range_idx = next(
+            (i for i, p in enumerate(parts) if date_range_re.match(p)), None
+        )
+        if date_range_idx is not None and date_range_idx >= 2:
+            # parts[date_range_idx - 1] is the season_id; everything before it is the AOI
+            aoi_parts = parts[: date_range_idx - 1]
+            return "_".join(aoi_parts) if aoi_parts else ""
+        # No season date range — fall back to stripping the trailing timestamp (YYYYMMDD-HHMMSS, 15 chars)
+        if len(parts) >= 2:
+            candidate_ts = parts[-1]
+            if len(candidate_ts) == 15 and "-" in candidate_ts:
+                return "_".join(parts[:-1])
+        return stem  # fallback: use whatever is left
+
+    def _get_season_filename_part(self) -> str:
+        """Return a season string for use in filenames, e.g. 'ShortRains_20190701-20200630'."""
+        parts: List[str] = []
+        if self.season_id:
+            parts.append(self.season_id)
+        if self.season_window is not None:
+            start = self.season_window.start_date.replace("-", "")
+            end = self.season_window.end_date.replace("-", "")
+            parts.append(f"{start}-{end}")
+        return "_".join(parts)
+
     def _save_aoi_to_bbox(self, aoi_map, output: widgets.Output) -> None:
         if aoi_map is None or output is None:
             return
@@ -973,26 +1082,117 @@ class WorldCerealClassificationApp:
             except Exception as exc:
                 print(f"Failed to save AOI: {exc}")
 
-    def _on_tab1_save_aoi_click(self, _=None) -> None:
+    def _auto_save_aoi(self, _=None) -> None:
+        """Automatically save the current AOI to ./bbox after the user submits it."""
         aoi_map = self.tab1_widgets.get("aoi_map")
-        output = self.tab1_widgets.get("aoi_save_output")
-        self._save_aoi_to_bbox(aoi_map, output)
+        if aoi_map is None:
+            return
+        try:
+            bbox_dir = Path("./bbox")
+            out_path = aoi_map.save_gdf(bbox_dir)
+            # Update the map output widget to confirm the save
+            with aoi_map.output:
+                from IPython.display import HTML as _HTML
+                from IPython.display import display as _display
+                _display(_HTML(f"<i>AOI saved to {out_path}.</i>"))
+        except Exception:
+            pass  # Silent – AOI may not be ready yet (e.g. submit failed)
+
+    def _try_load_aoi_for_seasons(self, aoi_name: str):
+        """Try to load an AOI GeoDataFrame from ./bbox/{aoi_name}.gpkg.
+
+        Returns a GeoDataFrame on success, or None when the file is not found.
+        """
+        if not aoi_name:
+            return None
+        bbox_file = Path("./bbox") / f"{aoi_name}.gpkg"
+        if not bbox_file.exists():
+            return None
+        try:
+            return gpd.read_file(str(bbox_file))
+        except Exception:
+            return None
+
+    def _gdf_to_utm_bbox(self, gdf) -> "Optional[BoundingBoxExtent]":
+        """Convert a GeoDataFrame to a UTM BoundingBoxExtent for seasons retrieval."""
+        try:
+            if gdf is None or gdf.empty:
+                return None
+            if gdf.crs and gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+            bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
+            bounds_gdf = gpd.GeoDataFrame(geometry=[shapely_box(*bounds)], crs="EPSG:4326")
+            crs = bounds_gdf.estimate_utm_crs()
+            epsg = int(crs.to_epsg())
+            bbox_utm = bounds_gdf.to_crs(crs).total_bounds
+            return BoundingBoxExtent(
+                west=float(bbox_utm[0]),
+                south=float(bbox_utm[1]),
+                east=float(bbox_utm[2]),
+                north=float(bbox_utm[3]),
+                epsg=epsg,
+            )
+        except Exception:
+            return None
 
     def _on_save_continue_click(self, button):
         """Save extractions and continue to next step."""
+        self._accumulate_aoi_name()
         output = self.tab1_widgets["config_output"]
         with output:
-            print("Extractions saved. You can proceed to the next step.")
+            output.clear_output()
+            if self.tab1_df is not None:
+                save_dir = Path("./training_extractions")
+                save_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                aoi_part = self._get_aoi_filename_part()
+                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                self._geometry_to_wkt(self.tab1_df).to_parquet(save_path, index=False)
+                print(f"Extractions saved to: {save_path}")
+                self._cleanup_tab1_temp()
+                print("You can proceed to the next step.")
+            else:
+                print("No extractions to save. Please run a query first.")
         self.tab1_saved = True
         self.tab2_df = None
         self.append_next_query = False
+        self.tab3_aoi_gdf = None  # reset: AOI comes from Tab 1 map when using this path
         self._update_tab2_state()
 
     def _on_save_add_click(self, button):
-        """Save current extractions and allow another query to add more."""
+        """Save current extractions to a temporary file and allow another query to add more."""
+        self._accumulate_aoi_name()
         output = self.tab1_widgets["config_output"]
         with output:
-            print("Extractions saved. You can run another query to add more.")
+            output.clear_output()
+            if self.tab1_df is not None:
+                try:
+                    temp_dir = Path("./training_extractions_temp")
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                    aoi_part = self._get_aoi_filename_part()
+                    fname = (
+                        f"query_{aoi_part}_{timestamp}.parquet"
+                        if aoi_part
+                        else f"query_{timestamp}.parquet"
+                    )
+                    temp_path = temp_dir / fname
+                    self._geometry_to_wkt(self.tab1_df).to_parquet(temp_path, index=False)
+                    print(f"Query results saved to temporary file: {temp_path}")
+                    print(
+                        "Temporary folder: ./training_extractions_temp/\n"
+                        "You can safely run another query to add more data.\n"
+                        "Click 'Save & Continue' when done — this will finalize "
+                        "all data and delete the temporary folder."
+                    )
+                    restore_section = self.tab1_widgets.get("restore_section")
+                    if restore_section is not None:
+                        restore_section.layout.display = ""
+                except Exception as exc:
+                    print(f"Error: could not save to temporary folder: {exc}")
+                    raise
+            else:
+                print("No extractions to save. Please run a query first.")
         self.append_next_query = True
         self.tab1_saved = False
 
@@ -1002,6 +1202,8 @@ class WorldCerealClassificationApp:
         self.tab1_saved = False
         self.tab2_df = None
         self.append_next_query = False
+        self.tab1_aoi_names = []
+        self._cleanup_tab1_temp()
         output = self.tab1_widgets["config_output"]
         with output:
             output.clear_output()
@@ -1010,6 +1212,69 @@ class WorldCerealClassificationApp:
         self.tab1_widgets["save_add_button"].disabled = True
         self.tab1_widgets["discard_button"].disabled = True
         self._update_tab2_state()
+
+    def _cleanup_tab1_temp(self) -> None:
+        """Delete the Tab 1 temporary query folder and hide the restore section."""
+        temp_dir = Path("./training_extractions_temp")
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        restore_section = self.tab1_widgets.get("restore_section")
+        if restore_section is not None:
+            restore_section.layout.display = "none"
+
+    def _on_tab1_restore_click(self, _=None) -> None:
+        """Restore extractions from the most recent file in the temp folder."""
+        output = self.tab1_widgets.get("restore_output")
+        temp_dir = Path("./training_extractions_temp")
+        if output is None:
+            return
+        with output:
+            output.clear_output()
+            temp_files = sorted(temp_dir.glob("*.parquet"))
+            if not temp_files:
+                print("No temporary files found in ./training_extractions_temp/")
+                return
+            # The most recent file contains the full merged state at that checkpoint
+            latest = temp_files[-1]
+            try:
+                df = pd.read_parquet(latest)
+            except Exception as exc:
+                print(f"Failed to load temporary file {latest.name}: {exc}")
+                return
+            self.tab1_df = self._wkt_to_geometry(df)
+            self.tab1_saved = False
+            self.append_next_query = True
+            # Re-populate AOI name tracking from temp filenames
+            for f in temp_files:
+                aoi = self._parse_aoi_from_filename(f)
+                if aoi and aoi not in self.tab1_aoi_names:
+                    self.tab1_aoi_names.append(aoi)
+            nsamples = df["sample_id"].nunique()
+            print(f"Restored {nsamples:,} samples from: {latest}")
+            print(
+                f"Temporary folder contains {len(temp_files)} file(s). "
+                "You can run another query to add more data, or click "
+                "'Save & Continue' to finalize."
+            )
+            # Enable query action buttons
+            self.tab1_widgets["save_continue_button"].disabled = False
+            self.tab1_widgets["save_add_button"].disabled = False
+            self.tab1_widgets["discard_button"].disabled = False
+            # Hide the restore banner now that data is loaded
+            restore_section = self.tab1_widgets.get("restore_section")
+            if restore_section is not None:
+                restore_section.layout.display = "none"
+
+    def _on_tab1_discard_temp_click(self, _=None) -> None:
+        """Delete temporary query data and hide the restore section."""
+        output = self.tab1_widgets.get("restore_output")
+        if output is not None:
+            with output:
+                output.clear_output()
+        self._cleanup_tab1_temp()
+        if output is not None:
+            with output:
+                print("Temporary data discarded. Start fresh with a new query.")
 
     # =========================================================================
     # Tab 2: Inspect & Clean Data
@@ -1027,6 +1292,34 @@ class WorldCerealClassificationApp:
             button_style="warning",
             icon="forward",
             layout=widgets.Layout(width="200px"),
+        )
+        load_title = widgets.HTML(
+            value="<h3>Option to load extractions from file</h3>"
+        )
+        load_info = self._info_callout(
+            "If you have previously saved extractions to disk (in the <code>./training_extractions/</code> folder), "
+            "you can reload them here to skip Tab 1 entirely.<br><br>"
+            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>."
+        )
+        load_input = widgets.Text(
+            value="",
+            description="Path:",
+            placeholder="./training_extractions/extractions_{aoi}_{YYYYMMDD-HHMMSS}.parquet",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+        )
+        load_button = widgets.Button(
+            description="Load extractions",
+            button_style="info",
+            icon="folder-open",
+            layout=widgets.Layout(width="200px", height="40px"),
+        )
+        load_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="80px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
         )
         inspection_info = self._info_callout(
             "In this step you can inspect individual datasets you retrieved in the previous step to get a better understanding of data quality.<br><br>"
@@ -1110,9 +1403,38 @@ class WorldCerealClassificationApp:
             )
         )
 
+        save_extractions_button = widgets.Button(
+            description="Save extractions to file",
+            button_style="success",
+            icon="save",
+            layout=widgets.Layout(width="240px", height="40px"),
+        )
+        save_extractions_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="60px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+
+        load_section = widgets.VBox(
+            [
+                load_title,
+                load_info,
+                load_input,
+                widgets.HBox([load_button]),
+                load_output,
+            ]
+        )
+
         self.tab2_widgets = {
             "status_message": status_message,
             "skip_button": skip_button,
+            "load_section": load_section,
+            "load_input": load_input,
+            "load_button": load_button,
+            "load_output": load_output,
             "dataset_dropdown": dataset_dropdown,
             "refresh_datasets_button": refresh_datasets_button,
             "visualize_button": visualize_button,
@@ -1123,6 +1445,8 @@ class WorldCerealClassificationApp:
             "drop_select": drop_select,
             "drop_button": drop_button,
             "drop_output": drop_output,
+            "save_extractions_button": save_extractions_button,
+            "save_extractions_output": save_extractions_output,
         }
 
         refresh_datasets_button.on_click(self._on_tab2_refresh_datasets)
@@ -1130,12 +1454,15 @@ class WorldCerealClassificationApp:
         drop_button.on_click(self._on_tab2_drop_datasets)
         dataset_dropdown.observe(self._on_tab2_dataset_change, names="value")
         skip_button.on_click(self._on_tab2_skip_click)
+        load_button.on_click(self._on_tab2_load_extractions)
+        save_extractions_button.on_click(self._on_tab2_save_extractions)
 
         return widgets.VBox(
             [
                 header,
                 status_message,
                 skip_button,
+                load_section,
                 widgets.HTML("<h3>1) Inspect included datasets</h3>"),
                 inspection_info,
                 widgets.HBox([dataset_dropdown, refresh_datasets_button]),
@@ -1149,6 +1476,9 @@ class WorldCerealClassificationApp:
                 drop_select,
                 widgets.HBox([drop_button]),
                 drop_output,
+                widgets.HTML("<h3>3) Save cleaned extractions to file</h3>"),
+                widgets.HBox([save_extractions_button]),
+                save_extractions_output,
                 self._build_tab_navigation(),
             ]
         )
@@ -1158,6 +1488,68 @@ class WorldCerealClassificationApp:
         if self.tab2_df is None:
             self._init_tab2_extractions_copy()
         return self.tab2_df
+
+    def _on_tab2_save_extractions(self, _=None) -> None:
+        """Save the current Tab 2 extractions dataframe to disk."""
+        output = self.tab2_widgets.get("save_extractions_output")
+        df = self._get_tab2_extractions_df()
+        if output is None:
+            return
+        with output:
+            output.clear_output()
+            if df is None or df.empty:
+                print("No extractions to save. Please load or retrieve data first.")
+                return
+            try:
+                save_dir = Path("./training_extractions")
+                save_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                aoi_part = self._get_aoi_filename_part() or self._get_aoi_name_tab1()
+                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                self._geometry_to_wkt(df).to_parquet(save_path, index=False)
+                print(f"Extractions saved to: {save_path}")
+            except Exception as exc:
+                print(f"Error: failed to save extractions: {exc}")
+                raise
+
+    def _on_tab2_load_extractions(self, _=None) -> None:
+        """Load extractions from a parquet file on disk into Tab 2."""
+        load_input = self.tab2_widgets.get("load_input")
+        output = self.tab2_widgets.get("load_output")
+        if load_input is None or output is None:
+            return
+        path_value = load_input.value.strip()
+        with output:
+            output.clear_output()
+            if not path_value:
+                print("Provide a path to an extractions parquet file to load.")
+                return
+            path = Path(path_value)
+            if not path.exists():
+                print(f"File not found: {path}")
+                return
+            try:
+                df = pd.read_parquet(path)
+            except Exception as exc:
+                print(f"Failed to read extractions file: {exc}")
+                return
+            required_cols = {"sample_id", "ref_id", "ewoc_code"}
+            missing = sorted(required_cols - set(df.columns))
+            if missing:
+                print(
+                    "Extractions file is missing required columns: "
+                    + ", ".join(missing)
+                )
+                return
+            self.tab1_df = self._wkt_to_geometry(df)
+            self.tab1_saved = True
+            self.tab2_df = None
+            self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
+            print(f"Extractions loaded from: {path}")
+            nsamples = df["sample_id"].nunique()
+            print(f"Total samples: {nsamples:,}")
+        self._update_tab2_state()
 
     def _on_tab2_skip_click(self, _=None) -> None:
         """Optionally skip Tab 2 and carry forward Tab 1 extractions."""
@@ -1292,8 +1684,66 @@ class WorldCerealClassificationApp:
             )
         )
 
+        tab3_load_title = widgets.HTML(
+            value="<h3>Option to load inspected extractions from file</h3>"
+        )
+        tab3_load_info = self._info_callout(
+            "If you have previously saved inspected/cleaned extractions to disk, "
+            "you can reload them here to skip Tabs 1 and 2 entirely.<br><br>"
+            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>."
+        )
+        tab3_load_input = widgets.Text(
+            value="",
+            description="Path:",
+            placeholder="./training_extractions/extractions_{aoi}_{YYYYMMDD-HHMMSS}.parquet",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+        )
+        tab3_load_button = widgets.Button(
+            description="Load extractions",
+            button_style="info",
+            icon="folder-open",
+            layout=widgets.Layout(width="200px", height="40px"),
+        )
+        tab3_load_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="80px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+
+        tab3_load_section = widgets.VBox(
+            [
+                tab3_load_title,
+                tab3_load_info,
+                tab3_load_input,
+                widgets.HBox([tab3_load_button]),
+                tab3_load_output,
+            ]
+        )
+
+        save_aligned_button = widgets.Button(
+            description="Save aligned extractions to file",
+            button_style="success",
+            icon="save",
+            layout=widgets.Layout(width="280px", height="40px"),
+        )
+        save_aligned_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="60px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+
         self.tab3_widgets = {
             "status_message": status_message,
+            "tab3_load_section": tab3_load_section,
+            "tab3_load_input": tab3_load_input,
+            "tab3_load_button": tab3_load_button,
+            "tab3_load_output": tab3_load_output,
             "seasons_button": seasons_button,
             "seasons_output": seasons_output,
             "valid_time_button": valid_time_button,
@@ -1304,16 +1754,21 @@ class WorldCerealClassificationApp:
             "strict_align_checkbox": strict_align_checkbox,
             "align_button": align_button,
             "align_output": align_output,
+            "save_aligned_button": save_aligned_button,
+            "save_aligned_output": save_aligned_output,
         }
 
         seasons_button.on_click(self._on_tab3_retrieve_seasons)
         valid_time_button.on_click(self._on_tab3_show_valid_time)
         align_button.on_click(self._on_tab3_align_season)
+        tab3_load_button.on_click(self._on_tab3_load_extractions)
+        save_aligned_button.on_click(self._on_tab3_save_aligned)
 
         return widgets.VBox(
             [
                 header,
                 status_message,
+                tab3_load_section,
                 season_generic_info,
                 widgets.HTML("<h3>1) Retrieve WorldCereal seasons</h3>"),
                 worldcereal_season_message,
@@ -1338,9 +1793,49 @@ class WorldCerealClassificationApp:
                 widgets.HBox([strict_align_checkbox]),
                 widgets.HBox([align_button]),
                 align_output,
+                widgets.HTML("<h3>5) Save aligned extractions to file</h3>"),
+                widgets.HBox([save_aligned_button]),
+                save_aligned_output,
                 self._build_tab_navigation(),
             ]
         )
+
+    def _on_tab3_load_extractions(self, _=None) -> None:
+        """Load extractions from a parquet file on disk directly into Tab 3."""
+        load_input = self.tab3_widgets.get("tab3_load_input")
+        output = self.tab3_widgets.get("tab3_load_output")
+        if load_input is None or output is None:
+            return
+        path_value = load_input.value.strip()
+        with output:
+            output.clear_output()
+            if not path_value:
+                print("Provide a path to an extractions parquet file to load.")
+                return
+            path = Path(path_value)
+            if not path.exists():
+                print(f"File not found: {path}")
+                return
+            try:
+                df = pd.read_parquet(path)
+            except Exception as exc:
+                print(f"Failed to read extractions file: {exc}")
+                return
+            required_cols = {"sample_id", "ref_id", "ewoc_code"}
+            missing = sorted(required_cols - set(df.columns))
+            if missing:
+                print(
+                    "Extractions file is missing required columns: "
+                    + ", ".join(missing)
+                )
+                return
+            self.tab2_df = self._wkt_to_geometry(df)
+            self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
+            print(f"Extractions loaded from: {path}")
+            nsamples = df["sample_id"].nunique()
+            print(f"Total samples: {nsamples:,}")
+        self._update_tab3_state()
 
     def _set_tab2_extractions_df(self, df: pd.DataFrame) -> None:
         """Persist updated extractions data for Tab 2."""
@@ -1516,15 +2011,43 @@ class WorldCerealClassificationApp:
     def _on_tab3_retrieve_seasons(self, _=None):
         """Retrieve and display WorldCereal seasons for the AOI."""
         output = self.tab3_widgets["seasons_output"]
-        aoi_map = self.tab1_widgets.get("aoi_map")
 
         with output:
             output.clear_output()
             try:
-                if aoi_map is None:
-                    print("No region of interest specified in Tab 1, cannot continue.")
+                # Multiple different AOIs: ambiguous, cannot display seasons
+                if len(self.tab1_aoi_names) > 1:
+                    print(
+                        "Extractions were collected for multiple different AOIs "
+                        f"({', '.join(self.tab1_aoi_names)}). "
+                        "WorldCereal seasons can only be displayed for a single AOI."
+                    )
                     return
-                spatial_extent = aoi_map.get_bbox(projection="utm")
+
+                spatial_extent = None
+
+                # Case 1: extractions came from Tab 1 — use the interactive map
+                aoi_map = self.tab1_widgets.get("aoi_map")
+                if aoi_map is not None:
+                    try:
+                        spatial_extent = aoi_map.get_bbox(projection="utm")
+                    except Exception:
+                        pass  # map may be empty (e.g. no-AOI global query)
+
+                # Case 2: extractions loaded from file — use the loaded AOI GDF
+                if spatial_extent is None and self.tab3_aoi_gdf is not None:
+                    spatial_extent = self._gdf_to_utm_bbox(self.tab3_aoi_gdf)
+
+                if spatial_extent is None:
+                    print(
+                        "No Area of Interest is available. "
+                        "WorldCereal seasons cannot be displayed without an AOI.\n"
+                        "Make sure to draw and submit an AOI in Tab 1, or ensure "
+                        "the corresponding AOI file exists in the ./bbox folder "
+                        "when loading extractions from disk."
+                    )
+                    return
+
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
@@ -1613,6 +2136,80 @@ class WorldCerealClassificationApp:
 
             except Exception as exc:
                 print(f"Failed to align extractions: {exc}")
+
+        self._update_tab4_state()
+
+    def _on_tab3_save_aligned(self, _=None) -> None:
+        """Save the aligned Tab 3 extractions dataframe to disk."""
+        output = self.tab3_widgets.get("save_aligned_output")
+        df = self.tab3_df
+        if output is None:
+            return
+        with output:
+            output.clear_output()
+            if df is None or df.empty:
+                print("No aligned extractions available. Run seasonal alignment first.")
+                return
+            try:
+                out_dir = Path("./training_extractions_aligned")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                aoi_part = self._get_aoi_filename_part()
+                season_part = self._get_season_filename_part()
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                name_parts = [p for p in [aoi_part, season_part, timestamp] if p]
+                filename = "extractions_aligned_" + "_".join(name_parts) + ".parquet"
+                out_path = out_dir / filename
+                self._geometry_to_wkt(df).to_parquet(out_path, index=False)
+                print(f"Aligned extractions saved to: {out_path}")
+            except Exception as exc:
+                print(f"Error: could not save aligned extractions: {exc}")
+                raise
+
+    def _on_tab4_load_aligned(self, _=None) -> None:
+        """Load aligned extractions from a parquet file on disk into Tab 4."""
+        load_input = self.tab4_widgets.get("load_aligned_input")
+        output = self.tab4_widgets.get("load_aligned_output")
+        if load_input is None or output is None:
+            return
+        path_value = load_input.value.strip()
+        with output:
+            output.clear_output()
+            if not path_value:
+                print("Please provide a path to a .parquet file.")
+                return
+            path = Path(path_value)
+            if not path.exists():
+                print(f"File not found: {path}")
+                return
+            try:
+                df = self._wkt_to_geometry(pd.read_parquet(path))
+            except Exception as exc:
+                print(f"Failed to load file: {exc}")
+                raise
+            required = {"sample_id", "ref_id", "ewoc_code"}
+            missing = required - set(df.columns)
+            if missing:
+                print(f"File is missing required columns: {missing}")
+                return
+            self.tab3_df = df
+            self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            season_id, season_window = self._parse_season_info_from_filename(path.stem)
+            if season_id is not None:
+                self.season_id = season_id
+                self.season_window = season_window
+                print(
+                    f"Parsed season: {season_id} "
+                    f"({season_window.start_date} – {season_window.end_date})"
+                )
+            else:
+                print(
+                    "Warning: could not parse season info from filename. "
+                    "Make sure to complete Tab 3 season alignment or the season "
+                    "ID/window will be missing when computing embeddings."
+                )
+            nsamples = df["sample_id"].nunique()
+            print(f"Loaded {nsamples:,} samples from {path}")
+        self._update_tab4_state()
 
     def _on_tab4_select_crops(self, _=None):
         """Initialize and display crop type picker for filtered samples."""
@@ -1853,8 +2450,50 @@ class WorldCerealClassificationApp:
             )
         )
 
+        load_aligned_title = widgets.HTML(
+            value="<h3>Option to load aligned extractions from file</h3>"
+        )
+        load_aligned_info = self._info_callout(
+            "If you have previously saved aligned extractions to disk (in the <code>./training_extractions_aligned/</code> folder), "
+            "you can reload them here to skip Tabs 1–3 entirely.<br><br>"
+            "Provide the full path to a <code>.parquet</code> aligned extractions file and click <b>Load aligned extractions</b>."
+        )
+        load_aligned_input = widgets.Text(
+            value="",
+            description="Path:",
+            placeholder="./training_extractions_aligned/extractions_aligned_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_{YYYYMMDD-HHMMSS}.parquet",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+        )
+        load_aligned_button = widgets.Button(
+            description="Load aligned extractions",
+            button_style="info",
+            icon="folder-open",
+            layout=widgets.Layout(width="220px", height="40px"),
+        )
+        load_aligned_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="80px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+        load_aligned_section = widgets.VBox(
+            [
+                load_aligned_title,
+                load_aligned_info,
+                load_aligned_input,
+                widgets.HBox([load_aligned_button]),
+                load_aligned_output,
+            ]
+        )
+
         self.tab4_widgets = {
             "status_message": status_message,
+            "load_aligned_section": load_aligned_section,
+            "load_aligned_input": load_aligned_input,
+            "load_aligned_button": load_aligned_button,
+            "load_aligned_output": load_aligned_output,
             "select_crops_button": select_crops_button,
             "apply_crops_button": apply_crops_button,
             "croptype_picker_container": croptype_picker_container,
@@ -1884,11 +2523,13 @@ class WorldCerealClassificationApp:
         subsample_button.on_click(self._on_tab4_subsample_classes)
         confirm_classes_button.on_click(self._on_tab4_confirm_classes)
         reset_classes_button.on_click(self._on_tab4_reset_classes)
+        load_aligned_button.on_click(self._on_tab4_load_aligned)
 
         return widgets.VBox(
             [
                 header,
                 status_message,
+                load_aligned_section,
                 widgets.HTML("<h3>1) Land cover/Crop type selection</h3>"),
                 croptype_message,
                 croptype_info,
@@ -1944,7 +2585,7 @@ class WorldCerealClassificationApp:
         load_input = widgets.Text(
             value="",
             description="Full path to your training dataframe:",
-            placeholder="/path/to/training_df_season-YYYYMMDD-YYYYMMDD_cl-x_YYYYMMDD-HHMMSS.csv",
+            placeholder="./training_dataframe/trainingdf_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_cl-{n}_{YYYYMMDD-HHMMSS}.csv",
             layout=widgets.Layout(width="100%"),
             description_width="250px",
             tooltip="Provide the full path to a previously saved training dataframe resulting from steps 1-4.",
@@ -2053,8 +2694,18 @@ class WorldCerealClassificationApp:
             )
         )
 
+        load_section = widgets.VBox(
+            [
+                load_title,
+                load_input,
+                widgets.HBox([load_button]),
+                load_output,
+            ]
+        )
+
         self.tab5_widgets = {
             "status_message": status_message,
+            "load_section": load_section,
             "load_title": load_title,
             "load_input": load_input,
             "load_button": load_button,
@@ -2077,10 +2728,7 @@ class WorldCerealClassificationApp:
             [
                 header,
                 status_message,
-                load_title,
-                load_input,
-                widgets.HBox([load_button]),
-                load_output,
+                load_section,
                 presto_title,
                 presto_message,
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
@@ -2134,12 +2782,20 @@ class WorldCerealClassificationApp:
             )
             if self.season_id is None or self.season_window is None:
                 print(
-                    "Failed to parse season information from filename. Make sure it follows the format: training_df_season-YYYYMMDD-YYYYMMDD_cl-x_YYYYMMDD-HHMMSS.csv"
+                    "Failed to parse season information from filename. Make sure it follows the format: trainingdf_{aoi}_{season}-{YYYYMMDD-YYYYMMDD}_cl-x_{timestamp}.csv"
                 )
                 return
             print(
                 f"Parsed season ID: {self.season_id}, season window: {self.season_window.start_date} to {self.season_window.end_date}"
             )
+            # Also extract AOI from filename: parts between 'trainingdf' prefix and season_id
+            parts = path.stem.split("_")
+            date_range_re = re.compile(r"^\d{8}-\d{8}$")
+            date_range_idx = next(
+                (i for i, p in enumerate(parts) if date_range_re.match(p)), None
+            )
+            if date_range_idx is not None and date_range_idx >= 2:
+                self.aoi_name_from_file = "_".join(parts[1 : date_range_idx - 1])
             self.tab4_df = df
             self.tab4_confirmed = True
             self.training_df_path = path
@@ -2155,15 +2811,20 @@ class WorldCerealClassificationApp:
     ) -> Tuple[Optional[str], Optional[TemporalContext]]:
         """Parse season ID and window from a training dataframe filename."""
         try:
-            season_info = filename.split("_")[1]
-            season_id = season_info.split("-")[0]
-            season_start = pd.to_datetime(
-                season_info.split("-")[1], format="%Y%m%d"
-            ).strftime("%Y-%m-%d")
-            season_end = pd.to_datetime(
-                season_info.split("-")[2], format="%Y%m%d"
-            ).strftime("%Y-%m-%d")
-            return season_id, TemporalContext(season_start, season_end)
+            parts = filename.split("_")
+            date_range_re = re.compile(r"^(\d{8})-(\d{8})$")
+            for i, part in enumerate(parts):
+                m = date_range_re.match(part)
+                if m and i >= 2:
+                    season_id = parts[i - 1]
+                    season_start = pd.to_datetime(
+                        m.group(1), format="%Y%m%d"
+                    ).strftime("%Y-%m-%d")
+                    season_end = pd.to_datetime(
+                        m.group(2), format="%Y%m%d"
+                    ).strftime("%Y-%m-%d")
+                    return season_id, TemporalContext(season_start, season_end)
+            return None, None
         except (IndexError, ValueError):
             return None, None
 
@@ -2274,24 +2935,16 @@ class WorldCerealClassificationApp:
                         "Only one training class found in your dataset. We cannot continue! Press the reset button below to start over and make sure to include at least two classes in your crop type selection in step 1 above."
                     )
                     return
-                training_dir = Path("./training_data")
+                training_dir = Path("./training_dataframe")
                 training_dir.mkdir(exist_ok=True)
                 timestamp = pd.Timestamp.now().strftime("%Y%m%d-%H%M%S")
-                season = self.season_window
-                season_start = season.start_date.replace("-", "")
-                season_end = season.end_date.replace("-", "")
-                season_str = f"{season_start}-{season_end}"
+                aoi_part = self._get_aoi_filename_part()
+                season_part = self._get_season_filename_part()
                 nclasses = df["downstream_class"].nunique()
-                training_df_path = (
-                    training_dir
-                    / f"trainingdf_{self.season_id}-{season_str}_cl-{nclasses}.csv"
-                )
-                if training_df_path.exists():
-                    # append timestamp to avoid overwriting
-                    training_df_path = (
-                        training_dir
-                        / f"trainingdf_{self.season_id}-{season_str}_cl-{nclasses}_{timestamp}.csv"
-                    )
+                name_parts = [p for p in [aoi_part, season_part] if p]
+                name_parts.append(f"cl-{nclasses}")
+                name_parts.append(timestamp)
+                training_df_path = training_dir / ("trainingdf_" + "_".join(name_parts) + ".csv")
                 df.to_csv(training_df_path, index=False)
                 print(
                     f"{nclasses} training classes confirmed and saved to {training_df_path}.\n"
@@ -2540,9 +3193,18 @@ class WorldCerealClassificationApp:
                 )
                 embeddings_dir = Path("./embeddings")
                 embeddings_dir.mkdir(exist_ok=True)
-                training_df_name = self.training_df_path.stem
-                embedding_df_name = training_df_name.replace("trainingdf", "embeddings")
-                embeddings_path = embeddings_dir / f"{embedding_df_name}.csv"
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                aoi_part = self._get_aoi_filename_part()
+                season_part = self._get_season_filename_part()
+                nclasses = (
+                    df["downstream_class"].nunique()
+                    if "downstream_class" in df.columns
+                    else 0
+                )
+                name_parts = [p for p in [aoi_part, season_part] if p]
+                name_parts.append(f"cl-{nclasses}")
+                name_parts.append(timestamp)
+                embeddings_path = embeddings_dir / ("embeddings_" + "_".join(name_parts) + ".csv")
                 self.tab5_df.to_csv(embeddings_path, index=False)
                 print(f"Embeddings computed: {len(self.tab5_df)} rows.")
                 print(f"Embeddings saved to: {embeddings_path}")
@@ -2569,7 +3231,7 @@ class WorldCerealClassificationApp:
         load_input = widgets.Text(
             value="",
             description="Full path to embeddings:",
-            placeholder="/path/to/embeddings_YYYYMMDD-HHMMSS.csv",
+            placeholder="./embeddings/embeddings_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_cl-{n}_{YYYYMMDD-HHMMSS}.csv",
             layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
         )
         load_button = widgets.Button(
@@ -2756,7 +3418,9 @@ class WorldCerealClassificationApp:
             )
             if self.season_id is None or self.season_window is None:
                 print(
-                    "Failed to parse season information from filename. Make sure it follows the format: embeddings_season-YYYYMMDD-YYYYMMDD_cl-x_YYYYMMDD-HHMMSS.csv"
+                    "Failed to parse season information from filename. "
+                    "Make sure it follows the format: "
+                    "embeddings_{aoi}_{seasonId}_{YYYYMMDD-YYYYMMDD}_cl-{n}_{YYYYMMDD-HHMMSS}.csv"
                 )
                 return
             print(
@@ -4097,12 +4761,15 @@ class WorldCerealClassificationApp:
                 status_message.value = "<i>Skipped (non-training mode).</i>"
                 return
             is_ready = self.tab1_saved and self.tab1_df is not None
+            load_section = self.tab2_widgets.get("load_section")
+            if load_section is not None:
+                load_section.layout.display = "none" if is_ready else ""
             if is_ready:
                 self._init_tab2_extractions_copy()
                 self._update_tab2_summary()
                 self._on_tab2_refresh_datasets()
             else:
-                status_message.value = "<i>Please retrieve data in Tab 1 first.</i>"
+                status_message.value = "<i>Please retrieve data in Tab 1 first, or load previously saved extractions from disk using the option below.</i>"
 
     def _update_tab3_state(self):
         """Enable/disable Tab 3 (season alignment) depending on Tab 1 state."""
@@ -4111,13 +4778,16 @@ class WorldCerealClassificationApp:
             if self.workflow_mode in {"apply-custom-model", "apply-default-model"}:
                 status_message.value = "<i>Skipped (non-training mode).</i>"
                 return
+            tab3_load_section = self.tab3_widgets.get("tab3_load_section")
+            if tab3_load_section is not None:
+                tab3_load_section.layout.display = "none" if self.tab1_saved else ""
             df = self._get_tab2_extractions_df()
             if df is None:
-                status_message.value = "<i>Please complete or skip Tab 2 first.</i>"
+                status_message.value = "<i>Please complete or skip Tab 2 first, or load previously saved extractions from disk using the option below.</i>"
                 return
             summary = self._format_extractions_summary(df)
             if summary is None:
-                status_message.value = "<i>No extractions loaded yet.</i>"
+                status_message.value = "<i>No extractions loaded yet. You can load previously saved extractions from disk using the option below.</i>"
                 return
             status_message.value = (
                 "<i>In this step we ensure we only work with reference data relevant to your season of interest.</i><br><br>"
@@ -4130,10 +4800,14 @@ class WorldCerealClassificationApp:
         if self.workflow_mode in {"apply-custom-model", "apply-default-model"}:
             return
         status_message = self.tab4_widgets.get("status_message")
+        load_aligned_section = self.tab4_widgets.get("load_aligned_section")
         df = self.tab3_df
+        tab3_done = df is not None
+        if load_aligned_section is not None:
+            load_aligned_section.layout.display = "none" if tab3_done else ""
         if status_message is not None:
             if df is None:
-                status_message.value = "<i>Please align data in Tab 3 first.</i>"
+                status_message.value = "<i>Please align data in Tab 3 first, or load previously saved aligned extractions from disk using the option below.</i>"
             else:
                 summary = self._format_extractions_summary(df)
                 if summary is None:
@@ -4151,10 +4825,7 @@ class WorldCerealClassificationApp:
         """Enable/disable Tab 5 (embeddings) depending on prepared samples."""
         embeddings_button = self.tab5_widgets.get("embeddings_button")
         status_message = self.tab5_widgets.get("status_message")
-        load_title = self.tab5_widgets.get("load_title")
-        load_input = self.tab5_widgets.get("load_input")
-        load_button = self.tab5_widgets.get("load_button")
-        load_output = self.tab5_widgets.get("load_output")
+        load_section = self.tab5_widgets.get("load_section")
 
         if embeddings_button:
             if self.workflow_mode in {"apply-custom-model", "apply-default-model"}:
@@ -4162,16 +4833,8 @@ class WorldCerealClassificationApp:
                 return
             embeddings_button.disabled = self.tab4_df is None or not self.tab4_confirmed
 
-        if self.tab4_confirmed:
-            load_title.layout.display = "none"
-            load_input.layout.display = "none"
-            load_button.layout.display = "none"
-            load_output.layout.display = "none"
-        else:
-            load_title.layout.display = "block"
-            load_input.layout.display = "block"
-            load_button.layout.display = "block"
-            load_output.layout.display = "block"
+        if load_section is not None:
+            load_section.layout.display = "none" if self.tab4_confirmed else ""
 
         if status_message is not None:
             df = self.tab4_df
@@ -4646,6 +5309,28 @@ class WorldCerealClassificationApp:
         start = str(season_window.start_date).replace("-", "")
         end = str(season_window.end_date).replace("-", "")
         return f"{start}_{end}"
+
+    @staticmethod
+    def _geometry_to_wkt(df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of df with the geometry column serialised to WKT strings."""
+        if "geometry" not in df.columns:
+            return df
+        df = pd.DataFrame(df.copy())
+        df["geometry"] = df["geometry"].apply(
+            lambda g: g.wkt if hasattr(g, "wkt") else g
+        )
+        return df
+
+    @staticmethod
+    def _wkt_to_geometry(df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of df with WKT strings in the geometry column parsed back to shapely objects."""
+        if "geometry" not in df.columns:
+            return df
+        df = pd.DataFrame(df.copy())
+        df["geometry"] = df["geometry"].apply(
+            lambda g: shapely_wkt.loads(g) if isinstance(g, str) else g
+        )
+        return df
 
     def _info_callout(self, message: str) -> widgets.Widget:
         """Create a collapsible info callout box for inline documentation."""
