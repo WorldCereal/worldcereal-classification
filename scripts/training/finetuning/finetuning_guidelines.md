@@ -39,25 +39,36 @@ required.
 
 ### Step 1 — Get Extractions + Labels
 
-Option 2 lets you specify your own Parquet files directly, **bypassing the public bucket
-entirely**. This is the recommended path when:
+Use the dedicated query notebook to assemble a Parquet file of labelled extraction samples:
 
-- You have **custom extractions** produced by your own extraction pipeline.
-- You have data that is **not (yet) available** in the public bucket.
+```
+notebooks/worldcereal_query_extractions.ipynb
+```
 
-To obtain extractions from the classification app:
+This notebook provides an interactive tool that lets you:
 
-Run `notebooks/worldcereal_classification_app.ipynb` either on
-[Terrascope](https://terrascope.be/en) or locally:
+1. **Draw a bounding box** on a map to spatially constrain your query.
+2. **Choose your data sources:**
+   - *Public S3 bucket* (enabled by default) — the official WorldCereal public extraction bucket.
+   - *Local path(s)* (optional) — one or more local Parquet files or directories, e.g. restricted
+     institutional datasets or custom extraction outputs from your own pipeline. Use the
+     **"+ Add path"** button to add as many paths as needed.
+     Example: `/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/WORLDCEREAL_ALL_EXTRACTIONS/worldcereal_all_extractions.parquet`
+3. **Disable** the *"Only temporary crop samples"* filter (default: off) so that all land-cover
+   categories are included — required for end-to-end finetuning where the model must distinguish
+   cropland from non-cropland.
+4. Click **Run Query** — a summary table shows the number of samples and crop types per dataset.
+   Samples that appear in both the public bucket and a local path are deduplicated automatically.
+5. Set the output path and click **Save to Parquet**.
 
-1. In **Tab 1**, disable the *"Only temporary crop samples"* filter to include all land-cover
-   categories.
-2. Export the resulting sample table to a Parquet file and download it.
-3. Place the Parquet file(s) in a directory accessible from the machine you will use for training.
+Pass the resulting file to the finetuning script via `--parquet_files`:
 
-Pass one or more Parquet files to the finetuning script via `--parquet_files`. When this argument
-is omitted the script falls back to the default global extraction list used by WorldCereal global training
-(requires VPN / cluster access).
+```bash
+--parquet_files "/path/to/worldcereal_query_result.parquet"
+```
+
+When `--parquet_files` is omitted the script falls back to the default global extraction list used
+by WorldCereal global training (requires VPN / cluster access).
 
 ---
 
