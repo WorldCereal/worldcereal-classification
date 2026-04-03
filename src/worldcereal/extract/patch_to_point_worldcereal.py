@@ -127,29 +127,39 @@ def get_label_points(
 
     """
 
-    # Find all items (i.e. patches) corresponding to the given ref_id and epsg
-    stac_query = {
-        "ref_id": {"eq": row["ref_id"]},
-        "proj:epsg": {"eq": int(row["epsg"])},
+    # Find all items (i.e. patches) corresponding to the given ref_id and epsg.
+    # Support both old-style `proj:epsg` (integer) and new-style `proj:code`
+    # (string like "EPSG:32634") property names.
+    ref_id = row["ref_id"]
+    epsg = int(row["epsg"])
+    stac_query_old = {
+        "ref_id": {"eq": ref_id},
+        "proj:epsg": {"eq": epsg},
+    }
+    stac_query_new = {
+        "ref_id": {"eq": ref_id},
+        "proj:code": {"eq": f"EPSG:{epsg}"},
     }
     client = pystac_client.Client.open("https://stac.openeo.vito.be/")
 
-    search_s1 = client.search(
-        collections=["worldcereal_sentinel_1_patch_extractions"], query=stac_query
-    )
-    search_s2 = client.search(
-        collections=["worldcereal_sentinel_2_patch_extractions"], query=stac_query
-    )
-
     logger.info("Querying S1/S2 STAC collections ...")
-    items_s1 = {
-        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
-        for item in search_s1.items()
-    }
-    items_s2 = {
-        item.properties["sample_id"]: shape(item.geometry).buffer(1e-9)
-        for item in search_s2.items()
-    }
+
+    def _collect_items(collection: str) -> dict:
+        """Search a STAC collection with both old and new EPSG property names."""
+        items: dict = {}
+        for query in (stac_query_old, stac_query_new):
+            search = client.search(collections=[collection], query=query)
+            for item in search.items():
+                sid = item.properties["sample_id"]
+                if sid not in items:
+                    items[sid] = shape(item.geometry).buffer(1e-9)
+        return items
+
+    items_s1 = _collect_items("worldcereal_sentinel_1_patch_extractions")
+    items_s2 = _collect_items("worldcereal_sentinel_2_patch_extractions")
+    logger.info(
+        f"Found {len(items_s1)} S1 items and {len(items_s2)} S2 items"
+    )
 
     # Find sample_ids which are present in either S2 or both STAC collections
     common_sample_ids = set(items_s1.keys()).intersection(set(items_s2.keys()))
@@ -278,16 +288,17 @@ def create_job_dataframe_patch_to_point_worldcereal(
     logger.info("Looking for unique EPSG codes in STAC collection ...")
     epsg_codes = {}
     for item in search.items():
-        try:
+        if "proj:epsg" in item.properties:
             epsg = int(item.properties["proj:epsg"])
-        except KeyError:
-            try:
-                epsg = int(item.properties["proj:code"].split(":")[-1])
-            except KeyError:
-                logger.warning(
-                    f"Item {item.id} does not have neither 'proj:epsg' nor 'proj:code' property, skipping ..."
-                )
-                continue
+            epsg_prop = "proj:epsg"
+        elif "proj:code" in item.properties:
+            epsg = int(item.properties["proj:code"].split(":")[-1])
+            epsg_prop = "proj:code"
+        else:
+            logger.warning(
+                f"Item {item.id} does not have 'proj:epsg' nor 'proj:code' property, skipping ..."
+            )
+            continue
 
         if epsg not in epsg_codes and epsg != 4038:
             logger.debug(f"Found EPSG: {epsg}")
@@ -295,6 +306,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
             epsg_codes[epsg] = {
                 "start_date": pd.to_datetime(item.properties["start_date"]),
                 "end_date": pd.to_datetime(item.properties["end_date"]),
+                "epsg_property": epsg_prop,
             }
         elif epsg != 4038:
             current_start_date = pd.to_datetime(item.properties["start_date"])
@@ -339,6 +351,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
             "ref_id": ref_id,
             "ground_truth_file": ground_truth_file,
             "epsg": epsg,
+            "epsg_property": epsg_codes[epsg]["epsg_property"],
             "geometry_url": None,
         }
         rows.append(pd.Series(variables))
@@ -466,6 +479,7 @@ def create_job_patch_to_point_worldcereal(
         s1_orbit_state=s1_orbit_state,
         period=period,
         optical_mask_method=optical_mask_method,
+        epsg_property=row.get("epsg_property", "proj:epsg"),
     )
 
     # Do spatial aggregation
@@ -581,19 +595,24 @@ def worldcereal_preprocessed_inputs_from_patches(
     optical_mask_method: Literal[
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
+    epsg_property: str = "proj:epsg",
 ):
     assert period in ["month", "dekad"], "period must be either 'month' or 'dekad'"
+
+    # Build the EPSG filter value: integer for old-style `proj:epsg`,
+    # string like "EPSG:32634" for new-style `proj:code`.
+    epsg_filter_value = f"EPSG:{epsg}" if epsg_property == "proj:code" else epsg
 
     # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
-        "proj:epsg": lambda x: eq(x, epsg),
+        epsg_property: lambda x: eq(x, epsg_filter_value),
         "sat:orbit_state": lambda x: eq(x, s1_orbit_state),
     }
 
     s2_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
-        "proj:epsg": lambda x: eq(x, epsg),
+        epsg_property: lambda x: eq(x, epsg_filter_value),
     }
 
     if s1_orbit_state is not None:
