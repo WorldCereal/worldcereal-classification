@@ -28,8 +28,22 @@ SHAREPOINT_FILE_URL = (
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
-def get_class_mappings(source: Literal["sharepoint", "local"] = "local") -> Dict:
+def get_class_mappings(
+    source: Union[Literal["sharepoint", "local"], str, Path] = "local",
+) -> Dict:
     """Method to get the WorldCereal class mappings for downstream task.
+
+    Parameters
+    ----------
+    source : str or Path, default "local"
+        One of:
+        - ``"local"``      – use the bundled ``class_mappings.json`` package resource.
+        - ``"sharepoint"`` – fetch the latest legend from SharePoint and build
+          the mappings on the fly.
+        - a file-system path (``str`` or :class:`pathlib.Path`) – load a
+          custom JSON file directly.  The JSON must have the same structure
+          as the bundled file: a top-level ``dict`` mapping class-set keys
+          (e.g. ``"LANDCOVER10"``) to ``{ewoc_code: label}`` dicts.
 
     Returns
     -------
@@ -47,7 +61,18 @@ def get_class_mappings(source: Literal["sharepoint", "local"] = "local") -> Dict
         )
         class_mappings = build_class_mappings(legend)
     else:
-        raise ValueError(f"Unsupported source for class mappings: {source}")
+        # Treat as a file-system path to a custom JSON mappings file.
+        custom_path = Path(source)
+        if not custom_path.exists():
+            raise FileNotFoundError(
+                f"Class mappings file not found: {custom_path}"
+            )
+        class_mappings = json.loads(custom_path.read_text(encoding="utf-8"))
+        if not isinstance(class_mappings, dict):
+            raise ValueError(
+                f"Class mappings JSON at '{custom_path}' must be a top-level object "
+                "mapping class-set keys to {{ewoc_code: label}} dicts."
+            )
 
     return class_mappings
 

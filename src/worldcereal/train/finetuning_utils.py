@@ -640,6 +640,7 @@ def prepare_training_datasets(
     train_min_season_coverage: float = 0.5,
     eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[Mapping] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -698,6 +699,10 @@ def prepare_training_datasets(
         Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
         or ``("annual",)``).  When ``None`` the dataset falls back to
         ``GLOBAL_SEASON_IDS``.
+    season_windows : Optional[Mapping], default=None
+        Explicit season windows mapping season name to a ``(start, end)``
+        datetime-like tuple.  Mutually exclusive with ``season_ids``—pass one
+        or the other but never both.
 
     Returns
     -------
@@ -719,6 +724,7 @@ def prepare_training_datasets(
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -735,6 +741,7 @@ def prepare_training_datasets(
         label_window=0,  # No windowing for validation
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -751,6 +758,7 @@ def prepare_training_datasets(
         label_window=0,  # No windowing for testing
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     return train_ds, val_ds, test_ds
 
@@ -1431,7 +1439,9 @@ def run_finetuning(
     best_loss = None
     best_model_dict = None
     epochs_since_improvement = 0
-    ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
+    ema_val_loss: Optional[float] = (
+        None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
+    )
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1747,7 +1757,10 @@ def run_finetuning(
 
         if tb_writer is not None:
             global_step = epoch + 1
-            _loss_scalars: dict[str, float] = {"train": train_loss[-1], "val": current_val_loss}
+            _loss_scalars: dict[str, float] = {
+                "train": train_loss[-1],
+                "val": current_val_loss,
+            }
             if val_loss_ema_alpha > 0.0 and ema_val_loss is not None:
                 _loss_scalars["val_ema"] = ema_val_loss
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
