@@ -16,7 +16,9 @@ from openeo_gfmap.preprocessing.sar import (
 )
 from openeo_gfmap.utils.catalogue import UncoveredS1Exception, select_s1_orbitstate_vvvh
 from pandas.core.dtypes.dtypes import CategoricalDtype
+from shapely import wkb
 from shapely.geometry import MultiPolygon, shape
+from shapely.ops import unary_union
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
@@ -184,22 +186,124 @@ def get_label_points(
         )
     logger.info(f"Total selected sample_ids for extraction: {len(selected_sample_ids)}")
 
-    # Items with the same sample_id will also have the same geometry
+    # Build the spatial extent from the patch footprints.
     polygons = [items_s2[sample_id] for sample_id in selected_sample_ids]
-
-    multi_polygon = MultiPolygon(polygons)
+    patches_multi = MultiPolygon(polygons)
 
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
-    # From the RDM API, we also want other 'collateral' geometries from the same ref_id.
-    gdf = RdmInteraction().get_samples(
-        ref_ids=[row["ref_id"]],
-        spatial_extent=multi_polygon,
-        temporal_extent=temporal_extent,
-        include_private=True,
-        ground_truth_file=ground_truth_file,
-        subset=only_flagged_samples,
-    )
+    if ground_truth_file is not None:
+        # Read the ground truth file row-group by row-group to keep memory
+        # low (the full file can be multi-GB). For each row group we check
+        # the h3_l3_cell statistics to skip irrelevant groups, then spatially
+        # intersect with the actual patch footprints to capture collaterals.
+        from shapely import prepare
+        from shapely.strtree import STRtree
+        import pyarrow.parquet as pq
+
+        logger.info(f"Reading ground truth from: {ground_truth_file}")
+
+        # Build a spatial index over the patch footprints for fast lookups
+        patch_tree = STRtree(polygons)
+        prepare(patches_multi)
+
+        # Extract unique h3_l3_cell values from the selected sample_ids.
+        # sample_id format: "<ref_id>_<h3_l3_cell><index>"
+        ref_id_prefix = row["ref_id"] + "_"
+        h3_cells = set()
+        for sid in selected_sample_ids:
+            rest = sid[len(ref_id_prefix):]
+            # h3 L3 cell ids are 15-char hex strings like "831e20fffffffff"
+            if len(rest) >= 15:
+                h3_cells.add(rest[:15])
+
+        logger.info(f"Pre-filtering ground truth on {len(h3_cells)} H3 L3 cells")
+
+        read_columns = [c for c in RDM_DEFAULT_COLUMNS if c != "ref_id"]
+        pf = pq.ParquetFile(ground_truth_file)
+        chunks = []
+
+        for rg_idx in range(pf.metadata.num_row_groups):
+            # Use row group statistics to skip groups with no matching h3 cells
+            if h3_cells:
+                rg = pf.metadata.row_group(rg_idx)
+                skip = False
+                for col_idx in range(rg.num_columns):
+                    col = rg.column(col_idx)
+                    if col.path_in_schema == "h3_l3_cell" and col.statistics and col.statistics.has_min_max:
+                        rg_min, rg_max = col.statistics.min, col.statistics.max
+                        if not any(rg_min <= c <= rg_max for c in h3_cells):
+                            skip = True
+                        break
+                if skip:
+                    continue
+
+            table = pf.read_row_group(rg_idx, columns=read_columns)
+            df = table.to_pandas()
+            del table
+
+            # Filter to matching h3 cells first (cheap, no geometry parsing)
+            if h3_cells and "h3_l3_cell" in df.columns:
+                df = df[df["h3_l3_cell"].isin(h3_cells)]
+
+            if df.empty:
+                continue
+
+            # Apply temporal filter before geometry parsing (cheap)
+            if "valid_time" in df.columns:
+                df["valid_time"] = pd.to_datetime(df["valid_time"])
+                df = df[
+                    (df["valid_time"] >= temporal_extent.start_date)
+                    & (df["valid_time"] <= temporal_extent.end_date)
+                ]
+
+            if df.empty:
+                continue
+
+            # Apply subset filter before geometry parsing (cheap)
+            if only_flagged_samples and "extract" in df.columns:
+                df = df[df["extract"] > 0]
+
+            if df.empty:
+                continue
+
+            # Now parse geometry and do spatial intersection with actual patches
+            df["geometry"] = df["geometry"].apply(lambda b: wkb.loads(bytes(b)))
+            chunk_gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+            del df
+
+            # Use STRtree for fast spatial lookup against patch footprints
+            hit_indices = patch_tree.query(chunk_gdf.geometry, predicate="intersects")
+            matched_rows = chunk_gdf.index[sorted(set(hit_indices[0]))]
+            chunk_gdf = chunk_gdf.loc[matched_rows]
+
+            if not chunk_gdf.empty:
+                chunks.append(chunk_gdf)
+
+            del chunk_gdf
+
+        if chunks:
+            gdf = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True))
+        else:
+            gdf = gpd.GeoDataFrame(columns=read_columns)
+
+        gdf["ref_id"] = row["ref_id"]
+
+        # Keep only default columns
+        available_cols = [c for c in RDM_DEFAULT_COLUMNS if c in gdf.columns]
+        gdf = gdf[available_cols]
+
+        logger.info(f"Loaded {len(gdf)} samples (including collaterals) from ground truth file")
+    else:
+        # Fall back to RDM API query for non-file sources.
+        gdf = RdmInteraction().get_samples(
+            ref_ids=[row["ref_id"]],
+            spatial_extent=patches_multi,
+            temporal_extent=temporal_extent,
+            include_private=True,
+            ground_truth_file=None,
+            subset=only_flagged_samples,
+        )
 
     sampled_gdf = gdf_to_points(gdf)
 
