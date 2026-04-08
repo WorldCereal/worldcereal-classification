@@ -104,7 +104,9 @@ class WorldCerealClassificationApp:
 
         # Tab 3 variables
         self.processing_period: Optional[TemporalContext] = None
-        self.tab3_aoi_gdf = None  # GeoDataFrame AOI loaded from file (for seasons display)
+        self.tab3_aoi_gdf = (
+            None  # GeoDataFrame AOI loaded from file (for seasons display)
+        )
         self.season_window: Optional[TemporalContext] = None
         self.season_id: Optional[str] = None
 
@@ -1039,9 +1041,15 @@ class WorldCerealClassificationApp:
         """
         stem = path.stem
         # Strip known prefixes
-        for prefix in ("extractions_aligned_", "extractions_", "trainingdf_", "embeddings_", "query_"):
+        for prefix in (
+            "extractions_aligned_",
+            "extractions_",
+            "trainingdf_",
+            "embeddings_",
+            "query_",
+        ):
             if stem.startswith(prefix):
-                stem = stem[len(prefix):]
+                stem = stem[len(prefix) :]
                 break
         parts = stem.split("_")
         # Detect YYYYMMDD-YYYYMMDD date range segment (season window, 17 chars)
@@ -1082,21 +1090,24 @@ class WorldCerealClassificationApp:
             except Exception as exc:
                 print(f"Failed to save AOI: {exc}")
 
-    def _auto_save_aoi(self, _=None) -> None:
-        """Automatically save the current AOI to ./bbox after the user submits it."""
-        aoi_map = self.tab1_widgets.get("aoi_map")
+    def _auto_save_aoi_map(self, aoi_map) -> None:
+        """Save the given aoi_map widget's GDF to ./bbox, showing a confirmation."""
         if aoi_map is None:
             return
         try:
             bbox_dir = Path("./bbox")
             out_path = aoi_map.save_gdf(bbox_dir)
-            # Update the map output widget to confirm the save
             with aoi_map.output:
                 from IPython.display import HTML as _HTML
                 from IPython.display import display as _display
+
                 _display(_HTML(f"<i>AOI saved to {out_path}.</i>"))
         except Exception:
-            pass  # Silent – AOI may not be ready yet (e.g. submit failed)
+            pass  # Silent – AOI may not be ready yet
+
+    def _auto_save_aoi(self, _=None) -> None:
+        """Automatically save the Tab 1 AOI to ./bbox after the user submits it."""
+        self._auto_save_aoi_map(self.tab1_widgets.get("aoi_map"))
 
     def _try_load_aoi_for_seasons(self, aoi_name: str):
         """Try to load an AOI GeoDataFrame from ./bbox/{aoi_name}.gpkg.
@@ -1121,7 +1132,9 @@ class WorldCerealClassificationApp:
             if gdf.crs and gdf.crs.to_epsg() != 4326:
                 gdf = gdf.to_crs(epsg=4326)
             bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
-            bounds_gdf = gpd.GeoDataFrame(geometry=[shapely_box(*bounds)], crs="EPSG:4326")
+            bounds_gdf = gpd.GeoDataFrame(
+                geometry=[shapely_box(*bounds)], crs="EPSG:4326"
+            )
             crs = bounds_gdf.estimate_utm_crs()
             epsg = int(crs.to_epsg())
             bbox_utm = bounds_gdf.to_crs(crs).total_bounds
@@ -1146,7 +1159,11 @@ class WorldCerealClassificationApp:
                 save_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part()
-                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                save_path = (
+                    save_dir / f"extractions_{aoi_part}_{timestamp}.parquet"
+                    if aoi_part
+                    else save_dir / f"extractions_{timestamp}.parquet"
+                )
                 self._geometry_to_wkt(self.tab1_df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
                 self._cleanup_tab1_temp()
@@ -1177,7 +1194,9 @@ class WorldCerealClassificationApp:
                         else f"query_{timestamp}.parquet"
                     )
                     temp_path = temp_dir / fname
-                    self._geometry_to_wkt(self.tab1_df).to_parquet(temp_path, index=False)
+                    self._geometry_to_wkt(self.tab1_df).to_parquet(
+                        temp_path, index=False
+                    )
                     print(f"Query results saved to temporary file: {temp_path}")
                     print(
                         "Temporary folder: ./training_extractions_temp/\n"
@@ -1293,9 +1312,7 @@ class WorldCerealClassificationApp:
             icon="forward",
             layout=widgets.Layout(width="200px"),
         )
-        load_title = widgets.HTML(
-            value="<h3>Option to load extractions from file</h3>"
-        )
+        load_title = widgets.HTML(value="<h3>Option to load extractions from file</h3>")
         load_info = self._info_callout(
             "If you have previously saved extractions to disk (in the <code>./training_extractions/</code> folder), "
             "you can reload them here to skip Tab 1 entirely.<br><br>"
@@ -1505,7 +1522,11 @@ class WorldCerealClassificationApp:
                 save_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part() or self._get_aoi_name_tab1()
-                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                save_path = (
+                    save_dir / f"extractions_{aoi_part}_{timestamp}.parquet"
+                    if aoi_part
+                    else save_dir / f"extractions_{timestamp}.parquet"
+                )
                 self._geometry_to_wkt(df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
             except Exception as exc:
@@ -2817,12 +2838,12 @@ class WorldCerealClassificationApp:
                 m = date_range_re.match(part)
                 if m and i >= 2:
                     season_id = parts[i - 1]
-                    season_start = pd.to_datetime(
-                        m.group(1), format="%Y%m%d"
-                    ).strftime("%Y-%m-%d")
-                    season_end = pd.to_datetime(
-                        m.group(2), format="%Y%m%d"
-                    ).strftime("%Y-%m-%d")
+                    season_start = pd.to_datetime(m.group(1), format="%Y%m%d").strftime(
+                        "%Y-%m-%d"
+                    )
+                    season_end = pd.to_datetime(m.group(2), format="%Y%m%d").strftime(
+                        "%Y-%m-%d"
+                    )
                     return season_id, TemporalContext(season_start, season_end)
             return None, None
         except (IndexError, ValueError):
@@ -2944,7 +2965,9 @@ class WorldCerealClassificationApp:
                 name_parts = [p for p in [aoi_part, season_part] if p]
                 name_parts.append(f"cl-{nclasses}")
                 name_parts.append(timestamp)
-                training_df_path = training_dir / ("trainingdf_" + "_".join(name_parts) + ".csv")
+                training_df_path = training_dir / (
+                    "trainingdf_" + "_".join(name_parts) + ".csv"
+                )
                 df.to_csv(training_df_path, index=False)
                 print(
                     f"{nclasses} training classes confirmed and saved to {training_df_path}.\n"
@@ -3204,7 +3227,9 @@ class WorldCerealClassificationApp:
                 name_parts = [p for p in [aoi_part, season_part] if p]
                 name_parts.append(f"cl-{nclasses}")
                 name_parts.append(timestamp)
-                embeddings_path = embeddings_dir / ("embeddings_" + "_".join(name_parts) + ".csv")
+                embeddings_path = embeddings_dir / (
+                    "embeddings_" + "_".join(name_parts) + ".csv"
+                )
                 self.tab5_df.to_csv(embeddings_path, index=False)
                 print(f"Embeddings computed: {len(self.tab5_df)} rows.")
                 print(f"Embeddings saved to: {embeddings_path}")
@@ -3815,12 +3840,12 @@ class WorldCerealClassificationApp:
             "Large AOIs are automatically split into tiles for processing.<br>"
             "You can manually alter the <b>tile size</b> if you want to experiment with smaller or larger tiles, but keep in mind that this will also impact processing time and the required computational resources.<br><br>"
             "You can <b>draw</b> a rectangle using the drawing tools on the left side of the map.<br>"
-            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button.<br>"
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also <b>upload a vector file</b> (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
-            "After you have selected your AOI you can <b>save</b> it to the local `./bbox` folder using the Save AOI button below.<br>"
+            "After you have selected your AOI, it will be <b>automatically saved</b> to the local `./bbox` folder when you submit it.<br>"
         )
         tile_resolution_input = widgets.IntText(
             value=20,
@@ -3828,21 +3853,6 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="220px"),
         )
         aoi_map = ui_map(display_ui=False)
-
-        aoi_save_button = widgets.Button(
-            description="Save AOI to file",
-            button_style="info",
-            icon="save",
-            layout=widgets.Layout(width="220px"),
-        )
-        aoi_save_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="60px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
 
         season_message = widgets.HTML(
             value="<i>Select your growing season and year.</i>"
@@ -4002,8 +4012,6 @@ class WorldCerealClassificationApp:
         self.tab8_widgets = {
             "status_message": status_message,
             "aoi_map": aoi_map,
-            "aoi_save_button": aoi_save_button,
-            "aoi_save_output": aoi_save_output,
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_hint": season_hint,
@@ -4080,7 +4088,9 @@ class WorldCerealClassificationApp:
         )
 
         generate_button.on_click(self._on_generate_map_click)
-        aoi_save_button.on_click(self._on_tab8_save_aoi_click)
+        aoi_map.submit_button.on_click(
+            lambda _: self._auto_save_aoi_map(self.tab8_widgets.get("aoi_map"))
+        )
         season_retrieve_button.on_click(self._on_tab8_retrieve_seasons)
 
         return widgets.VBox(
@@ -4097,8 +4107,6 @@ class WorldCerealClassificationApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
-                widgets.HBox([aoi_save_button]),
-                aoi_save_output,
                 widgets.HTML("<h3>2) Select season</h3>"),
                 season_retrieve_message,
                 season_hint,
@@ -4139,11 +4147,6 @@ class WorldCerealClassificationApp:
                 self._build_tab_navigation(),
             ]
         )
-
-    def _on_tab8_save_aoi_click(self, _=None) -> None:
-        aoi_map = self.tab8_widgets.get("aoi_map")
-        output = self.tab8_widgets.get("aoi_save_output")
-        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_tab8_retrieve_seasons(self, _=None) -> None:
         """Retrieve and display WorldCereal seasons for the AOI in Tab 8."""
