@@ -387,12 +387,13 @@ class season_slider(date_slider):
         # Set the start and end dates for the slider
         # The slider will cover a period from June 2017 to June 2019
         start_date = pd.to_datetime(("2017-07-01"))
-        end_date = pd.to_datetime(("2019-05-01"))
+        end_date = pd.to_datetime(("2019-06-30"))
 
         # Call the parent class constructor
         super().__init__(
             start_date=start_date,
             end_date=end_date,
+            year_selector=False,
             show_year=False,
             display_interval=1,
             title="Select season:",
