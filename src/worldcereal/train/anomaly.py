@@ -44,6 +44,7 @@ from worldcereal.utils.refdata import get_class_mappings, map_classes
 from worldcereal.train.anomaly_utils import (
     MIN_SCORING_SLICE_SIZE,
     _SCORE_COLS,
+    ANOMALY_COLUMNS,
     _as_label_levels,
     _require_label_columns,
     _load_mapping_df,
@@ -60,6 +61,10 @@ from worldcereal.train.anomaly_utils import (
     add_flagged_robust_confidence,
     apply_confidence_fusion,
     flag_anomalies,
+    find_unscored_samples,
+    compute_impact_zone,
+    load_affected_embeddings_from_cache,
+    merge_scores_to_long_parquets,
 )
 
 
@@ -104,7 +109,7 @@ def _load_embeddings(
 def _handle_incremental_mode(
     df: pd.DataFrame,
     output_samples_path: Optional[str],
-    con: duckdb.DuckDBPyConnection,
+    con: Optional[duckdb.DuckDBPyConnection],
 ) -> Tuple[pd.DataFrame, Optional[gpd.GeoDataFrame], set]:
     """Filter out already-processed sample_ids when resuming.
 
@@ -129,7 +134,8 @@ def _handle_incremental_mode(
     print(f"[anomaly] Loading existing results from {output_samples_path}...")
     existing_df_full = gpd.read_parquet(output_samples_path)
     if "sample_id" not in existing_df_full.columns:
-        con.close()
+        if con is not None:
+            con.close()
         raise ValueError(
             f"Existing output_samples_path has no 'sample_id' column: {output_samples_path}"
         )
@@ -153,7 +159,7 @@ def _apply_class_mapping(
     mapping_file: Optional[Union[str, dict]],
     label_cols: list[str],
     class_mappings_name: str,
-    con: duckdb.DuckDBPyConnection,
+    con: Optional[duckdb.DuckDBPyConnection] = None,
 ) -> pd.DataFrame:
     """Map ewoc_code → label column(s) using the chosen strategy."""
 
@@ -173,12 +179,14 @@ def _apply_class_mapping(
     )
 
     if "ewoc_code" not in map_df.columns:
-        con.close()
+        if con is not None:
+            con.close()
         raise ValueError("mapping_file must contain an 'ewoc_code' column")
 
     missing_map_cols = [c for c in label_cols if c not in map_df.columns]
     if missing_map_cols:
-        con.close()
+        if con is not None:
+            con.close()
         raise ValueError(f"mapping_file missing required label column(s): {missing_map_cols}")
 
     # Normalize ewoc_code for joining (remove dashes)
@@ -425,6 +433,8 @@ def run_pipeline(
     skip_existing_samples: bool = False,
     skip_classes: Optional[Sequence[str]] = None,
     debug: bool = False,
+    embeddings_df: Optional[Tuple[pd.DataFrame, list]] = None,
+    write_outputs: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Run anomaly detection using only cached embeddings.
 
@@ -469,6 +479,17 @@ def run_pipeline(
         Their rows are held aside and re-joined to the output at the end
         with all score / outlier columns set to NaN.  Pass e.g.
         ``skip_classes=["built-up", "ignore"]``.
+    embeddings_df
+        If provided, a tuple of ``(df, embed_cols)`` — pre-loaded embeddings
+        DataFrame and the list of embedding column names.  When set, the
+        pipeline skips the DuckDB load entirely and uses this data instead.
+        This is used by the incremental update pathway to pass only the
+        impact-zone subset of embeddings.
+    write_outputs
+        If *False*, skip writing output parquet / Excel files even when
+        *output_samples_path* / *output_summary_path* are set.  The scored
+        DataFrames are still returned.  Default *True* preserves existing
+        behaviour.
     """
     group_cols = list(group_cols or [])
     label_cols = _as_label_levels(label_domain)
@@ -493,15 +514,21 @@ def run_pipeline(
             raise ValueError("label_domain must be 'ewoc_code' or 'finetune_class'")
 
     # ------------------------------------------------------------------
-    # 1. Load embeddings from DuckDB
+    # 1. Load embeddings from DuckDB (or use pre-supplied data)
     # ------------------------------------------------------------------
-    print("[anomaly] Connecting DuckDB and loading cached embeddings...")
-    con = duckdb.connect(embeddings_db_path)
-    df, embed_cols = _load_embeddings(con, group_cols, restrict_model_hash)
+    con: Optional[duckdb.DuckDBPyConnection] = None
+    if embeddings_df is not None:
+        df, embed_cols = embeddings_df
+        print(f"[anomaly] Using pre-supplied embeddings: {len(df):,} rows")
+    else:
+        print("[anomaly] Connecting DuckDB and loading cached embeddings...")
+        con = duckdb.connect(embeddings_db_path)
+        df, embed_cols = _load_embeddings(con, group_cols, restrict_model_hash)
 
     print(f"[anomaly] Loaded {len(df):,} rows from embeddings_cache")
     if df.empty:
-        con.close()
+        if con is not None:
+            con.close()
         raise ValueError(
             "No rows loaded from embeddings_cache. Check model_hash or DB path."
         )
@@ -517,7 +544,8 @@ def run_pipeline(
         )
         if df.empty:
             print("[anomaly] All samples already processed. Returning existing results...")
-            con.close()
+            if con is not None:
+                con.close()
             return existing_df_full, None
 
     # ------------------------------------------------------------------
@@ -525,7 +553,8 @@ def run_pipeline(
     # ------------------------------------------------------------------
     missing_group_cols = [c for c in group_cols if c not in df.columns]
     if missing_group_cols:
-        con.close()
+        if con is not None:
+            con.close()
         raise ValueError(
             f"Requested group_cols not found in loaded data: {missing_group_cols}"
         )
@@ -890,13 +919,15 @@ def run_pipeline(
     if skip_existing_samples and existing_df_full is not None:
         flagged_gdf = _merge_with_existing(flagged_gdf, existing_df_full)
     flagged_gdf.rename(columns={'confidence': 'confidence_nonoutlier', 'combined_anomaly' : 'anomaly_flag'}, inplace=True)
-    # Write to disk
-    _write_outputs(
-        flagged_gdf, summary_df, slice_keys,
-        output_samples_path, output_summary_path,
-    )
+    # Write to disk (optional — can be skipped in incremental/update mode)
+    if write_outputs:
+        _write_outputs(
+            flagged_gdf, summary_df, slice_keys,
+            output_samples_path, output_summary_path,
+        )
 
-    con.close()
+    if con is not None:
+        con.close()
     return flagged_gdf, summary_df
 
 

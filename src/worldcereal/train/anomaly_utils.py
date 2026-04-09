@@ -15,6 +15,7 @@ Sections
 7. Context-aware metrics (centroid margins, kNN purity)
 8. Confidence computation & fusion
 9. Flagging / thresholding
+10. Incremental update helpers (impact zone, unscored sample detection)
 """
 
 from __future__ import annotations
@@ -33,6 +34,17 @@ from sklearn.neighbors import NearestNeighbors
 
 MIN_SCORING_SLICE_SIZE: int = 50
 """Slices smaller than this get zero scores (not enough data to be meaningful)."""
+
+# The 6 anomaly columns appended to long-format parquets.
+# These are the final user-facing columns after the LC10 + CTY24 pipeline runs.
+ANOMALY_COLUMNS: List[str] = [
+    "LC10_confidence_nonoutlier",
+    "LC10_anomaly_flag",
+    "outlier_LC10_cls",
+    "CTY24_confidence_nonoutlier",
+    "CTY24_anomaly_flag",
+    "outlier_CTY24_cls",
+]
 
 _SCORE_COLS: List[str] = [
     "cosine_distance",
@@ -1355,3 +1367,339 @@ def flag_anomalies(
     )
     summary["flagged_fraction"] = summary["flagged_samples"] / summary["total_samples"]
     return flagged_df, summary
+
+
+# ---------------------------------------------------------------------------
+# 10. Incremental update helpers (impact zone, unscored sample detection)
+# ---------------------------------------------------------------------------
+
+
+def find_unscored_samples(
+    long_parquet_dir: Union[str, Path],
+    anomaly_cols: Optional[List[str]] = None,
+    parquet_glob: str = "**/*.parquet",
+    read_cols: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Scan partitioned long-format parquets and return rows with missing anomaly scores.
+
+    A row is "unscored" if **any** of the *anomaly_cols* is NaN/missing, OR if
+    the anomaly columns do not exist in the file at all (newly added dataset).
+
+    Only the lightweight identifier columns are returned — never band data.
+
+    Parameters
+    ----------
+    long_parquet_dir
+        Root directory of the hive-partitioned long-format parquet dataset
+        (the ``_with_anomalies`` version, or the raw version if columns were
+        pre-added with NaN).
+    anomaly_cols
+        The 6 anomaly column names.  Defaults to :data:`ANOMALY_COLUMNS`.
+    parquet_glob
+        Glob pattern to find parquet files under *long_parquet_dir*.
+    read_cols
+        Extra columns to include in the output beyond the identifiers +
+        anomaly columns.  Useful for e.g. ``['ewoc_code']``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``ref_id, sample_id`` plus any *read_cols*.
+        One row per **unique** ``(ref_id, sample_id)`` that is unscored.
+    """
+    import pyarrow.parquet as pq
+
+    long_parquet_dir = Path(long_parquet_dir)
+    if anomaly_cols is None:
+        anomaly_cols = list(ANOMALY_COLUMNS)
+
+    id_cols = ["ref_id", "sample_id"]
+    want_cols = list(dict.fromkeys(id_cols + (read_cols or []) + anomaly_cols))
+
+    parquet_files = sorted(long_parquet_dir.glob(parquet_glob))
+    if not parquet_files:
+        raise FileNotFoundError(
+            f"No parquet files found under {long_parquet_dir} with pattern {parquet_glob}"
+        )
+
+    unscored_parts: List[pd.DataFrame] = []
+    for pf in parquet_files:
+        schema = pq.read_schema(str(pf))
+        available = set(schema.names)
+
+        # If anomaly columns are completely missing → entire file is unscored
+        has_anomaly_cols = all(c in available for c in anomaly_cols)
+
+        # Read only the columns we need (intersection with what's available)
+        cols_to_read = [c for c in want_cols if c in available]
+        df = pd.read_parquet(pf, columns=cols_to_read)
+        if df.empty:
+            continue
+
+        if not has_anomaly_cols:
+            # All rows are unscored
+            unscored = df
+        else:
+            # Rows where ANY anomaly column is NaN
+            mask = df[anomaly_cols].isna().any(axis=1)
+            unscored = df[mask]
+
+        if unscored.empty:
+            continue
+
+        # Keep only identifier columns (+ read_cols), deduplicate per sample_id
+        keep = [c for c in id_cols + (read_cols or []) if c in unscored.columns]
+        unscored_parts.append(unscored[keep].drop_duplicates(subset="sample_id"))
+
+    if not unscored_parts:
+        return pd.DataFrame(columns=id_cols + (read_cols or []))
+
+    result = pd.concat(unscored_parts, ignore_index=True).drop_duplicates(
+        subset="sample_id"
+    )
+    return result
+
+
+def compute_impact_zone(
+    unscored_h3_cells: Sequence[str],
+    h3_levels: Sequence[int],
+    neighbour_rings: int = 1,
+) -> set:
+    """Compute the set of H3 cells (at all adaptive levels) that are affected.
+
+    Starting from the ``h3_l3_cell`` values of unscored points, derives
+    parent/child cells at every requested level and expands each by
+    *neighbour_rings* using ``h3.grid_disk``.
+
+    Parameters
+    ----------
+    unscored_h3_cells
+        The ``h3_l3_cell`` values of unscored points.
+    h3_levels
+        The adaptive H3 levels used by the pipeline (e.g. ``[2, 3]``).
+    neighbour_rings
+        How many rings of neighbours to include around each affected cell.
+        1 ring is usually sufficient to cover ``merge_small_slices`` spillover.
+
+    Returns
+    -------
+    set
+        Union of all affected H3 cell indices across all levels.
+    """
+    import h3 as _h3
+
+    impact: set = set()
+    unique_cells = set(str(c) for c in unscored_h3_cells if c)
+
+    for lvl in h3_levels:
+        level_cells: set = set()
+        for cell in unique_cells:
+            if lvl == 3:
+                derived = cell
+            elif lvl < 3:
+                derived = _h3.cell_to_parent(cell, lvl)
+            else:
+                # Finer than L3: we can't derive a single child without lat/lon,
+                # but the parent at L3 is the cell itself, so include it.
+                # The actual finer cells will be handled when we filter by
+                # checking if cell_to_parent(point_h3, lvl_coarse) is in impact.
+                derived = cell
+            level_cells.add(derived)
+            # Expand by neighbour rings
+            for ring_cell in _h3.grid_disk(derived, neighbour_rings):
+                level_cells.add(ring_cell)
+        impact.update(level_cells)
+
+    return impact
+
+
+def load_affected_embeddings_from_cache(
+    embeddings_db_path: str,
+    impact_cells: set,
+    h3_levels: Sequence[int],
+    restrict_model_hash: Optional[str] = None,
+    group_cols: Optional[Sequence[str]] = None,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Load embeddings from DuckDB for all points in the impact zone.
+
+    A point is "affected" if its ``h3_l3_cell`` (or its parent at any
+    coarser level in *h3_levels*) falls within *impact_cells*.
+
+    Parameters
+    ----------
+    embeddings_db_path
+        Path to the DuckDB embeddings cache.
+    impact_cells
+        Set of H3 cell indices (at various levels) from :func:`compute_impact_zone`.
+    h3_levels
+        The adaptive H3 levels (e.g. ``[2, 3]``).
+    restrict_model_hash
+        If set, only load embeddings for this model hash.
+    group_cols
+        Additional columns to load (e.g. ``['ref_id']``).
+
+    Returns
+    -------
+    (df, embed_cols)
+        DataFrame with all embeddings in the impact zone, plus the list of
+        ``embedding_0..embedding_127`` column names.
+    """
+    import duckdb
+    import h3 as _h3
+
+    group_cols = list(group_cols or [])
+
+    con = duckdb.connect(embeddings_db_path, read_only=True)
+    try:
+        cols_df = con.execute("PRAGMA table_info('embeddings_cache')").fetchdf()
+        embed_cols = [c for c in cols_df.name.tolist() if c.startswith("embedding_")]
+
+        base_cols = [
+            "sample_id", "ewoc_code", "model_hash", "ref_id",
+            "h3_l3_cell", "lat", "lon",
+        ]
+        select_cols = list(dict.fromkeys([*base_cols, *group_cols]))
+
+        query = f"SELECT {', '.join(select_cols + embed_cols)} FROM embeddings_cache"
+        if restrict_model_hash:
+            query += f" WHERE model_hash='{restrict_model_hash}'"
+
+        df = con.execute(query).fetchdf()
+    finally:
+        con.close()
+
+    if df.empty:
+        return df, embed_cols
+
+    # Filter to points whose H3 cell at ANY adaptive level is in impact_cells.
+    # For efficiency, check coarsest level first (fewer unique cells).
+    in_impact = np.zeros(len(df), dtype=bool)
+    for lvl in sorted(h3_levels):
+        if lvl == 3:
+            cells = df["h3_l3_cell"]
+        elif lvl < 3:
+            cells = df["h3_l3_cell"].apply(lambda h, _l=lvl: _h3.cell_to_parent(h, _l))
+        else:
+            # Finer level: derive from lat/lon
+            if "lat" in df.columns and "lon" in df.columns:
+                cells = df.apply(
+                    lambda r, _l=lvl: _h3.latlng_to_cell(r["lat"], r["lon"], _l),
+                    axis=1,
+                )
+            else:
+                cells = df["h3_l3_cell"]
+        in_impact |= cells.isin(impact_cells)
+
+    df = df[in_impact].copy()
+    return df, embed_cols
+
+
+def merge_scores_to_long_parquets(
+    scored_df: pd.DataFrame,
+    long_parquet_dir: Union[str, Path],
+    output_parquet_dir: Union[str, Path],
+    anomaly_cols: Optional[List[str]] = None,
+    parquet_glob: str = "**/*.parquet",
+    only_affected_ref_ids: Optional[set] = None,
+) -> int:
+    """Write anomaly scores back to long-format parquets.
+
+    For each parquet file under *long_parquet_dir*, left-joins the anomaly
+    columns from *scored_df* on ``(ref_id, sample_id)`` and writes to
+    *output_parquet_dir* (which may be the same directory for in-place update).
+
+    Parameters
+    ----------
+    scored_df
+        Must contain ``ref_id, sample_id`` plus all *anomaly_cols*.
+    long_parquet_dir
+        Input long-format parquet root.
+    output_parquet_dir
+        Output root.  If same as *long_parquet_dir*, files are updated in place.
+    anomaly_cols
+        Column names to write.  Defaults to :data:`ANOMALY_COLUMNS`.
+    parquet_glob
+        Glob pattern for finding parquet files.
+    only_affected_ref_ids
+        If provided, only rewrite parquets whose ``ref_id`` (derived from the
+        hive partition name or from the data) is in this set.  All other files
+        are either left untouched (if input==output) or copied as-is.
+
+    Returns
+    -------
+    int
+        Number of parquet files written/updated.
+    """
+    import gc
+    import shutil
+
+    long_parquet_dir = Path(long_parquet_dir)
+    output_parquet_dir = Path(output_parquet_dir)
+    if anomaly_cols is None:
+        anomaly_cols = list(ANOMALY_COLUMNS)
+
+    in_place = long_parquet_dir.resolve() == output_parquet_dir.resolve()
+
+    # Build a lookup: only the columns we need from scored_df
+    merge_cols = ["ref_id", "sample_id"] + anomaly_cols
+    available_merge = [c for c in merge_cols if c in scored_df.columns]
+    scores_lookup = scored_df[available_merge].drop_duplicates(subset="sample_id")
+
+    parquet_files = sorted(long_parquet_dir.glob(parquet_glob))
+    n_written = 0
+
+    for pf in parquet_files:
+        # Derive ref_id from hive partition path if possible
+        # e.g. .../ref_id=2020_AUT_xyz/2020_AUT_xyz.parquet
+        file_ref_id = None
+        for part in pf.parts:
+            if part.startswith("ref_id="):
+                file_ref_id = part.split("=", 1)[1]
+                break
+        if file_ref_id is None:
+            file_ref_id = pf.stem
+
+        # Skip files not in the affected set
+        if only_affected_ref_ids is not None:
+            if file_ref_id not in only_affected_ref_ids:
+                # If not in-place, copy to output only if the output doesn't
+                # already exist (don't overwrite a previously scored file)
+                if not in_place:
+                    out_path = output_parquet_dir / pf.relative_to(long_parquet_dir)
+                    if not out_path.exists():
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(pf, out_path)
+                continue
+
+        df_long = pd.read_parquet(pf)
+        if df_long.empty:
+            continue
+
+        # Drop existing anomaly columns to avoid _x/_y suffixes
+        cols_to_drop = [c for c in anomaly_cols if c in df_long.columns]
+        if cols_to_drop:
+            df_long.drop(columns=cols_to_drop, inplace=True)
+
+        # Left-join: broadcasts per-(ref_id, sample_id)
+        df_long = df_long.merge(
+            scores_lookup,
+            on=["ref_id", "sample_id"],
+            how="left",
+        )
+
+        # Sort for better compression
+        if "timestamp" in df_long.columns:
+            df_long["timestamp"] = pd.to_datetime(df_long["timestamp"])
+            df_long.sort_values(["sample_id", "timestamp"], inplace=True)
+        df_long.reset_index(drop=True, inplace=True)
+
+        out_path = output_parquet_dir / pf.relative_to(long_parquet_dir)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        df_long.to_parquet(out_path, index=False)
+        n_written += 1
+
+        del df_long
+        gc.collect()
+
+    return n_written
+
