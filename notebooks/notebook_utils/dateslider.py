@@ -269,13 +269,31 @@ class date_slider:
     def on_slider_change(self, change):
         start, end = change["new"]
         months_selected = self._get_month_span(start, end)
+        n_opts = len(self.interval_slider.options)
+        start_idx, end_idx = self.interval_slider.index
+
+        clamped_index = None
         if months_selected > self.max_window_months:
-            clamped_end = start + pd.DateOffset(months=self.max_window_months - 1)
-            self.interval_slider.value = (start, clamped_end)
-            return
-        if months_selected < self.min_window_months:
-            clamped_end = start + pd.DateOffset(months=self.min_window_months - 1)
-            self.interval_slider.value = (start, clamped_end)
+            new_end_idx = min(n_opts - 1, start_idx + self.max_window_months - 1)
+            clamped_index = (start_idx, new_end_idx)
+        elif months_selected < self.min_window_months:
+            new_end_idx = start_idx + self.min_window_months - 1
+            if new_end_idx >= n_opts:
+                new_end_idx = n_opts - 1
+                new_start_idx = max(0, new_end_idx - self.min_window_months + 1)
+                clamped_index = (new_start_idx, new_end_idx)
+            else:
+                clamped_index = (start_idx, new_end_idx)
+
+        if clamped_index is not None:
+            self.interval_slider.unobserve(self.on_slider_change, names="value")
+            try:
+                self.interval_slider.index = clamped_index
+                clamped_start = self.interval_slider.value[0]
+                clamped_end = self.interval_slider.value[1]
+                self._update_summary(clamped_start, clamped_end)
+            finally:
+                self.interval_slider.observe(self.on_slider_change, names="value")
             return
 
         self._update_summary(start, end)
