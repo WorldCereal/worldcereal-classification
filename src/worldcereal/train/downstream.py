@@ -95,7 +95,7 @@ class TorchTrainer:
         batch_size: int = 1024,
         num_workers: int = 4,
         hidden_dim: int = 256,
-        dropout: float = 0.0,
+        dropout: float = 0.2,
         lr: float = 1e-2,  # can be high for lightweight head
         epochs: int = 30,
         log_interval: int = 10,
