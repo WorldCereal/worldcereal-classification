@@ -169,10 +169,12 @@ class date_slider:
         focus_year: Optional[int] = None,
     ) -> widgets.VBox:
         dates = pd.date_range(start_date, end_date, freq="MS")
-        if self.show_year:
-            options = [(date.strftime("%b %Y"), date) for date in dates]
-        else:
-            options = [(date.strftime("%b"), date) for date in dates]
+        # Always use year-qualified labels to guarantee uniqueness.
+        # Duplicate labels cause an infinite internal loop in ipywidgets
+        # (_propagate_label ↔ _propagate_index) when the same month name
+        # appears more than once across years. The labels are never shown
+        # to the user (readout=False) — the visual tick marks are separate HTML.
+        options = [(date.strftime("%b %Y"), date) for date in dates]
 
         default_start_index = 0
         if focus_year is not None:
