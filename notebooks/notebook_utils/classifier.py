@@ -14,7 +14,7 @@ If the upstream Presto model changes dimensionality this file should be updated 
 """
 
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -198,6 +198,7 @@ def compute_seasonal_presto_embeddings(
     custom_presto_url: Optional[str] = None,
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
     season_window: Optional[TemporalContext] = None,
+    min_season_coverage: float = 1.0,
     use_spatial_split: bool = True,
     bin_size_degrees: float = 0.25,
     val_size: float = 0.15,
@@ -231,6 +232,10 @@ def compute_seasonal_presto_embeddings(
         Season calendar resolution mode.
     season_window : TemporalContext, optional
         Custom temporal window for pooling.
+    min_season_coverage : float, optional
+        Minimum fraction of a season's composite slots that must fall inside
+        the selected timestep window for the season mask to be enabled.
+        1.0 (default) enforces full coverage.
     use_spatial_split : bool, default=False
         If True, uses spatial binning to split data and avoid spatial leakage.
         Requires 'lat' and 'lon' columns in the dataframe.
@@ -322,6 +327,7 @@ def compute_seasonal_presto_embeddings(
             season_ids=[season_id],
             season_calendar_mode=effective_mode,
             season_windows=season_windows,
+            min_season_coverage=min_season_coverage,
         )
 
     train_ds = _build_dataset(
@@ -354,7 +360,7 @@ def train_seasonal_torch_head(
     output_dir: Union[str, Path] = "./downstream_classifier",
     num_workers: int = 0,
     disable_progressbar: bool = True,
-    **trainer_kwargs: object,
+    **trainer_kwargs: Any,
 ):
     """Train a torch head compatible with the seasonal model bundle."""
 

@@ -503,6 +503,7 @@ def dataset_to_embeddings(
     )
 
     final_df = None
+    total_dropped = 0
 
     for predictors, attrs in tqdm(dl):
         with torch.no_grad():
@@ -533,12 +534,16 @@ def dataset_to_embeddings(
                 selected_mask = season_masks[:, season_index, :]
                 season_mask_float = selected_mask.to(dtype=time_embeddings.dtype)
                 weights = season_mask_float.sum(dim=-1, keepdim=True)
-                zero_weight = weights == 0
+                zero_weight = (weights == 0).squeeze(-1)
+                valid = None
                 if torch.any(zero_weight):
-                    # Handle zero weights by setting mask to all 1s for those samples
-                    season_mask_float = season_mask_float.clone()
-                    season_mask_float[zero_weight.squeeze(-1)] = 1.0
-                    weights = season_mask_float.sum(dim=-1, keepdim=True)
+                    # Drop samples that don't fall sufficiently inside the season
+                    n_dropped = int(zero_weight.sum().item())
+                    total_dropped += n_dropped
+                    valid = ~zero_weight
+                    season_mask_float = season_mask_float[valid]
+                    weights = weights[valid]
+                    time_embeddings = time_embeddings[valid]
 
                 encodings = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
                     dim=-2
@@ -553,13 +558,24 @@ def dataset_to_embeddings(
             k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
         }
 
+        # Drop the same samples from attrs if any were filtered out
+        if season_index is not None and valid is not None:
+            valid_np = valid.cpu().numpy()
+            attrs_frame = {
+                k: (np.asarray(v)[valid_np] if hasattr(v, "__len__") else v)
+                for k, v in attrs_frame.items()
+            }
+
         # Add in_season flag if seasonal mode and available
         if season_index is not None and attrs.get("in_seasons") is not None:
             in_seasons = np.asarray(attrs["in_seasons"])
             if in_seasons.ndim == 2:
-                attrs_frame["in_season"] = in_seasons[:, season_index]
+                col = in_seasons[:, season_index]
             else:
-                attrs_frame["in_season"] = in_seasons
+                col = in_seasons
+            if valid is not None:
+                col = col[valid.cpu().numpy()]
+            attrs_frame["in_season"] = col
 
         attrs_df = pd.DataFrame.from_dict(attrs_frame)
         encodings_df = pd.DataFrame(
@@ -568,6 +584,15 @@ def dataset_to_embeddings(
         result = pd.concat([encodings_df, attrs_df], axis=1)
 
         final_df = result if final_df is None else pd.concat([final_df, result])
+
+    if total_dropped > 0:
+        logger.warning(
+            f"{total_dropped} sample(s) were dropped because their season mask was "
+            f"all-zero (i.e. the sample does not fall sufficiently inside season "
+            f"{season_index}). Consider reviewing your season definition, lowering "
+            f"the min_season_coverage fraction, or checking the temporal coverage "
+            f"of those samples."
+        )
 
     return final_df
 

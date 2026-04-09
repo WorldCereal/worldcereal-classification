@@ -662,6 +662,12 @@ class WorldCerealDataset(Dataset):
                 f"min_season_coverage must be in (0, 1]; got {min_season_coverage}"
             )
         self.min_season_coverage = min_season_coverage
+
+        if self.min_season_coverage < 1.0:
+            logger.info(
+                f"Using min_season_coverage={self.min_season_coverage} with augment={self.augment}"
+            )
+
         if self.masking_config:
             if self.masking_config.seed is not None:
                 # set a per-dataset RNG seed (numpy global for simplicity)
@@ -1802,6 +1808,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
         season_calendar_mode: SeasonCalendarMode = "auto",
+        min_season_coverage: float = 1.0,
     ):
         """WorldCereal training dataset. This dataset is typically used for
         computing embeddings for downstream training."""
@@ -1813,6 +1820,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             num_outputs=num_outputs,
             augment=augment,
             masking_config=masking_config,
+            min_season_coverage=min_season_coverage,
         )
 
         self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
