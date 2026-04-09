@@ -2,6 +2,7 @@ import logging
 import textwrap
 import time
 import urllib.request
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -234,15 +235,22 @@ def run_extractions_notebook(
     )
 
     try:
-        job_db = run_extractions(
-            collection=collection,
-            output_folder=output_folder,
-            samples_df_path=samples_df_path,
-            ref_id=ref_id,
-            extract_value=extract_value,
-            restart_failed=restart_failed,
-            status_callback=status_callback,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="WKTReadingError is deprecated",
+                category=FutureWarning,
+                module=r"openeo\.extra\.job_management\._job_db",
+            )
+            job_db = run_extractions(
+                collection=collection,
+                output_folder=output_folder,
+                samples_df_path=samples_df_path,
+                ref_id=ref_id,
+                extract_value=extract_value,
+                restart_failed=restart_failed,
+                status_callback=status_callback,
+            )
     except KeyboardInterrupt:
         _log(break_msg)
         raise
