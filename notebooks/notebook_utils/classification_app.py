@@ -2662,14 +2662,21 @@ class WorldCerealClassificationApp:
             "The resulting <b>128 embeddings</b> (`presto_ft_0` -> `presto_ft_127`) nicely condense the Sentinel-1, Sentinel-2, meteo timeseries and ancillary data for your season of interest into a limited number of meaningful features which we will use for downstream model training.<br><br>"
             "We provide some options aimed at increasing robustness of your final crop model.<br>"
             "This is controlled by the following arguments:<br>"
+            "    - <b>augment</b> parameter: when `True`, applies temporal jitter augmentation to training samples, randomly shifting the season window slightly to increase temporal diversity and model robustness.<br>"
+            "           NOTE: This option is not available if you chose to strictly align your samples to the season window in Tab 3.<br>"
             "    - <b>mask_on_training</b> parameter: when `True`, applies sensor masking augmentations (e.g. simulating S1/S2 dropouts, additional clouds, ancillary feature removals) only to the training split to improve robustness to real-world data gaps.<br>"
             "           The validation/test split is kept untouched for fair evaluation.<br>"
-            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
+            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time. <br>"
+            "           Only active when augment or mask_on_training is enabled.<br>"
             "<br>"
             "<b>Dataset splitting options</b>:<br>"
             "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used.<br>"
             "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
             "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
+        )
+        augment_checkbox = widgets.Checkbox(
+            value=True,
+            description="Augment",
         )
         mask_on_training_checkbox = widgets.Checkbox(
             value=True,
@@ -2679,7 +2686,7 @@ class WorldCerealClassificationApp:
             value=3,
             description="Repeats:",
             layout=widgets.Layout(width="200px"),
-            disabled=not mask_on_training_checkbox.value,
+            disabled=not (augment_checkbox.value or mask_on_training_checkbox.value),
         )
         dataset_split_title = widgets.HTML("<h4>Dataset splitting</h4>")
         use_spatial_split_checkbox = widgets.Checkbox(
@@ -2733,6 +2740,7 @@ class WorldCerealClassificationApp:
             "load_button": load_button,
             "load_output": load_output,
             "presto_message": presto_message,
+            "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
             "use_spatial_split_checkbox": use_spatial_split_checkbox,
@@ -2743,12 +2751,30 @@ class WorldCerealClassificationApp:
             "embeddings_output": embeddings_output,
         }
 
+        def _update_repeats_disabled(_=None):
+            repeats_input.disabled = not (
+                augment_checkbox.value or mask_on_training_checkbox.value
+            )
+
+        def _sync_augment_from_strict(change):
+            strict = change["new"]
+            augment_checkbox.disabled = strict
+            if strict:
+                augment_checkbox.value = False
+            else:
+                augment_checkbox.value = True
+
+        strict_align_checkbox = self.tab3_widgets.get("strict_align_checkbox")
+        if strict_align_checkbox is not None:
+            if strict_align_checkbox.value:
+                augment_checkbox.disabled = True
+                augment_checkbox.value = False
+            strict_align_checkbox.observe(_sync_augment_from_strict, names="value")
+
         load_button.on_click(self._on_tab5_load_training_df)
         embeddings_button.on_click(self._on_tab5_compute_embeddings)
-        mask_on_training_checkbox.observe(
-            lambda change: repeats_input.__setattr__("disabled", not change["new"]),
-            names="value",
-        )
+        mask_on_training_checkbox.observe(_update_repeats_disabled, names="value")
+        augment_checkbox.observe(_update_repeats_disabled, names="value")
 
         return widgets.VBox(
             [
@@ -2760,7 +2786,7 @@ class WorldCerealClassificationApp:
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
                 embeddings_message,
                 embeddings_info,
-                widgets.HBox([mask_on_training_checkbox]),
+                widgets.HBox([augment_checkbox, mask_on_training_checkbox]),
                 widgets.HBox([repeats_input]),
                 dataset_split_title,
                 widgets.HBox([use_spatial_split_checkbox, bin_size_degrees_input]),
@@ -3152,6 +3178,7 @@ class WorldCerealClassificationApp:
     def _on_tab5_compute_embeddings(self, _=None):
         df = self._get_tab4_working_df()
         output = self.tab5_widgets["embeddings_output"]
+        augment_checkbox = self.tab5_widgets.get("augment_checkbox")
         mask_on_training_checkbox = self.tab5_widgets.get("mask_on_training_checkbox")
         repeats_input = self.tab5_widgets.get("repeats_input")
         use_spatial_split_checkbox = self.tab5_widgets.get("use_spatial_split_checkbox")
@@ -3174,6 +3201,7 @@ class WorldCerealClassificationApp:
                     "Season window missing. Complete Tab 3 season alignment or load a valid training dataframe containing a season window in its name."
                 )
                 return
+            augment = False if augment_checkbox is None else augment_checkbox.value
             mask_on_training = (
                 True
                 if mask_on_training_checkbox is None
@@ -3210,7 +3238,7 @@ class WorldCerealClassificationApp:
                     season_id=self.season_id,
                     mask_on_training=mask_on_training,
                     repeats=repeats,
-                    augment=False,
+                    augment=augment,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
                     custom_presto_url=custom_presto_url,
