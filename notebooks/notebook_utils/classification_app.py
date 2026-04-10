@@ -2679,6 +2679,7 @@ class WorldCerealClassificationApp:
             value=3,
             description="Repeats:",
             layout=widgets.Layout(width="200px"),
+            disabled=not mask_on_training_checkbox.value,
         )
         dataset_split_title = widgets.HTML("<h4>Dataset splitting</h4>")
         use_spatial_split_checkbox = widgets.Checkbox(
@@ -2744,6 +2745,10 @@ class WorldCerealClassificationApp:
 
         load_button.on_click(self._on_tab5_load_training_df)
         embeddings_button.on_click(self._on_tab5_compute_embeddings)
+        mask_on_training_checkbox.observe(
+            lambda change: repeats_input.__setattr__("disabled", not change["new"]),
+            names="value",
+        )
 
         return widgets.VBox(
             [
