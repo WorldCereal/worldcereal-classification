@@ -281,12 +281,12 @@ def compute_seasonal_presto_embeddings(
     if mask_on_training:
         masking_config = SensorMaskingConfig(
             enable=True,
-            s1_full_dropout_prob=0.05,
-            s1_timestep_dropout_prob=0.1,
-            s2_cloud_timestep_prob=0.1,
+            s1_full_dropout_prob=0.15,
+            s1_timestep_dropout_prob=0.15,
+            s2_cloud_timestep_prob=0.25,
             s2_cloud_block_prob=0.05,
             s2_cloud_block_min=2,
-            s2_cloud_block_max=3,
+            s2_cloud_block_max=5,
             meteo_timestep_dropout_prob=0.03,
             dem_dropout_prob=0.01,
         )
