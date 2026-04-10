@@ -27,7 +27,7 @@ from worldcereal.train.backbone import (
     checkpoint_fingerprint,
     resolve_seasonal_encoder,
 )
-from worldcereal.train.datasets import MIN_EDGE_BUFFER, SensorMaskingConfig
+from worldcereal.train.datasets import SensorMaskingConfig
 from worldcereal.utils.refdata import process_extractions_df
 
 
@@ -78,7 +78,7 @@ def align_extractions_to_season(
     df: pd.DataFrame,
     season: Optional[TemporalContext] = None,
     freq: Literal["month", "dekad"] = "month",
-    valid_time_buffer: int = MIN_EDGE_BUFFER,
+    valid_time_buffer: int = 0,
     season_window: Optional[TemporalContext] = None,
 ) -> pd.DataFrame:
     """Align raw extraction rows to a target season and enrich with labels.
@@ -90,7 +90,7 @@ def align_extractions_to_season(
     Samples are removed if:
     - (If season provided) They lack satellite coverage for the full processing period
     - Their valid_time falls outside the season window
-    - (If season provided) Their valid_time is too close to processing period edges (< MIN_EDGE_BUFFER)
+    - (If season provided) Their valid_time is too close to processing period edges
 
     Output additions
     ----------------
@@ -112,10 +112,8 @@ def align_extractions_to_season(
         12 timesteps (needed for embedding computation). When None, no trimming occurs.
     freq : {'month', 'dekad'}, default='month'
         Resampling / alignment frequency controlling internal temporal aggregation.
-    valid_time_buffer : int, default=MIN_EDGE_BUFFER
+    valid_time_buffer : int, default=0
         Buffer (in months for monthly freq) allowing valid_time closer to processing period edges.
-        Increase (e.g., to 6) to accommodate datasets with partial temporal coverage.
-        Set to 0 for strict requirements (full Jan-Dec satellite coverage).
     season_window : TemporalContext, optional
         Campaign window for valid_time filtering (typically the slider selection).
         When provided, only samples with valid_time inside this window are retained.
