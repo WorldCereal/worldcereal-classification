@@ -48,6 +48,268 @@ from worldcereal.train.seasonal_head import SeasonalHeadOutput
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
 
 
+def _series_from_column(
+    df: pd.DataFrame, column: Optional[str], default: float = 1.0
+) -> pd.Series:
+    """Return a numeric Series from *column*, falling back to *default*.
+
+    If *column* is ``None`` or absent from *df*, a constant Series filled
+    with *default* is returned so that downstream arithmetic (e.g.
+    multiplicative sample weighting) always has a valid operand.
+    """
+    if column and column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce").fillna(default).astype(float)
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _normalize_score(series: pd.Series) -> pd.Series:
+    """Rescale 0-100 integer scores to 0-1 and clip to [0, 1].
+
+    Uses a threshold of 1.5 to distinguish genuine 0-100 encoded scores
+    from values already in [0, 1] that may slightly exceed 1.0 due to
+    floating-point noise.  The final clip handles any residual overshoot.
+    """
+    if series.max() > 1.5:
+        series = series / 100.0
+    return series.clip(0.0, 1.0)
+
+
+def attach_sample_weights(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_score_col: str,
+    outlier_score_col: str,
+    output_col: str,
+) -> pd.DataFrame:
+    """Compute per-sample weight as the product of quality and outlier scores.
+
+    Each score independently modulates the sample weight:
+    score=1 means no effect, score<1 means proportional down-weighting.
+    """
+    quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
+    outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
+    combined = (quality * outlier).clip(0.0, 1.0)
+
+    updated = df.copy()
+    updated[output_col] = combined
+
+    stats = {
+        "min": float(combined.min()),
+        "max": float(combined.max()),
+        "mean": float(combined.mean()),
+    }
+    logger.info(f"{split_name} {output_col} stats: {stats}")
+    return updated
+
+
+def drop_outliers(
+    df: pd.DataFrame,
+    split_name: str,
+    outlier_col: str = "LC10_anomaly_flag",
+    drop_level: Literal[
+        "drop_candidate", "drop_suspect", "drop_flagged"
+    ] = "drop_candidate",
+) -> pd.DataFrame:
+    """Drop samples flagged as outliers from a split dataframe.
+
+    The *drop_level* controls which flag values are considered outliers:
+
+    - ``"drop_candidate"`` – only samples labelled ``"candidate"``.
+    - ``"drop_suspect"``   – samples labelled ``"candidate"`` or ``"suspect"``.
+    - ``"drop_flagged"``   – all of the above plus ``"flagged"``.
+    """
+    if outlier_col not in df.columns:
+        logger.warning(
+            f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
+        )
+        return df
+
+    if drop_level == "drop_candidate":
+        outliers = df[df[outlier_col] == "candidate"]["sample_id"].tolist()
+    elif drop_level == "drop_suspect":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect"])][
+            "sample_id"
+        ].tolist()
+    elif drop_level == "drop_flagged":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect", "flagged"])][
+            "sample_id"
+        ].tolist()
+    else:
+        raise ValueError(
+            f"Invalid drop_level '{drop_level}'; must be one of ['drop_candidate', 'drop_suspect', 'drop_flagged']"
+        )
+
+    if len(outliers) > 0:
+        logger.warning(
+            f"Dropping {len(outliers)} samples from {split_name} split "
+            f"with outlier categories <= '{drop_level}'"
+        )
+        df = df[~df["sample_id"].isin(outliers)].copy()
+    else:
+        logger.info(
+            f"No samples dropped from {split_name} split for outlier level '{drop_level}'."
+        )
+    return df
+
+
+def drop_zero_quality_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_cols: Sequence[str],
+) -> pd.DataFrame:
+    """Hard-exclude samples where *all* quality scores are exactly 0.
+
+    Samples with only one score at 0 (e.g. landcover-only datasets with
+    ``quality_score_ct == 0``) are kept — the non-zero score is sufficient
+    for the relevant task head.
+
+    A quality score of 0 across the board typically indicates a
+    fundamentally bad sample (e.g. road intersection) that should never
+    contribute to training.
+    """
+    if df.empty:
+        return df
+
+    present_cols = [col for col in quality_cols if col in df.columns]
+    if not present_cols:
+        logger.info(
+            f"{split_name}: no quality columns found ({quality_cols}); "
+            "skipping zero-quality exclusion."
+        )
+        return df
+
+    # Drop only when ALL quality scores are 0.
+    # fillna(1.0): treat missing scores as "not zero" so a NaN alone
+    # never causes a sample to be dropped — only explicit zeroes count.
+    all_zero = pd.Series(True, index=df.index)
+    for col in present_cols:
+        scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
+        all_zero = all_zero & (scores == 0.0)
+
+    n_dropped = int(all_zero.sum())
+    if n_dropped > 0:
+        logger.warning(
+            f"{split_name}: dropping {n_dropped} samples where all quality "
+            f"scores are zero in columns {present_cols}."
+        )
+        df = df[~all_zero].copy()
+    else:
+        logger.info(f"{split_name}: no samples with all-zero quality scores found.")
+    return df
+
+
+def filter_low_weight_eval_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    *,
+    weight_cols: Sequence[str] = ("sample_weight_lc", "sample_weight_ct"),
+    hard_floor: float = 0.5,
+    percentile: float = 20.0,
+    min_class_samples: int = 10,
+    label_columns: Sequence[str] = ("landcover_label", "croptype_label"),
+) -> pd.DataFrame:
+    """Remove low-quality samples from val/test using a hybrid filter.
+
+    A sample is *marked for removal* when **both** conditions hold:
+      1. Its combined weight is below the ``percentile``-th percentile
+         within its ref_id  (relatively bad within its dataset).
+      2. Its combined weight is below ``hard_floor``
+         (absolutely bad by a global standard).
+
+    Before actually removing, a **class safety net** ensures that no
+    label in ``label_columns`` drops below ``min_class_samples``.
+    """
+    if df.empty:
+        return df
+
+    present_weight_cols = [c for c in weight_cols if c in df.columns]
+    if not present_weight_cols:
+        logger.info(
+            f"{split_name}: weight columns {list(weight_cols)} not found; "
+            "skipping low-weight eval filtering."
+        )
+        return df
+
+    # Combined weight = minimum across task-specific weights
+    w = df[present_weight_cols].min(axis=1)
+
+    # Per-ref_id percentile threshold
+    pct_threshold = (
+        df.assign(_w=w)
+        .groupby("ref_id")["_w"]
+        .transform(lambda s: np.percentile(s, percentile))
+    )
+
+    # Mark: relatively bad AND absolutely bad
+    remove_mask = (w < pct_threshold) & (w < hard_floor)
+
+    # Class safety net: protect classes that would drop below min_class_samples
+    present_label_cols = [c for c in label_columns if c in df.columns]
+    if present_label_cols and remove_mask.any():
+        protected = pd.Series(False, index=df.index)
+        for label_col in present_label_cols:
+            labels = df[label_col].dropna()
+            remaining_counts = df.loc[
+                ~remove_mask & df[label_col].notna(), label_col
+            ].value_counts()
+            for cls_name in labels.unique():
+                if remaining_counts.get(cls_name, 0) < min_class_samples:
+                    # Protect all samples of this class from removal
+                    class_mask = (df[label_col] == cls_name) & remove_mask
+                    n_protected = int(class_mask.sum())
+                    if n_protected > 0:
+                        protected = protected | class_mask
+                        logger.warning(
+                            f"{split_name}: protecting {n_protected} sample(s) "
+                            f"of class '{cls_name}' (col={label_col}) from removal "
+                            f"to keep >= {min_class_samples} samples."
+                        )
+        remove_mask = remove_mask & ~protected
+
+    n_removed = int(remove_mask.sum())
+    if n_removed == 0:
+        logger.info(
+            f"{split_name}: no samples removed by low-weight eval filter "
+            f"(floor={hard_floor}, pct={percentile})."
+        )
+        return df
+
+    # --- Detailed logging ---
+    removed_df = df[remove_mask]
+    logger.warning(
+        f"{split_name}: removing {n_removed}/{len(df)} samples "
+        f"({100 * n_removed / len(df):.1f}%) with low combined weight "
+        f"(floor={hard_floor}, percentile={percentile})."
+    )
+
+    # Per-ref_id breakdown
+    ref_counts = removed_df["ref_id"].value_counts().sort_values(ascending=False)
+    champion_ref = ref_counts.index[0]
+    champion_count = int(ref_counts.iloc[0])
+    logger.warning(
+        f"{split_name}: top ref_id for removals: '{champion_ref}' "
+        f"({champion_count} samples). "
+        f"Total ref_ids affected: {len(ref_counts)}."
+    )
+    # Log up to top 15 ref_ids
+    top_refs = ref_counts.head(15)
+    logger.warning(
+        f"{split_name}: per-ref_id removal counts (top 15):\n" + top_refs.to_string()
+    )
+
+    # Weight distribution of removed samples
+    removed_weights = w[remove_mask]
+    logger.info(
+        f"{split_name}: removed samples weight stats: "
+        f"min={removed_weights.min():.4f}, "
+        f"max={removed_weights.max():.4f}, "
+        f"mean={removed_weights.mean():.4f}, "
+        f"median={removed_weights.median():.4f}"
+    )
+
+    return df[~remove_mask].copy()
+
+
 def _compute_metrics_from_records(
     records: List[dict], label_order: Optional[Sequence[str]]
 ) -> Tuple[pd.DataFrame, Figure, Figure]:

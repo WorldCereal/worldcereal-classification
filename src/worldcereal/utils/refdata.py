@@ -17,7 +17,6 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
-from worldcereal.train import MIN_EDGE_BUFFER
 from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
@@ -64,9 +63,7 @@ def get_class_mappings(
         # Treat as a file-system path to a custom JSON mappings file.
         custom_path = Path(source)
         if not custom_path.exists():
-            raise FileNotFoundError(
-                f"Class mappings file not found: {custom_path}"
-            )
+            raise FileNotFoundError(f"Class mappings file not found: {custom_path}")
         class_mappings = json.loads(custom_path.read_text(encoding="utf-8"))
         if not isinstance(class_mappings, dict):
             raise ValueError(
@@ -649,7 +646,10 @@ def check_shift(
 
 
 def get_best_valid_time(
-    row: pd.Series, valid_time_buffer: int, num_timesteps: int, freq: str
+    row: pd.Series,
+    valid_time_buffer: int,
+    num_timesteps: int,
+    freq: str,
 ) -> Union[pd.Timestamp, float]:
     """
     Determines the best valid time for a given row of data based on specified shift constraints.
@@ -696,7 +696,7 @@ def get_best_valid_time(
         )
     buffer_multiplier = 1 if freq == "month" else 3
     buffer_steps = valid_time_buffer * buffer_multiplier
-    edge_steps = MIN_EDGE_BUFFER * buffer_multiplier
+    edge_steps = valid_time_buffer * buffer_multiplier
     if buffer_steps > num_timesteps // 2:
         logger.warning(
             f"The provided valid_time_buffer ({valid_time_buffer} months) is larger than half the number of timesteps in the processing period. "
@@ -956,6 +956,7 @@ def process_extractions_df(
         freq=freq,
         use_valid_time=True,
         max_timesteps_trim=max_trim,
+        min_edge_buffer=valid_time_buffer,
     )
 
     if processing_period is not None:
@@ -1084,9 +1085,9 @@ def split_df(
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
         for country in val_countries_iso3:
-            assert df.iso3.str.contains(
-                country
-            ).any(), f"Tried removing {country} but it is not in the dataframe"
+            assert df.iso3.str.contains(country).any(), (
+                f"Tried removing {country} but it is not in the dataframe"
+            )
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
                 train_only_samples

@@ -35,6 +35,12 @@ from worldcereal.train.backbone import (
 )
 from worldcereal.train.data import spatial_train_val_test_split, train_val_test_split
 from worldcereal.train.datasets import get_class_weights
+from worldcereal.train.finetuning_utils import (
+    attach_sample_weights,
+    drop_outliers,
+    drop_zero_quality_samples,
+    filter_low_weight_eval_samples,
+)
 from worldcereal.train.seasonal_head import LinearHead, MLPHead
 
 
@@ -95,7 +101,7 @@ class TorchTrainer:
         batch_size: int = 1024,
         num_workers: int = 4,
         hidden_dim: int = 256,
-        dropout: float = 0.0,
+        dropout: float = 0.2,
         lr: float = 1e-2,  # can be high for lightweight head
         epochs: int = 30,
         log_interval: int = 10,
@@ -107,6 +113,15 @@ class TorchTrainer:
         balancing_method: str = "log",
         weights_clip_range: Tuple[float, float] = (0.1, 10),
         quality_col: Optional[str] = None,
+        outlier_score_col: Optional[str] = None,
+        outlier_col: Optional[str] = None,
+        outlier_drop_level: Optional[
+            Literal["drop_candidate", "drop_suspect", "drop_flagged"]
+        ] = None,
+        zero_quality_cols: Optional[Sequence[str]] = None,
+        eval_weight_floor: Optional[float] = 0.5,
+        eval_weight_percentile: float = 20.0,
+        eval_min_class_samples: int = 10,
         early_stopping_patience: int = 6,
         early_stopping_min_delta: float = 0.0,
         weight_decay: float = 0.0,
@@ -176,6 +191,17 @@ class TorchTrainer:
         self.balancing_method = balancing_method
         self.weights_clip_range = weights_clip_range
         self.quality_col = quality_col
+        self.outlier_score_col = outlier_score_col
+
+        # Sample filtering
+        self.outlier_col = outlier_col
+        self.outlier_drop_level = outlier_drop_level
+        self.zero_quality_cols = list(zero_quality_cols) if zero_quality_cols else []
+
+        # Eval quality filtering
+        self.eval_weight_floor = eval_weight_floor
+        self.eval_weight_percentile = eval_weight_percentile
+        self.eval_min_class_samples = eval_min_class_samples
 
         # Spatial splitting
         self.use_spatial_split = use_spatial_split
@@ -218,6 +244,13 @@ class TorchTrainer:
                 "balancing_method": self.balancing_method,
                 "weights_clip_range": self.weights_clip_range,
                 "quality_col": self.quality_col,
+                "outlier_score_col": self.outlier_score_col,
+                "outlier_col": self.outlier_col,
+                "outlier_drop_level": self.outlier_drop_level,
+                "zero_quality_cols": self.zero_quality_cols,
+                "eval_weight_floor": self.eval_weight_floor,
+                "eval_weight_percentile": self.eval_weight_percentile,
+                "eval_min_class_samples": self.eval_min_class_samples,
                 "use_spatial_split": self.use_spatial_split,
                 "spatial_bin_size_degrees": self.spatial_bin_size_degrees,
                 "early_stopping_patience": self.early_stopping_patience,
@@ -650,6 +683,35 @@ class TorchTrainer:
         val_df = self._drop_invalid_samples(val_df)
         test_df = self._drop_invalid_samples(test_df)
 
+        # Optionally drop flagged outlier samples
+        if self.outlier_col and self.outlier_drop_level:
+            train_df = drop_outliers(
+                train_df,
+                "train",
+                outlier_col=self.outlier_col,
+                drop_level=self.outlier_drop_level,
+            )
+            val_df = drop_outliers(
+                val_df,
+                "val",
+                outlier_col=self.outlier_col,
+                drop_level=self.outlier_drop_level,
+            )
+            test_df = drop_outliers(
+                test_df,
+                "test",
+                outlier_col=self.outlier_col,
+                drop_level=self.outlier_drop_level,
+            )
+
+        # Optionally drop samples where all quality scores are zero
+        if self.zero_quality_cols:
+            train_df = drop_zero_quality_samples(
+                train_df, "train", self.zero_quality_cols
+            )
+            val_df = drop_zero_quality_samples(val_df, "val", self.zero_quality_cols)
+            test_df = drop_zero_quality_samples(test_df, "test", self.zero_quality_cols)
+
         if train_df.empty:
             raise ValueError("No training samples available after filtering.")
         if val_df.empty:
@@ -662,36 +724,49 @@ class TorchTrainer:
 
         self._assign_label_indices([train_df, val_df, test_df])
 
-        # Compute quality-based sample weights if quality_col is provided
-        if self.quality_col is not None:
-            for df in (train_df, val_df, test_df):
-                if self.quality_col in df.columns:
-                    quality_values = df[self.quality_col].values
-                    # Normalize quality values to [0, 1] range
-                    quality_min = quality_values.min()
-                    quality_max = quality_values.max()
-                    if quality_max > quality_min:
-                        quality_normalized = (quality_values - quality_min) / (
-                            quality_max - quality_min
-                        )
-                    else:
-                        quality_normalized = np.ones_like(quality_values)
-                    df["_sample_weight"] = quality_normalized
-                else:
-                    df["_sample_weight"] = 1.0
-            logger.info(
-                f"Applied quality-based sample weights from column '{self.quality_col}'"
-            )
-        else:
-            for df in (train_df, val_df, test_df):
-                df["_sample_weight"] = 1.0
+        # Compute per-sample weights from quality and outlier score columns
+        train_df = attach_sample_weights(
+            train_df,
+            "train",
+            quality_score_col=self.quality_col or "",
+            outlier_score_col=self.outlier_score_col or "",
+            output_col="_sample_weight",
+        )
+        val_df = attach_sample_weights(
+            val_df,
+            "val",
+            quality_score_col=self.quality_col or "",
+            outlier_score_col=self.outlier_score_col or "",
+            output_col="_sample_weight",
+        )
+        test_df = attach_sample_weights(
+            test_df,
+            "test",
+            quality_score_col=self.quality_col or "",
+            outlier_score_col=self.outlier_score_col or "",
+            output_col="_sample_weight",
+        )
 
-        if "confidence_nonoutlier" in train_df.columns:
-            logger.info(
-                "Incorporating 'confidence_nonoutlier' into sample weights for train/val sets."
+        # Optionally filter low-quality samples from val/test
+        if self.eval_weight_floor is not None:
+            val_df = filter_low_weight_eval_samples(
+                val_df,
+                "val",
+                weight_cols=("_sample_weight",),
+                hard_floor=self.eval_weight_floor,
+                percentile=self.eval_weight_percentile,
+                min_class_samples=self.eval_min_class_samples,
+                label_columns=(self.target_column,),
             )
-            train_df["_sample_weight"] *= train_df["confidence_nonoutlier"].fillna(1.0)
-            val_df["_sample_weight"] *= val_df["confidence_nonoutlier"].fillna(1.0)
+            test_df = filter_low_weight_eval_samples(
+                test_df,
+                "test",
+                weight_cols=("_sample_weight",),
+                hard_floor=self.eval_weight_floor,
+                percentile=self.eval_weight_percentile,
+                min_class_samples=self.eval_min_class_samples,
+                label_columns=(self.target_column,),
+            )
 
         self.feat_cols = [c for c in train_df.columns if c.startswith("presto_ft_")]
         self.in_dim = len(self.feat_cols)
