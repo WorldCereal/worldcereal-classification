@@ -133,7 +133,7 @@ class ui_map:
 
         from ipyleaflet import basemap_to_tiles
 
-        osm = basemap_to_tiles(basemaps.OpenStreetMap.Mapnik)
+        osm = basemap_to_tiles(basemaps.Esri.WorldStreetMap)
         osm.base = True
         osm.name = "Open street map"
         img = basemap_to_tiles(basemaps.Esri.WorldImagery)
