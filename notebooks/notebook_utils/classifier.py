@@ -76,21 +76,21 @@ def _load_presto_encoder(custom_presto_url: Optional[str] = None):
 
 def align_extractions_to_season(
     df: pd.DataFrame,
-    season: Optional[TemporalContext] = None,
+    processing_period: Optional[TemporalContext] = None,
     freq: Literal["month", "dekad"] = "month",
     valid_time_buffer: int = 0,
     season_window: Optional[TemporalContext] = None,
 ) -> pd.DataFrame:
     """Align raw extraction rows to a target season and enrich with labels.
 
-    When processing_period (season) is provided, samples must have complete satellite
+    When processing_period is provided, samples must have complete satellite
     coverage for that 12-month window. When omitted (None), only season_window filtering
     is applied, allowing samples with partial temporal coverage.
 
     Samples are removed if:
-    - (If season provided) They lack satellite coverage for the full processing period
+    - (If processing_period provided) They lack satellite coverage for the full processing period
     - Their valid_time falls outside the season window
-    - (If season provided) Their valid_time is too close to processing period edges
+    - (If season_window provided) Their valid_time is too close to season window edges
 
     Output additions
     ----------------
@@ -107,9 +107,9 @@ def align_extractions_to_season(
     df : pandas.DataFrame
         Raw extraction rows containing at minimum ``ref_id``, ``ewoc_code``, ``timestamp``,
         and ``valid_time``.
-    season : TemporalContext, optional
-        Processing period (12 consecutive months). Required for trimming samples to exactly
-        12 timesteps (needed for embedding computation). When None, no trimming occurs.
+    processing_period : TemporalContext, optional
+        Processing period (12 consecutive months). Required when trimming samples to exactly
+        12 timesteps. When None, no trimming occurs.
     freq : {'month', 'dekad'}, default='month'
         Resampling / alignment frequency controlling internal temporal aggregation.
     valid_time_buffer : int, default=0
@@ -136,7 +136,7 @@ def align_extractions_to_season(
     # Align the samples with the season of interest
     df = process_extractions_df(
         df,
-        season,
+        processing_period,
         freq,
         valid_time_buffer,
         season_window=season_window,
