@@ -38,7 +38,7 @@ from notebook_utils.classifier import (
     train_seasonal_torch_head,
 )
 from notebook_utils.croptypepicker import CropTypePicker, apply_croptypepicker_to_df
-from notebook_utils.dateslider import date_slider as season_slider
+from notebook_utils.dateslider import date_slider, season_slider
 from notebook_utils.extractions import (
     get_band_statistics,
     query_extractions,
@@ -1662,12 +1662,8 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="100%", overflow="auto")
         )
         season_slider_obj = None
-        start_d = datetime(2019, 7, 1)
-        end_d = datetime(2021, 6, 30)
         with season_slider_output:
-            season_slider_obj = season_slider(
-                year_selector=False, show_year=False, start_date=start_d, end_date=end_d
-            )
+            season_slider_obj = season_slider()
 
         season_id_input = widgets.Text(
             value="",
@@ -3890,7 +3886,7 @@ class WorldCerealClassificationApp:
         )
         season_slider_obj = None
         with season_slider_output:
-            season_slider_obj = season_slider()
+            season_slider_obj = date_slider()
         season_id_input = widgets.Text(
             value=self.season_id,
             description="Season ID:",

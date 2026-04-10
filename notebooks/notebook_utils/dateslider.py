@@ -168,11 +168,21 @@ class date_slider:
         end_date: datetime,
         focus_year: Optional[int] = None,
     ) -> widgets.VBox:
-        dates = pd.date_range(start_date, end_date, freq="MS")
-        if self.show_year:
-            options = [(date.strftime("%b %Y"), date) for date in dates]
-        else:
-            options = [(date.strftime("%b"), date) for date in dates]
+        # Extend by one extra month so the end handle uses an exclusive-end
+        # convention: handle at month M means the season ends on the last day
+        # of month M-1. This makes the end handle sit visually one step past
+        # the last included month, matching user intuition.
+        dates = pd.date_range(
+            start_date,
+            pd.to_datetime(end_date) + pd.DateOffset(months=1),
+            freq="MS",
+        )
+        # Always use year-qualified labels to guarantee uniqueness.
+        # Duplicate labels cause an infinite internal loop in ipywidgets
+        # (_propagate_label ↔ _propagate_index) when the same month name
+        # appears more than once across years. The labels are never shown
+        # to the user (readout=False) — the visual tick marks are separate HTML.
+        options = [(date.strftime("%b %Y"), date) for date in dates]
 
         default_start_index = 0
         if focus_year is not None:
@@ -180,8 +190,9 @@ class date_slider:
                 if date.year == focus_year:
                     default_start_index = idx
                     break
+        # End index is exclusive: default_window_months steps past start
         default_end_index = min(
-            len(dates) - 1, default_start_index + self.default_window_months - 1
+            len(dates) - 1, default_start_index + self.default_window_months
         )
 
         self.interval_slider = widgets.SelectionRangeSlider(
@@ -214,16 +225,23 @@ class date_slider:
             tick_labels = [date.strftime("%b %Y") for date in tick_dates]
         else:
             tick_labels = [date.strftime("%b") for date in tick_dates]
-        n_labels = max(1, len(tick_labels))
+        # Total number of monthly steps in the slider (n options → n-1 intervals)
+        # dates now has one extra month appended for the exclusive end handle.
+        n_slider_steps = max(1, len(dates) - 1)
+        slider_start = dates[0]
         ticks_html = ""
-        for i, label in enumerate(tick_labels):
-            position = 0 if n_labels == 1 else (i / (n_labels - 1)) * 100
+        for date, label in zip(tick_dates, tick_labels):
+            # Position each tick by its distance from slider start, in months
+            months_from_start = (date.year - slider_start.year) * 12 + (
+                date.month - slider_start.month
+            )
+            position = min(100.0, (months_from_start / n_slider_steps) * 100)
             parts = label.split(" ") if " " in label else [label, ""]
             top_label = parts[0]
             bottom_label = parts[1] if len(parts) > 1 else ""
             ticks_html += f"""
-            <div class="tick-mark" style="left: {position}%; ">|</div>
-            <div class="tick-label" style="left: {position}%; ">{top_label}<br>{bottom_label}</div>
+            <div class="tick-mark" style="left: {position:.4f}%; ">|</div>
+            <div class="tick-label" style="left: {position:.4f}%; ">{top_label}<br>{bottom_label}</div>
             """
 
         tick_marks_and_labels = widgets.HTML(
@@ -266,14 +284,33 @@ class date_slider:
 
     def on_slider_change(self, change):
         start, end = change["new"]
+        # With exclusive-end, the number of selected months = steps between handles
         months_selected = self._get_month_span(start, end)
+        n_opts = len(self.interval_slider.options)
+        start_idx, end_idx = self.interval_slider.index
+
+        clamped_index = None
         if months_selected > self.max_window_months:
-            clamped_end = start + pd.DateOffset(months=self.max_window_months - 1)
-            self.interval_slider.value = (start, clamped_end)
-            return
-        if months_selected < self.min_window_months:
-            clamped_end = start + pd.DateOffset(months=self.min_window_months - 1)
-            self.interval_slider.value = (start, clamped_end)
+            new_end_idx = min(n_opts - 1, start_idx + self.max_window_months)
+            clamped_index = (start_idx, new_end_idx)
+        elif months_selected < self.min_window_months:
+            new_end_idx = start_idx + self.min_window_months
+            if new_end_idx >= n_opts:
+                new_end_idx = n_opts - 1
+                new_start_idx = max(0, new_end_idx - self.min_window_months)
+                clamped_index = (new_start_idx, new_end_idx)
+            else:
+                clamped_index = (start_idx, new_end_idx)
+
+        if clamped_index is not None:
+            self.interval_slider.unobserve(self.on_slider_change, names="value")
+            try:
+                self.interval_slider.index = clamped_index
+                clamped_start = self.interval_slider.value[0]
+                clamped_end = self.interval_slider.value[1]
+                self._update_summary(clamped_start, clamped_end)
+            finally:
+                self.interval_slider.observe(self.on_slider_change, names="value")
             return
 
         self._update_summary(start, end)
@@ -301,7 +338,8 @@ class date_slider:
 
     def _update_summary(self, start: pd.Timestamp, end: pd.Timestamp):
         season_start = start.replace(day=1)
-        season_end = self._get_last_day_of_month(end)
+        # end is exclusive: the season ends on the last day of the previous month
+        season_end = self._get_last_day_of_month(end - pd.DateOffset(months=1))
 
         processing_start_month = season_end.replace(day=1) - pd.DateOffset(
             months=self.processing_months - 1
@@ -352,7 +390,8 @@ class date_slider:
 
     @staticmethod
     def _get_month_span(start: pd.Timestamp, end: pd.Timestamp) -> int:
-        months = (end.year - start.year) * 12 + (end.month - start.month) + 1
+        # end is exclusive, so span = number of steps between handles
+        months = (end.year - start.year) * 12 + (end.month - start.month)
         return max(1, months)
 
 
@@ -367,12 +406,13 @@ class season_slider(date_slider):
         # Set the start and end dates for the slider
         # The slider will cover a period from June 2017 to June 2019
         start_date = pd.to_datetime(("2017-07-01"))
-        end_date = pd.to_datetime(("2019-05-01"))
+        end_date = pd.to_datetime(("2019-06-30"))
 
         # Call the parent class constructor
         super().__init__(
             start_date=start_date,
             end_date=end_date,
+            year_selector=False,
             show_year=False,
             display_interval=1,
             title="Select season:",
