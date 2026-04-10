@@ -1678,7 +1678,7 @@ class WorldCerealClassificationApp:
         )
 
         align_message = widgets.HTML(
-            value="<i>Drops irrelevant samples and aligns your data to the selected season.</i>"
+            value="<i>Drops irrelevant samples with an observation date outside the selected season.</i>"
         )
         align_info = self._info_callout(
             "You have the option to select whether or not to apply strict seasonal alignment:<br>"
