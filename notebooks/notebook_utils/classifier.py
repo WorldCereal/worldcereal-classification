@@ -175,9 +175,11 @@ def align_extractions_to_season(
     ncroptypes = df["ewoc_code"].nunique()
     logger.info(f"Number of crop types remaining: {ncroptypes}")
     if ncroptypes <= 1:
-        logger.warning(
-            "Not enough crop types found in the remaining data to train a model, cannot continue with model training!"
+        error_msg = (
+            "Not enough crop types found in the remaining data to train a model, cannot continue with model training."
+            " Consider adjusting the season window to retain more samples."
         )
+        raise RuntimeError(error_msg)
 
     # Enrich resulting dataframe with full and sampling string labels
     df["label_full"] = ewoc_code_to_label(df["ewoc_code"], label_type="full")
