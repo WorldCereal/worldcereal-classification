@@ -357,6 +357,18 @@ def train_seasonal_torch_head(
 
     from worldcereal.train.downstream import TorchTrainer
 
+    # Quality and outlier columns
+    if head_task == "croptype":
+        quality_col = "quality_score_ct"
+        outlier_score_col = "CTY24_confidence_nonoutlier"
+        outlier_col = "CTY24_anomaly_flag"
+        zero_quality_cols = ["quality_score_lc", "quality_score_ct"]
+    else:
+        quality_col = "quality_score_lc"
+        outlier_score_col = "LC10_confidence_nonoutlier"
+        outlier_col = "LC10_anomaly_flag"
+        zero_quality_cols = ["quality_score_lc"]
+
     trainer = TorchTrainer(
         training_dataframe,
         head_task=head_task,
@@ -364,6 +376,11 @@ def train_seasonal_torch_head(
         season_id=season_id,
         num_workers=num_workers,
         disable_progressbar=disable_progressbar,
+        quality_col=quality_col,
+        outlier_score_col=outlier_score_col,
+        outlier_col=outlier_col,
+        outlier_drop_level="drop_candidate",
+        zero_quality_cols=zero_quality_cols,
         **trainer_kwargs,
     )
     return trainer.train()
