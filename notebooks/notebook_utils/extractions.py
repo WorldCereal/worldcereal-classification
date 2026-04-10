@@ -235,6 +235,8 @@ def run_extractions_notebook(
     )
 
     try:
+        # TODO: remove this warning filter once the underlying issue
+        # in openeo-python-client is resolved (WKTReadingError deprecation warning)
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
