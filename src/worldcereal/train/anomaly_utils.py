@@ -46,6 +46,22 @@ ANOMALY_COLUMNS: List[str] = [
     "outlier_CTY24_cls",
 ]
 
+# Per-domain subsets — used by the incremental update pathway to detect
+# unscored samples for each domain independently.  Rows mapped to a
+# skip_class (e.g. "ignore") will have NaN in one domain's columns but
+# valid scores in the other; checking all 6 would incorrectly flag them.
+LC10_ANOMALY_COLUMNS: List[str] = [
+    "LC10_confidence_nonoutlier",
+    "LC10_anomaly_flag",
+    "outlier_LC10_cls",
+]
+
+CTY24_ANOMALY_COLUMNS: List[str] = [
+    "CTY24_confidence_nonoutlier",
+    "CTY24_anomaly_flag",
+    "outlier_CTY24_cls",
+]
+
 _SCORE_COLS: List[str] = [
     "cosine_distance",
     "knn_distance",
@@ -1525,6 +1541,11 @@ def load_affected_embeddings_from_cache(
     A point is "affected" if its ``h3_l3_cell`` (or its parent at any
     coarser level in *h3_levels*) falls within *impact_cells*.
 
+    This function is memory-efficient: it first queries only the lightweight
+    ``h3_l3_cell`` column to determine which L3 cells fall inside the impact
+    zone, then fetches only those rows (with embeddings) from DuckDB.  This
+    avoids loading the entire ~7M-row embeddings table into memory.
+
     Parameters
     ----------
     embeddings_db_path
@@ -1560,38 +1581,96 @@ def load_affected_embeddings_from_cache(
         ]
         select_cols = list(dict.fromkeys([*base_cols, *group_cols]))
 
-        query = f"SELECT {', '.join(select_cols + embed_cols)} FROM embeddings_cache"
+        # ------------------------------------------------------------------
+        # Phase 1: Lightweight query — fetch only h3_l3_cell to determine
+        # which L3 cells are in the impact zone.  This avoids loading the
+        # full embeddings table (~7M rows × 128 floats) into memory.
+        # ------------------------------------------------------------------
+        where_clause = f" WHERE model_hash='{restrict_model_hash}'" if restrict_model_hash else ""
+        l3_cells_df = con.execute(
+            f"SELECT DISTINCT h3_l3_cell FROM embeddings_cache{where_clause}"
+        ).fetchdf()
+
+        if l3_cells_df.empty:
+            return pd.DataFrame(), embed_cols
+
+        # Check which L3 cells (or their parents at coarser levels) fall in impact_cells
+        all_l3 = l3_cells_df["h3_l3_cell"].tolist()
+        matching_l3: set = set()
+        for cell in all_l3:
+            if not cell:
+                continue
+            for lvl in h3_levels:
+                if lvl == 3:
+                    derived = cell
+                elif lvl < 3:
+                    try:
+                        derived = _h3.cell_to_parent(cell, lvl)
+                    except Exception:
+                        continue
+                else:
+                    # Finer than L3: the L3 cell itself is the best we can check
+                    derived = cell
+                if derived in impact_cells:
+                    matching_l3.add(cell)
+                    break  # no need to check other levels for this cell
+
+        if not matching_l3:
+            return pd.DataFrame(), embed_cols
+
+        # ------------------------------------------------------------------
+        # Phase 2: Fetch only the matching rows (with embeddings) from DuckDB.
+        # Register the matching L3 cells as a temporary table for the IN filter.
+        # ------------------------------------------------------------------
+        filter_df = pd.DataFrame({"h3_l3_cell": list(matching_l3)})
+        con.register("impact_l3_cells", filter_df)
+
+        query = (
+            f"SELECT {', '.join('e.' + c for c in select_cols + embed_cols)} "
+            f"FROM embeddings_cache e "
+            f"INNER JOIN impact_l3_cells f ON e.h3_l3_cell = f.h3_l3_cell"
+        )
         if restrict_model_hash:
-            query += f" WHERE model_hash='{restrict_model_hash}'"
+            query += f" AND e.model_hash='{restrict_model_hash}'"
 
         df = con.execute(query).fetchdf()
     finally:
         con.close()
 
-    if df.empty:
-        return df, embed_cols
-
-    # Filter to points whose H3 cell at ANY adaptive level is in impact_cells.
-    # For efficiency, check coarsest level first (fewer unique cells).
-    in_impact = np.zeros(len(df), dtype=bool)
-    for lvl in sorted(h3_levels):
-        if lvl == 3:
-            cells = df["h3_l3_cell"]
-        elif lvl < 3:
-            cells = df["h3_l3_cell"].apply(lambda h, _l=lvl: _h3.cell_to_parent(h, _l))
-        else:
-            # Finer level: derive from lat/lon
-            if "lat" in df.columns and "lon" in df.columns:
-                cells = df.apply(
-                    lambda r, _l=lvl: _h3.latlng_to_cell(r["lat"], r["lon"], _l),
-                    axis=1,
-                )
-            else:
-                cells = df["h3_l3_cell"]
-        in_impact |= cells.isin(impact_cells)
-
-    df = df[in_impact].copy()
     return df, embed_cols
+
+
+def _write_parquet_preserve_geo(
+    df: pd.DataFrame,
+    out_path: Path,
+    original_schema_metadata: Optional[dict],
+) -> None:
+    """Write *df* to *out_path* as parquet, preserving any geoparquet metadata.
+
+    When *original_schema_metadata* contains a ``b'geo'`` key the file is
+    written via PyArrow so that the ``geo`` metadata block is re-attached to
+    the output schema.  Otherwise falls back to ``df.to_parquet()``.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if original_schema_metadata and b"geo" in original_schema_metadata:
+        # Convert to Arrow, attach original geo + pandas metadata
+        tbl = pa.Table.from_pandas(df, preserve_index=False)
+        # Merge: keep existing pandas metadata from Arrow conversion, overwrite
+        # with original geo metadata so downstream GIS tools can still read it.
+        existing_meta = dict(tbl.schema.metadata or {})
+        existing_meta[b"geo"] = original_schema_metadata[b"geo"]
+        tbl = tbl.replace_schema_metadata(existing_meta)
+        pq.write_table(
+            tbl,
+            str(out_path),
+            compression="zstd",
+            use_dictionary=True,
+            write_statistics=True,
+        )
+    else:
+        df.to_parquet(out_path, index=False)
 
 
 def merge_scores_to_long_parquets(
@@ -1608,6 +1687,12 @@ def merge_scores_to_long_parquets(
     columns from *scored_df* on ``(ref_id, sample_id)`` and writes to
     *output_parquet_dir* (which may be the same directory for in-place update).
 
+    Works with both nested ``.parquet`` datasets (hive-partitioned) and flat
+    ``.geoparquet`` directories.  When the input and output directories are the
+    same (in-place update) geoparquet files are updated atomically via a temp
+    file and any ``geo`` metadata in the original file is preserved so the
+    output remains a valid GeoParquet.
+
     Parameters
     ----------
     scored_df
@@ -1619,7 +1704,8 @@ def merge_scores_to_long_parquets(
     anomaly_cols
         Column names to write.  Defaults to :data:`ANOMALY_COLUMNS`.
     parquet_glob
-        Glob pattern for finding parquet files.
+        Glob pattern for finding parquet files.  Use ``"*.geoparquet"`` for a
+        flat geoparquet directory; use ``"**/*.parquet"`` for nested datasets.
     only_affected_ref_ids
         If provided, only rewrite parquets whose ``ref_id`` (derived from the
         hive partition name or from the data) is in this set.  All other files
@@ -1632,6 +1718,9 @@ def merge_scores_to_long_parquets(
     """
     import gc
     import shutil
+    import tempfile
+
+    import pyarrow.parquet as pq
 
     long_parquet_dir = Path(long_parquet_dir)
     output_parquet_dir = Path(output_parquet_dir)
@@ -1651,6 +1740,7 @@ def merge_scores_to_long_parquets(
     for pf in parquet_files:
         # Derive ref_id from hive partition path if possible
         # e.g. .../ref_id=2020_AUT_xyz/2020_AUT_xyz.parquet
+        # For flat geoparquet: stem IS the ref_id (e.g. 2019_BGR_Eurocrops_POLY_110)
         file_ref_id = None
         for part in pf.parts:
             if part.startswith("ref_id="):
@@ -1670,6 +1760,9 @@ def merge_scores_to_long_parquets(
                         out_path.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(pf, out_path)
                 continue
+
+        # Read the original geo metadata before loading data (cheap)
+        orig_schema_meta = dict(pq.read_schema(str(pf)).metadata or {})
 
         df_long = pd.read_parquet(pf)
         if df_long.empty:
@@ -1695,7 +1788,26 @@ def merge_scores_to_long_parquets(
 
         out_path = output_parquet_dir / pf.relative_to(long_parquet_dir)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        df_long.to_parquet(out_path, index=False)
+
+        if in_place:
+            # Write to a temp file first, then atomically replace the original
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                suffix=pf.suffix, dir=pf.parent, prefix=f"_tmp_{pf.name}_"
+            )
+            try:
+                import os as _os
+                _os.close(tmp_fd)
+                _write_parquet_preserve_geo(df_long, Path(tmp_path), orig_schema_meta)
+                _os.replace(tmp_path, str(pf))
+            except Exception:
+                try:
+                    _os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        else:
+            _write_parquet_preserve_geo(df_long, out_path, orig_schema_meta)
+
         n_written += 1
 
         del df_long

@@ -44,6 +44,15 @@ python compute_anomaly_scores.py \\
     --embeddings-db-path /projects/worldcereal/data/cached_embeddings/embeddings_cache.duckdb \\
     --class-mappings-json /path/to/class_mappings.json
 
+python compute_anomaly_scores.py \\
+--mode update \\
+--input-format geoparquet \\
+--input-long-dir /data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/MERGED_PARQUETS_PHASEII_WITH_ANOMALY \\
+--embeddings-db-path /data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/EMBEDDINGS_CACHE/embeddings_cache_LANDCOVER10_updated.duckdb \\
+--wide-dir /data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/CACHED_WIDE_MERGED/cached_wide_merged/cached_wide_parquets \\
+--merged-wide-path /data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/CACHED_WIDE_MERGED/cached_wide_merged/worldcereal_all_extractions_wide_month.parquet \\
+--sp-env-file /home/wcextractions/.sharepointenv 
+  
 # Skip the heavy embeddings rebuild and re-score only:
 python compute_anomaly_scores.py --mode rerun --skip-embeddings \\
     --embeddings-db-path /data/.../embeddings_cache.duckdb \\
@@ -67,16 +76,15 @@ from typing import Iterator, List, Literal, Optional, Sequence, Tuple, Union
 # ---------------------------------------------------------------------------
 
 def _ensure_worldcereal_importable() -> None:
-    """Best-effort sys.path tweak when worldcereal is not installed."""
-    try:
-        import worldcereal  # noqa: F401
-        return
-    except Exception:
-        pass
+    """Ensure the LOCAL worldcereal source tree is importable.
+
+    Always inserts the local ``src/`` directory at the front of sys.path so
+    that local changes take priority over any installed worldcereal package.
+    """
     here = Path(__file__).resolve()
     # This script lives at worldcereal-classification/scripts/misc/
     candidate_src = here.parents[2] / "src"
-    if candidate_src.exists():
+    if candidate_src.exists() and str(candidate_src) not in sys.path:
         sys.path.insert(0, str(candidate_src))
 
 
@@ -96,6 +104,8 @@ from tqdm.auto import tqdm  # noqa: E402
 from worldcereal.train.anomaly import run_pipeline  # noqa: E402
 from worldcereal.train.anomaly_utils import (  # noqa: E402
     ANOMALY_COLUMNS,
+    LC10_ANOMALY_COLUMNS,
+    CTY24_ANOMALY_COLUMNS,
     find_unscored_samples,
     compute_impact_zone,
     load_affected_embeddings_from_cache,
@@ -147,7 +157,7 @@ class EmbeddingsConfig:
     presto_url_or_path: str
     embeddings_db_path: Path
     batch_size: int = 16_384
-    num_workers: int = 8
+    num_workers: int = 2
     force_recompute: bool = False
     prematch: bool = True
     show_progress: bool = True
@@ -169,7 +179,7 @@ class AnomalyRunConfig:
     percentile_q: float = 0.96
     max_full_pairwise_n: int = 0
     norm_percentiles: Tuple[float, float] = (2.0, 98.0)
-    skip_classes: Optional[List[str]] = None
+    skip_classes: Optional[List[str]] = field(default_factory=lambda: ["ignore"])
     # Final output column names
     confidence_col_name: str = "confidence_nonoutlier"
     anomaly_flag_col_name: str = "anomaly_flag"
@@ -682,7 +692,10 @@ def write_scores_to_long_parquets(
     only_affected_ref_ids: Optional[set] = None,
 ) -> int:
     """Left-join anomaly scores onto every long-format parquet file."""
-    output_long_dir.mkdir(parents=True, exist_ok=True)
+    # Don't mkdir when writing in-place (the directory already exists and
+    # mkdir would fail or be a no-op; we avoid it to keep the call clean).
+    if input_long_dir.resolve() != output_long_dir.resolve():
+        output_long_dir.mkdir(parents=True, exist_ok=True)
     return merge_scores_to_long_parquets(
         scored_df=merged_scores,
         long_parquet_dir=input_long_dir,
@@ -707,17 +720,111 @@ def write_scores_to_wide_parquet(
     row_group_size: int = 100_000,
     overwrite: bool = False,
 ) -> None:
-    """Stream the wide parquet, left-join anomaly scores, write the result."""
-    if output_wide_path.exists() and not overwrite:
-        logger.info(f"skip wide score write — output exists: {output_wide_path}")
-        return
+    """Stream the wide parquet, left-join anomaly scores, write the result.
 
+    **Incremental update** (update mode): when the output file already exists
+    and ``overwrite=False``, instead of skipping, the function reads the
+    *existing output* (which already has anomaly columns for previously scored
+    rows), updates / fills in anomaly values for any ``(ref_id, sample_id)``
+    present in *merged_scores*, and rewrites the file atomically via a temp
+    file.  Rows not in *merged_scores* keep their existing anomaly values.
+
+    **Full rewrite** (rerun mode / ``overwrite=True``): reads the *source*
+    wide parquet (without anomaly columns), left-joins all scores, and writes
+    the output from scratch.
+    """
     scores_lookup = (
         merged_scores[["ref_id", "sample_id"] + anomaly_cols]
         .drop_duplicates(subset="sample_id")
         .copy()
     )
 
+    # ------------------------------------------------------------------
+    # Incremental update: the output file already exists and we don't want
+    # a full overwrite — read the EXISTING output, patch the anomaly cols
+    # for any newly scored sample_ids, and rewrite atomically.
+    # ------------------------------------------------------------------
+    if output_wide_path.exists() and not overwrite:
+        logger.info(
+            f"[wide-update] Incremental update — patching {len(scores_lookup):,} "
+            f"sample scores into {output_wide_path}"
+        )
+        scored_ids = set(scores_lookup["sample_id"].unique())
+        existing_pf = pq.ParquetFile(str(output_wide_path))
+        existing_schema = existing_pf.schema_arrow
+        logger.info(
+            f"[wide-update] Existing output: {existing_pf.metadata.num_rows:,} rows, "
+            f"{len(existing_schema)} cols"
+        )
+
+        # Ensure the target schema contains all anomaly columns
+        extra_fields: list[pa.Field] = []
+        for col in anomaly_cols:
+            if col in existing_schema.names:
+                continue
+            dtype = scores_lookup[col].dtype
+            arrow_type = pa.float32() if str(dtype).startswith("float") else pa.string()
+            extra_fields.append(pa.field(col, arrow_type))
+        if extra_fields:
+            base_fields = [f for f in existing_schema]
+            target_schema = pa.schema(base_fields + extra_fields)
+        else:
+            target_schema = existing_schema
+
+        tmp_path = output_wide_path.with_suffix(".tmp.parquet")
+        writer = pq.ParquetWriter(
+            str(tmp_path), target_schema, compression="zstd",
+            use_dictionary=True, write_statistics=True,
+        )
+        rows_written = 0
+        rows_updated = 0
+        try:
+            for batch in existing_pf.iter_batches(batch_size=batch_rows):
+                df_batch = batch.to_pandas()
+                # Identify rows in this batch that have new scores
+                mask = df_batch["sample_id"].isin(scored_ids)
+                n_hits = int(mask.sum())
+                if n_hits > 0:
+                    # Drop existing anomaly cols for matched rows, merge new values
+                    matched = df_batch.loc[mask].copy()
+                    cols_to_drop = [c for c in anomaly_cols if c in matched.columns]
+                    if cols_to_drop:
+                        matched.drop(columns=cols_to_drop, inplace=True)
+                    matched = matched.merge(
+                        scores_lookup, on=["ref_id", "sample_id"], how="left",
+                    )
+                    # Recombine: unmatched rows keep their original anomaly values
+                    unmatched = df_batch.loc[~mask]
+                    df_batch = pd.concat([unmatched, matched], ignore_index=True)
+                    df_batch.sort_values("sample_id", inplace=True)
+                    rows_updated += n_hits
+
+                # Fill any missing anomaly columns for rows not in scores_lookup
+                for col in anomaly_cols:
+                    if col not in df_batch.columns:
+                        df_batch[col] = float("nan")
+
+                tbl = pa.Table.from_pandas(df_batch, schema=target_schema, safe=False)
+                writer.write_table(tbl, row_group_size=row_group_size)
+                rows_written += len(df_batch)
+                del df_batch, tbl, batch
+                gc.collect()
+            logger.info(
+                f"[wide-update] {rows_written:,} rows written, "
+                f"{rows_updated:,} updated → {output_wide_path}"
+            )
+        finally:
+            writer.close()
+
+        # Atomic rename
+        tmp_path.replace(output_wide_path)
+        return
+
+    # ------------------------------------------------------------------
+    # Full rewrite: read the source wide parquet (no anomaly cols) and
+    # left-join all scores.  Used by rerun mode or when output doesn't
+    # exist yet.
+    # ------------------------------------------------------------------
     src_pf = pq.ParquetFile(str(src_wide_path))
     src_schema = src_pf.schema_arrow
     logger.info(f"wide source: {src_pf.metadata.num_rows:,} rows, {len(src_schema)} cols")
@@ -819,6 +926,143 @@ def _run_scoring_rerun(
 # ===========================================================================
 
 
+def _resolve_skip_ewoc_codes(
+    class_mappings: dict,
+    class_mappings_name: str,
+    skip_classes: Optional[List[str]],
+) -> set:
+    """Return the set of ``ewoc_code`` strings that map to a *skip_class* label.
+
+    Uses the class_mappings dict (keyed by domain name, e.g. ``CROPTYPE24``)
+    to look up which ewoc_codes produce a label in *skip_classes*.  Returns
+    an empty set when *skip_classes* is ``None`` or empty, or when the
+    mapping is not found.
+    """
+    if not skip_classes:
+        return set()
+    mapping = class_mappings.get(class_mappings_name)
+    if not isinstance(mapping, dict):
+        return set()
+    skip_set = {str(s).lower() for s in skip_classes}
+    return {
+        str(ewoc_code)
+        for ewoc_code, label in mapping.items()
+        if str(label).lower() in skip_set
+    }
+
+
+def _discover_domain_impact(
+    *,
+    domain_label: str,
+    domain_anomaly_cols: list[str],
+    h3_levels: list[int],
+    long_parquet_dir: Path,
+    embeddings_db_path: Path,
+    neighbour_rings: int,
+    restrict_model_hash: Optional[str],
+    skip_ewoc_codes: Optional[set] = None,
+    parquet_glob: str = "**/*.parquet",
+) -> Tuple[Optional[pd.DataFrame], Optional[list], Optional[set]]:
+    """Per-domain unscored detection → impact zone → embeddings load.
+
+    Returns ``(affected_df, embed_cols, rescored_ref_ids)`` or
+    ``(None, None, None)`` when there is nothing to do for this domain.
+
+    By checking only the domain-specific anomaly columns (e.g. the 3 LC10
+    columns instead of all 6), rows that are legitimately NaN because their
+    label is a *skip_class* in the other domain are no longer pulled in.
+    This typically reduces the "unscored" count from millions to only the
+    genuinely new / missing samples.
+
+    When *skip_ewoc_codes* is provided, unscored sample_ids whose
+    ``ewoc_code`` in the embeddings cache matches a skip class for this
+    domain are excluded **before** computing the impact zone.  These rows
+    will always be NaN in the anomaly columns (by design — ``run_pipeline``
+    holds them aside), so there is no point expanding the impact zone for
+    them.  This is the key optimisation for CROPTYPE24 where ~half the
+    samples map to "ignore".
+    """
+    logger.info(f"[update/{domain_label}] Scanning for unscored samples "
+                f"(checking {domain_anomaly_cols}) ...")
+    unscored = find_unscored_samples(
+        long_parquet_dir=long_parquet_dir,
+        anomaly_cols=domain_anomaly_cols,
+        parquet_glob=parquet_glob,
+    )
+    if unscored.empty:
+        logger.info(f"[update/{domain_label}] No unscored samples — skipping domain.")
+        return None, None, None
+
+    logger.info(f"[update/{domain_label}] {len(unscored):,} unscored (ref_id, sample_id) pairs")
+
+    # Look up their H3 cells (and ewoc_code for skip-class filtering) in cache
+    logger.info(f"[update/{domain_label}] Looking up H3 cells for unscored samples ...")
+    con = duckdb.connect(str(embeddings_db_path), read_only=True)
+    try:
+        id_df = pd.DataFrame({"sample_id": unscored["sample_id"].astype(str).tolist()})
+        con.register("unscored_ids", id_df)
+        h3_df = con.execute(
+            """SELECT DISTINCT e.sample_id, e.h3_l3_cell, e.ewoc_code
+               FROM unscored_ids u
+               INNER JOIN embeddings_cache e ON e.sample_id = u.sample_id"""
+        ).fetchdf()
+    finally:
+        con.close()
+
+    # Filter out samples whose ewoc_code maps to a skip class for this domain.
+    # These will always be NaN in the anomaly columns (run_pipeline holds them
+    # aside with NaN scores), so including them would needlessly inflate the
+    # impact zone.
+    if skip_ewoc_codes and not h3_df.empty:
+        before = len(h3_df)
+        h3_df = h3_df[~h3_df["ewoc_code"].astype(str).isin(skip_ewoc_codes)].copy()
+        n_skipped = before - len(h3_df)
+        if n_skipped > 0:
+            logger.info(
+                f"[update/{domain_label}] Excluded {n_skipped:,} samples "
+                f"with skip-class ewoc_codes ({before:,} → {len(h3_df):,})"
+            )
+
+    if h3_df.empty:
+        logger.warning(
+            f"[update/{domain_label}] Unscored samples not found in embeddings cache "
+            "(or all were skip-class). "
+            "Run the embeddings pipeline (steps 1–4) first if this is unexpected."
+        )
+        return None, None, None
+
+    logger.info(f"[update/{domain_label}] {len(h3_df):,} unscored samples found in cache")
+
+    # Drop ewoc_code — no longer needed after skip-class filtering
+    h3_df = h3_df[["sample_id", "h3_l3_cell"]]
+
+    unscored_h3_cells = h3_df["h3_l3_cell"].dropna().unique().tolist()
+    impact_cells = compute_impact_zone(
+        unscored_h3_cells=unscored_h3_cells,
+        h3_levels=h3_levels,
+        neighbour_rings=neighbour_rings,
+    )
+    logger.info(f"[update/{domain_label}] Impact zone: {len(impact_cells):,} H3 cells")
+
+    logger.info(f"[update/{domain_label}] Loading impact-zone embeddings from cache ...")
+    affected_df, embed_cols = load_affected_embeddings_from_cache(
+        embeddings_db_path=str(embeddings_db_path),
+        impact_cells=impact_cells,
+        h3_levels=h3_levels,
+        restrict_model_hash=restrict_model_hash,
+    )
+    if affected_df.empty:
+        logger.warning(f"[update/{domain_label}] No embeddings found in impact zone.")
+        return None, None, None
+
+    rescored_ref_ids = set(affected_df["ref_id"].astype(str).unique())
+    logger.info(
+        f"[update/{domain_label}] Re-scoring {len(affected_df):,} samples "
+        f"across {len(rescored_ref_ids):,} ref_ids"
+    )
+    return affected_df, embed_cols, rescored_ref_ids
+
+
 def _run_scoring_update(
     *,
     embeddings_db_path: Path,
@@ -830,6 +1074,7 @@ def _run_scoring_update(
     output_review_dir_path: Optional[Path],
     restrict_model_hash: Optional[str],
     debug: bool,
+    parquet_glob: str = "**/*.parquet",
 ) -> Tuple[pd.DataFrame, set]:
     """Incrementally re-score only geographic slices affected by new data.
 
@@ -840,115 +1085,124 @@ def _run_scoring_update(
     Instead of calling ``run_pipeline`` pointing at the full DuckDB cache
     (which loads and scores millions of embeddings), we:
 
-    1. Scan the output long parquets to find sample_ids with NaN anomaly scores.
-    2. Look up their H3 cells in the embeddings cache (a small DuckDB query).
-    3. Expand the set of cells outward by *neighbour_rings* to include the
-       geographic neighbourhood that needs re-scoring (because adding new points
-       to a H3 slice changes the outlier scores of all existing points in it).
-    4. Pull ONLY the embeddings that fall inside those impact cells from DuckDB.
-    5. Pass that pre-loaded ``(df, embed_cols)`` tuple as ``embeddings_df`` to
-       ``run_pipeline``, which bypasses the DuckDB load entirely.
+    1. For **each domain separately** (LC10, CTY24), scan the output long
+       parquets checking only that domain's 3 anomaly columns.  This avoids
+       incorrectly flagging rows that are NaN only because their label is a
+       skip_class in the *other* domain (e.g. "ignore" for CROPTYPE24).
+    2. For each domain, look up the H3 cells of genuinely unscored samples,
+       expand by *neighbour_rings*, and load only those embeddings.
+    3. Score each domain with its own (smaller) impact-zone embeddings.
+    4. Outer-merge the two sets of scores.
 
-    Result: only the affected slices are recomputed; other slices keep their
-    existing scores.
+    Result: only the affected slices are recomputed per domain; other slices
+    keep their existing scores.  Memory usage is dramatically lower because
+    each domain loads only the embeddings it actually needs.
     """
-    logger.info("[update] Scanning for unscored samples ...")
-    unscored = find_unscored_samples(
+
+    # Resolve skip-class ewoc_codes for each domain so we can exclude them
+    # from the unscored set before computing the impact zone.
+    lc10_skip_codes = _resolve_skip_ewoc_codes(
+        class_mappings, lc10_config.class_mappings_name, lc10_config.skip_classes,
+    )
+    cty24_skip_codes = _resolve_skip_ewoc_codes(
+        class_mappings, cty24_config.class_mappings_name, cty24_config.skip_classes,
+    )
+    logger.info(f"[update] Skip-class ewoc_codes — LC10: {len(lc10_skip_codes):,}, "
+                f"CTY24: {len(cty24_skip_codes):,}")
+
+    # ----- LC10 domain -----
+    logger.info("[update] === LANDCOVER10 domain ===")
+    lc10_result = _discover_domain_impact(
+        domain_label="LC10",
+        domain_anomaly_cols=list(LC10_ANOMALY_COLUMNS),
+        h3_levels=sorted(lc10_config.h3_levels),
         long_parquet_dir=long_parquet_dir,
-        anomaly_cols=list(ANOMALY_COLUMNS),
-    )
-    if unscored.empty:
-        logger.info("[update] No unscored samples found — nothing to do.")
-        return pd.DataFrame(), set()
-
-    logger.info(f"[update] {len(unscored):,} unscored (ref_id, sample_id) pairs")
-
-    # Look up their H3 cells in the embeddings cache
-    logger.info("[update] Looking up H3 cells for unscored samples ...")
-    con = duckdb.connect(str(embeddings_db_path), read_only=True)
-    try:
-        id_df = pd.DataFrame({"sample_id": unscored["sample_id"].astype(str).tolist()})
-        con.register("unscored_ids", id_df)
-        h3_df = con.execute(
-            """SELECT DISTINCT e.sample_id, e.h3_l3_cell
-               FROM unscored_ids u
-               INNER JOIN embeddings_cache e ON e.sample_id = u.sample_id"""
-        ).fetchdf()
-    finally:
-        con.close()
-
-    if h3_df.empty:
-        logger.warning(
-            "[update] Unscored samples not found in embeddings cache. "
-            "Run the embeddings pipeline (steps 1–4) first."
-        )
-        return pd.DataFrame(), set()
-
-    logger.info(f"[update] {len(h3_df):,} unscored samples found in cache")
-
-    all_h3_levels = sorted(set(lc10_config.h3_levels + cty24_config.h3_levels))
-    unscored_h3_cells = h3_df["h3_l3_cell"].dropna().unique().tolist()
-    impact_cells = compute_impact_zone(
-        unscored_h3_cells=unscored_h3_cells,
-        h3_levels=all_h3_levels,
+        embeddings_db_path=embeddings_db_path,
         neighbour_rings=neighbour_rings,
-    )
-    logger.info(f"[update] Impact zone: {len(impact_cells):,} H3 cells")
-
-    logger.info("[update] Loading impact-zone embeddings from cache ...")
-    affected_df, embed_cols = load_affected_embeddings_from_cache(
-        embeddings_db_path=str(embeddings_db_path),
-        impact_cells=impact_cells,
-        h3_levels=all_h3_levels,
         restrict_model_hash=restrict_model_hash,
+        skip_ewoc_codes=lc10_skip_codes,
+        parquet_glob=parquet_glob,
     )
-    if affected_df.empty:
-        logger.warning("[update] No embeddings found in impact zone.")
+    lc10_affected_df, lc10_embed_cols, lc10_ref_ids = lc10_result
+
+    lc10_df = pd.DataFrame()
+    if lc10_affected_df is not None:
+        lc10_out = str(output_review_dir_path / "LC10_update_flagged.parquet") if output_review_dir_path else None
+        lc10_sum = str(output_review_dir_path / "LC10_update_summary.parquet") if output_review_dir_path else None
+
+        logger.info("[update] Running LANDCOVER10 scoring (impact zone) ...")
+        lc10_df = run_single_domain_scoring(
+            embeddings_db_path=str(embeddings_db_path),
+            config=lc10_config,
+            class_mappings=class_mappings,
+            embeddings_df=(lc10_affected_df, lc10_embed_cols),
+            output_samples_path=lc10_out,
+            output_summary_path=lc10_sum,
+            write_outputs=output_review_dir_path is not None,
+            overwrite=True,
+            restrict_model_hash=restrict_model_hash,
+            debug=debug,
+        )
+        # Free memory — the embeddings DataFrame can be large
+        del lc10_affected_df
+        gc.collect()
+    else:
+        lc10_ref_ids = set()
+
+    # ----- CTY24 domain -----
+    logger.info("[update] === CROPTYPE24 domain ===")
+    cty24_result = _discover_domain_impact(
+        domain_label="CTY24",
+        domain_anomaly_cols=list(CTY24_ANOMALY_COLUMNS),
+        h3_levels=sorted(cty24_config.h3_levels),
+        long_parquet_dir=long_parquet_dir,
+        embeddings_db_path=embeddings_db_path,
+        neighbour_rings=neighbour_rings,
+        restrict_model_hash=restrict_model_hash,
+        skip_ewoc_codes=cty24_skip_codes,
+        parquet_glob=parquet_glob,
+    )
+    cty24_affected_df, cty24_embed_cols, cty24_ref_ids = cty24_result
+
+    cty24_df = pd.DataFrame()
+    if cty24_affected_df is not None:
+        cty24_out = str(output_review_dir_path / "CTY24_update_flagged.parquet") if output_review_dir_path else None
+        cty24_sum = str(output_review_dir_path / "CTY24_update_summary.parquet") if output_review_dir_path else None
+
+        logger.info("[update] Running CROPTYPE24 scoring (impact zone) ...")
+        cty24_df = run_single_domain_scoring(
+            embeddings_db_path=str(embeddings_db_path),
+            config=cty24_config,
+            class_mappings=class_mappings,
+            embeddings_df=(cty24_affected_df, cty24_embed_cols),
+            output_samples_path=cty24_out,
+            output_summary_path=cty24_sum,
+            write_outputs=output_review_dir_path is not None,
+            overwrite=True,
+            restrict_model_hash=restrict_model_hash,
+            debug=debug,
+        )
+        del cty24_affected_df
+    else:
+        cty24_ref_ids = set()
+
+    # ----- Merge results -----
+    all_rescored_ref_ids = (lc10_ref_ids or set()) | (cty24_ref_ids or set())
+
+    if lc10_df.empty and cty24_df.empty:
+        logger.info("[update] No unscored samples found in either domain — nothing to do.")
         return pd.DataFrame(), set()
 
-    rescored_ref_ids = set(affected_df["ref_id"].astype(str).unique())
-    logger.info(
-        f"[update] Re-scoring {len(affected_df):,} samples "
-        f"across {len(rescored_ref_ids):,} ref_ids"
-    )
-    embeddings_tuple = (affected_df, embed_cols)
+    if lc10_df.empty:
+        merged = cty24_df
+    elif cty24_df.empty:
+        merged = lc10_df
+    else:
+        merged = cty24_df.merge(lc10_df, on=["ref_id", "sample_id"], how="outer")
 
-    lc10_out = str(output_review_dir_path / "LC10_update_flagged.parquet") if output_review_dir_path else None
-    lc10_sum = str(output_review_dir_path / "LC10_update_summary.parquet") if output_review_dir_path else None
-    cty24_out = str(output_review_dir_path / "CTY24_update_flagged.parquet") if output_review_dir_path else None
-    cty24_sum = str(output_review_dir_path / "CTY24_update_summary.parquet") if output_review_dir_path else None
-
-    logger.info("[update] Running LANDCOVER10 scoring (impact zone) ...")
-    lc10_df = run_single_domain_scoring(
-        embeddings_db_path=str(embeddings_db_path),
-        config=lc10_config,
-        class_mappings=class_mappings,
-        embeddings_df=embeddings_tuple,
-        output_samples_path=lc10_out,
-        output_summary_path=lc10_sum,
-        write_outputs=output_review_dir_path is not None,
-        overwrite=True,  # update always overwrites the impact-zone result
-        restrict_model_hash=restrict_model_hash,
-        debug=debug,
-    )
-
-    logger.info("[update] Running CROPTYPE24 scoring (impact zone) ...")
-    cty24_df = run_single_domain_scoring(
-        embeddings_db_path=str(embeddings_db_path),
-        config=cty24_config,
-        class_mappings=class_mappings,
-        embeddings_df=embeddings_tuple,
-        output_samples_path=cty24_out,
-        output_summary_path=cty24_sum,
-        write_outputs=output_review_dir_path is not None,
-        overwrite=True,
-        restrict_model_hash=restrict_model_hash,
-        debug=debug,
-    )
-
-    merged = cty24_df.merge(lc10_df, on=["ref_id", "sample_id"], how="outer")
-    logger.info(f"[update] Merged scores: {len(merged):,} rows")
-    return merged, rescored_ref_ids
+    logger.info(f"[update] Merged scores: {len(merged):,} rows "
+                f"(LC10: {len(lc10_df):,}, CTY24: {len(cty24_df):,})")
+    return merged, all_rescored_ref_ids
 
 
 # ===========================================================================
@@ -1147,38 +1401,45 @@ def compute_anomaly_scores(
         elif mode == "update":
             logger.info("[6–8/10] Scoring mode: update (impact zone only) ...")
 
-            # Write NaN-stub files for any input parquets that have no corresponding
-            # output file yet (brand-new ref_ids arriving for the first time).
-            # This makes them visible to find_unscored_samples, which scans the
-            # output dir for rows with missing anomaly scores.
-            if effective_output_long.exists():
-                out_ref_ids = {
-                    p.parent.name.split("=", 1)[1]
-                    for p in effective_output_long.glob(parquet_glob)
-                    if "ref_id=" in p.parent.name
-                }
-                for src_pf in sorted(input_long_dir.glob(parquet_glob)):
-                    src_ref_id = None
-                    for part in src_pf.parts:
-                        if part.startswith("ref_id="):
-                            src_ref_id = part.split("=", 1)[1]
-                            break
-                    if src_ref_id is None:
-                        src_ref_id = src_pf.stem
-                    if src_ref_id not in out_ref_ids:
-                        stub_path = effective_output_long / src_pf.relative_to(input_long_dir)
-                        stub_path.parent.mkdir(parents=True, exist_ok=True)
-                        df_stub = pd.read_parquet(src_pf)
-                        for col in ANOMALY_COLUMNS:
-                            df_stub[col] = float("nan")
-                        df_stub.to_parquet(stub_path, index=False)
-                        logger.info(
-                            f"[update] Wrote NaN stub for new ref_id: {src_ref_id} "
-                            f"({len(df_stub):,} rows)"
-                        )
+            in_place = input_long_dir.resolve() == effective_output_long.resolve()
 
-            # Scan the scored output dir for NaN anomaly rows
-            scan_dir = effective_output_long if effective_output_long.exists() else input_long_dir
+            if in_place:
+                # Geoparquet mode: files are updated in-place so we scan the input
+                # dir directly — every file already has anomaly columns (or is missing
+                # them entirely for newly added datasets).  No stub files needed.
+                logger.info("[update] In-place mode — scanning input dir for unscored files.")
+                scan_dir = input_long_dir
+            else:
+                # Hive-partitioned mode: write NaN-stub files for any input parquets
+                # that have no corresponding output file yet (brand-new ref_ids arriving
+                # for the first time).  This makes them visible to find_unscored_samples.
+                if effective_output_long.exists():
+                    out_ref_ids = {
+                        p.parent.name.split("=", 1)[1]
+                        for p in effective_output_long.glob(parquet_glob)
+                        if "ref_id=" in p.parent.name
+                    }
+                    for src_pf in sorted(input_long_dir.glob(parquet_glob)):
+                        src_ref_id = None
+                        for part in src_pf.parts:
+                            if part.startswith("ref_id="):
+                                src_ref_id = part.split("=", 1)[1]
+                                break
+                        if src_ref_id is None:
+                            src_ref_id = src_pf.stem
+                        if src_ref_id not in out_ref_ids:
+                            stub_path = effective_output_long / src_pf.relative_to(input_long_dir)
+                            stub_path.parent.mkdir(parents=True, exist_ok=True)
+                            df_stub = pd.read_parquet(src_pf)
+                            for col in ANOMALY_COLUMNS:
+                                df_stub[col] = float("nan")
+                            df_stub.to_parquet(stub_path, index=False)
+                            logger.info(
+                                f"[update] Wrote NaN stub for new ref_id: {src_ref_id} "
+                                f"({len(df_stub):,} rows)"
+                            )
+                # Scan the scored output dir for NaN anomaly rows
+                scan_dir = effective_output_long if effective_output_long.exists() else input_long_dir
             merged_scores, rescored_ref_ids = _run_scoring_update(
                 embeddings_db_path=effective_db,
                 class_mappings=class_mappings,
@@ -1189,6 +1450,7 @@ def compute_anomaly_scores(
                 output_review_dir_path=effective_review,
                 restrict_model_hash=None,
                 debug=False,
+                parquet_glob=parquet_glob,
             )
             if merged_scores.empty:
                 logger.info("No re-scoring needed — all parquets are already up to date.")
@@ -1297,6 +1559,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Input format
+    p.add_argument(
+        "--input-format",
+        choices=["parquet", "geoparquet"],
+        default="parquet",
+        help=(
+            "'parquet' (default): nested hive-partitioned .parquet dataset (HPC layout). "
+            "'geoparquet': flat folder of per-dataset .geoparquet files (VM layout). "
+            "In 'geoparquet' mode scores are written back IN-PLACE, the output long dir "
+            "defaults to the same as the input, and geo metadata is preserved."
+        ),
+    )
+
     # Core I/O
     p.add_argument(
         "--input-long-dir", type=Path, default=default_in, required=default_in is None,
@@ -1309,7 +1584,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--suffix", type=str, default="",
         help="Appended to all output dir/file names for side-by-side runs (e.g. '_v2').",
     )
-    p.add_argument("--parquet-glob", type=str, default="**/*.parquet")
+    p.add_argument(
+        "--parquet-glob", type=str, default=None,
+        help=(
+            "Glob pattern to find input files. "
+            "Defaults to '*.geoparquet' when --input-format=geoparquet, "
+            "otherwise '**/*.parquet'."
+        ),
+    )
 
     # Optional path overrides (all derived from --input-long-dir + --suffix by default)
     p.add_argument("--wide-dir",           type=Path, default=None)
@@ -1340,9 +1622,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--merge-compression",    type=str, default="zstd")
 
     # embeddings
-    p.add_argument("--batch-size",         type=int, default=16_384)
-    p.add_argument("--num-workers",        type=int, default=8)
-    p.add_argument("--parquet-batch-rows", type=int, default=300_000)
+    p.add_argument("--batch-size",         type=int, default=4096)
+    p.add_argument("--num-workers",        type=int, default=2)
+    p.add_argument("--parquet-batch-rows", type=int, default=100_000)
     p.add_argument("--force-recompute",    action="store_true")
     p.add_argument("--prematch", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--no-progress", action="store_true")
@@ -1428,6 +1710,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger.remove()
     logger.add(sys.stderr, level=args.log_level.upper())
 
+    # Resolve parquet glob default from input format
+    if args.parquet_glob is not None:
+        parquet_glob = args.parquet_glob
+    elif args.input_format == "geoparquet":
+        parquet_glob = "*.geoparquet"
+    else:
+        parquet_glob = "**/*.parquet"
+
+    # In geoparquet mode: in-place update — output dir == input dir by default
+    output_long_dir = args.output_long_dir
+    if output_long_dir is None and args.input_format == "geoparquet":
+        output_long_dir = args.input_long_dir
+
     process_cfg = ParquetProcessConfig(
         freq=args.freq,
         required_min_timesteps=args.required_min_timesteps,
@@ -1496,9 +1791,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         merged_wide_path=args.merged_wide_path,
         embeddings_db_path=args.embeddings_db_path,
         review_dir=args.review_dir,
-        output_long_dir=args.output_long_dir,
+        output_long_dir=output_long_dir,
         output_wide_path=args.output_wide_path,
-        parquet_glob=args.parquet_glob,
+        parquet_glob=parquet_glob,
         presto_url_or_path=args.presto_url_or_path,
         process_cfg=process_cfg,
         merge_cfg=merge_cfg,

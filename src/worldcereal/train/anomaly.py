@@ -170,7 +170,7 @@ def _apply_class_mapping(
     if mapping_file is None:
         return df
 
-    print(f"[anomaly] Mapping classes using mapping_file: {mapping_file}")
+    print(f"[anomaly] Mapping classes using mapping_file")
 
     map_df = _load_mapping_df(
         mapping_file,
