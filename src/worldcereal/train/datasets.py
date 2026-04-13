@@ -1,4 +1,5 @@
 import calendar
+import re
 from collections import Counter
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -73,6 +74,16 @@ class SeasonWindow:
     end_month: int
     end_day: int
     year_offset: int = 0
+
+
+def _is_lc_only_dataset(ref_id: str) -> bool:
+    """Return True for LC-only datasets whose ref_id ends in ``_100`` or ``_101``.
+
+    These datasets carry no crop-type annotation by design, so their seasonal
+    masks should always be considered fully valid regardless of the sample's
+    valid_time relative to any crop calendar.
+    """
+    return bool(re.search(r"_10[01]$", ref_id))
 
 
 SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
@@ -1074,6 +1085,18 @@ class WorldCerealDataset(Dataset):
                 else None
             )
             return masks, in_seasons
+
+        # LC-only datasets (ref_id ending _100/_101) carry no crop-type annotation
+        # by design.  Their valid_time is meaningless relative to any crop season,
+        # so we short-circuit the calendar/window logic and return all-True masks.
+        # This ensures nocrop samples from LC datasets always provide supervision
+        # signal for the crop-type head without being gated by season boundaries.
+        if _is_lc_only_dataset(str(row.get("ref_id", ""))):
+            all_true = np.ones((num_seasons, num_timesteps), dtype=bool)
+            in_seasons = (
+                np.ones(num_seasons, dtype=bool) if label_datetime is not None else None
+            )
+            return all_true, in_seasons
 
         lat = _extract_float(row.get("lat"))
         lon = _extract_float(row.get("lon"))

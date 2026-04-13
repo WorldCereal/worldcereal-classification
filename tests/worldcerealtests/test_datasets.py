@@ -13,6 +13,7 @@ from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
     WorldCerealTrainingDataset,
+    _is_lc_only_dataset,
     align_to_composite_window,
     get_dekad_timestamp_components,
     get_monthly_timestamp_components,
@@ -1367,12 +1368,18 @@ class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
         total_ts = num_timesteps + 6
         for ts in range(total_ts):
             for tpl in [
-                "OPTICAL-B02-ts{}-10m", "OPTICAL-B03-ts{}-10m",
-                "OPTICAL-B04-ts{}-10m", "OPTICAL-B08-ts{}-10m",
-                "OPTICAL-B05-ts{}-20m", "OPTICAL-B06-ts{}-20m",
-                "OPTICAL-B07-ts{}-20m", "OPTICAL-B8A-ts{}-20m",
-                "OPTICAL-B11-ts{}-20m", "OPTICAL-B12-ts{}-20m",
-                "SAR-VH-ts{}-20m", "SAR-VV-ts{}-20m",
+                "OPTICAL-B02-ts{}-10m",
+                "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m",
+                "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m",
+                "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m",
+                "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m",
+                "OPTICAL-B12-ts{}-20m",
+                "SAR-VH-ts{}-20m",
+                "SAR-VV-ts{}-20m",
                 "METEO-precipitation_flux-ts{}-100m",
                 "METEO-temperature_mean-ts{}-100m",
             ]:
@@ -1390,8 +1397,11 @@ class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
         """With num_timesteps=8, season_masks should have shape (S, 8)."""
         df = self._build_df(2, 8)
         ds = WorldCerealLabelledDataset(
-            df, task_type="binary", num_outputs=1,
-            num_timesteps=8, season_calendar_mode="calendar",
+            df,
+            task_type="binary",
+            num_outputs=1,
+            num_timesteps=8,
+            season_calendar_mode="calendar",
         )
         _, attrs = ds[0]
         masks = attrs["season_masks"]
@@ -1403,8 +1413,11 @@ class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
         """With num_timesteps=18, season_masks should have shape (S, 18)."""
         df = self._build_df(2, 18)
         ds = WorldCerealLabelledDataset(
-            df, task_type="binary", num_outputs=1,
-            num_timesteps=18, season_calendar_mode="calendar",
+            df,
+            task_type="binary",
+            num_outputs=1,
+            num_timesteps=18,
+            season_calendar_mode="calendar",
         )
         _, attrs = ds[0]
         masks = attrs["season_masks"]
@@ -1415,13 +1428,185 @@ class TestSeasonMaskShapeMatchesTimesteps(unittest.TestCase):
         """With default num_timesteps=12, season_masks should have shape (S, 12)."""
         df = self._build_df(2, 12)
         ds = WorldCerealLabelledDataset(
-            df, task_type="binary", num_outputs=1,
+            df,
+            task_type="binary",
+            num_outputs=1,
             season_calendar_mode="calendar",
         )
         _, attrs = ds[0]
         masks = attrs["season_masks"]
         self.assertEqual(masks.shape[1], 12)
         self.assertEqual(masks.shape[0], 2)
+
+
+class TestLcOnlyDatasetHelperAndSeasonMasks(unittest.TestCase):
+    """Tests for _is_lc_only_dataset helper and the LC-only season-mask shortcut."""
+
+    # ------------------------------------------------------------------
+    # _is_lc_only_dataset
+    # ------------------------------------------------------------------
+
+    def test_is_lc_only_100(self):
+        self.assertTrue(_is_lc_only_dataset("2020_KEN_FOO_POINT_100"))
+
+    def test_is_lc_only_101(self):
+        self.assertTrue(_is_lc_only_dataset("2020_KEN_FOO_POINT_101"))
+
+    def test_is_not_lc_only_110(self):
+        self.assertFalse(_is_lc_only_dataset("2020_KEN_BAR_POINT_110"))
+
+    def test_is_not_lc_only_empty_string(self):
+        self.assertFalse(_is_lc_only_dataset(""))
+
+    def test_is_not_lc_only_100_mid_string(self):
+        """_100 not at the end of the string should not match."""
+        self.assertFalse(_is_lc_only_dataset("2020_100_KEN_BAR_POINT_110"))
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_timestamps(num_timesteps: int = 12) -> np.ndarray:
+        """Monthly timestamps as (day, month, year) rows covering 2021."""
+        rows = []
+        year, month = 2021, 1
+        for _ in range(num_timesteps):
+            rows.append([1, month, year])
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+        return np.array(rows, dtype=np.int32)
+
+    @staticmethod
+    def _make_dataset(num_timesteps: int = 12) -> WorldCerealLabelledDataset:
+        """Minimal WorldCerealLabelledDataset — ref_id is set per-test on the row."""
+        total_ts = num_timesteps + 6
+        data: dict = {
+            "lat": [45.0],
+            "lon": [5.0],
+            "start_date": ["2021-01-01"],
+            "end_date": ["2022-07-01"],
+            "valid_time": ["2021-07-01"],
+            "available_timesteps": [total_ts],
+            "valid_position": [num_timesteps // 2],
+            "ref_id": ["2020_KEN_PLACEHOLDER_POINT_110"],
+            "finetune_class": ["nocrop"],
+            "label_task": ["croptype"],
+            "landcover_label": ["lc_nocrop"],
+            "croptype_label": ["nocrop"],
+            "DEM-alt-20m": [100],
+            "DEM-slo-20m": [5],
+        }
+        for ts in range(total_ts):
+            for tpl in [
+                "OPTICAL-B02-ts{}-10m",
+                "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m",
+                "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m",
+                "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m",
+                "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m",
+                "OPTICAL-B12-ts{}-20m",
+                "SAR-VH-ts{}-20m",
+                "SAR-VV-ts{}-20m",
+                "METEO-precipitation_flux-ts{}-100m",
+                "METEO-temperature_mean-ts{}-100m",
+            ]:
+                data[tpl.format(ts)] = [1000]
+        return WorldCerealLabelledDataset(
+            pd.DataFrame(data),
+            task_type="multiclass",
+            num_outputs=1,
+            num_timesteps=num_timesteps,
+            season_calendar_mode="calendar",
+        )
+
+    # ------------------------------------------------------------------
+    # Season-mask shortcut in _compute_season_metadata
+    # ------------------------------------------------------------------
+
+    def test_lc_100_masks_all_true_with_label_datetime(self):
+        """LC-only row (_100) must return all-True masks and in_seasons."""
+        ds = self._make_dataset()
+        timestamps = self._make_timestamps()
+        row = {
+            "ref_id": "2020_KEN_FOO_POINT_100",
+            "lat": 45.0,
+            "lon": 5.0,
+            "valid_time": "2021-07-01",
+        }
+        label_dt = np.datetime64("2021-07-01", "D")
+
+        masks, in_seasons = ds._compute_season_metadata(
+            row=row,
+            timestamps=timestamps,
+            season_ids=ds._season_ids,
+            season_windows=ds._season_windows,
+            derive_from_calendar=True,
+            label_datetime=label_dt,
+        )
+
+        self.assertTrue(masks.all(), "Expected all-True masks for LC-only dataset")
+        self.assertIsNotNone(in_seasons)
+        self.assertTrue(
+            in_seasons.all(), "Expected all-True in_seasons for LC-only dataset"
+        )
+        # Shape contract: (num_seasons, num_timesteps)
+        self.assertEqual(masks.shape[1], len(timestamps))
+
+    def test_lc_101_masks_all_true_without_label_datetime(self):
+        """Without label_datetime, in_seasons must be None (not all-True)."""
+        ds = self._make_dataset()
+        timestamps = self._make_timestamps()
+        row = {
+            "ref_id": "2020_KEN_FOO_POINT_101",
+            "lat": 45.0,
+            "lon": 5.0,
+        }
+
+        masks, in_seasons = ds._compute_season_metadata(
+            row=row,
+            timestamps=timestamps,
+            season_ids=ds._season_ids,
+            season_windows=ds._season_windows,
+            derive_from_calendar=True,
+            label_datetime=None,
+        )
+
+        self.assertTrue(masks.all(), "Expected all-True masks for LC-only dataset")
+        self.assertIsNone(in_seasons)
+
+    def test_ct_110_is_not_shortcircuited(self):
+        """CT rows (_110) must not be short-circuited; calendar lookup must be attempted."""
+        ds = self._make_dataset()
+        timestamps = self._make_timestamps()
+        row = {
+            "ref_id": "2020_KEN_BAR_POINT_110",
+            "lat": 45.0,
+            "lon": 5.0,
+        }
+        sentinel = (np.zeros(len(timestamps), dtype=bool), False)
+        label_dt = np.datetime64("2021-07-01", "D")
+
+        with mock.patch.object(
+            WorldCerealLabelledDataset,
+            "_season_mask_from_calendar",
+            return_value=sentinel,
+        ) as mocked:
+            ds._compute_season_metadata(
+                row=row,
+                timestamps=timestamps,
+                season_ids=ds._season_ids,
+                season_windows=ds._season_windows,
+                derive_from_calendar=True,
+                label_datetime=label_dt,
+            )
+
+        mocked.assert_called()
 
 
 if __name__ == "__main__":

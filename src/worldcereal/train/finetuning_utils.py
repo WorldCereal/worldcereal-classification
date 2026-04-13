@@ -102,6 +102,39 @@ def attach_sample_weights(
     return updated
 
 
+def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy ``quality_score_lc`` → ``quality_score_ct`` for LC-only datasets.
+
+    LC-only datasets (``ref_id`` ending in ``_100`` or ``_101``) have
+    ``quality_score_ct`` set to 0 by design — there is no crop-type
+    annotation to score.  When training a downstream croptype head that
+    includes a nocrop class, those samples would otherwise receive a
+    weight of 0 and be silently discarded from val/test filtering,
+    despite carrying valid landcover quality information.
+
+    This patch replaces the sentinel 0 with the landcover quality score
+    for those datasets only.  CT-dataset samples (``_110``) whose
+    ``quality_score_ct`` is 0 due to e.g. an OSM road intersection are
+    intentionally left untouched.
+    """
+    if "ref_id" not in df.columns or "quality_score_lc" not in df.columns:
+        return df
+    if "quality_score_ct" not in df.columns:
+        return df
+    is_lc_dataset = df["ref_id"].str.contains(r"_10[01]$", regex=True)
+    n_patched = int(is_lc_dataset.sum())
+    if n_patched:
+        logger.info(
+            f"Patching quality_score_ct → quality_score_lc for "
+            f"{n_patched} LC-only samples (ref_id ending _100/_101)."
+        )
+        df = df.copy()
+        df.loc[is_lc_dataset, "quality_score_ct"] = df.loc[
+            is_lc_dataset, "quality_score_lc"
+        ]
+    return df
+
+
 def drop_outliers(
     df: pd.DataFrame,
     split_name: str,
