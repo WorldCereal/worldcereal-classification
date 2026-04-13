@@ -40,6 +40,7 @@ from worldcereal.train.finetuning_utils import (
     drop_outliers,
     drop_zero_quality_samples,
     filter_low_weight_eval_samples,
+    patch_lc_dataset_ct_quality,
 )
 from worldcereal.train.seasonal_head import LinearHead, MLPHead
 
@@ -667,6 +668,7 @@ class TorchTrainer:
         # the derived identity mapping (when downstream_classes is None) includes all
         # classes present in any split, not just the training split.
         self.training_df = self._apply_downstream_mapping(self.training_df)
+        self.training_df = patch_lc_dataset_ct_quality(self.training_df)
 
         if self.use_spatial_split:
             train_df, val_df, test_df = spatial_train_val_test_split(
