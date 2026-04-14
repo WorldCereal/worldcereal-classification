@@ -1135,6 +1135,7 @@ def evaluate_finetuned_model(
     seasonal_landcover_classes: Optional[List[str]] = None,
     seasonal_croptype_classes: Optional[List[str]] = None,
     cropland_class_names: Optional[Sequence[str]] = None,
+    weight_threshold: float = 0.0,
 ) -> Union[dict, Tuple[pd.DataFrame, Figure, Figure]]:
     """Evaluate a fine-tuned model on a labelled dataset and report metrics.
 
@@ -1162,6 +1163,12 @@ def evaluate_finetuned_model(
     cropland_class_names : Optional[Sequence[str]]
         Optional list of class names that should trigger cropland gating during
         seasonal evaluation.
+    weight_threshold : float, default 0.0
+        Samples whose task weight is at or below this value are excluded from
+        metrics.  For seasonal heads ``sample_weight_lc`` gates landcover
+        records and ``sample_weight_ct`` gates crop-type records independently.
+        For standard (non-seasonal) heads the minimum of both available weight
+        columns is used; samples at or below the threshold are skipped.
 
     Returns
     -------
@@ -1220,6 +1227,8 @@ def evaluate_finetuned_model(
                     seasonal_landcover_classes,
                     seasonal_croptype_classes,
                     cropland_class_names=cropland_class_names,
+                    lc_weight_threshold=weight_threshold,
+                    ct_weight_threshold=weight_threshold,
                 )
                 seasonal_landcover_records.extend(batch_summary["landcover"])
                 seasonal_croptype_records.extend(batch_summary["croptype"])
@@ -1227,6 +1236,16 @@ def evaluate_finetuned_model(
                 seasonal_mode = True
                 continue
             targets = predictors.label.cpu().numpy().astype(int)
+
+            # Exclude samples whose combined task weight is at or below
+            # weight_threshold before computing any metrics.
+            _wm = _compute_weight_mask(
+                attrs or {}, n_samples=targets.shape[0], threshold=weight_threshold
+            )
+            if not _wm.all():
+                _wm_t = torch.as_tensor(_wm, device=model_output.device)
+                model_output = model_output[_wm_t]
+                targets = targets[_wm]
 
             if test_ds.task_type == "binary":
                 probs = torch.sigmoid(model_output).cpu().numpy()
@@ -1511,6 +1530,33 @@ def _ensure_list(value, expected_len: int, fill=None) -> List:
     return result
 
 
+def _compute_weight_mask(
+    attrs: dict,
+    n_samples: int,
+    threshold: float = 0.0,
+) -> np.ndarray:
+    """Return a boolean array of shape *(n_samples,)* marking valid samples.
+
+    A sample is considered valid when its combined sample weight is *strictly
+    above* ``threshold``.  The combined weight is the element-wise minimum of
+    ``sample_weight_lc`` and ``sample_weight_ct``, whichever keys are present
+    in *attrs*.  When neither key is present all samples are considered valid
+    (mask of all ``True``).
+    """
+    weights = np.ones(n_samples, dtype=float)
+    for key in ("sample_weight_lc", "sample_weight_ct"):
+        val = attrs.get(key)
+        if val is None:
+            continue
+        if torch.is_tensor(val):
+            w = val.detach().cpu().numpy().flatten().astype(float)
+        else:
+            w = np.asarray(val, dtype=float).flatten()
+        if w.shape[0] == n_samples:
+            weights = np.minimum(weights, w)
+    return weights > threshold
+
+
 def _select_representative_season(
     output: SeasonalHeadOutput,
     attrs: dict,
@@ -1595,6 +1641,8 @@ def summarize_seasonal_predictions(
     landcover_task_name: str = "landcover",
     croptype_task_name: str = "croptype",
     enforce_cropland_gate: bool = False,
+    lc_weight_threshold: float = 0.0,
+    ct_weight_threshold: float = 0.0,
 ) -> dict:
     """Convert seasonal logits into per-branch classification records.
 
@@ -1603,12 +1651,18 @@ def summarize_seasonal_predictions(
     they need. When ``enforce_cropland_gate`` is True, crop-type predictions are
     only emitted if either the predicted or labelled landcover class belongs to
     ``cropland_class_names``.
+
+    Samples whose ``sample_weight_lc`` (for landcover) or ``sample_weight_ct``
+    (for crop-type) is at or below the respective threshold are excluded from
+    the returned records.
     """
 
     batch_size = output.global_embedding.shape[0]
     landcover_labels = _ensure_list(attrs.get("landcover_label"), batch_size, fill=None)
     croptype_labels = _ensure_list(attrs.get("croptype_label"), batch_size, fill=None)
     label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
+    lc_weights = _ensure_list(attrs.get("sample_weight_lc"), batch_size, fill=1.0)
+    ct_weights = _ensure_list(attrs.get("sample_weight_ct"), batch_size, fill=1.0)
 
     tasks: List[str] = []
     for idx in range(batch_size):
@@ -1650,6 +1704,7 @@ def summarize_seasonal_predictions(
         if landcover_labels[idx] is not None
         and not _is_missing_value(landcover_labels[idx])
         and str(landcover_labels[idx]) in landcover_classes
+        and float(lc_weights[idx]) > lc_weight_threshold
     ]
     if lc_probs is not None:
         for sample_idx in landcover_indices:
@@ -1687,6 +1742,8 @@ def summarize_seasonal_predictions(
             if _is_missing_value(target_name):
                 continue
             if str(target_name) not in croptype_classes:
+                continue
+            if float(ct_weights[sample_idx]) <= ct_weight_threshold:
                 continue
 
             if gating_enabled:
