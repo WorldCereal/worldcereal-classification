@@ -81,7 +81,9 @@ def attach_sample_weights(
     quality_score_col: str,
     outlier_score_col: str,
     outlier_flag_col: str,
-    outlier_drop_mode: Literal["drop_candidate", "drop_suspect", "drop_flagged"],
+    outlier_drop_mode: Literal[
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
+    ],
     output_col: str,
 ) -> pd.DataFrame:
     """Compute and attach a per-sample weight column to *df*.
@@ -124,7 +126,7 @@ def attach_sample_weights(
         Pass an absent name to disable hard outlier gating.
     outlier_drop_mode : str
         Severity threshold forwarded to :func:`identify_true_outliers`.
-        One of ``"drop_candidate"``, ``"drop_suspect"``, or
+        One of ``"keep"``, ``"drop_candidate"``, ``"drop_suspect"``, or
         ``"drop_flagged"``.
     output_col : str
         Name of the new weight column written to the returned DataFrame.
@@ -193,7 +195,7 @@ def identify_true_outliers(
     split_name: str,
     outlier_col: str = OUTLIER_COLUMNS["LC_outlier_flag"],
     drop_level: Literal[
-        "drop_candidate", "drop_suspect", "drop_flagged"
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
     ] = "drop_candidate",
 ) -> pd.Series:
     """Identify samples flagged as outliers from a split dataframe.
@@ -206,9 +208,10 @@ def identify_true_outliers(
         Name of the split (e.g., 'train', 'val', 'test') for logging purposes.
     outlier_col : str, optional
         Column name containing outlier flags. Default is the LC outlier column.
-    drop_level : {'drop_candidate', 'drop_suspect', 'drop_flagged'}
+    drop_level : {'keep', 'drop_candidate', 'drop_suspect', 'drop_flagged'}
         Controls which flag values are considered outliers:
 
+        - ``'keep'`` – no samples are considered outliers.
         - ``'drop_candidate'`` – only samples labelled ``'candidate'``.
         - ``'drop_suspect'`` – samples labelled ``'candidate'`` or ``'suspect'``.
         - ``'drop_flagged'`` – all of the above plus ``'flagged'``.
@@ -221,6 +224,12 @@ def identify_true_outliers(
     if outlier_col not in df.columns:
         logger.warning(
             f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
+        )
+        return pd.Series(False, index=df.index, dtype=bool)
+
+    if drop_level == "keep":
+        logger.info(
+            f"Outlier drop mode set to 'keep'; no samples will be treated as outliers in {split_name} split."
         )
         return pd.Series(False, index=df.index, dtype=bool)
 
