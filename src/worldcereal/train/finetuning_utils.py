@@ -97,7 +97,7 @@ def attach_sample_weights(
     confidence.  Scores on the 0–100 integer scale are automatically
     rescaled to ``[0, 1]``.  Missing column → defaults to 1.0 (no effect).
 
-    **outlier_score** – read from *outlier_flag_col*; a continuous confidence
+    **outlier_score** – read from *outlier_score_col*; a continuous confidence
     score produced by the outlier-detection pipeline.  Same scale handling as
     quality_score.  Missing column → defaults to 1.0.
 
