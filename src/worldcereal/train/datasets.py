@@ -36,6 +36,7 @@ from worldcereal.seasons import season_doys_to_dates_refyear
 from worldcereal.train import (
     GLOBAL_SEASON_IDS,
     MIN_EDGE_BUFFER,
+    OUTLIER_COLUMNS,
     SEASONALITY_COLUMN_MAP,
     SEASONALITY_LAT_RANGE,
     SEASONALITY_LON_RANGE,
@@ -100,11 +101,9 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "quality_score_ct",
     "sample_weight_lc",
     "sample_weight_ct",
-    "LC10_confidence_nonoutlier",
-    "CTY24_confidence_nonoutlier",
-    "LC10_anomaly_flag",
-    "CTY24_anomaly_flag",
+    *OUTLIER_COLUMNS.values(),
 )
+
 
 _LABEL_DATETIME_COLUMNS: Tuple[str, ...] = (
     "valid_time",

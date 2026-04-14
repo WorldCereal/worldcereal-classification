@@ -22,6 +22,7 @@ from openeo_gfmap import TemporalContext
 from prometheo.utils import DEFAULT_SEED
 from tabulate import tabulate
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.backbone import (
     build_presto_backbone,
     checkpoint_fingerprint,
@@ -360,13 +361,13 @@ def train_seasonal_torch_head(
     # Quality and outlier columns
     if head_task == "croptype":
         quality_col = "quality_score_ct"
-        outlier_score_col = "CTY24_confidence_nonoutlier"
-        outlier_col = "CTY24_anomaly_flag"
+        outlier_score_col = OUTLIER_COLUMNS["CT_outlier_score"]
+        outlier_col = OUTLIER_COLUMNS["CT_outlier_flag"]
         zero_quality_cols = ["quality_score_lc", "quality_score_ct"]
     else:
         quality_col = "quality_score_lc"
-        outlier_score_col = "LC10_confidence_nonoutlier"
-        outlier_col = "LC10_anomaly_flag"
+        outlier_score_col = OUTLIER_COLUMNS["LC_outlier_score"]
+        outlier_col = OUTLIER_COLUMNS["LC_outlier_flag"]
         zero_quality_cols = ["quality_score_lc"]
 
     trainer = TorchTrainer(

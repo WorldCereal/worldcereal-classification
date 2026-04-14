@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.data import collate_fn
 from worldcereal.train.datasets import (
     SensorMaskingConfig,
@@ -138,7 +139,7 @@ def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
 def drop_outliers(
     df: pd.DataFrame,
     split_name: str,
-    outlier_col: str = "LC10_anomaly_flag",
+    outlier_col: str = OUTLIER_COLUMNS["LC_outlier_flag"],
     drop_level: Literal[
         "drop_candidate", "drop_suspect", "drop_flagged"
     ] = "drop_candidate",
