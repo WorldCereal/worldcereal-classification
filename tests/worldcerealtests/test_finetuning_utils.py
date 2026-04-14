@@ -8,6 +8,7 @@ from prometheo.predictors import NODATAVALUE, Predictors
 from torch import nn
 from torch.utils.data import Dataset
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.datasets import (
     WorldCerealLabelledDataset,  # MaskingMode,; MaskingStrategy,
@@ -15,6 +16,7 @@ from worldcereal.train.datasets import (
 from worldcereal.train.finetuning_utils import (
     SeasonalMultiTaskLoss,
     _select_representative_season,
+    attach_sample_weights,
     evaluate_finetuned_model,
     prepare_training_datasets,
 )
@@ -24,6 +26,190 @@ from worldcereal.utils.refdata import get_class_mappings
 CLASS_MAPPINGS = get_class_mappings()
 LANDCOVER_KEY = "LANDCOVER10"
 CROPTYPE_KEY = "CROPTYPE28"
+
+
+# ---------------------------------------------------------------------------
+# attach_sample_weights
+# ---------------------------------------------------------------------------
+_OUTLIER_FLAG_COL = OUTLIER_COLUMNS["LC_outlier_flag"]  # "LC10_anomaly_flag"
+
+
+class TestAttachSampleWeights(unittest.TestCase):
+    """Unit tests for attach_sample_weights and its helpers.
+
+    Each test builds a minimal DataFrame with the columns that
+    attach_sample_weights / identify_true_outliers rely on, so no
+    real parquet files are required.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _make_df(
+        self,
+        n: int = 4,
+        quality=1.0,
+        outlier_score=1.0,
+        outlier_flag="normal",
+    ) -> pd.DataFrame:
+        """Return a minimal DataFrame for attach_sample_weights."""
+
+        def _to_list(val, length):
+            return val if isinstance(val, list) else [val] * length
+
+        return pd.DataFrame(
+            {
+                "sample_id": [f"s{i}" for i in range(n)],
+                "quality_score": _to_list(quality, n),
+                "outlier_score": _to_list(outlier_score, n),
+                _OUTLIER_FLAG_COL: _to_list(outlier_flag, n),
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    # Convenience wrapper: fixed flag col and drop mode for brevity
+    def _attach(
+        self,
+        df,
+        quality_col="quality_score",
+        outlier_col="outlier_score",
+        flag_col=None,
+        drop_mode="drop_candidate",
+        out_col="weight",
+    ):
+        return attach_sample_weights(
+            df,
+            "train",
+            quality_col,
+            outlier_col,
+            flag_col if flag_col is not None else _OUTLIER_FLAG_COL,
+            drop_mode,
+            out_col,
+        )
+
+    def test_output_column_added(self):
+        """The returned DataFrame must contain the requested output column."""
+        df = self._make_df()
+        result = self._attach(df)
+        self.assertIn("weight", result.columns)
+
+    def test_uniform_perfect_scores_give_weight_one(self):
+        """quality=1.0, outlier_score=1.0, no outlier flag → weight=1.0."""
+        df = self._make_df(quality=1.0, outlier_score=1.0)
+        result = self._attach(df)
+        np.testing.assert_allclose(result["weight"].to_numpy(), 1.0)
+
+    def test_weight_is_product_of_scores(self):
+        """weight == quality × outlier_score for non-outlier samples."""
+        df = self._make_df(quality=0.8, outlier_score=0.7)
+        result = self._attach(df)
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.8 * 0.7, rtol=1e-6)
+
+    def test_zero_quality_gives_zero_weight(self):
+        """quality=0 → weight=0 regardless of outlier_score."""
+        df = self._make_df(quality=0.0, outlier_score=1.0)
+        result = self._attach(df)
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.0)
+
+    def test_scores_normalized_from_0_100_scale(self):
+        """Scores on 0-100 scale are divided by 100 before multiplication."""
+        df = self._make_df(quality=80.0, outlier_score=100.0)
+        result = self._attach(df)
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.8, rtol=1e-6)
+
+    def test_outlier_candidate_gets_zero_weight(self):
+        """A sample flagged 'candidate' must receive weight=0."""
+        df = self._make_df(
+            n=4,
+            quality=[1.0, 1.0, 1.0, 1.0],
+            outlier_score=[1.0, 1.0, 1.0, 1.0],
+            outlier_flag=["normal", "candidate", "normal", "normal"],
+        )
+        result = self._attach(df, drop_mode="drop_candidate")
+        self.assertAlmostEqual(result["weight"].iloc[1], 0.0)
+        # The remaining three non-outlier samples keep weight=1
+        np.testing.assert_allclose(result["weight"].iloc[[0, 2, 3]].to_numpy(), 1.0)
+
+    def test_suspect_not_dropped_at_candidate_level(self):
+        """A sample flagged 'suspect' is kept when drop_mode='drop_candidate'."""
+        df = self._make_df(
+            n=2,
+            quality=[1.0, 1.0],
+            outlier_score=[1.0, 1.0],
+            outlier_flag=["suspect", "normal"],
+        )
+        result = self._attach(df, drop_mode="drop_candidate")
+        np.testing.assert_allclose(result["weight"].to_numpy(), 1.0)
+
+    def test_suspect_dropped_at_suspect_level(self):
+        """A 'suspect' sample is zeroed when drop_mode='drop_suspect'."""
+        df = self._make_df(
+            n=2,
+            quality=[1.0, 1.0],
+            outlier_score=[1.0, 1.0],
+            outlier_flag=["suspect", "normal"],
+        )
+        result = self._attach(df, drop_mode="drop_suspect")
+        self.assertAlmostEqual(result["weight"].iloc[0], 0.0)
+        self.assertAlmostEqual(result["weight"].iloc[1], 1.0)
+
+    def test_missing_quality_column_defaults_to_one(self):
+        """Absent quality column → quality defaults to 1.0 (no effect on weight)."""
+        df = self._make_df(outlier_score=0.6)
+        result = self._attach(df, quality_col="nonexistent_quality")
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.6, rtol=1e-6)
+
+    def test_missing_outlier_score_column_defaults_to_one(self):
+        """Absent outlier_score column → outlier_score defaults to 1.0."""
+        df = self._make_df(quality=0.7)
+        result = self._attach(df, outlier_col="nonexistent_outlier")
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.7, rtol=1e-6)
+
+    def test_missing_outlier_flag_column_treated_as_clean(self):
+        """When the outlier flag column is absent all samples are treated as clean."""
+        df = pd.DataFrame(
+            {
+                "sample_id": ["s0", "s1"],
+                "quality_score": [0.9, 0.9],
+                "outlier_score": [1.0, 1.0],
+                # Note: outlier flag column intentionally omitted
+            }
+        )
+        result = self._attach(df, flag_col="missing_flag_col")
+        np.testing.assert_allclose(result["weight"].to_numpy(), 0.9, rtol=1e-6)
+
+    def test_original_dataframe_not_mutated(self):
+        """attach_sample_weights must not modify the input DataFrame in-place."""
+        df = self._make_df()
+        original_cols = set(df.columns)
+        self._attach(df)
+        self.assertEqual(set(df.columns), original_cols)
+        self.assertNotIn("weight", df.columns)
+
+    def test_weights_clipped_to_unit_interval(self):
+        """Scores slightly above 1.0 in a [0,1] range are clipped to 1.0."""
+        df = self._make_df(quality=1.05, outlier_score=1.1)
+        result = self._attach(df)
+        self.assertTrue((result["weight"] >= 0.0).all())
+        self.assertTrue((result["weight"] <= 1.0).all())
+
+    def test_per_sample_variability(self):
+        """Different quality per sample translates to different weights."""
+        df = self._make_df(
+            n=4,
+            quality=[1.0, 0.8, 0.5, 0.2],
+            outlier_score=[1.0, 1.0, 1.0, 1.0],
+        )
+        result = self._attach(df)
+        np.testing.assert_allclose(
+            result["weight"].to_numpy(),
+            [1.0, 0.8, 0.5, 0.2],
+            rtol=1e-6,
+        )
 
 
 class TestPrepareTrainingDatasets(unittest.TestCase):

@@ -80,16 +80,68 @@ def attach_sample_weights(
     split_name: str,
     quality_score_col: str,
     outlier_score_col: str,
+    outlier_flag_col: str,
+    outlier_drop_mode: Literal["drop_candidate", "drop_suspect", "drop_flagged"],
     output_col: str,
 ) -> pd.DataFrame:
-    """Compute per-sample weight as the product of quality and outlier scores.
+    """Compute and attach a per-sample weight column to *df*.
 
-    Each score independently modulates the sample weight:
-    score=1 means no effect, score<1 means proportional down-weighting.
+    The final weight is the element-wise product of three independent factors,
+    each in ``[0, 1]``, clipped to that range after multiplication:
+
+        weight = quality_score × outlier_score × outlier_flag_mask
+
+    **quality_score** – read from *quality_score_col*; reflects annotation
+    confidence.  Scores on the 0–100 integer scale are automatically
+    rescaled to ``[0, 1]``.  Missing column → defaults to 1.0 (no effect).
+
+    **outlier_score** – read from *outlier_flag_col*; a continuous confidence
+    score produced by the outlier-detection pipeline.  Same scale handling as
+    quality_score.  Missing column → defaults to 1.0.
+
+    **outlier_flag_mask** – a hard binary gate derived from *outlier_flag_col*
+    and *outlier_drop_mode* via :func:`identify_true_outliers`.  Samples
+    whose flag exceeds the chosen severity threshold receive 0; all others
+    receive 1.  Missing column → all samples treated as clean (mask = 1).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input split DataFrame.  Must contain a ``sample_id`` column when
+        *outlier_flag_col* is present.
+    split_name : str
+        Human-readable name of the split (e.g. ``"train"``, ``"val"``);
+        used only for log messages.
+    quality_score_col : str
+        Column holding the annotation quality score.  Pass an absent name to
+        disable quality-based down-weighting.
+    outlier_score_col : str
+        Column holding the continuous outlier confidence score.  Pass an
+        absent name to disable score-based down-weighting.
+    outlier_flag_col : str
+        Column holding categorical outlier flags (e.g.
+        ``"normal"``, ``"candidate"``, ``"suspect"``, ``"flagged"``).
+        Pass an absent name to disable hard outlier gating.
+    outlier_drop_mode : str
+        Severity threshold forwarded to :func:`identify_true_outliers`.
+        One of ``"drop_candidate"``, ``"drop_suspect"``, or
+        ``"drop_flagged"``.
+    output_col : str
+        Name of the new weight column written to the returned DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of *df* with *output_col* added.  The original DataFrame is
+        never modified in-place.  Weight stats (min / max / mean) are logged
+        at ``INFO`` level.
     """
     quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
     outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
-    combined = (quality * outlier).clip(0.0, 1.0)
+    zero_outlier_weights = (
+        ~identify_true_outliers(df, split_name, outlier_flag_col, outlier_drop_mode)
+    ).astype(float)  # Invert to get 1 for non-outliers, 0 for outliers
+    combined = (quality * outlier * zero_outlier_weights).clip(0.0, 1.0)
 
     updated = df.copy()
     updated[output_col] = combined
@@ -136,27 +188,41 @@ def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def drop_outliers(
+def identify_true_outliers(
     df: pd.DataFrame,
     split_name: str,
     outlier_col: str = OUTLIER_COLUMNS["LC_outlier_flag"],
     drop_level: Literal[
         "drop_candidate", "drop_suspect", "drop_flagged"
     ] = "drop_candidate",
-) -> pd.DataFrame:
-    """Drop samples flagged as outliers from a split dataframe.
+) -> pd.Series:
+    """Identify samples flagged as outliers from a split dataframe.
 
-    The *drop_level* controls which flag values are considered outliers:
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing sample records.
+    split_name : str
+        Name of the split (e.g., 'train', 'val', 'test') for logging purposes.
+    outlier_col : str, optional
+        Column name containing outlier flags. Default is the LC outlier column.
+    drop_level : {'drop_candidate', 'drop_suspect', 'drop_flagged'}
+        Controls which flag values are considered outliers:
 
-    - ``"drop_candidate"`` – only samples labelled ``"candidate"``.
-    - ``"drop_suspect"``   – samples labelled ``"candidate"`` or ``"suspect"``.
-    - ``"drop_flagged"``   – all of the above plus ``"flagged"``.
+        - ``'drop_candidate'`` – only samples labelled ``'candidate'``.
+        - ``'drop_suspect'`` – samples labelled ``'candidate'`` or ``'suspect'``.
+        - ``'drop_flagged'`` – all of the above plus ``'flagged'``.
+
+    Returns
+    -------
+    pd.Series
+        Boolean Series with ``False`` for non-outlier samples and ``True`` for outliers.
     """
     if outlier_col not in df.columns:
         logger.warning(
             f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
         )
-        return df
+        return pd.Series(False, index=df.index, dtype=bool)
 
     if drop_level == "drop_candidate":
         outliers = df[df[outlier_col] == "candidate"]["sample_id"].tolist()
@@ -175,15 +241,14 @@ def drop_outliers(
 
     if len(outliers) > 0:
         logger.warning(
-            f"Dropping {len(outliers)} samples from {split_name} split "
+            f"Identified {len(outliers)} samples from {split_name} split "
             f"with outlier categories <= '{drop_level}'"
         )
-        df = df[~df["sample_id"].isin(outliers)].copy()
     else:
         logger.info(
-            f"No samples dropped from {split_name} split for outlier level '{drop_level}'."
+            f"No samples identified from {split_name} split for outlier level '{drop_level}'."
         )
-    return df
+    return df["sample_id"].isin(outliers)
 
 
 def drop_zero_quality_samples(
