@@ -112,8 +112,9 @@ class TestAttachSampleWeights(unittest.TestCase):
     def test_zero_quality_gives_zero_weight(self):
         """quality=0 → weight=0 regardless of outlier_score."""
         df = self._make_df(quality=0.0, outlier_score=1.0)
-        result = self._attach(df)
-        np.testing.assert_allclose(result["weight"].to_numpy(), 0.0)
+        with self.assertRaises(ValueError) as cm:
+            self._attach(df)
+        self.assertIn("all sample weights are 0.0", str(cm.exception))
 
     def test_scores_normalized_from_0_100_scale(self):
         """Scores on 0-100 scale are divided by 100 before multiplication."""
