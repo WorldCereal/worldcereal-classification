@@ -380,7 +380,7 @@ def train_seasonal_torch_head(
         quality_col=quality_col,
         outlier_score_col=outlier_score_col,
         outlier_col=outlier_col,
-        outlier_drop_level="drop_candidate",
+        outlier_drop_mode="drop_candidate",
         zero_quality_cols=zero_quality_cols,
         **trainer_kwargs,
     )

@@ -37,7 +37,6 @@ from worldcereal.train.data import spatial_train_val_test_split, train_val_test_
 from worldcereal.train.datasets import get_class_weights
 from worldcereal.train.finetuning_utils import (
     attach_sample_weights,
-    drop_outliers,
     drop_zero_quality_samples,
     filter_low_weight_eval_samples,
     patch_lc_dataset_ct_quality,
@@ -116,9 +115,9 @@ class TorchTrainer:
         quality_col: Optional[str] = None,
         outlier_score_col: Optional[str] = None,
         outlier_col: Optional[str] = None,
-        outlier_drop_level: Optional[
-            Literal["drop_candidate", "drop_suspect", "drop_flagged"]
-        ] = None,
+        outlier_drop_mode: Literal[
+            "keep", "drop_candidate", "drop_suspect", "drop_flagged"
+        ] = "keep",
         zero_quality_cols: Optional[Sequence[str]] = None,
         eval_weight_floor: Optional[float] = 0.5,
         eval_weight_percentile: float = 20.0,
@@ -196,7 +195,7 @@ class TorchTrainer:
 
         # Sample filtering
         self.outlier_col = outlier_col
-        self.outlier_drop_level = outlier_drop_level
+        self.outlier_drop_mode = outlier_drop_mode
         self.zero_quality_cols = list(zero_quality_cols) if zero_quality_cols else []
 
         # Eval quality filtering
@@ -247,7 +246,7 @@ class TorchTrainer:
                 "quality_col": self.quality_col,
                 "outlier_score_col": self.outlier_score_col,
                 "outlier_col": self.outlier_col,
-                "outlier_drop_level": self.outlier_drop_level,
+                "outlier_drop_mode": self.outlier_drop_mode,
                 "zero_quality_cols": self.zero_quality_cols,
                 "eval_weight_floor": self.eval_weight_floor,
                 "eval_weight_percentile": self.eval_weight_percentile,
@@ -685,27 +684,6 @@ class TorchTrainer:
         val_df = self._drop_invalid_samples(val_df)
         test_df = self._drop_invalid_samples(test_df)
 
-        # Optionally drop flagged outlier samples
-        if self.outlier_col and self.outlier_drop_level:
-            train_df = drop_outliers(
-                train_df,
-                "train",
-                outlier_col=self.outlier_col,
-                drop_level=self.outlier_drop_level,
-            )
-            val_df = drop_outliers(
-                val_df,
-                "val",
-                outlier_col=self.outlier_col,
-                drop_level=self.outlier_drop_level,
-            )
-            test_df = drop_outliers(
-                test_df,
-                "test",
-                outlier_col=self.outlier_col,
-                drop_level=self.outlier_drop_level,
-            )
-
         # Optionally drop samples where all quality scores are zero
         if self.zero_quality_cols:
             train_df = drop_zero_quality_samples(
@@ -732,6 +710,8 @@ class TorchTrainer:
             "train",
             quality_score_col=self.quality_col or "",
             outlier_score_col=self.outlier_score_col or "",
+            outlier_flag_col=self.outlier_col or "",
+            outlier_drop_mode=self.outlier_drop_mode or "keep",
             output_col="_sample_weight",
         )
         val_df = attach_sample_weights(
@@ -739,6 +719,8 @@ class TorchTrainer:
             "val",
             quality_score_col=self.quality_col or "",
             outlier_score_col=self.outlier_score_col or "",
+            outlier_flag_col=self.outlier_col or "",
+            outlier_drop_mode=self.outlier_drop_mode or "keep",
             output_col="_sample_weight",
         )
         test_df = attach_sample_weights(
@@ -746,6 +728,8 @@ class TorchTrainer:
             "test",
             quality_score_col=self.quality_col or "",
             outlier_score_col=self.outlier_score_col or "",
+            outlier_flag_col=self.outlier_col or "",
+            outlier_drop_mode=self.outlier_drop_mode or "keep",
             output_col="_sample_weight",
         )
 
