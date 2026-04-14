@@ -235,15 +235,15 @@ def identify_true_outliers(
     pd.Series
         Boolean Series with ``False`` for non-outlier samples and ``True`` for outliers.
     """
-    if outlier_col not in df.columns:
-        logger.warning(
-            f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
-        )
-        return pd.Series(False, index=df.index, dtype=bool)
-
     if drop_level == "keep":
         logger.info(
             f"Outlier drop mode set to 'keep'; no samples will be treated as outliers in {split_name} split."
+        )
+        return pd.Series(False, index=df.index, dtype=bool)
+
+    if outlier_col not in df.columns:
+        logger.warning(
+            f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
         )
         return pd.Series(False, index=df.index, dtype=bool)
 
