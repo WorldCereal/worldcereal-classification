@@ -148,11 +148,25 @@ def attach_sample_weights(
     updated = df.copy()
     updated[output_col] = combined
 
+    # Log percentage of zero weights and stats on non-zero weights
+    zero_mask = combined == 0.0
+    pct_zero = 100 * zero_mask.sum() / len(combined)
+    non_zero = combined[~zero_mask]
+
+    if len(non_zero) == 0:
+        raise ValueError(
+            f"{split_name}: all sample weights are 0.0 for {output_col}. "
+            "Cannot proceed with training - check quality scores, outlier scores, "
+            "and outlier drop settings."
+        )
+
     stats = {
-        "min": float(combined.min()),
-        "max": float(combined.max()),
-        "mean": float(combined.mean()),
+        "pct_zero": f"{pct_zero:.1f}%",
+        "non_zero_min": float(non_zero.min()),
+        "non_zero_max": float(non_zero.max()),
+        "non_zero_mean": float(non_zero.mean()),
     }
+
     logger.info(f"{split_name} {output_col} stats: {stats}")
     return updated
 
