@@ -349,6 +349,34 @@ def generate_output_path_patch_to_point_worldcereal(
     return subfolder / output_file
 
 
+def _dominant_s1_epsg_for_cell(
+    client: pystac_client.Client, ref_id: str, h3_cell: str
+) -> Optional[Tuple[int, str]]:
+    """Return the (epsg, epsg_property) most common among S1 patches for a given
+    (ref_id, h3_l3_cell). Returns None if no S1 patches are found.
+
+    H3 cells near a UTM-zone boundary can have S1 patches stored under a UTM zone
+    that differs from the dominant one for the ref_id, which would silently make
+    the per-cell load_stac call return an empty datacube.
+    """
+    counts: dict = {}
+    search = client.search(
+        collections=["worldcereal_sentinel_1_patch_extractions"],
+        query={"ref_id": {"eq": ref_id}, "h3_l3_cell": {"eq": h3_cell}},
+    )
+    for item in search.items():
+        if "proj:epsg" in item.properties:
+            key = (int(item.properties["proj:epsg"]), "proj:epsg")
+        elif "proj:code" in item.properties:
+            key = (int(item.properties["proj:code"].split(":")[-1]), "proj:code")
+        else:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
 def create_job_dataframe_patch_to_point_worldcereal(
     ref_id,
     ground_truth_file=None,
@@ -553,6 +581,21 @@ def create_job_dataframe_patch_to_point_worldcereal(
                 cell_str if split_applied and cell_str is not None else ""
             )
 
+            # Override EPSG per cell when the dominant S1 EPSG for this cell
+            # differs from the group's EPSG (cells near a UTM-zone boundary).
+            # Without this, the per-cell load_stac call would filter on an EPSG
+            # that has no S1 patches and the backend crashes on an empty list.
+            if split_applied and cell_str is not None:
+                dominant = _dominant_s1_epsg_for_cell(client, row.ref_id, cell_str)
+                if dominant is not None and dominant[0] != int(row.epsg):
+                    logger.warning(
+                        f"Cell {cell_str}: dominant S1 EPSG is {dominant[0]} "
+                        f"but job group is EPSG {row.epsg}. Overriding to "
+                        f"{dominant[0]} for this cell."
+                    )
+                    job_row_dict["epsg"] = dominant[0]
+                    job_row_dict["epsg_property"] = dominant[1]
+
             if not disable_s1:
                 # Determine S1 orbit; very small buffer to cover cases with < 3 samples
                 try:
@@ -608,7 +651,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
 
             # Upload the geoparquet file to Artifactory
             logger.info("Deploying geoparquet file to Artifactory ...")
-            collection_suffix = f"{row.epsg}"
+            collection_suffix = f"{job_row_dict['epsg']}"
             if split_applied and cell_str is not None:
                 collection_suffix = f"{collection_suffix}_{cell_str}"
 
