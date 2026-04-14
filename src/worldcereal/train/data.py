@@ -1024,10 +1024,10 @@ def get_training_dfs_from_parquet(
 
     # Columns that may not exist in older data — fill with sensible defaults
     OPTIONAL_COLS: dict = {
-        "CTY25_confidence_nonoutlier": "1.0",  # no outlier penalty
-        "LC10_confidence_nonoutlier": "1.0",
-        "CTY25_anomaly_flag": 0.0,  # not flagged
-        "LC10_anomaly_flag": 0.0,
+        "CTY24_confidence_nonoutlier": 1.0,  # no outlier penalty (float, not string)
+        "LC10_confidence_nonoutlier": 1.0,
+        "CTY24_anomaly_flag": "normal",  # string category, not a number
+        "LC10_anomaly_flag": "normal",
     }
 
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():
