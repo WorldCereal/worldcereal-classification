@@ -1858,7 +1858,7 @@ def run_finetuning(
     unfreeze_epoch: Optional[int] = None,
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
-    val_loss_ema_alpha: float = 0.0,
+    model_ema_alpha: float = 0.0,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -1880,8 +1880,8 @@ def run_finetuning(
     best_loss = None
     best_model_dict = None
     epochs_since_improvement = 0
-    ema_val_loss: Optional[float] = (
-        None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
+    ema_model: Optional[torch.nn.Module] = (
+        None  # EMA of model weights (used when model_ema_alpha > 0)
     )
 
     tb_writer: Optional[Any] = None
@@ -2019,9 +2019,9 @@ def run_finetuning(
                 f"was {epochs_since_improvement}/{hyperparams.patience}."
             )
             epochs_since_improvement = 0
-            if val_loss_ema_alpha > 0.0:
-                ema_val_loss = None  # Restart EMA for the new optimization regime.
-                logger.info("EMA val loss reset at encoder unfreeze.")
+            if model_ema_alpha > 0.0:
+                ema_model = None  # Restart EMA model for the new optimization regime.
+                logger.info("EMA model reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -2049,7 +2049,29 @@ def run_finetuning(
 
         train_loss.append(epoch_train_loss / len(train_dl))
 
-        model.eval()
+        # --- EMA model weight update ---
+        if model_ema_alpha > 0.0:
+            if ema_model is None:
+                ema_model = deepcopy(model)
+                for p in ema_model.parameters():
+                    p.requires_grad_(False)
+                logger.info(
+                    f"EMA model initialised from epoch {epoch + 1} weights "
+                    f"(alpha={model_ema_alpha})."
+                )
+            else:
+                with torch.no_grad():
+                    for ema_p, cur_p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.copy_(
+                            (1.0 - model_ema_alpha) * ema_p + model_ema_alpha * cur_p
+                        )
+                    # Keep buffers (e.g. BatchNorm running stats) in sync.
+                    for ema_b, cur_b in zip(ema_model.buffers(), model.buffers()):
+                        ema_b.copy_(cur_b)
+
+        # Validate on the EMA model when available; fall back to the raw model.
+        eval_model = ema_model if ema_model is not None else model
+        eval_model.eval()
         val_task_tracker = _make_task_tracker()
         val_croptype_supervision = (
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
@@ -2069,7 +2091,7 @@ def run_finetuning(
         for batch in val_dl:
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
-                preds = _forward_with_optional_attrs(model, predictors, attrs)
+                preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
                 loss_value, flat_preds, flat_targets = _compute_loss(
                     loss_fn, preds, predictors, attrs
                 )
@@ -2202,8 +2224,6 @@ def run_finetuning(
                 "train": train_loss[-1],
                 "val": current_val_loss,
             }
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None:
-                _loss_scalars["val_ema"] = ema_val_loss
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
             tb_writer.add_scalar(
                 "learning_rate", scheduler.get_last_lr()[0], global_step
@@ -2268,7 +2288,6 @@ def run_finetuning(
             "epoch": epoch + 1,
             "train_loss": train_loss[-1],
             "val_loss": current_val_loss,
-            "val_loss_ema": ema_val_loss,
             "task_losses": {
                 "train": train_task_loss_avgs,
                 "val": val_task_loss_avgs,
@@ -2285,33 +2304,16 @@ def run_finetuning(
                 f"Failed to append validation metrics history at epoch {epoch + 1}: {exc}"
             )
 
-        # ------ EMA smoothing of val loss for early stopping (Direction B) ------
-        if val_loss_ema_alpha > 0.0:
-            if ema_val_loss is None:
-                ema_val_loss = current_val_loss  # warm-start on first observation
-            else:
-                ema_val_loss = (
-                    val_loss_ema_alpha * current_val_loss
-                    + (1.0 - val_loss_ema_alpha) * ema_val_loss
-                )
-        # Metric used for early-stopping and best-model selection.
-        # Equals EMA-smoothed loss when val_loss_ema_alpha > 0, otherwise raw val loss.
-        early_stop_loss = (
-            ema_val_loss
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
-            else current_val_loss
-        )
-
         # --- Early stopping: patience resets only when loss improves ---
-        loss_improved = best_loss is None or early_stop_loss < best_loss
+        loss_improved = best_loss is None or current_val_loss < best_loss
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
 
         if loss_improved:
-            best_loss = early_stop_loss
+            best_loss = current_val_loss
             epochs_since_improvement = 0
             logger.info(
-                f"Epoch {epoch + 1}: val loss improved to {early_stop_loss:.4f}"
+                f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
             )
         else:
             epochs_since_improvement += 1
@@ -2321,7 +2323,17 @@ def run_finetuning(
 
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
-            best_model_dict = deepcopy(model.state_dict())
+            _ckpt_model = ema_model if ema_model is not None else model
+            best_model_dict = deepcopy(_ckpt_model.state_dict())
+            _ckpt_label = (
+                f"EMA model (alpha={model_ema_alpha})"
+                if ema_model is not None
+                else "raw model"
+            )
+            logger.info(
+                f"Epoch {epoch + 1}: saving best checkpoint from {_ckpt_label} "
+                f"(val_loss={current_val_loss:.4f})."
+            )
 
             validation_context = {
                 "epoch": epoch + 1,
@@ -2337,7 +2349,7 @@ def run_finetuning(
                 validation_context["croptype_supervision"] = (
                     croptype_supervision_summary
                 )
-            setattr(model, "_last_validation_context", validation_context)
+            setattr(_ckpt_model, "_last_validation_context", validation_context)
 
             # best_loss is guaranteed non-None here: on the first epoch
             # best_loss is None → loss_improved is True → best_loss is set
@@ -2346,20 +2358,16 @@ def run_finetuning(
 
             if on_validation_improved is not None:
                 try:
-                    on_validation_improved(epoch + 1, model, best_loss)
+                    on_validation_improved(epoch + 1, _ckpt_model, best_loss)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            checkpoint_model = deepcopy(model)
+            checkpoint_model = deepcopy(_ckpt_model)
             _save_best(epoch + 1, checkpoint_model, best_loss)
 
-        _val_loss_str = (
-            f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
-            else f"{current_val_loss:.4f}"
-        )
+        _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
         if cur_lc_f1 > 0 or cur_ct_f1 > 0:
             _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
@@ -2384,6 +2392,10 @@ def run_finetuning(
 
     assert best_model_dict is not None
 
+    _restore_label = (
+        f"EMA model (alpha={model_ema_alpha})" if model_ema_alpha > 0.0 else "raw model"
+    )
+    logger.info(f"Restoring best {_restore_label} weights into model before returning.")
     model.load_state_dict(best_model_dict)
     model.eval()
 
