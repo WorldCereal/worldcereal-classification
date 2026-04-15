@@ -9,6 +9,13 @@ MIN_EDGE_BUFFER = 2
 
 GLOBAL_SEASON_IDS: Tuple[str, ...] = ("tc-s1", "tc-s2")
 
+OUTLIER_COLUMNS: dict = {
+    "CT_outlier_score": "CTY24_confidence_nonoutlier",
+    "LC_outlier_score": "LC10_confidence_nonoutlier",
+    "CT_outlier_flag": "CTY24_anomaly_flag",
+    "LC_outlier_flag": "LC10_anomaly_flag",
+}
+
 SEASONALITY_LOOKUP_FILENAME = "seasonality_lookup.parquet"
 SEASONALITY_LOOKUP_PACKAGE = "worldcereal.data.cropcalendars"
 SEASONALITY_LOOKUP_PATH = (
@@ -33,6 +40,7 @@ SEASONALITY_LON_RANGE = (-179.999, 179.999)
 
 __all__ = [
     "GLOBAL_SEASON_IDS",
+    "OUTLIER_COLUMNS",
     "MIN_EDGE_BUFFER",
     "SEASONALITY_LOOKUP_FILENAME",
     "SEASONALITY_LOOKUP_PACKAGE",

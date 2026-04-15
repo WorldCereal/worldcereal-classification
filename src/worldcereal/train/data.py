@@ -17,6 +17,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
 from worldcereal.train.datasets import (
     SeasonCalendarMode,
@@ -999,8 +1000,6 @@ def get_training_dfs_from_parquet(
     ]
     INT_COLS = [
         "extract",
-        "quality_score_ct",
-        "quality_score_lc",
         "ewoc_code",
         "S2-L2A-B02",
         "S2-L2A-B03",
@@ -1019,15 +1018,24 @@ def get_training_dfs_from_parquet(
         "AGERA5-PRECIP",
         "AGERA5-TMEAN",
     ]
-    FLOAT_COLS = ["lon", "lat"]
+    FLOAT_COLS = [
+        "lon",
+        "lat",
+        "quality_score_ct",
+        "quality_score_lc",
+    ]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
     # Columns that may not exist in older data — fill with sensible defaults
     OPTIONAL_COLS: dict = {
-        "CTY25_confidence_nonoutlier": "1.0",  # no outlier penalty
-        "LC10_confidence_nonoutlier": "1.0",
-        "CTY25_anomaly_flag": 0.0,  # not flagged
-        "LC10_anomaly_flag": 0.0,
+        OUTLIER_COLUMNS[
+            "CT_outlier_score"
+        ]: 1.0,  # no outlier penalty (float, not string)
+        OUTLIER_COLUMNS[
+            "LC_outlier_score"
+        ]: 1.0,  # no outlier penalty (float, not string)
+        OUTLIER_COLUMNS["CT_outlier_flag"]: "normal",  # string category, not a number
+        OUTLIER_COLUMNS["LC_outlier_flag"]: "normal",  # string category, not a number
     }
 
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():

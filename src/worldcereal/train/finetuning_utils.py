@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.data import collate_fn
 from worldcereal.train.datasets import (
     SensorMaskingConfig,
@@ -79,25 +80,93 @@ def attach_sample_weights(
     split_name: str,
     quality_score_col: str,
     outlier_score_col: str,
+    outlier_flag_col: str,
+    outlier_drop_mode: Literal[
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
+    ],
     output_col: str,
 ) -> pd.DataFrame:
-    """Compute per-sample weight as the product of quality and outlier scores.
+    """Compute and attach a per-sample weight column to *df*.
 
-    Each score independently modulates the sample weight:
-    score=1 means no effect, score<1 means proportional down-weighting.
+    The final weight is the element-wise product of three independent factors,
+    each in ``[0, 1]``, clipped to that range after multiplication:
+
+        weight = quality_score × outlier_score × outlier_flag_mask
+
+    **quality_score** – read from *quality_score_col*; reflects annotation
+    confidence.  Scores on the 0–100 integer scale are automatically
+    rescaled to ``[0, 1]``.  Missing column → defaults to 1.0 (no effect).
+
+    **outlier_score** – read from *outlier_score_col*; a continuous confidence
+    score produced by the outlier-detection pipeline.  Same scale handling as
+    quality_score.  Missing column → defaults to 1.0.
+
+    **outlier_flag_mask** – a hard binary gate derived from *outlier_flag_col*
+    and *outlier_drop_mode* via :func:`identify_true_outliers`.  Samples
+    whose flag exceeds the chosen severity threshold receive 0; all others
+    receive 1.  Missing column → all samples treated as clean (mask = 1).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input split DataFrame.  Must contain a ``sample_id`` column when
+        *outlier_flag_col* is present.
+    split_name : str
+        Human-readable name of the split (e.g. ``"train"``, ``"val"``);
+        used only for log messages.
+    quality_score_col : str
+        Column holding the annotation quality score.  Pass an absent name to
+        disable quality-based down-weighting.
+    outlier_score_col : str
+        Column holding the continuous outlier confidence score.  Pass an
+        absent name to disable score-based down-weighting.
+    outlier_flag_col : str
+        Column holding categorical outlier flags (e.g.
+        ``"normal"``, ``"candidate"``, ``"suspect"``, ``"flagged"``).
+        Pass an absent name to disable hard outlier gating.
+    outlier_drop_mode : str
+        Severity threshold forwarded to :func:`identify_true_outliers`.
+        One of ``"keep"``, ``"drop_candidate"``, ``"drop_suspect"``, or
+        ``"drop_flagged"``.
+    output_col : str
+        Name of the new weight column written to the returned DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of *df* with *output_col* added.  The original DataFrame is
+        never modified in-place.  Weight stats (min / max / mean) are logged
+        at ``INFO`` level.
     """
     quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
     outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
-    combined = (quality * outlier).clip(0.0, 1.0)
+    zero_outlier_weights = (
+        ~identify_true_outliers(df, split_name, outlier_flag_col, outlier_drop_mode)
+    ).astype(float)  # Invert to get 1 for non-outliers, 0 for outliers
+    combined = (quality * outlier * zero_outlier_weights).clip(0.0, 1.0)
 
     updated = df.copy()
     updated[output_col] = combined
 
+    # Log percentage of zero weights and stats on non-zero weights
+    zero_mask = combined == 0.0
+    pct_zero = 100 * zero_mask.sum() / len(combined)
+    non_zero = combined[~zero_mask]
+
+    if len(non_zero) == 0:
+        raise ValueError(
+            f"{split_name}: all sample weights are 0.0 for {output_col}. "
+            "Cannot proceed with training - check quality scores, outlier scores, "
+            "and outlier drop settings."
+        )
+
     stats = {
-        "min": float(combined.min()),
-        "max": float(combined.max()),
-        "mean": float(combined.mean()),
+        "pct_zero": f"{pct_zero:.1f}%",
+        "non_zero_min": float(non_zero.min()),
+        "non_zero_max": float(non_zero.max()),
+        "non_zero_mean": float(non_zero.mean()),
     }
+
     logger.info(f"{split_name} {output_col} stats: {stats}")
     return updated
 
@@ -135,27 +204,48 @@ def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def drop_outliers(
+def identify_true_outliers(
     df: pd.DataFrame,
     split_name: str,
-    outlier_col: str = "LC10_anomaly_flag",
+    outlier_col: str = OUTLIER_COLUMNS["LC_outlier_flag"],
     drop_level: Literal[
-        "drop_candidate", "drop_suspect", "drop_flagged"
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
     ] = "drop_candidate",
-) -> pd.DataFrame:
-    """Drop samples flagged as outliers from a split dataframe.
+) -> pd.Series:
+    """Identify samples flagged as outliers from a split dataframe.
 
-    The *drop_level* controls which flag values are considered outliers:
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing sample records.
+    split_name : str
+        Name of the split (e.g., 'train', 'val', 'test') for logging purposes.
+    outlier_col : str, optional
+        Column name containing outlier flags. Default is the LC outlier column.
+    drop_level : {'keep', 'drop_candidate', 'drop_suspect', 'drop_flagged'}
+        Controls which flag values are considered outliers:
 
-    - ``"drop_candidate"`` – only samples labelled ``"candidate"``.
-    - ``"drop_suspect"``   – samples labelled ``"candidate"`` or ``"suspect"``.
-    - ``"drop_flagged"``   – all of the above plus ``"flagged"``.
+        - ``'keep'`` – no samples are considered outliers.
+        - ``'drop_candidate'`` – only samples labelled ``'candidate'``.
+        - ``'drop_suspect'`` – samples labelled ``'candidate'`` or ``'suspect'``.
+        - ``'drop_flagged'`` – all of the above plus ``'flagged'``.
+
+    Returns
+    -------
+    pd.Series
+        Boolean Series with ``False`` for non-outlier samples and ``True`` for outliers.
     """
+    if drop_level == "keep":
+        logger.info(
+            f"Outlier drop mode set to 'keep'; no samples will be treated as outliers in {split_name} split."
+        )
+        return pd.Series(False, index=df.index, dtype=bool)
+
     if outlier_col not in df.columns:
         logger.warning(
             f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
         )
-        return df
+        return pd.Series(False, index=df.index, dtype=bool)
 
     if drop_level == "drop_candidate":
         outliers = df[df[outlier_col] == "candidate"]["sample_id"].tolist()
@@ -174,15 +264,14 @@ def drop_outliers(
 
     if len(outliers) > 0:
         logger.warning(
-            f"Dropping {len(outliers)} samples from {split_name} split "
+            f"Identified {len(outliers)} samples from {split_name} split "
             f"with outlier categories <= '{drop_level}'"
         )
-        df = df[~df["sample_id"].isin(outliers)].copy()
     else:
         logger.info(
-            f"No samples dropped from {split_name} split for outlier level '{drop_level}'."
+            f"No samples identified from {split_name} split for outlier level '{drop_level}'."
         )
-    return df
+    return df["sample_id"].isin(outliers)
 
 
 def drop_zero_quality_samples(
@@ -1069,6 +1158,7 @@ def evaluate_finetuned_model(
     seasonal_landcover_classes: Optional[List[str]] = None,
     seasonal_croptype_classes: Optional[List[str]] = None,
     cropland_class_names: Optional[Sequence[str]] = None,
+    weight_threshold: float = 0.0,
 ) -> Union[dict, Tuple[pd.DataFrame, Figure, Figure]]:
     """Evaluate a fine-tuned model on a labelled dataset and report metrics.
 
@@ -1096,6 +1186,12 @@ def evaluate_finetuned_model(
     cropland_class_names : Optional[Sequence[str]]
         Optional list of class names that should trigger cropland gating during
         seasonal evaluation.
+    weight_threshold : float, default 0.0
+        Samples whose task weight is at or below this value are excluded from
+        metrics.  For seasonal heads ``sample_weight_lc`` gates landcover
+        records and ``sample_weight_ct`` gates crop-type records independently.
+        For standard (non-seasonal) heads the minimum of both available weight
+        columns is used; samples at or below the threshold are skipped.
 
     Returns
     -------
@@ -1154,6 +1250,8 @@ def evaluate_finetuned_model(
                     seasonal_landcover_classes,
                     seasonal_croptype_classes,
                     cropland_class_names=cropland_class_names,
+                    lc_weight_threshold=weight_threshold,
+                    ct_weight_threshold=weight_threshold,
                 )
                 seasonal_landcover_records.extend(batch_summary["landcover"])
                 seasonal_croptype_records.extend(batch_summary["croptype"])
@@ -1161,6 +1259,16 @@ def evaluate_finetuned_model(
                 seasonal_mode = True
                 continue
             targets = predictors.label.cpu().numpy().astype(int)
+
+            # Exclude samples whose combined task weight is at or below
+            # weight_threshold before computing any metrics.
+            _wm = _compute_weight_mask(
+                attrs or {}, n_samples=targets.shape[0], threshold=weight_threshold
+            )
+            if not _wm.all():
+                _wm_t = torch.as_tensor(_wm, device=model_output.device)
+                model_output = model_output[_wm_t]
+                targets = targets[_wm]
 
             if test_ds.task_type == "binary":
                 probs = torch.sigmoid(model_output).cpu().numpy()
@@ -1445,6 +1553,33 @@ def _ensure_list(value, expected_len: int, fill=None) -> List:
     return result
 
 
+def _compute_weight_mask(
+    attrs: dict,
+    n_samples: int,
+    threshold: float = 0.0,
+) -> np.ndarray:
+    """Return a boolean array of shape *(n_samples,)* marking valid samples.
+
+    A sample is considered valid when its combined sample weight is *strictly
+    above* ``threshold``.  The combined weight is the element-wise minimum of
+    ``sample_weight_lc`` and ``sample_weight_ct``, whichever keys are present
+    in *attrs*.  When neither key is present all samples are considered valid
+    (mask of all ``True``).
+    """
+    weights = np.ones(n_samples, dtype=float)
+    for key in ("sample_weight_lc", "sample_weight_ct"):
+        val = attrs.get(key)
+        if val is None:
+            continue
+        if torch.is_tensor(val):
+            w = val.detach().cpu().numpy().flatten().astype(float)
+        else:
+            w = np.asarray(val, dtype=float).flatten()
+        if w.shape[0] == n_samples:
+            weights = np.minimum(weights, w)
+    return weights > threshold
+
+
 def _select_representative_season(
     output: SeasonalHeadOutput,
     attrs: dict,
@@ -1529,6 +1664,8 @@ def summarize_seasonal_predictions(
     landcover_task_name: str = "landcover",
     croptype_task_name: str = "croptype",
     enforce_cropland_gate: bool = False,
+    lc_weight_threshold: float = 0.0,
+    ct_weight_threshold: float = 0.0,
 ) -> dict:
     """Convert seasonal logits into per-branch classification records.
 
@@ -1537,12 +1674,18 @@ def summarize_seasonal_predictions(
     they need. When ``enforce_cropland_gate`` is True, crop-type predictions are
     only emitted if either the predicted or labelled landcover class belongs to
     ``cropland_class_names``.
+
+    Samples whose ``sample_weight_lc`` (for landcover) or ``sample_weight_ct``
+    (for crop-type) is at or below the respective threshold are excluded from
+    the returned records.
     """
 
     batch_size = output.global_embedding.shape[0]
     landcover_labels = _ensure_list(attrs.get("landcover_label"), batch_size, fill=None)
     croptype_labels = _ensure_list(attrs.get("croptype_label"), batch_size, fill=None)
     label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
+    lc_weights = _ensure_list(attrs.get("sample_weight_lc"), batch_size, fill=1.0)
+    ct_weights = _ensure_list(attrs.get("sample_weight_ct"), batch_size, fill=1.0)
 
     tasks: List[str] = []
     for idx in range(batch_size):
@@ -1584,6 +1727,7 @@ def summarize_seasonal_predictions(
         if landcover_labels[idx] is not None
         and not _is_missing_value(landcover_labels[idx])
         and str(landcover_labels[idx]) in landcover_classes
+        and float(lc_weights[idx]) > lc_weight_threshold
     ]
     if lc_probs is not None:
         for sample_idx in landcover_indices:
@@ -1621,6 +1765,8 @@ def summarize_seasonal_predictions(
             if _is_missing_value(target_name):
                 continue
             if str(target_name) not in croptype_classes:
+                continue
+            if float(ct_weights[sample_idx]) <= ct_weight_threshold:
                 continue
 
             if gating_enabled:
