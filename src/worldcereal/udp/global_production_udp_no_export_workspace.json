@@ -928,8 +928,7 @@
                         "from_parameter": "filename_prefix_classification"
                     }
                 }
-            },
-            "result": true
+            }
         },
         "filterbands2": {
             "process_id": "filter_bands",
@@ -990,8 +989,7 @@
                         "from_parameter": "filename_prefix_ndvi"
                     }
                 }
-            },
-            "result": true
+            }
         },
         "filterbands3": {
             "process_id": "filter_bands",
@@ -1168,8 +1166,7 @@
                         "from_parameter": "filename_prefix_embeddings"
                     }
                 }
-            },
-            "result": true
+            }
         },
         "filterbands4": {
             "process_id": "filter_bands",
