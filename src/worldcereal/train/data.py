@@ -108,6 +108,10 @@ def _attach_regions_from_boundaries(
         )
 
     if valid_mask.any():
+        n_target = int(valid_mask.sum())
+        logger.info(
+            f"Assigning regions for {n_target:,} samples via spatial join ..."
+        )
         coords = pd.DataFrame(
             {"lon": lon[valid_mask], "lat": lat[valid_mask]},
             index=df.index[valid_mask],
@@ -117,13 +121,34 @@ def _attach_regions_from_boundaries(
             geometry=gpd.GeoSeries.from_xy(coords["lon"], coords["lat"]),
             crs="EPSG:4326",
         )
-        joined = gpd.sjoin_nearest(
-            gdf.to_crs("EPSG:3857"),
-            world_df.to_crs("EPSG:3857"),
-            how="left",
-        )
-        del gdf, world_df  # free the geometry objects as soon as join is done
+
+        # Two-pass strategy: fast point-in-polygon first, expensive nearest
+        # only for the handful of points that don't land inside any polygon
+        # (coastal / border edge-cases).  sjoin uses an R-tree index and is
+        # orders of magnitude faster than sjoin_nearest on large datasets.
+        world_4326 = world_df.to_crs("EPSG:4326")  # stay in 4326 for sjoin
+        joined = gpd.sjoin(gdf, world_4326, how="left", predicate="within")
         joined = joined[~joined.index.duplicated(keep="first")]
+
+        unmatched_mask = joined["region"].isna()
+        n_unmatched = int(unmatched_mask.sum())
+
+        if n_unmatched > 0:
+            logger.info(
+                f"{n_unmatched:,} samples not inside any polygon; "
+                f"falling back to sjoin_nearest for those."
+            )
+            unmatched_idx = joined.index[unmatched_mask]
+            gdf_miss = gdf.loc[unmatched_idx].to_crs("EPSG:3857")
+            world_3857 = world_df.to_crs("EPSG:3857")
+            nearest = gpd.sjoin_nearest(gdf_miss, world_3857, how="left")
+            nearest = nearest[~nearest.index.duplicated(keep="first")]
+            joined.loc[unmatched_idx, "region"] = nearest["region"].reindex(
+                unmatched_idx
+            )
+            del gdf_miss, world_3857, nearest
+
+        del gdf, world_df, world_4326
         region_series = joined["region"].reindex(coords.index)
         del joined, coords
         df.loc[region_series.index, "region"] = region_series
