@@ -1,4 +1,6 @@
 import gc
+import os
+import stat
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
@@ -6,6 +8,7 @@ import duckdb
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from loguru import logger
@@ -85,14 +88,12 @@ def _attach_regions_from_boundaries(
 
     world_df = world_df[["region", "geometry"]].copy()
 
-    result = df.copy()
-    if "region" in result.columns:
-        result["region"] = result["region"]
-    else:
-        result["region"] = pd.NA
+    # Mutate df in-place rather than copying the whole (potentially 7M-row) frame.
+    if "region" not in df.columns:
+        df["region"] = pd.NA
 
-    lat = pd.to_numeric(result["lat"], errors="coerce")
-    lon = pd.to_numeric(result["lon"], errors="coerce")
+    lat = pd.to_numeric(df["lat"], errors="coerce")
+    lon = pd.to_numeric(df["lon"], errors="coerce")
     valid_coords = lat.between(-90, 90) & lon.between(-180, 180)
 
     if target_mask is not None:
@@ -107,31 +108,58 @@ def _attach_regions_from_boundaries(
         )
 
     if valid_mask.any():
+        n_target = int(valid_mask.sum())
+        logger.info(
+            f"Assigning regions for {n_target:,} samples via spatial join ..."
+        )
         coords = pd.DataFrame(
             {"lon": lon[valid_mask], "lat": lat[valid_mask]},
-            index=result.index[valid_mask],
+            index=df.index[valid_mask],
         )
         gdf = gpd.GeoDataFrame(
             coords,
             geometry=gpd.GeoSeries.from_xy(coords["lon"], coords["lat"]),
             crs="EPSG:4326",
         )
-        joined = gpd.sjoin_nearest(
-            gdf.to_crs("EPSG:3857"),
-            world_df.to_crs("EPSG:3857"),
-            how="left",
-        )
-        joined = joined[~joined.index.duplicated(keep="first")]
-        region_series = joined["region"].reindex(coords.index)
-        result.loc[coords.index, "region"] = region_series
 
-    missing = int(result["region"].isna().sum())
+        # Two-pass strategy: fast point-in-polygon first, expensive nearest
+        # only for the handful of points that don't land inside any polygon
+        # (coastal / border edge-cases).  sjoin uses an R-tree index and is
+        # orders of magnitude faster than sjoin_nearest on large datasets.
+        world_4326 = world_df.to_crs("EPSG:4326")  # stay in 4326 for sjoin
+        joined = gpd.sjoin(gdf, world_4326, how="left", predicate="within")
+        joined = joined[~joined.index.duplicated(keep="first")]
+
+        unmatched_mask = joined["region"].isna()
+        n_unmatched = int(unmatched_mask.sum())
+
+        if n_unmatched > 0:
+            logger.info(
+                f"{n_unmatched:,} samples not inside any polygon; "
+                f"falling back to sjoin_nearest for those."
+            )
+            unmatched_idx = joined.index[unmatched_mask]
+            gdf_miss = gdf.loc[unmatched_idx].to_crs("EPSG:3857")
+            world_3857 = world_df.to_crs("EPSG:3857")
+            nearest = gpd.sjoin_nearest(gdf_miss, world_3857, how="left")
+            nearest = nearest[~nearest.index.duplicated(keep="first")]
+            joined.loc[unmatched_idx, "region"] = nearest["region"].reindex(
+                unmatched_idx
+            )
+            del gdf_miss, world_3857, nearest
+
+        del gdf, world_df, world_4326
+        region_series = joined["region"].reindex(coords.index)
+        del joined, coords
+        df.loc[region_series.index, "region"] = region_series
+
+    missing = int(df["region"].isna().sum())
     if missing:
         logger.warning(
             f"Region enrichment left {missing} samples without a region assignment."
         )
 
-    return result
+    return df
 
 
 def _ensure_label_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -1119,22 +1147,26 @@ def get_training_dfs_from_parquet(
             )
 
         # write a single Parquet file
+        # Use ROW_GROUP_SIZE ~20 000 so each group is small enough to load without OOM.
+        # DuckDB also sorts by ref_id here so rows of the same source file are contiguous.
         con.execute(
             f"""
-            COPY (SELECT * FROM {table_name})
+            COPY (SELECT * FROM {table_name} ORDER BY ref_id)
             TO '{wide_parquet_output_path}'
-            (FORMAT PARQUET, COMPRESSION SNAPPY)
+            (FORMAT PARQUET, COMPRESSION SNAPPY, ROW_GROUP_SIZE 20000)
         """
         )
 
-    # Load the merged Parquet -> use pyarrow for efficient chunked reading
+    # Load the merged Parquet -> accumulate Arrow tables first (much lower overhead
+    # than converting each to pandas individually), then do a single to_pandas() call.
     logger.info(f"Loading wide parquet file from {wide_parquet_output_path} ...")
     pf = pq.ParquetFile(wide_parquet_output_path)
-    parts = []
+    arrow_parts = []
     for i in range(pf.num_row_groups):
-        table = pf.read_row_group(i)  # arrow Table (usually lower overhead than pandas)
-        parts.append(table.to_pandas())  # convert one chunk at a time
-    df = pd.concat(parts, ignore_index=True)
+        arrow_parts.append(pf.read_row_group(i))  # stay in Arrow until all groups are loaded
+    df = pa.concat_tables(arrow_parts).to_pandas()  # single conversion: avoids N intermediate pandas frames
+    del arrow_parts
+    gc.collect()
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
@@ -1149,8 +1181,9 @@ def get_training_dfs_from_parquet(
         ).str.strip().eq("")
     else:
         region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
-
-    should_enrich_regions = region_missing_mask.any() and (
+    # only if region_missing_mask has more than 10 missings
+    redo_regions = True if region_missing_mask.sum() > 10 else False
+    should_enrich_regions = redo_regions and (
         existing_wide_parquet or normalized_regions is not None
     )
 
@@ -1162,7 +1195,20 @@ def get_training_dfs_from_parquet(
             df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
         )
         if not is_tempfile:
-            df.to_parquet(wide_parquet_output_path, index=False)
+            tbl = pa.Table.from_pandas(df, preserve_index=False)
+            pq.write_table(
+                tbl,
+                wide_parquet_output_path,
+                compression="snappy",
+                row_group_size=20_000,
+            )
+            del tbl
+            # Ensure group-write permission so teammates can overwrite the file
+            try:
+                current_mode = os.stat(wide_parquet_output_path).st_mode
+                os.chmod(wide_parquet_output_path, current_mode | stat.S_IWGRP)
+            except OSError as e:
+                logger.warning(f"Could not set group-write permission on {wide_parquet_output_path}: {e}")
         logger.info(
             f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
         )
