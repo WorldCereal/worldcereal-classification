@@ -2013,10 +2013,17 @@ def run_finetuning(
     best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
     best_encoder_ckpt_path = Path(output_dir) / f"{experiment_name}_encoder.pt"
 
-    def _save_best(epoch_idx: int, model: torch.nn.Module, best_val: float):
+    def _save_best(
+        epoch_idx: int,
+        model: torch.nn.Module,
+        best_val: float,
+        state_dict: Optional[dict] = None,
+    ):
         """Persist best full-model checkpoint and encoder-only variant (head=None)."""
-        # Save full model
-        torch.save(model.state_dict(), best_ckpt_path)
+        # Save full model – use pre-computed state_dict when available to
+        # avoid an extra deepcopy that doubles GPU memory.
+        sd = state_dict if state_dict is not None else model.state_dict()
+        torch.save(sd, best_ckpt_path)
         logger.debug(
             f"Saved best checkpoint (val_loss={best_val:.4f}) to {best_ckpt_path}"
         )
@@ -2146,8 +2153,8 @@ def run_finetuning(
                     chunk_weight = float(flat_targets.numel())
                     weighted_loss_sum += loss_value.item() * chunk_weight
                     weighted_count += chunk_weight
-                    val_pred_chunks.append(flat_preds)
-                    val_target_chunks.append(flat_targets)
+                    val_pred_chunks.append(flat_preds.cpu())
+                    val_target_chunks.append(flat_targets.cpu())
                 else:
                     fallback_loss_sum += loss_value.item()
                     fallback_batches += 1
@@ -2187,6 +2194,10 @@ def run_finetuning(
                         seasonal_gate_rejections += batch_summary[
                             "croptype_gate_rejections"
                         ]
+
+        # Free GPU cache after validation forward passes
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if weighted_count > 0:
             current_val_loss = weighted_loss_sum / weighted_count
@@ -2411,7 +2422,7 @@ def run_finetuning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            _save_best(epoch + 1, _ckpt_model, best_loss)
+            _save_best(epoch + 1, _ckpt_model, best_loss, state_dict=best_model_dict)
 
         _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
@@ -2431,7 +2442,20 @@ def run_finetuning(
         )
 
         pbar.set_description(description)
-        pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        _postfix: dict = {"lr": scheduler.get_last_lr()[0]}
+        try:
+            import psutil as _psutil
+
+            _postfix["RSS_GB"] = round(
+                _psutil.Process().memory_info().rss / 1024**3, 1
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if torch.cuda.is_available():
+            _postfix["GPU_GB"] = round(
+                torch.cuda.memory_allocated() / 1024**3, 1
+            )
+        pbar.set_postfix(**_postfix)
         logger.info(
             f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
         )  # Only log to file if console filters on "PROGRESS"
