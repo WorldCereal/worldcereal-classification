@@ -1803,13 +1803,17 @@ class DualHeadBatchSampler(Sampler):
     def __iter__(self):
         lc_half = self._batch_size // 2
         ct_half = self._batch_size - lc_half
-        for _ in range(self._num_batches):
-            lc_drawn = torch.multinomial(
-                self._lc_probs, lc_half, replacement=True, generator=self._generator
-            )
-            ct_drawn = torch.multinomial(
-                self._ct_probs, ct_half, replacement=True, generator=self._generator
-            )
+        total_lc = lc_half * self._num_batches
+        total_ct = ct_half * self._num_batches
+        all_lc_drawn = torch.multinomial(
+            self._lc_probs, total_lc, replacement=True, generator=self._generator
+        )
+        all_ct_drawn = torch.multinomial(
+            self._ct_probs, total_ct, replacement=True, generator=self._generator
+        )
+        for i in range(self._num_batches):
+            lc_drawn = all_lc_drawn[i * lc_half : (i + 1) * lc_half]
+            ct_drawn = all_ct_drawn[i * ct_half : (i + 1) * ct_half]
             batch = torch.cat([self._lc_virtual[lc_drawn], self._ct_virtual[ct_drawn]])
             perm = torch.randperm(self._batch_size, generator=self._generator)
             yield batch[perm].tolist()
