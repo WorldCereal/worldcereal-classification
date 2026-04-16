@@ -1212,17 +1212,23 @@ def evaluate_finetuned_model(
     # Put model in eval mode
     finetuned_model.eval()
 
-    # Construct the dataloader
-    # Cap workers at 4: inference is bottlenecked on the forward pass in the
-    # main process,
-    eval_num_workers = min(num_workers, 4)
+    # Construct the dataloader.
+    # persistent_workers is intentionally False here: this function may be
+    # called from the on_validation_improved callback while training DataLoader
+    # workers are still alive.  Forking 8 additional persistent workers from a
+    # ~24 GB parent process can push total RSS past the SLURM memory limit.
+    logger.info(
+        f"evaluate_finetuned_model: creating DataLoader "
+        f"(num_workers={num_workers}, batch_size={batch_size}, "
+        f"persistent_workers=False, dataset_size={len(test_ds)})"
+    )
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
         num_workers=eval_num_workers,
         collate_fn=collate_fn,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
         persistent_workers=False,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
@@ -2153,8 +2159,8 @@ def run_finetuning(
                     chunk_weight = float(flat_targets.numel())
                     weighted_loss_sum += loss_value.item() * chunk_weight
                     weighted_count += chunk_weight
-                    val_pred_chunks.append(flat_preds.cpu())
-                    val_target_chunks.append(flat_targets.cpu())
+                    val_pred_chunks.append(flat_preds)
+                    val_target_chunks.append(flat_targets)
                 else:
                     fallback_loss_sum += loss_value.item()
                     fallback_batches += 1
@@ -2194,10 +2200,6 @@ def run_finetuning(
                         seasonal_gate_rejections += batch_summary[
                             "croptype_gate_rejections"
                         ]
-
-        # Free GPU cache after validation forward passes
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         if weighted_count > 0:
             current_val_loss = weighted_loss_sum / weighted_count
@@ -2416,13 +2418,22 @@ def run_finetuning(
 
             if on_validation_improved is not None:
                 try:
+                    logger.info(
+                        f"Epoch {epoch + 1}: running on_validation_improved callback "
+                        f"(test-set evaluation) ..."
+                    )
                     on_validation_improved(epoch + 1, _ckpt_model, best_loss)
+                    logger.info(
+                        f"Epoch {epoch + 1}: on_validation_improved callback completed."
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
+            logger.info(f"Epoch {epoch + 1}: saving model checkpoint to disk ...")
             _save_best(epoch + 1, _ckpt_model, best_loss, state_dict=best_model_dict)
+            logger.info(f"Epoch {epoch + 1}: checkpoint saved.")
 
         _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
