@@ -180,10 +180,50 @@ def _ensure_label_columns_inplace(df: pd.DataFrame) -> None:
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
-    predictor_dicts = [item.as_dict(ignore_nones=True) for item, _ in batch]
-    collated_dict = default_collate(predictor_dicts)
+    """Collate a list of (Predictors, attrs) tuples into batched tensors.
+
+    Optimized path: instead of building N dicts via Predictors.as_dict() and
+    then passing them to default_collate (which re-inspects types and builds
+    intermediate lists), we directly iterate the NamedTuple fields and stack
+    the numpy arrays in one np.stack → torch.from_numpy call per field.
+    This avoids ~4096 dict allocations and the type-dispatch overhead in
+    default_collate.
+    """
+    n = len(batch)
+    if n == 0:
+        return Predictors(), {}
+
+    # ── Fast Predictors collation ──
+    # Predictors is a NamedTuple; iterate its _fields directly.
+    first_pred = batch[0][0]
+    collated_dict: Dict[str, Any] = {}
+
+    for field in first_pred._fields:
+        val0 = getattr(first_pred, field)
+        if val0 is None:
+            # Check if ALL are None (they should be for a given field).
+            continue
+
+        if isinstance(val0, np.ndarray):
+            # Fast path: pre-allocate and fill
+            out = np.empty((n, *val0.shape), dtype=val0.dtype)
+            out[0] = val0
+            for i in range(1, n):
+                out[i] = getattr(batch[i][0], field)
+            collated_dict[field] = torch.from_numpy(out)
+        elif isinstance(val0, torch.Tensor):
+            collated_dict[field] = torch.stack(
+                [getattr(batch[i][0], field) for i in range(n)]
+            )
+        else:
+            # Rare fallback — use default_collate for this field only
+            collated_dict[field] = default_collate(
+                [getattr(batch[i][0], field) for i in range(n)]
+            )
+
     predictors = Predictors(**collated_dict)
 
+    # ── Attrs collation (already optimized) ──
     attrs_list = [attrs for _, attrs in batch]
     collated_attrs = _collate_attrs(attrs_list)
 
@@ -196,14 +236,44 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
 
     collated: Dict[str, Any] = {}
     all_keys = set().union(*(attrs.keys() for attrs in attrs_list))
-    for key in all_keys:
-        values = [attrs.get(key) for attrs in attrs_list]
+    n = len(attrs_list)
 
+    for key in all_keys:
         if key in {"season_masks", "in_seasons"}:
-            if all(v is None for v in values):
-                collated[key] = None
+            # Fast path: pre-check first/last to avoid scanning all N entries
+            first_val = attrs_list[0].get(key)
+            last_val = attrs_list[-1].get(key)
+            if first_val is None and last_val is None:
+                # Likely all None — verify with a quick scan
+                if all(attrs.get(key) is None for attrs in attrs_list):
+                    collated[key] = None
+                    continue
+
+            # Common case: all values are non-None numpy arrays (same shape)
+            if first_val is not None and last_val is not None:
+                # Pre-allocate output array and fill in-place
+                shape = np.asarray(first_val).shape
+                out = np.empty((n, *shape), dtype=bool)
+                has_none = False
+                filler = None
+                for i, attrs in enumerate(attrs_list):
+                    v = attrs.get(key)
+                    if v is not None:
+                        out[i] = v
+                    else:
+                        has_none = True
+                        if filler is None:
+                            filler = (
+                                np.ones(shape, dtype=bool)
+                                if key == "season_masks"
+                                else np.zeros(shape, dtype=bool)
+                            )
+                        out[i] = filler
+                collated[key] = out
                 continue
 
+            # Slow fallback (mixed None/non-None)
+            values = [attrs.get(key) for attrs in attrs_list]
             first = next(v for v in values if v is not None)
             filler = (
                 np.ones_like(first, dtype=bool)
@@ -216,13 +286,14 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
             collated[key] = np.stack(stacked, axis=0)
             continue
 
+        values = [attrs.get(key) for attrs in attrs_list]
+
         if all(v is None for v in values):
             collated[key] = None
             continue
 
         if any(v is None for v in values):
             if key in _ATTR_KEYS_ALLOW_PARTIAL_NONE:
-                # Keep per-sample values so downstream helpers can handle missing labels.
                 collated[key] = values
                 continue
             missing_indices = [i for i, v in enumerate(values) if v is None]

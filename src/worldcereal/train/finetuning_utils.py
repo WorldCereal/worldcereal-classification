@@ -763,20 +763,41 @@ class SeasonalMultiTaskLoss(nn.Module):
         if attr_key is None or not sample_indices:
             return None
 
-        attr_values = _ensure_list(attrs.get(attr_key), batch_size, fill=None)
-        weights: List[float] = []
-        for idx in sample_indices:
-            value = attr_values[idx]
-            if value is None or _is_missing_value(value):
-                numeric = self._sample_weight_default
-            else:
-                try:
-                    numeric = float(value)
-                except (TypeError, ValueError):
-                    numeric = self._sample_weight_default
-            weights.append(numeric)
+        raw = attrs.get(attr_key)
+        if raw is None:
+            return None
 
-        weight_tensor = torch.tensor(weights, device=device, dtype=torch.float32)
+        # Fast path: if raw is already a tensor or numpy array, gather directly
+        if torch.is_tensor(raw):
+            idx_t = torch.as_tensor(sample_indices, device=raw.device, dtype=torch.long)
+            weight_tensor = raw[idx_t].to(device=device, dtype=torch.float32)
+        elif isinstance(raw, np.ndarray):
+            idx_np = np.asarray(sample_indices, dtype=np.intp)
+            weight_tensor = torch.from_numpy(
+                raw[idx_np].astype(np.float32)
+            ).to(device=device)
+        else:
+            # Fallback for list / mixed types
+            attr_values = _ensure_list(raw, batch_size, fill=None)
+            default = self._sample_weight_default
+            weights_np = np.empty(len(sample_indices), dtype=np.float32)
+            for i, idx in enumerate(sample_indices):
+                value = attr_values[idx]
+                if value is None or _is_missing_value(value):
+                    weights_np[i] = default
+                else:
+                    try:
+                        weights_np[i] = float(value)
+                    except (TypeError, ValueError):
+                        weights_np[i] = default
+            weight_tensor = torch.from_numpy(weights_np).to(device=device)
+
+        # Replace NaN/inf with default
+        bad = ~torch.isfinite(weight_tensor)
+        if bad.any():
+            weight_tensor = weight_tensor.clone()
+            weight_tensor[bad] = self._sample_weight_default
+
         if self._sample_weight_clip is not None:
             weight_tensor = torch.clamp(
                 weight_tensor,
@@ -823,31 +844,39 @@ class SeasonalMultiTaskLoss(nn.Module):
         )
         label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
 
-        tasks: List[str] = []
+        # ── Vectorized task assignment ──
+        # Pre-compute numpy arrays for label string → class index mapping.
+        # This avoids per-sample Python dict lookups in inner loops.
+        lc_target_arr = np.full(batch_size, -1, dtype=np.int64)
+        ct_target_arr = np.full(batch_size, -1, dtype=np.int64)
+        task_arr = np.zeros(batch_size, dtype=np.int8)  # 0=lc, 1=ct
+
         for idx in range(batch_size):
-            if label_tasks[idx] is not None:
-                tasks.append(str(label_tasks[idx]))
-            elif croptype_labels[idx] is not None and not _is_missing_value(
-                croptype_labels[idx]
-            ):
-                tasks.append(self.croptype_task_name)
-            else:
-                tasks.append(self.landcover_task_name)
+            lt = label_tasks[idx]
+            if lt is not None:
+                task_arr[idx] = 1 if str(lt) == self.croptype_task_name else 0
+            elif croptype_labels[idx] is not None and not _is_missing_value(croptype_labels[idx]):
+                task_arr[idx] = 1
+            # else: 0 (landcover) — already default
+
+            lc_label = landcover_labels[idx]
+            if lc_label is not None and not _is_missing_value(lc_label):
+                mapped = self._lc_to_idx.get(str(lc_label))
+                if mapped is not None:
+                    lc_target_arr[idx] = mapped
+
+            ct_label = croptype_labels[idx]
+            if ct_label is not None and not _is_missing_value(ct_label):
+                mapped = self._ct_to_idx.get(str(ct_label))
+                if mapped is not None:
+                    ct_target_arr[idx] = mapped
 
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
-        # Landcover pathway – only activate for samples explicitly routed to the LC
-        # head (tasks[idx] == landcover_task_name).  When the DualHeadBatchSampler is
-        # used, CT-assigned samples carry label_task="croptype" so they are excluded
-        # here, preventing cropland-class contamination of the LC supervision signal.
-        landcover_indices = [
-            idx
-            for idx in range(batch_size)
-            if tasks[idx] == self.landcover_task_name
-            and landcover_labels[idx] is not None
-            and not _is_missing_value(landcover_labels[idx])
-            and str(landcover_labels[idx]) in self._lc_to_idx
-        ]
+        # ── Landcover pathway (vectorized) ──
+        lc_valid_mask = (task_arr == 0) & (lc_target_arr >= 0)
+        landcover_indices_np = np.where(lc_valid_mask)[0]
+        landcover_indices = landcover_indices_np.tolist()
         landcover_weights_full = self._task_weights_for(
             attrs,
             landcover_indices,
@@ -860,54 +889,35 @@ class SeasonalMultiTaskLoss(nn.Module):
                 raise ValueError(
                     "Seasonal head missing global logits for landcover supervision"
                 )
-            lc_logits = output.global_logits[landcover_indices]
-            lc_targets: List[int] = []
-            valid_idx: List[int] = []
-            for batch_idx, sample_idx in enumerate(landcover_indices):
-                class_name = landcover_labels[sample_idx]
-                if class_name is None or _is_missing_value(class_name):
-                    continue
-                mapped = self._lc_to_idx.get(str(class_name))
-                if mapped is None:
-                    continue
-                lc_targets.append(mapped)
-                valid_idx.append(batch_idx)
+            idx_t = torch.from_numpy(landcover_indices_np).to(
+                device=device, dtype=torch.long
+            )
+            logits = output.global_logits[idx_t]
+            targets = torch.from_numpy(
+                lc_target_arr[landcover_indices_np]
+            ).to(device=device, dtype=torch.long)
 
-            if lc_targets:
-                logits = lc_logits[valid_idx]
-                targets = torch.tensor(lc_targets, device=device, dtype=torch.long)
-                per_sample_losses = F.cross_entropy(
-                    logits,
-                    targets,
-                    reduction="none",
-                )
-                lc_sample_weights = None
-                if landcover_weights_full is not None:
-                    weight_idx = torch.tensor(
-                        valid_idx,
-                        device=device,
-                        dtype=torch.long,
-                    )
-                    lc_sample_weights = landcover_weights_full[weight_idx]
-                branch_loss = self._reduce_loss(per_sample_losses, lc_sample_weights)
-                loss = loss + self.landcover_weight * branch_loss
+            per_sample_losses = F.cross_entropy(logits, targets, reduction="none")
+            branch_loss = self._reduce_loss(per_sample_losses, landcover_weights_full)
+            loss = loss + self.landcover_weight * branch_loss
 
-                effective_weight = (
-                    float(torch.sum(lc_sample_weights).item())
-                    if lc_sample_weights is not None
-                    else float(len(lc_targets))
-                )
-                scaled_loss = branch_loss * self.landcover_weight
-                self._last_task_losses[self.landcover_task_name] = {
-                    "raw_loss": float(branch_loss.detach().item()),
-                    "scaled_loss": float(scaled_loss.detach().item()),
-                    "weight": max(effective_weight, 1e-8),
-                }
+            effective_weight = (
+                float(torch.sum(landcover_weights_full).item())
+                if landcover_weights_full is not None
+                else float(len(landcover_indices))
+            )
+            scaled_loss = branch_loss * self.landcover_weight
+            self._last_task_losses[self.landcover_task_name] = {
+                "raw_loss": float(branch_loss.detach().item()),
+                "scaled_loss": float(scaled_loss.detach().item()),
+                "weight": max(effective_weight, 1e-8),
+            }
 
-        # Crop-type pathway
-        croptype_indices = [
-            i for i, task in enumerate(tasks) if task == self.croptype_task_name
-        ]
+        # ── Crop-type pathway (vectorized) ──
+        ct_task_mask = task_arr == 1
+        ct_eligible_mask = ct_task_mask & (ct_target_arr >= 0)
+        croptype_indices_np = np.where(ct_task_mask)[0]
+        croptype_indices = croptype_indices_np.tolist()
         croptype_weights_full = self._task_weights_for(
             attrs,
             croptype_indices,
@@ -915,79 +925,70 @@ class SeasonalMultiTaskLoss(nn.Module):
             batch_size=batch_size,
             device=device,
         )
-        eligible_croptype_samples = 0
+        eligible_croptype_samples = int(ct_eligible_mask.sum())
         missing_representative_season = 0
-        if croptype_indices:
-            if output.season_logits is None:
-                raise ValueError(
-                    "Seasonal head missing season logits for crop-type supervision"
-                )
-
-            season_selection = _select_representative_season(
-                output, attrs, croptype_indices, allow_multiple=True
+        if croptype_indices and output.season_logits is not None:
+            _, flat_local_idx, flat_season_idx, has_season = _select_representative_season(
+                output, attrs, croptype_indices, allow_multiple=True, return_flat=True
             )
 
-            selected_logits: List[torch.Tensor] = []
-            selected_targets: List[int] = []
-            selection_weights: List[float] = []
-            for local_idx, sample_idx in enumerate(croptype_indices):
-                class_name = croptype_labels[sample_idx]
-                if class_name is None or _is_missing_value(class_name):
-                    continue
-                mapped = self._ct_to_idx.get(str(class_name))
-                if mapped is None:
-                    continue
+            # ── Fully vectorized CT logit gathering (no Python loops) ──
+            # flat_local_idx: [K] indices into croptype_indices (local)
+            # flat_season_idx: [K] season indices
+            croptype_indices_t = torch.tensor(
+                croptype_indices, device=device, dtype=torch.long
+            )
+            ct_target_t = torch.from_numpy(ct_target_arr).to(device=device, dtype=torch.long)
 
-                eligible_croptype_samples += 1
-                seasons = season_selection[local_idx]
-                if not seasons:
-                    missing_representative_season += 1
-                    continue
+            # Count samples without any season (among eligible only)
+            ct_eligible_local = ct_target_t[croptype_indices_t] >= 0  # [n_ct]
+            missing_representative_season = int(
+                (ct_eligible_local & ~has_season).sum().item()
+            )
 
-                season_ids = torch.as_tensor(
-                    seasons, device=output.season_logits.device, dtype=torch.long
-                )
-                logits = output.season_logits[sample_idx, season_ids, :]
-                if logits.dim() == 1:
-                    logits = logits.unsqueeze(0)
+            if flat_local_idx.numel() > 0:
+                # Filter to eligible targets only
+                batch_indices_flat = croptype_indices_t[flat_local_idx]  # [K]
+                targets_flat = ct_target_t[batch_indices_flat]  # [K]
+                eligible_mask = targets_flat >= 0  # [K]
 
-                selected_logits.append(logits)
-                selected_targets.extend([mapped] * logits.shape[0])
-                if croptype_weights_full is not None:
-                    weight_value = float(croptype_weights_full[local_idx].item())
-                    selection_weights.extend([weight_value] * logits.shape[0])
+                if eligible_mask.any():
+                    flat_local_idx = flat_local_idx[eligible_mask]
+                    flat_season_idx = flat_season_idx[eligible_mask]
+                    batch_indices_flat = batch_indices_flat[eligible_mask]
+                    targets_flat = targets_flat[eligible_mask]
 
-            if selected_logits:
-                logits_tensor = torch.cat(selected_logits, dim=0)
-                targets = torch.tensor(
-                    selected_targets, device=device, dtype=torch.long
-                )
-                per_sample_losses = F.cross_entropy(
-                    logits_tensor,
-                    targets,
-                    reduction="none",
-                )
-                ct_sample_weights = None
-                if croptype_weights_full is not None and selection_weights:
-                    ct_sample_weights = torch.tensor(
-                        selection_weights,
-                        device=device,
-                        dtype=torch.float32,
+                    # Single batched gather: season_logits[batch, season, :]
+                    logits_tensor = output.season_logits[
+                        batch_indices_flat, flat_season_idx, :
+                    ]  # [K', C]
+                    per_sample_losses = F.cross_entropy(
+                        logits_tensor, targets_flat, reduction="none"
                     )
-                branch_loss = self._reduce_loss(per_sample_losses, ct_sample_weights)
-                loss = loss + self.croptype_weight * branch_loss
 
-                effective_weight = (
-                    float(torch.sum(ct_sample_weights).item())
-                    if ct_sample_weights is not None
-                    else float(len(selected_targets))
-                )
-                scaled_loss = branch_loss * self.croptype_weight
-                self._last_task_losses[self.croptype_task_name] = {
-                    "raw_loss": float(branch_loss.detach().item()),
-                    "scaled_loss": float(scaled_loss.detach().item()),
-                    "weight": max(effective_weight, 1e-8),
-                }
+                    # Build weights for the K' entries
+                    ct_sample_weights = None
+                    if croptype_weights_full is not None:
+                        ct_sample_weights = croptype_weights_full[flat_local_idx]
+
+                    branch_loss = self._reduce_loss(per_sample_losses, ct_sample_weights)
+                    loss = loss + self.croptype_weight * branch_loss
+
+                    effective_weight = (
+                        float(torch.sum(ct_sample_weights).item())
+                        if ct_sample_weights is not None
+                        else float(targets_flat.numel())
+                    )
+                    scaled_loss = branch_loss * self.croptype_weight
+                    self._last_task_losses[self.croptype_task_name] = {
+                        "raw_loss": float(branch_loss.detach().item()),
+                        "scaled_loss": float(scaled_loss.detach().item()),
+                        "weight": max(effective_weight, 1e-8),
+                    }
+        elif croptype_indices and output.season_logits is None:
+            raise ValueError(
+                "Seasonal head missing season logits for crop-type supervision"
+            )
 
         supervised_samples = max(
             eligible_croptype_samples - missing_representative_season, 0
@@ -1221,6 +1222,8 @@ def evaluate_finetuned_model(
         shuffle=False,  # keep as False!
         num_workers=eval_num_workers,
         collate_fn=collate_fn,
+        pin_memory=True,
+        persistent_workers=False,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
 
@@ -1590,13 +1593,25 @@ def _select_representative_season(
     sample_indices: List[int],
     *,
     allow_multiple: bool = True,
-) -> Union[torch.Tensor, List[List[int]]]:
+    return_flat: bool = False,
+) -> Union[torch.Tensor, List[List[int]], tuple]:
     """Choose one or more season indices per sample using metadata cues.
+
+    When ``return_flat`` is True, returns a tuple of:
+        (combined, local_idx, season_idx, has_season_mask)
+    where:
+        - combined: [n_samples, S] boolean tensor (which seasons are active)
+        - local_idx: [K] int64 tensor of local sample indices into sample_indices
+        - season_idx: [K] int64 tensor of season indices
+        - has_season_mask: [n_samples] boolean tensor (True if sample has ≥1 season)
+    This avoids the Python-level conversion to List[List[int]] for the loss path.
 
     When ``allow_multiple`` is True the function returns a ``List[List[int]]`` where
     each inner list enumerates all seasons whose masks overlap the label date. When
     False it falls back to a single representative per sample and returns a
     tensor of indices, matching the previous behavior expected by evaluation utilities.
+
+    Vectorized implementation: batch tensor ops instead of per-sample Python loops.
     """
 
     season_masks = output.season_masks
@@ -1624,38 +1639,64 @@ def _select_representative_season(
     )
 
     num_timesteps = season_masks.shape[-1]
+    num_seasons = season_masks.shape[1]
 
-    selections: List[List[int]] = []
-    for sample_idx in sample_indices:
-        candidate_indices: List[int] = []
-        if in_seasons_tensor is not None:
-            season_flags = in_seasons_tensor[sample_idx].flatten()
-            if season_flags.any():
-                candidate_indices.extend(
-                    torch.nonzero(season_flags, as_tuple=False).view(-1).tolist()
-                )
+    idx_tensor = torch.as_tensor(
+        sample_indices, device=season_masks.device, dtype=torch.long
+    )
+    n_samples = idx_tensor.shape[0]
 
-        if not candidate_indices:
-            vp = int(valid_position_tensor[sample_idx].item())
-            vp = max(0, min(vp, num_timesteps - 1))
-            mask = season_masks[sample_idx, :, vp]
-            mask = mask.flatten()
-            if mask.any():
-                candidate_indices.extend(
-                    torch.nonzero(mask, as_tuple=False).view(-1).tolist()
-                )
+    # ── Vectorized: gather candidate flags for all samples at once ──
+    # Primary source: in_seasons flags  [n_samples, S]
+    if in_seasons_tensor is not None:
+        primary_flags = in_seasons_tensor[idx_tensor]  # [n_samples, S]
+    else:
+        primary_flags = torch.zeros(
+            (n_samples, num_seasons), device=season_masks.device, dtype=torch.bool
+        )
 
-        selections.append(candidate_indices)
+    # Fallback: season_masks at valid_position  [n_samples, S]
+    vp = valid_position_tensor[idx_tensor].clamp(0, num_timesteps - 1)  # [n_samples]
+    sub_masks = season_masks[idx_tensor]  # [n_samples, S, T]
+    # Use gather along T dimension: expand vp to [n_samples, S, 1] then squeeze
+    vp_expanded = vp.view(n_samples, 1, 1).expand(n_samples, num_seasons, 1)
+    fallback_flags = sub_masks.gather(2, vp_expanded).squeeze(2)  # [n_samples, S]
+
+    # Use primary where it has any True; else fallback
+    has_primary = primary_flags.any(dim=1, keepdim=True)  # [n_samples, 1]
+    combined = torch.where(has_primary, primary_flags, fallback_flags)  # [n_samples, S]
+
+    if return_flat:
+        # Fast path for loss computation — return flat tensors, no Python loops
+        nz = torch.nonzero(combined, as_tuple=False)  # [K, 2]
+        has_season_mask = combined.any(dim=1)  # [n_samples]
+        if nz.numel() > 0:
+            local_idx = nz[:, 0]  # [K]
+            season_idx = nz[:, 1]  # [K]
+        else:
+            local_idx = torch.empty(0, device=combined.device, dtype=torch.long)
+            season_idx = torch.empty(0, device=combined.device, dtype=torch.long)
+        return combined, local_idx, season_idx, has_season_mask
 
     if allow_multiple:
+        # Convert bool tensor to list-of-lists using nonzero (one kernel call)
+        nz = torch.nonzero(combined, as_tuple=False)  # [K, 2] — (sample_local_idx, season_idx)
+        selections: List[List[int]] = [[] for _ in range(n_samples)]
+        if nz.numel() > 0:
+            nz_cpu = nz.cpu()
+            for row_idx in range(nz_cpu.shape[0]):
+                selections[int(nz_cpu[row_idx, 0])].append(int(nz_cpu[row_idx, 1]))
         return selections
 
-    first_indices = [indices[0] for indices in selections if indices]
-    if len(first_indices) != len(selections):
+    # allow_multiple=False: pick first True season per sample
+    has_any = combined.any(dim=1)  # [n_samples]
+    first_season = combined.to(torch.int8).argmax(dim=1)  # [n_samples]
+    valid_mask = has_any
+    if not valid_mask.all():
         logger.warning(
             "Dropping samples without representative season while returning tensor"
         )
-    return torch.tensor(first_indices, device=season_masks.device, dtype=torch.long)
+    return first_season[valid_mask]
 
 
 def summarize_seasonal_predictions(

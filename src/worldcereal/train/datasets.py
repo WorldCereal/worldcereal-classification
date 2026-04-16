@@ -414,6 +414,71 @@ def _snap_latlon_to_calendar_grid(lat: float, lon: float) -> Tuple[float, float]
     return lat_center, lon_center
 
 
+def _vectorized_snap_to_grid(values: np.ndarray, bounds: Tuple[float, float]) -> np.ndarray:
+    """Vectorized version of _snap_coordinate_to_grid for entire arrays."""
+    min_value, max_value = bounds
+    clamped = np.clip(values.astype(np.float64), min_value, max_value)
+    return (np.floor(clamped * 2.0) / 2.0) + 0.25
+
+
+def _precompute_season_doys(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    season_ids: Sequence[str],
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Pre-compute (sos_doy, eos_doy) per sample per season in one vectorized pass.
+
+    Returns a dict mapping season_id -> (sos_doys, eos_doys) where each is an
+    int16 array of length N.  Samples that have no seasonality data (nodata) get
+    DOY values of 0.
+
+    This replaces the per-sample ``table.loc[(lat, lon)]`` call in
+    ``_season_context_for`` — a single vectorized merge once at init time
+    eliminates ~0.06 ms × 2 seasons × N_samples of repeated pandas lookups
+    from __getitem__.
+    """
+    if not season_ids:
+        return {}
+
+    table = _ensure_seasonality_lookup()
+    n = len(lats)
+
+    # Snap all lat/lon to grid in one go
+    lat_grid = _vectorized_snap_to_grid(lats, SEASONALITY_LAT_RANGE)
+    lon_grid = _vectorized_snap_to_grid(lons, SEASONALITY_LON_RANGE)
+
+    # Build a DataFrame of snapped coords, merge with the lookup table
+    coords = pd.DataFrame({"lat": lat_grid, "lon": lon_grid})
+    # Reset index of the lookup table for merge
+    lookup_flat = table.reset_index()
+
+    merged = coords.merge(lookup_flat, on=["lat", "lon"], how="left")
+
+    result: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for season_id in season_ids:
+        try:
+            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season_id]
+        except KeyError:
+            logger.warning(
+                f"Season '{season_id}' not in SEASONALITY_COLUMN_MAP; skipping DOY cache."
+            )
+            continue
+        if sos_col not in merged.columns or eos_col not in merged.columns:
+            logger.warning(
+                f"Columns ({sos_col}, {eos_col}) not in seasonality table; skipping."
+            )
+            continue
+        sos = merged[sos_col].fillna(0).to_numpy(dtype=np.int16)
+        eos = merged[eos_col].fillna(0).to_numpy(dtype=np.int16)
+        result[season_id] = (sos, eos)
+        valid = (sos > 0) & (eos > 0)
+        logger.info(
+            f"Season DOY cache '{season_id}': {int(valid.sum())}/{n} samples have valid DOYs."
+        )
+
+    return result
+
+
 def get_class_weights(
     labels: Union[np.ndarray[Any, Any], Sequence[Hashable]],
     method: str = "balanced",  # 'balanced', 'log', 'effective', or 'none'
@@ -654,9 +719,21 @@ class WorldCerealDataset(Dataset):
             0.5) so that seasons only partially shifted out of the window by
             random augmentation still contribute supervision signal.
         """
-        self.dataframe = dataframe.copy()
-        numeric_cols = self.dataframe.select_dtypes(include="number").columns
-        self.dataframe[numeric_cols] = self.dataframe[numeric_cols].fillna(NODATAVALUE)
+        # Keep a reference to the dataframe for metadata access during setup
+        # (e.g. DualHeadBatchSampler reads columns).  After setup is complete,
+        # call freeze_for_training() to drop it and free ~9 GB.
+        self.dataframe = dataframe
+        self._n_samples = len(dataframe)
+        # Build a columnar numpy cache: one array per column.  Numeric columns
+        # get NaN → NODATAVALUE replacement directly on the numpy array (a
+        # single copy per column instead of a full DataFrame.copy()).
+        self._col_arrays: Dict[str, Any] = {}
+        for col in dataframe.columns:
+            arr = dataframe[col].to_numpy(copy=True)
+            if arr.dtype.kind in ("f", "i", "u"):  # float, int, uint
+                if np.issubdtype(arr.dtype, np.floating):
+                    np.nan_to_num(arr, copy=False, nan=NODATAVALUE)
+            self._col_arrays[col] = arr
         self.num_timesteps = num_timesteps
 
         if timestep_freq not in ["month", "dekad"]:
@@ -697,10 +774,48 @@ class WorldCerealDataset(Dataset):
                 )
 
     def __len__(self):
-        return self.dataframe.shape[0]
+        return self._n_samples
+
+    def freeze_for_training(self) -> None:
+        """Drop the pandas DataFrame and mark numpy arrays as read-only.
+
+        After this call, the dataset is safe for fork-based DataLoader
+        workers: read-only numpy buffers stay on shared copy-on-write pages
+        and are never dirtied.  The DataFrame (~9 GB at 4M × 287 columns)
+        is freed immediately, halving the per-process RSS.
+
+        Call this **after** all setup that needs the DataFrame is complete
+        (e.g. after DualHeadBatchSampler is built).
+        """
+        # Drop the DataFrame reference — _col_arrays is the authoritative source
+        self.dataframe = None
+
+        # Mark every numpy array as read-only.  This has two benefits:
+        # 1. Fork workers sharing these pages via COW will never dirty them
+        #    (any accidental write raises ValueError instead of silently
+        #    triggering a page copy).
+        # 2. CPython's refcount increment on the array *object* still touches
+        #    the PyObject header (not the data buffer), but read-only arrays
+        #    prevent the much larger data-page duplication.
+        for col, arr in self._col_arrays.items():
+            if isinstance(arr, np.ndarray):
+                arr.flags.writeable = False
+
+        # Also freeze season DOY cache arrays if present
+        if hasattr(self, '_season_doy_cache'):
+            for key, val in self._season_doy_cache.items():
+                if isinstance(val, tuple):
+                    for a in val:
+                        if isinstance(a, np.ndarray):
+                            a.flags.writeable = False
+
+        logger.info(
+            f"{self.__class__.__name__}.freeze_for_training(): "
+            f"dropped DataFrame, marked {len(self._col_arrays)} arrays read-only"
+        )
 
     def __getitem__(self, idx):
-        row = pd.Series.to_dict(self.dataframe.iloc[idx, :])
+        row = {col: arr[idx] for col, arr in self._col_arrays.items()}
         timestep_positions, _ = self.get_timestep_positions(row)
         return Predictors(**self.get_inputs(row, timestep_positions))
 
@@ -966,6 +1081,8 @@ class WorldCerealDataset(Dataset):
         season_engine: SeasonEngine,
         derive_from_calendar: bool,
         label_datetime: Optional[np.datetime64] = None,
+        *,
+        sample_idx: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Build sample attributes dictionary.
 
@@ -1017,6 +1134,7 @@ class WorldCerealDataset(Dataset):
             season_windows=season_windows,
             derive_from_calendar=derive_from_calendar,
             label_datetime=label_datetime,
+            sample_idx=sample_idx,
         )
         attrs["season_masks"] = season_masks
         if in_seasons is not None:
@@ -1032,6 +1150,8 @@ class WorldCerealDataset(Dataset):
         season_windows: Optional[Mapping[str, SeasonWindow]],
         derive_from_calendar: bool,
         label_datetime: Optional[np.datetime64],
+        *,
+        sample_idx: Optional[int] = None,
     ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """Resolve per-season temporal masks for a single sample.
 
@@ -1162,6 +1282,7 @@ class WorldCerealDataset(Dataset):
                     label_datetime=label_datetime,
                     lat=lat,
                     lon=lon,
+                    sample_idx=sample_idx,
                 )
 
             season_mask_list.append(mask)
@@ -1233,6 +1354,8 @@ class WorldCerealDataset(Dataset):
         label_datetime: Optional[np.datetime64],
         lat: Optional[float],
         lon: Optional[float],
+        *,
+        sample_idx: Optional[int] = None,
     ) -> Tuple[np.ndarray, bool]:
         """Build a mask from calendar dates only when every timestep is present."""
         if lat is None or lon is None:
@@ -1244,7 +1367,8 @@ class WorldCerealDataset(Dataset):
 
         try:
             start_dt, end_dt = self._season_context_for(
-                season_name, row, target_year, lat, lon
+                season_name, row, target_year, lat, lon,
+                sample_idx=sample_idx,
             )
         except ValueError as exc:
             # Nodata DOY values for this season at this location — treat as
@@ -1322,8 +1446,34 @@ class WorldCerealDataset(Dataset):
         year: int,
         lat: float,
         lon: float,
+        *,
+        sample_idx: Optional[int] = None,
     ) -> Tuple[np.datetime64, np.datetime64]:
-        """Fetch (start, end) dates for a season/grid cell from the lookup."""
+        """Fetch (start, end) dates for a season/grid cell from the lookup.
+
+        When ``sample_idx`` is provided and a pre-computed DOY cache exists
+        (populated at ``__init__`` via ``_precompute_season_doys``), the
+        cached per-sample DOY values are used directly — avoiding the expensive
+        per-sample pandas MultiIndex lookup.
+        """
+        # Fast path: use pre-computed DOY cache if available
+        if (
+            sample_idx is not None
+            and hasattr(self, "_season_doy_cache")
+            and season_id in self._season_doy_cache
+        ):
+            sos_doy, eos_doy = (
+                int(self._season_doy_cache[season_id][0][sample_idx]),
+                int(self._season_doy_cache[season_id][1][sample_idx]),
+            )
+            if sos_doy <= 0 or eos_doy <= 0:
+                sample_id = row.get("sample_id", "n/a")
+                raise ValueError(
+                    "Seasonality lookup returned nodata DOY values for "
+                    f"season '{season_id}' (sample_id={sample_id})."
+                )
+            start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, year)
+            return (np.datetime64(start_dt, "D"), np.datetime64(end_dt, "D"))
 
         lat_center, lon_center = _snap_latlon_to_calendar_grid(lat, lon)
         try:
@@ -1483,6 +1633,31 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                     f"{self.__class__.__name__}: proceeding with {len(filtered_df)} samples after enforcing manual season window(s)."
                 )
             self.dataframe = filtered_df
+            self._n_samples = len(filtered_df)
+            # Rebuild columnar cache after filtering (same nan→NODATAVALUE logic as base __init__)
+            self._col_arrays = {}
+            for col in filtered_df.columns:
+                arr = filtered_df[col].to_numpy(copy=True)
+                if arr.dtype.kind in ("f", "i", "u"):
+                    if np.issubdtype(arr.dtype, np.floating):
+                        np.nan_to_num(arr, copy=False, nan=NODATAVALUE)
+                self._col_arrays[col] = arr
+
+        # Pre-compute per-sample season DOYs via a single vectorized merge
+        # instead of doing per-sample pandas MultiIndex lookups in __getitem__.
+        if (
+            self._season_engine == "calendar"
+            and self._season_ids
+            and "lat" in self._col_arrays
+            and "lon" in self._col_arrays
+        ):
+            self._season_doy_cache = _precompute_season_doys(
+                self._col_arrays["lat"],
+                self._col_arrays["lon"],
+                self._season_ids,
+            )
+        else:
+            self._season_doy_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
     def __getitem__(self, idx):
         # During dual-task training the DualHeadBatchSampler tells each sample
@@ -1491,7 +1666,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         # We decode the real row index and the intended task here, so the
         # dataframe itself never needs to be mutated (important for multi-worker
         # data loading).  Plain [0..N) indices are used during validation/test.
-        n = len(self.dataframe)
+        n = self._n_samples
         if idx >= 2 * n:
             real_idx = idx - 2 * n
             task_override: Optional[str] = "croptype"
@@ -1502,7 +1677,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             real_idx = idx
             task_override = None
 
-        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+        row = {col: arr[real_idx] for col, arr in self._col_arrays.items()}
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
@@ -1526,6 +1701,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             season_engine=self._season_engine,
             derive_from_calendar=self._season_engine == "calendar",
             label_datetime=_resolve_label_datetime(row),
+            sample_idx=real_idx,
         )
 
         # Sampler-driven task assignment always overrides the dataframe value so
@@ -1667,7 +1843,14 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         Each batch will contain exactly ``batch_size // 2`` LC-assigned and
         ``batch_size // 2`` CT-assigned samples drawn from class-balanced pools.
         See :class:`DualHeadBatchSampler` for full documentation.
+
+        Must be called **before** :meth:`freeze_for_training`.
         """
+        if self.dataframe is None:
+            raise RuntimeError(
+                "get_dual_head_batch_sampler() must be called before "
+                "freeze_for_training() — the DataFrame has already been dropped."
+            )
         return DualHeadBatchSampler(
             dataframe=self.dataframe,
             batch_size=batch_size,
@@ -1876,10 +2059,34 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
                     f"{self.__class__.__name__}: proceeding with {len(filtered_df)} samples after enforcing manual season window(s)."
                 )
             self.dataframe = filtered_df
+            self._n_samples = len(filtered_df)
+            # Rebuild columnar cache after filtering (same nan→NODATAVALUE logic as base __init__)
+            self._col_arrays = {}
+            for col in filtered_df.columns:
+                arr = filtered_df[col].to_numpy(copy=True)
+                if arr.dtype.kind in ("f", "i", "u"):
+                    if np.issubdtype(arr.dtype, np.floating):
+                        np.nan_to_num(arr, copy=False, nan=NODATAVALUE)
+                self._col_arrays[col] = arr
+
+        # Pre-compute per-sample season DOYs via a single vectorized merge
+        if (
+            self._season_engine == "calendar"
+            and self._season_ids
+            and "lat" in self._col_arrays
+            and "lon" in self._col_arrays
+        ):
+            self._season_doy_cache = _precompute_season_doys(
+                self._col_arrays["lat"],
+                self._col_arrays["lon"],
+                self._season_ids,
+            )
+        else:
+            self._season_doy_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
         repeats = _check_augmentation_settings(augment, masking_config, repeats)
 
-        base_indices = list(range(len(self.dataframe)))
+        base_indices = list(range(self._n_samples))
         self.indices = base_indices * repeats
         self._repeats = repeats
 
@@ -1897,8 +2104,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
 
         # Get the sample
         sample = super().__getitem__(real_idx)
-        row_series = self.dataframe.iloc[real_idx, :]
-        row = pd.Series.to_dict(row_series)
+        row = {col: arr[real_idx] for col, arr in self._col_arrays.items()}
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
 
@@ -1911,6 +2117,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             season_engine=self._season_engine,
             derive_from_calendar=self._season_engine == "calendar",
             label_datetime=_resolve_label_datetime(row),
+            sample_idx=real_idx,
         )
 
         return sample, attrs
