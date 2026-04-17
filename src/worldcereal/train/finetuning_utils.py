@@ -1212,11 +1212,14 @@ def evaluate_finetuned_model(
     finetuned_model.eval()
 
     # Construct the dataloader
+    # Cap workers at 4: inference is bottlenecked on the forward pass in the
+    # main process,
+    eval_num_workers = min(num_workers, 4)
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        num_workers=num_workers,
+        num_workers=eval_num_workers,
         collate_fn=collate_fn,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
