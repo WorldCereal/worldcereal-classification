@@ -2324,7 +2324,7 @@ def run_finetuning(
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
             _ckpt_model = ema_model if ema_model is not None else model
-            best_model_dict = deepcopy(_ckpt_model.state_dict())
+            best_model_dict = _ckpt_model.state_dict()
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
@@ -2364,8 +2364,7 @@ def run_finetuning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            checkpoint_model = deepcopy(_ckpt_model)
-            _save_best(epoch + 1, checkpoint_model, best_loss)
+            _save_best(epoch + 1, _ckpt_model, best_loss)
 
         _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
