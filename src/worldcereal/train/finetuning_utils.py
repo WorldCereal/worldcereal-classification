@@ -1212,11 +1212,14 @@ def evaluate_finetuned_model(
     finetuned_model.eval()
 
     # Construct the dataloader
+    # Cap workers at 4: inference is bottlenecked on the forward pass in the
+    # main process,
+    eval_num_workers = min(num_workers, 4)
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        num_workers=num_workers,
+        num_workers=eval_num_workers,
         collate_fn=collate_fn,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
@@ -1230,7 +1233,8 @@ def evaluate_finetuned_model(
     seasonal_croptype_records: List[dict[str, Any]] = []
     croptype_gate_rejections = 0
 
-    for batch in val_dl:
+    logger.info("Starting evaluation loop ...")
+    for batch in tqdm(val_dl, desc="Evaluating", leave=False):
         predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
             model_output = _forward_with_optional_attrs(
@@ -2029,6 +2033,7 @@ def run_finetuning(
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
         )
 
+        logger.info("Starting training loop ...")
         for batch in tqdm(train_dl, desc="Training", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
@@ -2088,7 +2093,8 @@ def run_finetuning(
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
 
-        for batch in val_dl:
+        logger.info("Starting validation loop ...")
+        for batch in tqdm(val_dl, desc="Validating", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
                 preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
@@ -2324,7 +2330,7 @@ def run_finetuning(
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
             _ckpt_model = ema_model if ema_model is not None else model
-            best_model_dict = deepcopy(_ckpt_model.state_dict())
+            best_model_dict = _ckpt_model.state_dict()
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
@@ -2364,8 +2370,7 @@ def run_finetuning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            checkpoint_model = deepcopy(_ckpt_model)
-            _save_best(epoch + 1, checkpoint_model, best_loss)
+            _save_best(epoch + 1, _ckpt_model, best_loss)
 
         _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
