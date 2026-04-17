@@ -1230,7 +1230,8 @@ def evaluate_finetuned_model(
     seasonal_croptype_records: List[dict[str, Any]] = []
     croptype_gate_rejections = 0
 
-    for batch in val_dl:
+    logger.info("Starting evaluation loop ...")
+    for batch in tqdm(val_dl, desc="Evaluating", leave=False):
         predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
             model_output = _forward_with_optional_attrs(
@@ -2029,6 +2030,7 @@ def run_finetuning(
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
         )
 
+        logger.info("Starting training loop ...")
         for batch in tqdm(train_dl, desc="Training", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
@@ -2088,7 +2090,8 @@ def run_finetuning(
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
 
-        for batch in val_dl:
+        logger.info("Starting validation loop ...")
+        for batch in tqdm(val_dl, desc="Validating", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
                 preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
