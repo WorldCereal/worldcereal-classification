@@ -1081,7 +1081,7 @@ def get_training_dfs_from_parquet(
         con.execute(f"DROP TABLE IF EXISTS {table_name}")
         initialized = False
         for f in tqdm(parquet_files, desc="Processing long parquet files"):
-            _data = pd.read_parquet(f, engine="fastparquet")
+            _data = pq.ParquetFile(f).read().to_pandas()
             _ref_id = Path(f).stem
             _data["ref_id"] = _ref_id
             filled_optional = []
