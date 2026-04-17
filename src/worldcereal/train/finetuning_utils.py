@@ -14,11 +14,49 @@ from typing import (
     Union,
 )
 
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import psutil
 import torch
 import torch.nn as nn
+
+
+def _get_cgroup_rss_gb() -> Optional[float]:
+    """Read the SLURM cgroup total RSS (main process + all forked workers).
+
+    This is what SLURM's OOM killer counts against --mem.  Returns None if
+    the cgroup path cannot be read (e.g. running outside SLURM).
+    """
+    try:
+        with open("/proc/self/cgroup") as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) == 3 and "memory" in parts[1]:
+                    usage_path = f"/sys/fs/cgroup/memory{parts[2]}/memory.usage_in_bytes"
+                    return int(open(usage_path).read().strip()) / 1024**3
+    except Exception:
+        pass
+    return None
+
+
+def _log_mem(prefix: str) -> None:
+    """Log process RSS, SLURM cgroup total RSS (all workers), and GPU allocation."""
+    proc_gb = psutil.Process(os.getpid()).memory_info().rss / 1024**3
+    cgroup_gb = _get_cgroup_rss_gb()
+    if cgroup_gb is not None:
+        mem_str = f"{prefix}proc={proc_gb:.1f}GB cgroup={cgroup_gb:.1f}GB"
+    else:
+        node = psutil.virtual_memory()
+        mem_str = f"{prefix}RSS={proc_gb:.1f}GB Node={node.used / 1024**3:.1f}/{node.total / 1024**3:.0f}GB"
+    parts = [mem_str]
+    if torch.cuda.is_available():
+        alloc = torch.cuda.memory_allocated() / 1024**3
+        resrv = torch.cuda.memory_reserved() / 1024**3
+        parts.append(f"GPU alloc={alloc:.2f}GB resrv={resrv:.2f}GB")
+    logger.info(" | ".join(parts))
 import torch.nn.functional as F
 from loguru import logger
 from matplotlib.figure import Figure
@@ -1241,9 +1279,16 @@ def evaluate_finetuned_model(
     seasonal_landcover_records: List[dict[str, Any]] = []
     seasonal_croptype_records: List[dict[str, Any]] = []
     croptype_gate_rejections = 0
-
-    logger.info("Starting evaluation loop ...")
-    for batch in tqdm(val_dl, desc="Evaluating", leave=False):
+    
+    # Log memory before evaluation starts
+    _log_mem("[eval] Before evaluation loop: ")
+    
+    # add a tqdm progress bar for evaluation, with dynamic description showing running counts of samples and gate rejections
+    for batch_idx, batch in enumerate(tqdm(val_dl, desc="Evaluating", dynamic_ncols=True)):
+        # Log memory at every batch to catch spikes
+        if batch_idx % 20 == 0:  # Log every 20 batches to avoid spam
+            _log_mem(f"[eval batch {batch_idx}] ")
+        
         predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
             model_output = _forward_with_optional_attrs(
@@ -1325,6 +1370,8 @@ def evaluate_finetuned_model(
                 pred_batches.append(preds.flatten())
                 target_batches.append(targets.flatten())
 
+    _log_mem("[eval] After evaluation loop (before metrics): ")
+    
     if seasonal_mode:
         landcover_df, landcover_cm, landcover_cm_norm = _compute_metrics_from_records(
             seasonal_landcover_records, seasonal_landcover_classes
@@ -2081,6 +2128,8 @@ def run_finetuning(
                 ema_model = None  # Restart EMA model for the new optimization regime.
                 logger.info("EMA model reset at encoder unfreeze.")
 
+        _log_mem(f"Epoch {epoch + 1} train start: ")
+
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
         train_croptype_supervision = (
@@ -2107,6 +2156,7 @@ def run_finetuning(
             )
 
         train_loss.append(epoch_train_loss / len(train_dl))
+        _log_mem(f"Epoch {epoch + 1} train end: ")
 
         # --- EMA model weight update ---
         if model_ema_alpha > 0.0:
@@ -2147,8 +2197,8 @@ def run_finetuning(
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
 
-        logger.info("Starting validation loop ...")
-        for batch in tqdm(val_dl, desc="Validating", leave=False):
+        _log_mem(f"Epoch {epoch + 1} val start: ")
+        for batch in val_dl:
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
                 preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
@@ -2200,6 +2250,8 @@ def run_finetuning(
                         seasonal_gate_rejections += batch_summary[
                             "croptype_gate_rejections"
                         ]
+
+        _log_mem(f"Epoch {epoch + 1} val end: ")
 
         if weighted_count > 0:
             current_val_loss = weighted_loss_sum / weighted_count
