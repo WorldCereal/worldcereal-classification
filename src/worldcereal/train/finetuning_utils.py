@@ -1255,16 +1255,20 @@ def evaluate_finetuned_model(
     # called from the on_validation_improved callback while training DataLoader
     # workers are still alive.  Forking 8 additional persistent workers from a
     # ~24 GB parent process can push total RSS past the SLURM memory limit.
+    _eval_workers = min(2, num_workers)
     logger.info(
         f"evaluate_finetuned_model: creating DataLoader "
-        f"(num_workers={num_workers}, batch_size={batch_size}, "
+        f"(num_workers={_eval_workers}, batch_size={batch_size} [2\u00d7 train], "
         f"persistent_workers=False, dataset_size={len(test_ds)})"
     )
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        num_workers=eval_num_workers,
+        # Cap at 2: this function may be called from on_validation_improved
+        # while the main process is still at ~26 GB RSS.  More workers multiply
+        # that via CoW fork.  2 workers is enough — eval is GPU-bottlenecked.
+        num_workers=_eval_workers,
         collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=False,
