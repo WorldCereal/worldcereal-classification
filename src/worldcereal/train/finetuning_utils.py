@@ -1255,20 +1255,20 @@ def evaluate_finetuned_model(
     # called from the on_validation_improved callback while training DataLoader
     # workers are still alive.  Forking 8 additional persistent workers from a
     # ~24 GB parent process can push total RSS past the SLURM memory limit.
-    _eval_workers = min(2, num_workers)
     logger.info(
         f"evaluate_finetuned_model: creating DataLoader "
-        f"(num_workers={_eval_workers}, batch_size={batch_size} [2\u00d7 train], "
+        f"(num_workers={num_workers}, batch_size={batch_size} [2\u00d7 train], "
         f"persistent_workers=False, dataset_size={len(test_ds)})"
     )
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        # Cap at 2: this function may be called from on_validation_improved
-        # while the main process is still at ~26 GB RSS.  More workers multiply
-        # that via CoW fork.  2 workers is enough — eval is GPU-bottlenecked.
-        num_workers=_eval_workers,
+        # Use the full worker count passed in.  The caller (on_validation_improved)
+        # runs after val_dl is torn down (persistent_workers=False), so no overlap
+        # with val workers.  With large eval batches the bottleneck is CPU data
+        # loading, not GPU — more workers matter here.
+        num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=False,
@@ -1290,7 +1290,7 @@ def evaluate_finetuned_model(
     # add a tqdm progress bar for evaluation, with dynamic description showing running counts of samples and gate rejections
     for batch_idx, batch in enumerate(tqdm(val_dl, desc="Evaluating", dynamic_ncols=True)):
         # Log memory at every batch to catch spikes
-        if batch_idx % 20 == 0:  # Log every 20 batches to avoid spam
+        if batch_idx % 25 == 0:  # Log every 25 batches to avoid spam
             _log_mem(f"[eval batch {batch_idx}] ")
         
         predictors, attrs = _unpack_predictor_batch(batch)
@@ -2202,7 +2202,11 @@ def run_finetuning(
         seasonal_gate_rejections = 0
 
         _log_mem(f"Epoch {epoch + 1} val start: ")
-        for batch in val_dl:
+        # add a tqdm progress bar for validation, with dynamic description showing running counts of samples and gate rejections
+        for batch_idx, batch in enumerate(tqdm(val_dl, desc="Validating", dynamic_ncols=True)):
+            # Log memory at every batch to catch spikes
+            if batch_idx % 10 == 0:  # Log every 10 batches to avoid spam
+                _log_mem(f"[val batch {batch_idx}] ")
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
                 preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
