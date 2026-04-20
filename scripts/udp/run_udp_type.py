@@ -48,7 +48,7 @@ c = openeo.connect("https://openeo.dataspace.copernicus.eu").authenticate_oidc()
 
 inference_cube = c.datacube_from_process(
     process_id="worldcereal_crop_type",
-    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/heads/582-create-pytoch-udps/src/worldcereal/udp/worldcereal_crop_type.json", 
+    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/heads/582-create-pytoch-udps/src/worldcereal/udp/worldcereal_crop_type.json",
     spatial_extent=spatial_extent,
     temporal_extent=temporal_extent,
     model_url=model_url,

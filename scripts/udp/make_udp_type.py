@@ -3,7 +3,10 @@ Script that generates the worldcereal_crop_type UDP from the source code.
 """
 
 import json
-from loguru import logger
+
+import openeo
+from openeo.api.process import Parameter
+from openeo.rest.udp import build_process_dict
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
 
@@ -17,11 +20,6 @@ from worldcereal.openeo.workflow_config import (
     SeasonSection,
     WorldCerealWorkflowConfig,
 )
-
-import openeo
-from openeo.api.process import Parameter
-from openeo.rest.udp import build_process_dict
-
 
 default_job_options = DEFAULT_INFERENCE_JOB_OPTIONS.copy()
 
@@ -335,7 +333,7 @@ def main():
     replace_kernel_size(spec)
     remove_filter_bands(spec)
 
-    path_to_udp_json = f"./worldcereal_crop_type.json"
+    path_to_udp_json = "./worldcereal_crop_type.json"
     with open(path_to_udp_json, "w") as f:
         json.dump(spec, f, indent=2)
 

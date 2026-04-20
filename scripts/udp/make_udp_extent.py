@@ -1,9 +1,12 @@
 """
-Script that generates the worldcereal_crop_type UDP from the source code.
+Script that generates the worldcereal_crop_extent UDP from the source code.
 """
 
 import json
-from loguru import logger
+
+import openeo
+from openeo.api.process import Parameter
+from openeo.rest.udp import build_process_dict
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
 
@@ -17,11 +20,6 @@ from worldcereal.openeo.workflow_config import (
     SeasonSection,
     WorldCerealWorkflowConfig,
 )
-
-import openeo
-from openeo.api.process import Parameter
-from openeo.rest.udp import build_process_dict
-
 
 default_job_options = DEFAULT_INFERENCE_JOB_OPTIONS.copy()
 
@@ -63,9 +61,6 @@ def create_process_graph_with_parameters() -> openeo.MultiResult:
     enable_cropland_postprocess = (
         True  # what is the cost because we postprocess anyway?
     )
-    enable_croptype_postprocess = (
-        True  # what is the cost because we postprocess anyway?
-    )
     export_embeddings = False
     export_ndvi = False
     merge_classification_products = True # Keeps all classification products together
@@ -89,12 +84,6 @@ def create_process_graph_with_parameters() -> openeo.MultiResult:
             "method": "majority_vote",
             "kernel_size": 5,
         }
-    # if enable_croptype_postprocess:
-    #     postprocess_config["croptype"] = {
-    #         "enabled": True,
-    #         "method": "majority_vote",
-    #         "kernel_size": 5,
-    #     }
 
     workflow_cfg = WorldCerealWorkflowConfig(
         model=ModelSection(
@@ -174,22 +163,6 @@ def replace_orbit_state(obj, target_orbit_state="DESCENDING"):
         for item in obj:
             replace_orbit_state(item, target_orbit_state)
 
-
-# def replace_model_url(
-#     obj,
-#     target_model_url="https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip",
-# ):
-#     if isinstance(obj, dict):
-#         for key, value in obj.items():
-#             if key == "seasonal_model_zip" and value == target_model_url:
-#                 obj[key] = {"from_parameter": "model_url"}
-#             else:
-#                 replace_model_url(value, target_model_url)
-#     elif isinstance(obj, list):
-#         for item in obj:
-#             replace_model_url(item, target_model_url)
-
-
 def replace_season_ids(obj):
     if isinstance(obj, dict):
         for key in list(obj.keys()):
@@ -242,8 +215,6 @@ def remove_filter_bands(obj: dict):
     obj["process_graph"]["apply5"]["arguments"]["data"]["from_node"] = "reducedimension3"
 
 
-
-
 # -------------------------------------------------------------------------------
 # CREATE AND WRITE THE UDP
 # -------------------------------------------------------------------------------
@@ -255,9 +226,6 @@ def main():
 
     spatial_extent_param = Parameter.spatial_extent()
     temporal_extent_param = Parameter.temporal_interval()
-    model_url_param = Parameter.string(
-        "model_url", description="URL to the seasonal model zip to use for inference."
-    )
     orbit_state_param = Parameter.string(
         "orbit_state",
         description="Sentinel-1 orbit state.",
@@ -327,14 +295,13 @@ def main():
     replace_temporal_extent(spec)
     replace_spatial_extent(spec)
     replace_orbit_state(spec)
-    # replace_model_url(spec)
     replace_season_ids(spec)
     replace_season_windows(spec)
     replace_postprocess_method(spec)
     replace_kernel_size(spec)
     remove_filter_bands(spec)
 
-    path_to_udp_json = f"./worldcereal_crop_extent.json"
+    path_to_udp_json = "./worldcereal_crop_extent.json"
     with open(path_to_udp_json, "w") as f:
         json.dump(spec, f, indent=2)
 
