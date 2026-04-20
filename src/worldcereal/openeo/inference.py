@@ -445,7 +445,12 @@ def _backbone_fingerprint_from_artifact(artifact: "ModelArtifact") -> str:
     return fingerprint
 
 
-def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec:
+def _select_head_spec(
+    heads: Iterable[Mapping[str, Any]],
+    task: str,
+    backbone: Optional[Mapping[str, Any]] = None,
+) -> HeadSpec:
+    backbone = backbone or {}
     for head in heads:
         if head.get("task") == task:
             class_names = [str(cls) for cls in head.get("class_names", [])]
@@ -460,9 +465,15 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
                 class_names=class_names,
                 cropland_classes=cropland_classes,
                 gating_enabled=bool(gating_cfg.get("enabled", False)),
-                head_type=str(head.get("head_type", "linear")),
-                hidden_dim=int(head.get("hidden_dim", 256)),
-                dropout=float(head.get("dropout", 0.0)),
+                head_type=str(
+                    head.get("head_type", backbone.get("head_type", "linear"))
+                ),
+                hidden_dim=int(
+                    head.get("hidden_dim", backbone.get("head_hidden_dim", 256))
+                ),
+                dropout=float(
+                    head.get("dropout", backbone.get("head_dropout", 0.0))
+                ),
             )
     raise ValueError(f"Manifest does not define a '{task}' head")
 
@@ -500,8 +511,13 @@ class SeasonalModelBundle:
         self._cropland_head_enabled = enable_cropland_head
 
         heads = base_artifact.manifest.get("heads", [])
-        self.landcover_spec = _select_head_spec(heads, task="landcover")
-        self.croptype_spec = _select_head_spec(heads, task="croptype")
+        backbone_cfg = base_artifact.manifest.get("backbone", {})
+        self.landcover_spec = _select_head_spec(
+            heads, task="landcover", backbone=backbone_cfg
+        )
+        self.croptype_spec = _select_head_spec(
+            heads, task="croptype", backbone=backbone_cfg
+        )
         self.cropland_gate_classes: List[str] = []
         self._base_backbone_fingerprint = _backbone_fingerprint_from_artifact(
             base_artifact
@@ -605,7 +621,11 @@ class SeasonalModelBundle:
             artifact.manifest, artifact.extract_dir, priority
         )
         state_dict = torch.load(checkpoint, map_location=self.device)
-        head_spec = _select_head_spec(artifact.manifest.get("heads", []), task)
+        head_spec = _select_head_spec(
+            artifact.manifest.get("heads", []),
+            task,
+            backbone=artifact.manifest.get("backbone", {}),
+        )
 
         # Get current head spec and module
         is_landcover = task == "landcover"
