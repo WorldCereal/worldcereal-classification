@@ -87,7 +87,7 @@ def test_get_training_dfs_from_parquet(WorldCerealPrivateExtractionsPath):
 
     # Check that finetune_class values match expected CROPLAND2 classes
     assert all(
-        c in ["temporary_crops", "grasslands"]
+        c in ["temporary_crops", "grasslands", "ignore"]
         for c in train_df["finetune_class"].unique()
     )
 

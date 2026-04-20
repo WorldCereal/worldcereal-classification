@@ -86,7 +86,8 @@ train = [
 ]
 finetune = [
   "office365-rest-python-client",
-  "openpyxl"
+  "openpyxl",
+  "tensorboard"
 ]
 
 notebooks = [
