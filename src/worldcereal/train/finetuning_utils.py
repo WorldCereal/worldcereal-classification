@@ -123,6 +123,8 @@ def attach_sample_weights(
         "keep", "drop_candidate", "drop_suspect", "drop_flagged"
     ],
     output_col: str,
+    disable_quality_score: bool = False,
+    disable_outlier_score: bool = False,
 ) -> pd.DataFrame:
     """Compute and attach a per-sample weight column to *df*.
 
@@ -168,6 +170,13 @@ def attach_sample_weights(
         ``"drop_flagged"``.
     output_col : str
         Name of the new weight column written to the returned DataFrame.
+    disable_quality_score : bool
+        When ``True``, replace the quality factor with 1.0 for all samples
+        (i.e. quality scoring has no effect on the final weight).
+    disable_outlier_score : bool
+        When ``True``, replace the continuous outlier score factor with 1.0
+        for all samples (i.e. the outlier score has no effect on the final
+        weight).  The hard flag gate (``outlier_drop_mode``) is unaffected.
 
     Returns
     -------
@@ -178,6 +187,12 @@ def attach_sample_weights(
     """
     quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
     outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
+    if disable_quality_score:
+        logger.info(f"{split_name}: quality scoring disabled for {output_col} — all quality weights set to 1.0")
+        quality = pd.Series(1.0, index=df.index, dtype=float)
+    if disable_outlier_score:
+        logger.info(f"{split_name}: outlier scoring disabled for {output_col} — all outlier score weights set to 1.0")
+        outlier = pd.Series(1.0, index=df.index, dtype=float)
     zero_outlier_weights = (
         ~identify_true_outliers(df, split_name, outlier_flag_col, outlier_drop_mode)
     ).astype(float)  # Invert to get 1 for non-outliers, 0 for outliers
@@ -2202,7 +2217,7 @@ def run_finetuning(
         seasonal_gate_rejections = 0
 
         _log_mem(f"Epoch {epoch + 1} val start: ")
-        # add a tqdm progress bar for validation, with dynamic description showing running counts of samples and gate rejections
+    # add a tqdm progress bar for validation, with dynamic description showing running counts of samples and gate rejections
         for batch_idx, batch in enumerate(tqdm(val_dl, desc="Validating", dynamic_ncols=True)):
             # Log memory at every batch to catch spikes
             if batch_idx % 10 == 0:  # Log every 10 batches to avoid spam
