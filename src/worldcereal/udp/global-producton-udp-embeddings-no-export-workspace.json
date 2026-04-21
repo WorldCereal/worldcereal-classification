@@ -1307,41 +1307,6 @@
       }
     },
     {
-      "name": "classification_bands",
-      "description": "List of names of the output classification bands.",
-      "schema": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      }
-    },
-    {
-      "name": "workspace",
-      "description": "The workspace in which the results will be exported.",
-      "schema": {
-        "type": "string"
-      }
-    },
-    {
-      "name": "filename_prefix_classification",
-      "description": "Filename for the classification output. Must be different from the other three!",
-      "schema": {
-        "type": "string"
-      },
-      "optional": true,
-      "default": null
-    },
-    {
-      "name": "filename_prefix_ndvi",
-      "description": "Filename for the NDVI output. Must be different from the other three!",
-      "schema": {
-        "type": "string"
-      },
-      "optional": true,
-      "default": null
-    },
-    {
       "name": "filename_prefix_embeddings",
       "description": "Filename for the embeddings output. Must be different from the other three!",
       "schema": {
