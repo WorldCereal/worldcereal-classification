@@ -2182,6 +2182,7 @@ def run_finetuning(
             metrics_dict, _ = compute_validation_metrics(
                 val_preds, val_targets, task_type
             )
+        del val_preds, val_targets
 
         seasonal_metrics_flat: dict[str, float] = {}
         if seasonal_metrics_supported:
@@ -2205,6 +2206,9 @@ def run_finetuning(
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
                         seasonal_gate_rejections / total_attempts
                     )
+
+        del seasonal_landcover_records, seasonal_croptype_records
+        del val_pred_chunks
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)

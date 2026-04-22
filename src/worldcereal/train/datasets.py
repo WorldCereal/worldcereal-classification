@@ -460,9 +460,12 @@ def get_class_weights(
         weights = np.log1p(inv_freq / np.mean(inv_freq))
 
     elif method == "effective":
-        # Effective number of samples (Class-Balanced Loss)
-        # beta close to 1.0 -> smoother, less extreme weights
-        beta = 0.999
+        # Effective number of samples (Class-Balanced Loss, Cui et al. 2019).
+        # Beta is derived from the total sample count so the saturation point
+        # (1 / (1 - beta)) scales with the dataset rather than being fixed at
+        # 1000 (beta=0.999), which causes all classes to saturate and receive
+        # near-identical weights when class sizes are in the millions.
+        beta = total_samples / (total_samples + 1)
         effective_num = (1.0 - np.power(beta, freq)) / (1.0 - beta)
         weights = 1.0 / effective_num
 
@@ -481,7 +484,9 @@ def get_class_weights(
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
     rounded = np.round(weights, 3)
-    return {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
+    result = {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
+    logger.info(f"Class weights ({method}): {result}")
+    return result
 
 
 def _stringify_weight_dict(weights: Dict[Hashable, float]) -> Dict[str, float]:
