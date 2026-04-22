@@ -860,12 +860,12 @@
           {
             "dimension": "x",
             "unit": "px",
-            "value": 256
+            "value": 128
           },
           {
             "dimension": "y",
             "unit": "px",
-            "value": 256
+            "value": 128
           }
         ]
       }
