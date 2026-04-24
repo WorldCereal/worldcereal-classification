@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """Local seasonal inference runner for cropland + croptype mapping."""
+#%%
+
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import sys
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import requests
 import xarray as xr
+
+# Prefer local source tree when running from the repository checkout.
+REPO_SRC = Path(__file__).resolve().parents[2] / "src"
+if REPO_SRC.exists() and str(REPO_SRC) not in sys.path:
+    sys.path.insert(0, str(REPO_SRC))
 
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
@@ -19,6 +27,10 @@ DEFAULT_INPUT_URL = (
     "local_presto_inputs.nc"
 )
 DEFAULT_INPUT_PATH = Path.cwd() / "presto_test_inputs.nc"
+DEFAULT_SEASON_WINDOWS = [
+    "tc-s1:2020-12-01:2021-07-31",
+    "tc-s2:2021-04-01:2021-10-31",
+]
 
 
 def parse_args(arg_list=None) -> argparse.Namespace:
@@ -64,6 +76,22 @@ def parse_args(arg_list=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--batch-size", type=int, default=2048, help="Batch size for inference"
+    )
+    parser.add_argument(
+        "--memory-logging",
+        action="store_true",
+        help="Enable runtime memory/timing profiling checkpoints",
+    )
+    parser.add_argument(
+        "--memory-logging-verbose",
+        action="store_true",
+        help="Log every memory checkpoint (default: only final summary)",
+    )
+    parser.add_argument(
+        "--memory-report-top-n",
+        type=int,
+        default=5,
+        help="How many stages to include in the final profile summary",
     )
     parser.add_argument(
         "--cache-dir",
@@ -223,9 +251,10 @@ def build_postprocess_spec(
 def main() -> None:
     default_arg_list = [
         "--season-window",
-        "tc-s1:2020-12-01:2021-07-31",
+        DEFAULT_SEASON_WINDOWS[0],
         "--season-window",
-        "tc-s2:2021-04-01:2021-10-31",
+        DEFAULT_SEASON_WINDOWS[1],
+        "--memory-logging",
         "--cropland-postprocess",
         "--croptype-postprocess",
         # "--export-class-probabilities",
@@ -240,6 +269,15 @@ def main() -> None:
         sys.exit(1)
 
     season_ids = args.season_id if args.season_id else None
+
+    # If the user passed custom CLI args but omitted season windows,
+    # fall back to a known-valid two-season setup for local testing.
+    if args.season_window is None and season_ids is None:
+        args.season_window = list(DEFAULT_SEASON_WINDOWS)
+        print(
+            "No --season-window provided; using default windows for tc-s1/tc-s2.",
+            file=sys.stderr,
+        )
     try:
         season_windows = parse_manual_windows(args.season_window)
     except ValueError as exc:
@@ -257,17 +295,31 @@ def main() -> None:
         kernel_size=args.croptype_kernel_size,
     )
 
-    engine = SeasonalInferenceEngine(
-        seasonal_model_zip=args.seasonal_zip,
-        landcover_head_zip=args.landcover_head_zip,
-        croptype_head_zip=args.croptype_head_zip,
-        cache_root=args.cache_dir,
-        batch_size=args.batch_size,
-        season_ids=season_ids,
-        export_class_probabilities=args.export_class_probabilities,
-        cropland_postprocess=cropland_postprocess,
-        croptype_postprocess=croptype_postprocess,
-    )
+    engine_kwargs = {
+        "seasonal_model_zip": args.seasonal_zip,
+        "landcover_head_zip": args.landcover_head_zip,
+        "croptype_head_zip": args.croptype_head_zip,
+        "cache_root": args.cache_dir,
+        "batch_size": args.batch_size,
+        "season_ids": season_ids,
+        "export_class_probabilities": args.export_class_probabilities,
+        "cropland_postprocess": cropland_postprocess,
+        "croptype_postprocess": croptype_postprocess,
+    }
+    if "memory_logging" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+        engine_kwargs["memory_logging"] = args.memory_logging
+        if "memory_logging_verbose" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+            engine_kwargs["memory_logging_verbose"] = args.memory_logging_verbose
+        if "memory_report_top_n" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+            engine_kwargs["memory_report_top_n"] = args.memory_report_top_n
+    elif args.memory_logging:
+        print(
+            "Warning: installed SeasonalInferenceEngine does not support memory_logging."
+            " Use the local source tree or reinstall worldcereal from this checkout.",
+            file=sys.stderr,
+        )
+
+    engine = SeasonalInferenceEngine(**engine_kwargs)
 
     result = engine.infer(
         arr,
