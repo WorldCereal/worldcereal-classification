@@ -3,6 +3,7 @@
 
 import datetime
 import logging
+import os
 import random
 import sys
 import time
@@ -215,6 +216,26 @@ def _lazy_import_torch():
             "call _require_openeo_runtime() first so feature dependencies are available."
         ) from exc
     return torch
+
+
+def _cpu_autotuned_batch_size(requested_batch_size: int, logical_cores: int) -> int:
+    """Heuristic CPU batch-size tuning for better cache locality.
+
+    Only adjusts the default oversized CPU batch (2048). User-specified values are respected.
+    """
+
+    if requested_batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+
+    # Keep explicit user overrides unchanged.
+    if requested_batch_size != 2048:
+        return requested_batch_size
+
+    if logical_cores <= 4:
+        return 256
+    if logical_cores <= 8:
+        return 512
+    return 1024
 
 
 def _seasonal_workflow_presets():
@@ -1071,6 +1092,9 @@ class SeasonalInferenceEngine:
         enable_cropland_head: bool = True,
         cropland_postprocess: Optional[Mapping[str, Any]] = None,
         croptype_postprocess: Optional[Mapping[str, Any]] = None,
+        auto_tune_batch_size: bool = False,
+        cpu_num_threads: Optional[int] = None,
+        cpu_num_interop_threads: Optional[int] = None,
         memory_logging: bool = False,
         memory_logging_verbose: bool = False,
         memory_report_top_n: int = 5,
@@ -1090,7 +1114,55 @@ class SeasonalInferenceEngine:
         )
         torch = _lazy_import_torch()
         self.device = torch.device(device)
-        self.batch_size = batch_size
+        self._auto_tune_batch_size = bool(auto_tune_batch_size)
+        self._cpu_num_threads = (
+            int(cpu_num_threads) if cpu_num_threads is not None else None
+        )
+        self._cpu_num_interop_threads = (
+            int(cpu_num_interop_threads)
+            if cpu_num_interop_threads is not None
+            else None
+        )
+        if self._cpu_num_threads is not None and self._cpu_num_threads < 1:
+            raise ValueError("cpu_num_threads must be >= 1 when provided")
+        if (
+            self._cpu_num_interop_threads is not None
+            and self._cpu_num_interop_threads < 1
+        ):
+            raise ValueError("cpu_num_interop_threads must be >= 1 when provided")
+
+        # Explicit CPU thread controls.
+        if device == "cpu" or str(device).lower() == "cpu":
+            try:
+                if self._cpu_num_threads is not None:
+                    for env_name in (
+                        "OMP_NUM_THREADS",
+                        "MKL_NUM_THREADS",
+                        "OPENBLAS_NUM_THREADS",
+                        "NUMEXPR_NUM_THREADS",
+                    ):
+                        os.environ[env_name] = str(self._cpu_num_threads)
+                    torch.set_num_threads(self._cpu_num_threads)
+                if self._cpu_num_interop_threads is not None:
+                    torch.set_num_interop_threads(self._cpu_num_interop_threads)
+            except Exception:
+                pass  # Thread tuning is optional.
+
+        effective_batch_size = batch_size
+        if self._auto_tune_batch_size and (device == "cpu" or str(device).lower() == "cpu"):
+            try:
+                logical_cores = os.cpu_count() or 1
+                tuned_batch_size = _cpu_autotuned_batch_size(batch_size, logical_cores)
+                if tuned_batch_size != batch_size:
+                    logger.info(
+                        f"Auto-tuned CPU batch_size from {batch_size} to {tuned_batch_size} "
+                        f"(logical_cores={logical_cores})."
+                    )
+                effective_batch_size = tuned_batch_size
+            except Exception:
+                effective_batch_size = batch_size
+
+        self.batch_size = effective_batch_size
         self._season_composite_frequency = season_composite_frequency
         self._export_class_probabilities = export_class_probabilities
         self._croptype_enabled = enable_croptype_head
@@ -1100,6 +1172,7 @@ class SeasonalInferenceEngine:
         self._memory_logging = bool(memory_logging)
         self._memory_logging_verbose = bool(memory_logging_verbose)
         self._memory_report_top_n = max(1, int(memory_report_top_n))
+        self._export_embeddings_enabled = False  # Will be set to True if export_embeddings is used
         from worldcereal.train import GLOBAL_SEASON_IDS
 
         if not self._croptype_enabled:
@@ -1122,6 +1195,9 @@ class SeasonalInferenceEngine:
             f"croptype_enabled={self._croptype_enabled}, cropland_enabled={self._cropland_enabled}, "
             f"cropland_postprocess={self._cropland_postprocess.enabled}, "
             f"croptype_postprocess={self._croptype_postprocess.enabled}, "
+            f"auto_tune_batch_size={self._auto_tune_batch_size}, "
+            f"cpu_num_threads={self._cpu_num_threads}, "
+            f"cpu_num_interop_threads={self._cpu_num_interop_threads}, "
             f"memory_logging={self._memory_logging}, "
             f"memory_logging_verbose={self._memory_logging_verbose})"
         )
@@ -1138,6 +1214,9 @@ class SeasonalInferenceEngine:
         export_embeddings: bool = False,
         export_ndvi: bool = False,
     ) -> xr.Dataset:
+        # Gate embedding collection based on whether they will be exported.
+        self._export_embeddings_enabled = export_embeddings
+
         mem = _MemoryTrace(
             enabled=self._memory_logging, verbose=self._memory_logging_verbose
         )
@@ -1163,8 +1242,16 @@ class SeasonalInferenceEngine:
             self._log_input_statistics(prepped)
             mem.checkpoint("infer:after_input_stats")
 
+            predictor_cube = prepped.transpose("bands", "t", "x", "y")
+            predictor_values = np.ascontiguousarray(predictor_cube.values)
+            predictor_cube = xr.DataArray(
+                predictor_values,
+                dims=predictor_cube.dims,
+                coords=predictor_cube.coords,
+            )
+
             predictors = generate_predictor(
-                prepped.transpose("bands", "t", "x", "y"), epsg
+                predictor_cube, epsg
             )
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
@@ -1398,6 +1485,9 @@ class SeasonalInferenceEngine:
         croptype_logits: List[TorchTensor] = []
         global_embeddings: List[TorchTensor] = []
 
+        # Gate embedding collection for minimal overhead when not exported.
+        collect_embeddings = getattr(self, "_export_embeddings_enabled", True)
+
         total_samples = getattr(predictors, "B", 0)
         estimated_batches = (
             (total_samples + self.batch_size - 1) // self.batch_size
@@ -1412,6 +1502,11 @@ class SeasonalInferenceEngine:
             memory_trace.checkpoint("run_batches:start")
         processed_batches = 0
         start = 0
+        season_masks_tensor = torch.as_tensor(
+            season_masks,
+            device=self.device,
+            dtype=torch.bool,
+        )
         log_every = max(1, (estimated_batches or 1) // 10)
         for processed_batches, batch in enumerate(
             predictors.as_batches(self.batch_size), start=1
@@ -1427,21 +1522,18 @@ class SeasonalInferenceEngine:
                 if getattr(batch, field) is not None
             }
             batch_predictors = Predictors(**batch_dict)
-            mask_tensor = torch.as_tensor(
-                season_masks[start : start + batch_size],
-                device=self.device,
-                dtype=torch.bool,
-            )
+            mask_tensor = season_masks_tensor[start : start + batch_size]
             start += batch_size
             with torch.inference_mode():
                 output = self.bundle.model(
                     batch_predictors, attrs={"season_masks": mask_tensor}
                 )
             if output.global_logits is not None:
-                landcover_logits.append(output.global_logits.detach().cpu())
+                landcover_logits.append(output.global_logits.detach())
             if output.season_logits is not None:
-                croptype_logits.append(output.season_logits.detach().cpu())
-            global_embeddings.append(output.global_embedding.detach().cpu())
+                croptype_logits.append(output.season_logits.detach())
+            if collect_embeddings and output.global_embedding is not None:
+                global_embeddings.append(output.global_embedding.detach())
             if memory_trace is not None and (
                 processed_batches == 1
                 or processed_batches % log_every == 0
@@ -1459,9 +1551,13 @@ class SeasonalInferenceEngine:
         lc_pieces = [t for t in landcover_logits if t.numel() > 0]
         ct_pieces = [t for t in croptype_logits if t.numel() > 0]
         ge_pieces = [t for t in global_embeddings if t.numel() > 0]
-        lc_tensor = torch.cat(lc_pieces, dim=0) if lc_pieces else None
-        ct_tensor = torch.cat(ct_pieces, dim=0) if ct_pieces else None
-        ge_tensor = torch.cat(ge_pieces, dim=0) if ge_pieces else None
+        lc_tensor = torch.cat(lc_pieces, dim=0).to("cpu") if lc_pieces else None
+        ct_tensor = torch.cat(ct_pieces, dim=0).to("cpu") if ct_pieces else None
+        ge_tensor = (
+            torch.cat(ge_pieces, dim=0).to("cpu")
+            if (ge_pieces and collect_embeddings)
+            else None
+        )
         if memory_trace is not None:
             memory_trace.checkpoint("run_batches:after_concat")
         return lc_tensor, ct_tensor, ge_tensor
@@ -1616,6 +1712,8 @@ class SeasonalInferenceEngine:
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
+            # Reshape probs once, minimizing intermediate arrays.
+            # prob_np is (height, width, num_seasons, num_classes)
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
                 assert (
@@ -1765,6 +1863,9 @@ def run_seasonal_workflow(
     enable_cropland_head: bool = True,
     cropland_postprocess: Optional[Mapping[str, Any]] = None,
     croptype_postprocess: Optional[Mapping[str, Any]] = None,
+    auto_tune_batch_size: bool = False,
+    cpu_num_threads: Optional[int] = None,
+    cpu_num_interop_threads: Optional[int] = None,
     export_embeddings: bool = False,
     export_ndvi: bool = False,
     memory_logging: bool = False,
@@ -1788,6 +1889,9 @@ def run_seasonal_workflow(
         enable_cropland_head=enable_cropland_head,
         cropland_postprocess=cropland_postprocess,
         croptype_postprocess=croptype_postprocess,
+        auto_tune_batch_size=auto_tune_batch_size,
+        cpu_num_threads=cpu_num_threads,
+        cpu_num_interop_threads=cpu_num_interop_threads,
         memory_logging=memory_logging,
         memory_logging_verbose=memory_logging_verbose,
         memory_report_top_n=memory_report_top_n,
@@ -2200,6 +2304,34 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
             f"batch_size must be an integer, got {batch_size_value!r}"
         ) from exc
     device = runtime_cfg.get("device", "cpu")
+    auto_tune_batch_size = _as_bool(runtime_cfg.get("auto_tune_batch_size"), False)
+    cpu_num_threads_raw = runtime_cfg.get("cpu_num_threads")
+    cpu_num_interop_threads_raw = runtime_cfg.get("cpu_num_interop_threads")
+    cpu_num_threads: Optional[int]
+    cpu_num_interop_threads: Optional[int]
+    try:
+        cpu_num_threads = (
+            int(cpu_num_threads_raw) if cpu_num_threads_raw is not None else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"cpu_num_threads must be an integer, got {cpu_num_threads_raw!r}"
+        ) from exc
+    try:
+        cpu_num_interop_threads = (
+            int(cpu_num_interop_threads_raw)
+            if cpu_num_interop_threads_raw is not None
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "cpu_num_interop_threads must be an integer, "
+            f"got {cpu_num_interop_threads_raw!r}"
+        ) from exc
+    if cpu_num_threads is not None and cpu_num_threads < 1:
+        raise ValueError("cpu_num_threads must be >= 1 when provided")
+    if cpu_num_interop_threads is not None and cpu_num_interop_threads < 1:
+        raise ValueError("cpu_num_interop_threads must be >= 1 when provided")
     memory_logging = _as_bool(runtime_cfg.get("memory_logging"), False)
     memory_logging_verbose = _as_bool(runtime_cfg.get("memory_logging_verbose"), False)
     memory_report_top_n_value = runtime_cfg.get("memory_report_top_n", 5)
@@ -2270,6 +2402,9 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "cache_root": cache_root,
         "device": device,
         "batch_size": batch_size_int,
+        "auto_tune_batch_size": auto_tune_batch_size,
+        "cpu_num_threads": cpu_num_threads,
+        "cpu_num_interop_threads": cpu_num_interop_threads,
         "memory_logging": memory_logging,
         "memory_logging_verbose": memory_logging_verbose,
         "memory_report_top_n": memory_report_top_n,
@@ -2350,6 +2485,16 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         workflow_cfg["runtime"]["device"] = context.get("device")
     if "batch_size" in context:
         workflow_cfg["runtime"]["batch_size"] = context.get("batch_size")
+    if "auto_tune_batch_size" in context:
+        workflow_cfg["runtime"]["auto_tune_batch_size"] = _as_bool(
+            context.get("auto_tune_batch_size"), False
+        )
+    if "cpu_num_threads" in context:
+        workflow_cfg["runtime"]["cpu_num_threads"] = context.get("cpu_num_threads")
+    if "cpu_num_interop_threads" in context:
+        workflow_cfg["runtime"]["cpu_num_interop_threads"] = context.get(
+            "cpu_num_interop_threads"
+        )
     if "memory_logging" in context:
         workflow_cfg["runtime"]["memory_logging"] = _as_bool(
             context.get("memory_logging"), False

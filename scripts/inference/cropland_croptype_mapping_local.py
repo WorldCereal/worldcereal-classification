@@ -78,6 +78,23 @@ def parse_args(arg_list=None) -> argparse.Namespace:
         "--batch-size", type=int, default=2048, help="Batch size for inference"
     )
     parser.add_argument(
+        "--auto-tune-batch-size",
+        action="store_true",
+        help="Enable CPU batch-size auto-tuning (disabled by default)",
+    )
+    parser.add_argument(
+        "--cpu-num-threads",
+        type=int,
+        default=None,
+        help="Fixed CPU intra-op thread count for torch/BLAS",
+    )
+    parser.add_argument(
+        "--cpu-num-interop-threads",
+        type=int,
+        default=None,
+        help="Fixed CPU inter-op thread count for torch",
+    )
+    parser.add_argument(
         "--memory-logging",
         action="store_true",
         help="Enable runtime memory/timing profiling checkpoints",
@@ -306,11 +323,39 @@ def main() -> None:
         "cropland_postprocess": cropland_postprocess,
         "croptype_postprocess": croptype_postprocess,
     }
-    if "memory_logging" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+    init_params = inspect.signature(SeasonalInferenceEngine.__init__).parameters
+    if "auto_tune_batch_size" in init_params:
+        engine_kwargs["auto_tune_batch_size"] = args.auto_tune_batch_size
+    elif args.auto_tune_batch_size:
+        print(
+            "Warning: installed SeasonalInferenceEngine does not support auto_tune_batch_size.",
+            file=sys.stderr,
+        )
+
+    if "cpu_num_threads" in init_params and args.cpu_num_threads is not None:
+        engine_kwargs["cpu_num_threads"] = args.cpu_num_threads
+    elif args.cpu_num_threads is not None:
+        print(
+            "Warning: installed SeasonalInferenceEngine does not support cpu_num_threads.",
+            file=sys.stderr,
+        )
+
+    if (
+        "cpu_num_interop_threads" in init_params
+        and args.cpu_num_interop_threads is not None
+    ):
+        engine_kwargs["cpu_num_interop_threads"] = args.cpu_num_interop_threads
+    elif args.cpu_num_interop_threads is not None:
+        print(
+            "Warning: installed SeasonalInferenceEngine does not support cpu_num_interop_threads.",
+            file=sys.stderr,
+        )
+
+    if "memory_logging" in init_params:
         engine_kwargs["memory_logging"] = args.memory_logging
-        if "memory_logging_verbose" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+        if "memory_logging_verbose" in init_params:
             engine_kwargs["memory_logging_verbose"] = args.memory_logging_verbose
-        if "memory_report_top_n" in inspect.signature(SeasonalInferenceEngine.__init__).parameters:
+        if "memory_report_top_n" in init_params:
             engine_kwargs["memory_report_top_n"] = args.memory_report_top_n
     elif args.memory_logging:
         print(
@@ -328,6 +373,7 @@ def main() -> None:
         season_windows=season_windows or None,
         season_ids=season_ids,
         export_embeddings=True,
+        export_ndvi=True,
     )
     result = attach_crs_metadata(result, template)
 
@@ -338,3 +384,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
