@@ -44,7 +44,7 @@ SEASONAL_WORKFLOW_PRESETS: SeasonalWorkflowPresets = {
             "batch_size": 1024,
         },
         "season": {
-            "enforce_cropland_gate": True,
+            "mask_cropland": True,
             # Default to GLOBAL_SEASON_IDS at runtime when None.
             "season_ids": None,
             "season_windows": None,

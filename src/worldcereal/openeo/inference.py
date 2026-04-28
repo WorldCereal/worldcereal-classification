@@ -996,7 +996,7 @@ class SeasonalInferenceEngine:
         arr: xr.DataArray,
         epsg: int,
         *,
-        enforce_cropland_gate: bool = True,
+        mask_cropland: bool = True,
         season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
         season_masks: Optional[np.ndarray] = None,
         season_ids: Optional[Sequence[str]] = None,
@@ -1005,7 +1005,7 @@ class SeasonalInferenceEngine:
     ) -> xr.Dataset:
         dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
         logger.info(
-            f"Seasonal inference request received (epsg={epsg}, enforce_gate={enforce_cropland_gate}, "
+            f"Seasonal inference request received (epsg={epsg}, mask_cropland={mask_cropland}, "
             f"dims={dims_summary})"
         )
         prepped = self._prepare_array(arr, epsg)
@@ -1023,7 +1023,11 @@ class SeasonalInferenceEngine:
         num_samples = getattr(predictors, "B", None)
         num_timesteps = getattr(predictors, "T", None)
         expected_timesteps = self._get_expected_timesteps()
-        if num_timesteps is not None and expected_timesteps is not None and num_timesteps > expected_timesteps:
+        if (
+            num_timesteps is not None
+            and expected_timesteps is not None
+            and num_timesteps > expected_timesteps
+        ):
             raise ValueError(
                 f"Input has {num_timesteps} timesteps but the model was trained "
                 f"with {expected_timesteps}.  Positional indices beyond "
@@ -1053,7 +1057,7 @@ class SeasonalInferenceEngine:
             arr=prepped,
             outputs=outputs,
             season_ids=active_season_ids,
-            enforce_cropland_gate=enforce_cropland_gate,
+            mask_cropland=mask_cropland,
             export_embeddings=export_embeddings,
             export_ndvi=export_ndvi,
         )
@@ -1067,9 +1071,7 @@ class SeasonalInferenceEngine:
         back to the encoder's positional-embedding capacity when the
         artifact metadata is incomplete.
         """
-        result = get_expected_timesteps_from_artifact(
-            self.bundle.base_artifact
-        )
+        result = get_expected_timesteps_from_artifact(self.bundle.base_artifact)
         if result is not None:
             return result
 
@@ -1299,7 +1301,7 @@ class SeasonalInferenceEngine:
             Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]
         ],
         season_ids: Sequence[str],
-        enforce_cropland_gate: bool,
+        mask_cropland: bool,
         export_embeddings: bool = False,
         export_ndvi: bool = False,
     ) -> xr.Dataset:
@@ -1430,7 +1432,7 @@ class SeasonalInferenceEngine:
                 )
             )
             gate_applicable = (
-                enforce_cropland_gate
+                mask_cropland
                 and self._cropland_enabled
                 and cropland_mask_bool is not None
             )
@@ -1577,7 +1579,7 @@ def run_seasonal_workflow(
     seasonal_model_zip: str | Path,
     landcover_head_zip: str | Path | None = None,
     croptype_head_zip: str | Path | None = None,
-    enforce_cropland_gate: bool = True,
+    mask_cropland: bool = True,
     cache_root: Optional[Path] = None,
     device: Union[str, TorchDevice] = "cpu",
     batch_size: int = 256,
@@ -1614,7 +1616,7 @@ def run_seasonal_workflow(
     datacube = engine.infer(
         arr,
         epsg,
-        enforce_cropland_gate=enforce_cropland_gate,
+        mask_cropland=mask_cropland,
         season_ids=season_ids,
         season_windows=season_windows,
         season_masks=season_masks,
@@ -2034,7 +2036,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
     season_ids = _normalize_season_id_list(season_cfg.get("season_ids"))
     season_windows = _parse_udf_season_windows(season_cfg.get("season_windows"))
     season_masks = _normalize_udf_season_masks(season_cfg.get("season_masks"))
-    enforce_gate = _as_bool(season_cfg.get("enforce_cropland_gate"), True)
+    mask_cropland = _as_bool(season_cfg.get("mask_cropland"), True)
     composite_frequency_raw = season_cfg.get("composite_frequency", "month")
     if composite_frequency_raw not in (None, "month", "dekad"):
         raise ValueError("Season composite frequency must be 'month', 'dekad', or None")
@@ -2044,9 +2046,9 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         else None
     )
 
-    if enforce_gate and not enable_cropland_head:
+    if mask_cropland and not enable_cropland_head:
         logger.info(
-            "Cropland head disabled in config but gating requested; auto-enabling cropland head."
+            "Cropland head disabled in config but masking requested; auto-enabling cropland head."
         )
         enable_cropland_head = True
 
@@ -2076,7 +2078,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "croptype_head_zip": model_cfg.get("croptype_head_zip"),
         "export_embeddings": export_embeddings,
         "export_ndvi": export_ndvi,
-        "enforce_cropland_gate": enforce_gate,
+        "mask_cropland": mask_cropland,
         "cache_root": cache_root,
         "device": device,
         "batch_size": batch_size_int,
@@ -2148,7 +2150,7 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     if croptype_only_ctx is not None and _as_bool(croptype_only_ctx, False):
         workflow_cfg["model"]["enable_cropland_head"] = False
         workflow_cfg["model"]["enable_croptype_head"] = True
-        workflow_cfg["season"]["enforce_cropland_gate"] = False
+        workflow_cfg["season"]["mask_cropland"] = False
 
     cache_root_override = context.get("cache_root") or context.get("cache_dir")
     if cache_root_override is not None:
@@ -2178,15 +2180,10 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
     if "croptype_postprocess" in context:
         workflow_cfg["postprocess"]["croptype"] = context.get("croptype_postprocess")
 
-    if "enforce_cropland_gate" in context:
-        workflow_cfg["season"]["enforce_cropland_gate"] = _as_bool(
-            context.get("enforce_cropland_gate"), True
+    if "mask_cropland" in context:
+        workflow_cfg["season"]["mask_cropland"] = _as_bool(
+            context.get("mask_cropland"), True
         )
-
-    if "disable_cropland_gate" in context:
-        disable_flag = _as_bool(context.get("disable_cropland_gate"), False)
-        if disable_flag:
-            workflow_cfg["season"]["enforce_cropland_gate"] = False
 
     if "export_class_probabilities" in context:
         workflow_cfg["season"]["export_class_probabilities"] = context.get(

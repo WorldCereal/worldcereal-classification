@@ -99,7 +99,7 @@ def _probability_dataset_with_engine(
         arr=arr,
         outputs=(landcover_logits, croptype_logits, None),
         season_ids=["tc-s1", "tc-s2"],
-        enforce_cropland_gate=True,
+        mask_cropland=True,
     )
 
     return engine, dataset
@@ -130,7 +130,7 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
                 "season_windows": {"S-user": ("2021-01-01", "2021-06-01")},
                 "season_masks": np.ones((2, 3), dtype=bool).tolist(),
                 "composite_frequency": "dekad",
-                "enforce_cropland_gate": False,
+                "mask_cropland": False,
             },
             "postprocess": {
                 "cropland": {"enabled": True, "kernel_size": 7},
@@ -152,7 +152,7 @@ def test_extract_udf_configuration_applies_context_overrides(tmp_path):
     assert config["season_ids"] == ["S-user"]
     assert config["season_windows"] == {"S-user": ("2021-01-01", "2021-06-01")}
     assert np.array_equal(config["season_masks"], np.ones((2, 3), dtype=bool))
-    assert config["enforce_cropland_gate"] is False
+    assert config["mask_cropland"] is False
     assert config["season_composite_frequency"] == "dekad"
     assert config["cache_root"] == Path(tmp_path)
     assert config["enable_croptype_head"] is True
@@ -207,7 +207,7 @@ def test_extract_udf_configuration_allows_croptype_only(monkeypatch):
 
     assert config["enable_croptype_head"] is True
     assert config["enable_cropland_head"] is False
-    assert config["enforce_cropland_gate"] is False
+    assert config["mask_cropland"] is False
 
 
 def test_extract_udf_configuration_rejects_class_probs_without_croptype_head():

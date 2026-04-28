@@ -4489,7 +4489,7 @@ class WorldCerealClassificationApp:
                     "landcover_head_zip": landcover_head_zip,
                     "enable_croptype_head": enable_croptype_head,
                     "croptype_head_zip": croptype_head_zip,
-                    "enforce_cropland_gate": mask_cropland,
+                    "mask_cropland": mask_cropland,
                     "export_class_probs": export_class_probs,
                     "enable_cropland_postprocess": cropland_pp_enabled,
                     "cropland_postprocess_method": cropland_pp_method,

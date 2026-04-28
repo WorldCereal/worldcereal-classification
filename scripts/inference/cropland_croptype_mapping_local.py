@@ -272,7 +272,7 @@ def main() -> None:
     result = engine.infer(
         arr,
         epsg=args.epsg,
-        enforce_cropland_gate=not args.disable_gating,
+        mask_cropland=not args.disable_masking,
         season_windows=season_windows or None,
         season_ids=season_ids,
         export_embeddings=True,
