@@ -944,7 +944,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         job_df = job_db.read()
         if restart_failed and not job_df.empty:
             job_df.loc[
-                job_df["status"].isin(["error", "start_failed"]),
+                job_df["status"].isin(["error", "start_failed", "canceled"]),
                 "status",
             ] = "not_started"
             job_db.persist(job_df)
