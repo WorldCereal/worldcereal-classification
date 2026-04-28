@@ -3808,6 +3808,7 @@ class WorldCerealClassificationApp:
         if status_message is not None:
             status_message.value = "<i>Torch head archive loaded. Ready to deploy.</i>"
         self._update_tab7_state()
+        self._update_tab8_state(prefill_season=True)
 
     def _on_deploy_click(self, button):
         """Handle deploy click."""
@@ -3864,7 +3865,7 @@ class WorldCerealClassificationApp:
             print(
                 "You can proceed to the next step to generate a map using your deployed model."
             )
-            self._update_tab8_state()
+            self._update_tab8_state(prefill_season=True)
             self._update_tab9_state()
 
     # =========================================================================
@@ -3950,7 +3951,7 @@ class WorldCerealClassificationApp:
         with season_slider_output:
             season_slider_obj = date_slider()
         season_id_input = widgets.Text(
-            value=self.season_id,
+            value=self.season_id or "",
             description="Season ID:",
             placeholder="e.g., ShortRains",
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
@@ -5059,7 +5060,9 @@ class WorldCerealClassificationApp:
             authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
-    def _update_tab8_state(self, reset_default: bool = False):
+    def _update_tab8_state(
+        self, reset_default: bool = False, prefill_season: bool = False
+    ):
         """Enable/disable Tab 8 (generate map) depending on model availability."""
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
@@ -5123,6 +5126,39 @@ class WorldCerealClassificationApp:
             season_retrieve_button.layout.display = retrieve_display
         if season_retrieve_output is not None:
             season_retrieve_output.layout.display = retrieve_display
+
+        # Pre-fill season slider and Season ID from the trained model when requested.
+        if (
+            prefill_season
+            and self.workflow_mode != "apply-default-model"
+            and self.season_window is not None
+        ):
+            season_slider_output = self.tab8_widgets.get("season_slider_output")
+            if season_slider_output is not None:
+                # Preserve the trained-model start/end months but shift the year
+                # so the processing period always ends in 2025.
+                ws = pd.Timestamp(self.season_window.start_date)
+                we = pd.Timestamp(self.season_window.end_date)
+                end_year = 2025
+                start_year = 2025 if ws.month <= we.month else 2024
+                adj_end = (
+                    pd.Timestamp(end_year, we.month, 1)
+                    + pd.DateOffset(months=1)
+                    - pd.DateOffset(days=1)
+                )
+                adj_start = pd.Timestamp(start_year, ws.month, 1)
+                adjusted_window = TemporalContext(
+                    adj_start.strftime("%Y-%m-%d"),
+                    adj_end.strftime("%Y-%m-%d"),
+                )
+                season_slider_output.clear_output()
+                with season_slider_output:
+                    new_slider = date_slider(initial_window=adjusted_window)
+                self.tab8_widgets["season_slider"] = new_slider
+            season_id_input = self.tab8_widgets.get("season_id_input")
+            if season_id_input is not None and self.season_id:
+                season_id_input.value = self.season_id
+
         if generate_button and status_message:
             generate_button.disabled = False
             if self.workflow_mode == "apply-default-model":
