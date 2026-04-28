@@ -3939,8 +3939,12 @@ class WorldCerealClassificationApp:
             )
         )
         season_info = self._info_callout(
-            "Use the slider to define your growing season of interest(max 12 months).<br>"
-            "The tool automatically also derives a 12-month processing period that ends on your selected end month."
+            "Use the slider to define your growing season of interest (min. 3 months, max. 12 months).<br>"
+            "When applying a custom model, we automatically propose the exact same season for which your model was trained,"
+            " but you are free to adjust both the year and season.<br>"
+            "<br>"
+            "The tool automatically also derives a 12-month processing period that ends on your selected end month.<br>"
+            "This processing period will be used to generate your cropland mask, if desired."
         )
         season_hint = widgets.HTML(value="<i>No model loaded yet.</i>")
 
