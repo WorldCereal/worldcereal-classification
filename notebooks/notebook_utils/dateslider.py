@@ -39,6 +39,7 @@ class date_slider:
         year_selector_initial: Optional[int] = None,
         year_selector_months_before: int = 6,
         year_selector_months_after: int = 6,
+        initial_window: Optional[TemporalContext] = None,
     ):
         self.show_year = show_year
         self.max_window_months = max(1, max_window_months)
@@ -57,6 +58,27 @@ class date_slider:
         self.interval_slider: widgets.SelectionRangeSlider
         self.html_text: widgets.HTML
         self._year_dropdown: Optional[widgets.Dropdown] = None
+
+        # Parse initial_window into start/exclusive-end timestamps used by
+        # _build_slider to snap the handles to the right positions.
+        self._initial_start: Optional[pd.Timestamp] = None
+        self._initial_end_exclusive: Optional[pd.Timestamp] = None
+        if initial_window is not None:
+            try:
+                ws = pd.Timestamp(initial_window.start_date)
+                we = pd.Timestamp(initial_window.end_date)
+                self._initial_start = ws.replace(day=1)
+                # The slider uses an exclusive-end convention: the end handle
+                # sits at the first day of the month *after* the last included
+                # month, so add one month to the season-end month.
+                we_first = we.replace(day=1)
+                self._initial_end_exclusive = we_first + pd.DateOffset(months=1)
+                # Auto-select the year in the dropdown to the season start year
+                # (only if the caller has not already provided an explicit value).
+                if year_selector and year_selector_initial is None:
+                    year_selector_initial = ws.year
+            except Exception:
+                pass
 
         custom_css = self._build_custom_css()
         descr_widget = widgets.HTML(
@@ -185,15 +207,39 @@ class date_slider:
         options = [(date.strftime("%b %Y"), date) for date in dates]
 
         default_start_index = 0
-        if focus_year is not None:
+        if self._initial_start is not None and focus_year == self._initial_start.year:
+            # Snap to the month specified by the initial window.
+            for idx, date in enumerate(dates):
+                if (
+                    date.year == self._initial_start.year
+                    and date.month == self._initial_start.month
+                ):
+                    default_start_index = idx
+                    break
+            # Exclusive end: find the month *after* the season-end month.
+            default_end_index = min(
+                len(dates) - 1, default_start_index + self.default_window_months
+            )
+            if self._initial_end_exclusive is not None:
+                for idx, date in enumerate(dates):
+                    if (
+                        date.year == self._initial_end_exclusive.year
+                        and date.month == self._initial_end_exclusive.month
+                    ):
+                        default_end_index = idx
+                        break
+        elif focus_year is not None:
             for idx, date in enumerate(dates):
                 if date.year == focus_year:
                     default_start_index = idx
                     break
-        # End index is exclusive: default_window_months steps past start
-        default_end_index = min(
-            len(dates) - 1, default_start_index + self.default_window_months
-        )
+            default_end_index = min(
+                len(dates) - 1, default_start_index + self.default_window_months
+            )
+        else:
+            default_end_index = min(
+                len(dates) - 1, default_start_index + self.default_window_months
+            )
 
         self.interval_slider = widgets.SelectionRangeSlider(
             options=options,

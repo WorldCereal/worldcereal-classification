@@ -458,7 +458,7 @@ class WorldCerealClassificationApp:
         self._update_tab5_state()
         self._update_tab6_state()
         self._update_tab7_state()
-        self._update_tab8_state()
+        self._update_tab8_state(reset_default=True)
         self._update_tab9_state()
 
     # =========================================================================
@@ -3808,6 +3808,7 @@ class WorldCerealClassificationApp:
         if status_message is not None:
             status_message.value = "<i>Torch head archive loaded. Ready to deploy.</i>"
         self._update_tab7_state()
+        self._update_tab8_state(prefill_season=True)
 
     def _on_deploy_click(self, button):
         """Handle deploy click."""
@@ -3864,7 +3865,7 @@ class WorldCerealClassificationApp:
             print(
                 "You can proceed to the next step to generate a map using your deployed model."
             )
-            self._update_tab8_state()
+            self._update_tab8_state(prefill_season=True)
             self._update_tab9_state()
 
     # =========================================================================
@@ -3938,8 +3939,12 @@ class WorldCerealClassificationApp:
             )
         )
         season_info = self._info_callout(
-            "Use the slider to define your growing season of interest(max 12 months).<br>"
-            "The tool automatically also derives a 12-month processing period that ends on your selected end month."
+            "Use the slider to define your growing season of interest (min. 3 months, max. 12 months).<br>"
+            "When applying a custom model, we automatically propose the exact same season for which your model was trained,"
+            " but you are free to adjust both the year and season.<br>"
+            "<br>"
+            "The tool automatically also derives a 12-month processing period that ends on your selected end month.<br>"
+            "This processing period will be used to generate your cropland mask, if desired."
         )
         season_hint = widgets.HTML(value="<i>No model loaded yet.</i>")
 
@@ -3950,7 +3955,7 @@ class WorldCerealClassificationApp:
         with season_slider_output:
             season_slider_obj = date_slider()
         season_id_input = widgets.Text(
-            value=self.season_id,
+            value=self.season_id or "",
             description="Season ID:",
             placeholder="e.g., ShortRains",
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
@@ -3994,7 +3999,7 @@ class WorldCerealClassificationApp:
 
         product_type_dropdown = widgets.Dropdown(
             options=[("Cropland", "cropland"), ("Croptype", "croptype")],
-            value="cropland",
+            value="croptype",
             description="Product type:",
             layout=widgets.Layout(width="240px"),
         )
@@ -4067,6 +4072,55 @@ class WorldCerealClassificationApp:
         postprocess_header = widgets.HTML("<h4>Postprocessing</h4>")
         export_header = widgets.HTML("<h4>Export</h4>")
 
+        # ----------------------------------------------------------------
+        # Resume section — continue from an existing output directory
+        # ----------------------------------------------------------------
+        resume_title = widgets.HTML(
+            value="<h3>Option to resume map production from an existing output directory</h3>"
+        )
+        resume_info = self._info_callout(
+            "If you have previously started a map generation run (in a <code>./runs/</code> folder), "
+            "you can resume it here instead of restarting from scratch.<br><br>"
+            "Provide the full path to an existing output directory and click <b>Resume production</b>.<br>"
+            "The app will verify that the required <code>production_grid.geoparquet</code>, "
+            "<code>job_tracking.csv</code> and <code>run_settings.json</code> files are present, "
+            "restore all original processing settings, and restart job submission for any unfinished tiles."
+        )
+        resume_input = widgets.Text(
+            value="",
+            description="Output dir:",
+            placeholder="./runs/croptype_mymodel_myruns_20250101-20251231",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+        )
+        resume_button = widgets.Button(
+            description="Resume production",
+            button_style="warning",
+            icon="play",
+            layout=widgets.Layout(width="200px", height="40px"),
+        )
+        restart_failed_checkbox = widgets.Checkbox(
+            value=False,
+            description="Restart failed jobs",
+            layout=widgets.Layout(width="220px"),
+        )
+        resume_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="80px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+        resume_section = widgets.VBox(
+            [
+                resume_title,
+                resume_info,
+                resume_input,
+                widgets.HBox([resume_button, restart_failed_checkbox]),
+                resume_output,
+            ]
+        )
+
         self.tab8_widgets = {
             "status_message": status_message,
             "aoi_map": aoi_map,
@@ -4096,6 +4150,10 @@ class WorldCerealClassificationApp:
             "tile_resolution_input": tile_resolution_input,
             "generate_button": generate_button,
             "output": output,
+            "resume_input": resume_input,
+            "resume_button": resume_button,
+            "restart_failed_checkbox": restart_failed_checkbox,
+            "resume_output": resume_output,
         }
 
         def _update_product_controls(_=None):
@@ -4150,11 +4208,10 @@ class WorldCerealClassificationApp:
             lambda _: self._auto_save_aoi_map(self.tab8_widgets.get("aoi_map"))
         )
         season_retrieve_button.on_click(self._on_tab8_retrieve_seasons)
+        resume_button.on_click(self._on_tab8_resume_click)
 
-        return widgets.VBox(
+        new_run_section = widgets.VBox(
             [
-                header,
-                status_message,
                 widgets.HTML("<h3>Note on upscaling</h3>"),
                 upscaling_short,
                 upscaling_info,
@@ -4202,6 +4259,16 @@ class WorldCerealClassificationApp:
                 ),
                 widgets.HTML("<b>Map Generation Status:</b>"),
                 output,
+            ]
+        )
+        self.tab8_widgets["new_run_section"] = new_run_section
+
+        return widgets.VBox(
+            [
+                header,
+                status_message,
+                resume_section,
+                new_run_section,
                 self._build_tab_navigation(),
             ]
         )
@@ -4223,6 +4290,147 @@ class WorldCerealClassificationApp:
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
+
+    def _on_tab8_resume_click(self, _=None) -> None:
+        """Validate an existing output directory and resume map production from it."""
+        resume_input = self.tab8_widgets.get("resume_input")
+        resume_button = self.tab8_widgets.get("resume_button")
+        restart_failed_checkbox = self.tab8_widgets.get("restart_failed_checkbox")
+        resume_output = self.tab8_widgets.get("resume_output")
+        status_message = self.tab8_widgets.get("status_message")
+        if resume_input is None or resume_output is None:
+            return
+
+        path_value = resume_input.value.strip()
+        with resume_output:
+            resume_output.clear_output()
+            if not path_value:
+                print("Please provide an output directory path.")
+                return
+            path = Path(path_value)
+            if not path.exists():
+                print(f"Directory not found: {path}")
+                return
+            if not path.is_dir():
+                print("Path must be a directory.")
+                return
+
+            ok = True
+
+            # Check for model_metadata.json
+            if (path / "model_metadata.json").exists():
+                print("✓ model_metadata.json found")
+            else:
+                print(
+                    "✗ model_metadata.json not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for production grid
+            if (path / "production_grid.geoparquet").exists():
+                print("✓ production_grid.geoparquet found")
+            else:
+                print(
+                    "✗ production_grid.geoparquet not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for job tracking CSV
+            if (path / "job_tracking.csv").exists():
+                print("✓ job_tracking.csv found")
+            else:
+                print(
+                    "✗ job_tracking.csv not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for run settings
+            if (path / "run_settings.json").exists():
+                print("✓ run_settings.json found")
+            else:
+                print(
+                    "✗ run_settings.json not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            if not ok:
+                print(
+                    "\nCould not resume from this directory. "
+                    "Please check that all required files are present."
+                )
+                return
+
+            run_settings = self._load_run_settings(path)
+            if run_settings is None:
+                print("\nFailed to load run_settings.json. Cannot resume.")
+                return
+
+            self.tab8_results = path
+            self._load_model_metadata(path)
+            print(f"\nSuccessfully loaded output directory: {path}")
+            print(
+                "All original production settings restored. Starting map production..."
+            )
+
+        # Hide the form section and disable the button during production
+        new_run_section = self.tab8_widgets.get("new_run_section")
+        if new_run_section is not None:
+            new_run_section.layout.display = "none"
+        if resume_button is not None:
+            resume_button.disabled = True
+        if status_message is not None:
+            status_message.value = (
+                "<i>Resuming production... this may take a while.</i>"
+            )
+
+        # Build log/plot output widgets inside resume_output
+        log_out = widgets.Output()
+        plot_out = widgets.Output()
+        with resume_output:
+            display(log_out)
+            display(plot_out)
+
+        # aoi_gdf is required by the job manager constructor but is not used
+        # when an existing job_tracking.csv is present (resume path).
+        empty_aoi = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+        restart_failed = (
+            restart_failed_checkbox.value if restart_failed_checkbox is not None else False
+        )
+
+        # Merge run_settings with model info from model_metadata.json
+        # (already loaded into self.tab8_* by _load_model_metadata above)
+        full_production_kwargs = {
+            "aoi_gdf": empty_aoi,
+            "output_dir": path,
+            "temporal_extent": None,
+            "season_specifications": None,
+            "product_type": self.tab8_product_type or "cropland",
+            "seasonal_model_zip": self.tab8_seasonal_model_url,
+            "landcover_head_zip": self.tab8_landcover_head_url,
+            "croptype_head_zip": self.tab8_croptype_head_url,
+            "restart_failed": restart_failed,
+            **run_settings,
+        }
+
+        try:
+            _ = run_worldcereal_task_notebook(
+                task=WorldCerealTask.CLASSIFICATION,
+                production_kwargs=full_production_kwargs,
+                plot_out=plot_out,
+                log_out=log_out,
+                display_outputs=True,
+            )
+            if status_message is not None:
+                status_message.value = "<i>Production resumed and finished.</i>"
+        except Exception:  # noqa: BLE001
+            if status_message is not None:
+                status_message.value = "<i>Production failed. Check logs below.</i>"
+        finally:
+            if resume_button is not None:
+                resume_button.disabled = False
+
+        self._update_tab9_state()
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
@@ -4455,6 +4663,29 @@ class WorldCerealClassificationApp:
             landcover_head=landcover_head_zip,
             croptype_head=croptype_head_zip,
             presto_model=presto_model_path,
+        )
+
+        # Save all production settings so the run can be resumed with identical
+        # parameters without requiring the user to re-enter them.
+        # Model URLs and product_type are already persisted in model_metadata.json,
+        # so we only store the settings that aren't covered there.
+        # grid_size is intentionally excluded: it only affects the initial grid
+        # creation and is irrelevant on resume (the grid is loaded from disk).
+        self._save_run_settings(
+            output_dir=output_dir,
+            settings={
+                "enable_cropland_head": enable_cropland_head,
+                "enable_croptype_head": enable_croptype_head,
+                "enforce_cropland_gate": mask_cropland,
+                "export_class_probs": export_class_probs,
+                "enable_cropland_postprocess": cropland_pp_enabled,
+                "cropland_postprocess_method": cropland_pp_method,
+                "cropland_postprocess_kernel_size": cropland_pp_kernel,
+                "enable_croptype_postprocess": croptype_pp_enabled,
+                "croptype_postprocess_method": croptype_pp_method,
+                "croptype_postprocess_kernel_size": croptype_pp_kernel,
+                "simplify_logging": True,
+            },
         )
 
         # Get processing spatial extent
@@ -5059,7 +5290,9 @@ class WorldCerealClassificationApp:
             authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
-    def _update_tab8_state(self):
+    def _update_tab8_state(
+        self, reset_default: bool = False, prefill_season: bool = False
+    ):
         """Enable/disable Tab 8 (generate map) depending on model availability."""
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
@@ -5080,7 +5313,16 @@ class WorldCerealClassificationApp:
                 options.append(("Croptype", "croptype"))
             product_type_dropdown.options = options
             allowed_values = {value for _, value in options}
-            if product_type_dropdown.value not in allowed_values:
+            if reset_default:
+                # Set a mode-appropriate default value
+                if self.workflow_mode == "apply-default-model":
+                    mode_default = "cropland"
+                else:
+                    mode_default = (
+                        "croptype" if "croptype" in allowed_values else "cropland"
+                    )
+                product_type_dropdown.value = mode_default
+            elif product_type_dropdown.value not in allowed_values:
                 product_type_dropdown.value = "cropland"
 
         if season_hint is not None:
@@ -5114,6 +5356,39 @@ class WorldCerealClassificationApp:
             season_retrieve_button.layout.display = retrieve_display
         if season_retrieve_output is not None:
             season_retrieve_output.layout.display = retrieve_display
+
+        # Pre-fill season slider and Season ID from the trained model when requested.
+        if (
+            prefill_season
+            and self.workflow_mode != "apply-default-model"
+            and self.season_window is not None
+        ):
+            season_slider_output = self.tab8_widgets.get("season_slider_output")
+            if season_slider_output is not None:
+                # Preserve the trained-model start/end months but shift the year
+                # so the processing period always ends in 2025.
+                ws = pd.Timestamp(self.season_window.start_date)
+                we = pd.Timestamp(self.season_window.end_date)
+                end_year = 2025
+                start_year = 2025 if ws.month <= we.month else 2024
+                adj_end = (
+                    pd.Timestamp(end_year, we.month, 1)
+                    + pd.DateOffset(months=1)
+                    - pd.DateOffset(days=1)
+                )
+                adj_start = pd.Timestamp(start_year, ws.month, 1)
+                adjusted_window = TemporalContext(
+                    adj_start.strftime("%Y-%m-%d"),
+                    adj_end.strftime("%Y-%m-%d"),
+                )
+                season_slider_output.clear_output()
+                with season_slider_output:
+                    new_slider = date_slider(initial_window=adjusted_window)
+                self.tab8_widgets["season_slider"] = new_slider
+            season_id_input = self.tab8_widgets.get("season_id_input")
+            if season_id_input is not None and self.season_id:
+                season_id_input.value = self.season_id
+
         if generate_button and status_message:
             generate_button.disabled = False
             if self.workflow_mode == "apply-default-model":
@@ -5285,6 +5560,25 @@ class WorldCerealClassificationApp:
         }
         with open(output_dir / "model_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
+
+    def _save_run_settings(self, output_dir: Path, settings: dict) -> None:
+        """Persist all production kwargs (except aoi_gdf/output_dir/temporal/season)
+        to ``run_settings.json`` so a run can be resumed with identical settings."""
+        with open(output_dir / "run_settings.json", "w") as f:
+            json.dump(settings, f, indent=2)
+
+    def _load_run_settings(self, results_dir: Path) -> Optional[dict]:
+        """Load production settings saved by ``_save_run_settings``.
+        Returns the settings dict, or ``None`` if the file is missing or unreadable.
+        """
+        settings_path = results_dir / "run_settings.json"
+        if not settings_path.exists():
+            return None
+        try:
+            with open(settings_path) as f:
+                return json.load(f)
+        except Exception:
+            return None
 
     def _load_model_metadata(self, results_dir: Path) -> bool:
         """Restore model configuration from a previously saved results folder.
