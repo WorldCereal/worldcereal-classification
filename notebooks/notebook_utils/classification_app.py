@@ -458,7 +458,7 @@ class WorldCerealClassificationApp:
         self._update_tab5_state()
         self._update_tab6_state()
         self._update_tab7_state()
-        self._update_tab8_state()
+        self._update_tab8_state(reset_default=True)
         self._update_tab9_state()
 
     # =========================================================================
@@ -3994,7 +3994,7 @@ class WorldCerealClassificationApp:
 
         product_type_dropdown = widgets.Dropdown(
             options=[("Cropland", "cropland"), ("Croptype", "croptype")],
-            value="cropland",
+            value="croptype",
             description="Product type:",
             layout=widgets.Layout(width="240px"),
         )
@@ -5059,7 +5059,7 @@ class WorldCerealClassificationApp:
             authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
-    def _update_tab8_state(self):
+    def _update_tab8_state(self, reset_default: bool = False):
         """Enable/disable Tab 8 (generate map) depending on model availability."""
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
@@ -5080,7 +5080,16 @@ class WorldCerealClassificationApp:
                 options.append(("Croptype", "croptype"))
             product_type_dropdown.options = options
             allowed_values = {value for _, value in options}
-            if product_type_dropdown.value not in allowed_values:
+            if reset_default:
+                # Set a mode-appropriate default value
+                if self.workflow_mode == "apply-default-model":
+                    mode_default = "cropland"
+                else:
+                    mode_default = (
+                        "croptype" if "croptype" in allowed_values else "cropland"
+                    )
+                product_type_dropdown.value = mode_default
+            elif product_type_dropdown.value not in allowed_values:
                 product_type_dropdown.value = "cropland"
 
         if season_hint is not None:
