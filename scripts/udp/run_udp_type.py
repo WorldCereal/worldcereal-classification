@@ -29,9 +29,7 @@ model_url = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcer
 orbit_state = "DESCENDING"  # "ASCENDING" or "DESCENDING"
 
 season_ids = ["tc-s1"]
-season_windows = {
-    "tc-s1": ("2020-12-01", "2021-07-31")
-}
+season_windows = {"tc-s1": ("2020-12-01", "2021-07-31")}
 
 postprocess_method = "majority_vote"  # "majority_vote" or "smooth_probabilities", defaults to "majority_vote" if not provided
 
@@ -48,7 +46,7 @@ c = openeo.connect("https://openeo.dataspace.copernicus.eu").authenticate_oidc()
 
 inference_cube = c.datacube_from_process(
     process_id="worldcereal_crop_type",
-    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/heads/582-create-pytoch-udps/src/worldcereal/udp/worldcereal_crop_type.json",
+    namespace="https://raw.githubusercontent.com/WorldCereal/worldcereal-classification/refs/heads/582-create-pytoch-udps/scripts/udp/worldcereal_crop_type.json",
     spatial_extent=spatial_extent,
     temporal_extent=temporal_extent,
     model_url=model_url,
@@ -60,8 +58,7 @@ inference_cube = c.datacube_from_process(
 )
 
 
-
 job = inference_cube.execute_batch(
     title="WorldCereal Crop Type UDP Test",
-    auto_add_save_result=False
+    auto_add_save_result=False,
 )
