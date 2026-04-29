@@ -14,11 +14,6 @@ from typing import Dict, Optional, Tuple
 import requests
 import xarray as xr
 
-# Prefer local source tree when running from the repository checkout.
-REPO_SRC = Path(__file__).resolve().parents[2] / "src"
-if REPO_SRC.exists() and str(REPO_SRC) not in sys.path:
-    sys.path.insert(0, str(REPO_SRC))
-
 from worldcereal.openeo.inference import SeasonalInferenceEngine
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
@@ -384,6 +379,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
