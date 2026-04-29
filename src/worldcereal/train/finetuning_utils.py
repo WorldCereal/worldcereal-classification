@@ -2394,9 +2394,10 @@ def run_finetuning(
         )
 
         pbar.set_description(description)
-        pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        current_lr = scheduler.get_last_lr()[0]
+        pbar.set_postfix(lr=current_lr)
         logger.info(
-            f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
+            f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description} | LR: {current_lr:.2e}"
         )  # Only log to file if console filters on "PROGRESS"
 
     assert best_model_dict is not None
