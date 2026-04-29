@@ -1,0 +1,85 @@
+{
+  "started": "2026-04-27T13:56:00",
+  "finished": "2026-04-27T14:21:29",
+  "baseline_time_s": null,
+  "baseline_config": null,
+  "batch_sizes": [
+    2048
+  ],
+  "num_threads": [
+    2
+  ],
+  "num_interop_threads": [
+    2
+  ],
+  "modes": [
+    "baseline",
+    "bf16",
+    "int8",
+    "jit",
+    "jit+bf16",
+    "jit+int8"
+  ],
+  "results": [
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "baseline",
+      "total_time_s": 13.128,
+      "all_runs_s": [
+        13.128
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "bf16",
+      "total_time_s": 175.01,
+      "all_runs_s": [
+        175.01
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "int8",
+      "total_time_s": 12.846,
+      "all_runs_s": [
+        12.846
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "jit",
+      "total_time_s": 57.845,
+      "all_runs_s": [
+        57.845
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "jit+bf16",
+      "total_time_s": 1186.634,
+      "all_runs_s": [
+        1186.634
+      ]
+    },
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "jit+int8",
+      "total_time_s": 12.482,
+      "all_runs_s": [
+        12.482
+      ]
+    }
+  ]
+}

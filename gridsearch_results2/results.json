@@ -1,0 +1,30 @@
+{
+  "started": "2026-04-27T13:53:35",
+  "finished": "2026-04-27T13:54:12",
+  "baseline_time_s": null,
+  "baseline_config": null,
+  "batch_sizes": [
+    2048
+  ],
+  "num_threads": [
+    2
+  ],
+  "num_interop_threads": [
+    2
+  ],
+  "modes": [
+    "baseline"
+  ],
+  "results": [
+    {
+      "batch_size": 2048,
+      "num_threads": 2,
+      "num_interop_threads": 2,
+      "mode": "baseline",
+      "total_time_s": 23.269,
+      "all_runs_s": [
+        23.269
+      ]
+    }
+  ]
+}

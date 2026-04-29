@@ -111,6 +111,38 @@ def parse_args(arg_list=None) -> argparse.Namespace:
         help="How many stages to include in the final profile summary",
     )
     parser.add_argument(
+        "--torch-profile",
+        action="store_true",
+        help="Wrap the batch loop in torch.profiler and log top CPU ops",
+    )
+    parser.add_argument(
+        "--torch-profile-trace",
+        type=Path,
+        default=None,
+        help="Optional path to export a Chrome trace from torch.profiler",
+    )
+    parser.add_argument(
+        "--torch-profile-top-n",
+        type=int,
+        default=15,
+        help="Number of rows in the torch.profiler summary table",
+    )
+    parser.add_argument(
+        "--optimize-dynamic-int8",
+        action="store_true",
+        help="Apply dynamic INT8 quantization to nn.Linear layers (CPU)",
+    )
+    parser.add_argument(
+        "--optimize-jit-freeze",
+        action="store_true",
+        help="Apply torch.jit.script + freeze + optimize_for_inference",
+    )
+    parser.add_argument(
+        "--optimize-bf16-autocast",
+        action="store_true",
+        help="Run forward pass under torch.autocast('cpu', dtype=bfloat16)",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=None,
@@ -363,6 +395,32 @@ def main() -> None:
             " Use the local source tree or reinstall worldcereal from this checkout.",
             file=sys.stderr,
         )
+
+    if "enable_torch_profiler" in init_params:
+        engine_kwargs["enable_torch_profiler"] = args.torch_profile
+        if "torch_profiler_trace_path" in init_params:
+            engine_kwargs["torch_profiler_trace_path"] = args.torch_profile_trace
+        if "torch_profiler_top_n" in init_params:
+            engine_kwargs["torch_profiler_top_n"] = args.torch_profile_top_n
+    elif args.torch_profile:
+        print(
+            "Warning: installed SeasonalInferenceEngine does not support enable_torch_profiler.",
+            file=sys.stderr,
+        )
+
+    for cli_name, init_name in (
+        ("optimize_dynamic_int8", "optimize_dynamic_int8"),
+        ("optimize_jit_freeze", "optimize_jit_freeze"),
+        ("optimize_bf16_autocast", "optimize_bf16_autocast"),
+    ):
+        value = getattr(args, cli_name)
+        if init_name in init_params:
+            engine_kwargs[init_name] = value
+        elif value:
+            print(
+                f"Warning: installed SeasonalInferenceEngine does not support {init_name}.",
+                file=sys.stderr,
+            )
 
     engine = SeasonalInferenceEngine(**engine_kwargs)
 
