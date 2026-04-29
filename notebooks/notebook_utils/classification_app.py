@@ -152,9 +152,7 @@ class WorldCerealClassificationApp:
         self.tab8_widgets: Dict[str, Any] = {}
         self.tab9_widgets: Dict[str, Any] = {}
 
-        display(
-            HTML(
-                """
+        display(HTML("""
                 <style>
                     .jp-OutputArea-output pre {
                         white-space: pre-wrap !important;
@@ -162,9 +160,7 @@ class WorldCerealClassificationApp:
                         overflow-wrap: break-word !important;
                     }
                 </style>
-                """
-            )
-        )
+                """))
 
         tab0 = self._build_tab0_workflow()
         tab1 = self._build_tab1_retrieve_reference_data()
@@ -193,8 +189,7 @@ class WorldCerealClassificationApp:
         self.tabs = widgets.Tab(children=[])
         self.tabs.layout = widgets.Layout(width="100%", max_width="100%")
 
-        self._tab_style = widgets.HTML(
-            value="""
+        self._tab_style = widgets.HTML(value="""
 <style>
 .p-TabBar-tabLabel {
     font-size: 14px;
@@ -204,8 +199,7 @@ class WorldCerealClassificationApp:
     max-width: none;
 }
 </style>
-"""
-        )
+""")
 
         self.welcome_screen = tab0
         self.tabs_container = widgets.VBox([self.welcome_screen])
@@ -2698,12 +2692,12 @@ class WorldCerealClassificationApp:
             "Validation and test splits are left untouched to ensure fair evaluation.<br><br>"
             "The resulting <code>split</code> column is carried forward to the next step and used as input during training.<br><br>"
             "<b>Dataset splitting options</b>:<br>"
-            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used.<br>"
+            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used (default).<br>"
             "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
             "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
         )
         use_spatial_split_checkbox = widgets.Checkbox(
-            value=True,
+            value=False,
             description="Use spatial split",
         )
         bin_size_degrees_input = widgets.FloatText(
@@ -3225,7 +3219,7 @@ class WorldCerealClassificationApp:
             )
             repeats = repeats_input.value if repeats_input is not None else 3
             use_spatial_split = (
-                True
+                False
                 if use_spatial_split_checkbox is None
                 else use_spatial_split_checkbox.value
             )
@@ -4395,7 +4389,9 @@ class WorldCerealClassificationApp:
         empty_aoi = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
         restart_failed = (
-            restart_failed_checkbox.value if restart_failed_checkbox is not None else False
+            restart_failed_checkbox.value
+            if restart_failed_checkbox is not None
+            else False
         )
 
         # Merge run_settings with model info from model_metadata.json
