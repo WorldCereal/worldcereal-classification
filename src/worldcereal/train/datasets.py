@@ -934,16 +934,14 @@ class WorldCerealDataset(Dataset):
             #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
             # )
 
-        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps)
+        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps).
         if cfg.s2_cloud_timestep_prob > 0:
             s2_mask = np.random.rand(T) < cfg.s2_cloud_timestep_prob
-            # Avoid double logging of block; still mask independent timesteps not in block
-            newly_masked = s2_mask & (s2[0, 0, :, 0] != NODATAVALUE)
+            # Probe B4 to determine which timesteps are newly masked (cloudy) vs already masked
+            b4_idx = S2_BANDS.index("B4")
+            newly_masked = s2_mask & (s2[0, 0, :, b4_idx] != NODATAVALUE)
             if newly_masked.any():
                 s2[..., newly_masked, :] = NODATAVALUE
-                # logger.debug(
-                #     f"Applied S2 per-timestep cloud masking on {newly_masked.sum()} timesteps"
-                # )
 
         # 5. Meteo per-timestep dropout
         if cfg.meteo_timestep_dropout_prob > 0:
