@@ -95,22 +95,6 @@ def parse_args(arg_list=None) -> argparse.Namespace:
         help="Fixed CPU inter-op thread count for torch",
     )
     parser.add_argument(
-        "--memory-logging",
-        action="store_true",
-        help="Enable runtime memory/timing profiling checkpoints",
-    )
-    parser.add_argument(
-        "--memory-logging-verbose",
-        action="store_true",
-        help="Log every memory checkpoint (default: only final summary)",
-    )
-    parser.add_argument(
-        "--memory-report-top-n",
-        type=int,
-        default=5,
-        help="How many stages to include in the final profile summary",
-    )
-    parser.add_argument(
         "--torch-profile",
         action="store_true",
         help="Wrap the batch loop in torch.profiler and log top CPU ops",
@@ -303,7 +287,6 @@ def main() -> None:
         DEFAULT_SEASON_WINDOWS[0],
         "--season-window",
         DEFAULT_SEASON_WINDOWS[1],
-        "--memory-logging",
         "--cropland-postprocess",
         "--croptype-postprocess",
         # "--export-class-probabilities",
@@ -380,19 +363,6 @@ def main() -> None:
     elif args.cpu_num_interop_threads is not None:
         print(
             "Warning: installed SeasonalInferenceEngine does not support cpu_num_interop_threads.",
-            file=sys.stderr,
-        )
-
-    if "memory_logging" in init_params:
-        engine_kwargs["memory_logging"] = args.memory_logging
-        if "memory_logging_verbose" in init_params:
-            engine_kwargs["memory_logging_verbose"] = args.memory_logging_verbose
-        if "memory_report_top_n" in init_params:
-            engine_kwargs["memory_report_top_n"] = args.memory_report_top_n
-    elif args.memory_logging:
-        print(
-            "Warning: installed SeasonalInferenceEngine does not support memory_logging."
-            " Use the local source tree or reinstall worldcereal from this checkout.",
             file=sys.stderr,
         )
 

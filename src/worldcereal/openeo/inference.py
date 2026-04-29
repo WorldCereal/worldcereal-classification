@@ -6,8 +6,6 @@ import logging
 import os
 import random
 import sys
-import time
-import tracemalloc
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -80,269 +78,6 @@ else:  # pragma: no cover - runtime avoids importing torch eagerly
 
 TorchTensor: TypeAlias = _TorchTensorType
 TorchDevice: TypeAlias = _TorchDeviceType
-
-
-def _safe_rss_megabytes() -> Optional[float]:
-    """Best-effort RSS reporting for memory diagnostics."""
-
-    # Try psutil first when available.
-    try:
-        import os
-
-        import psutil  # type: ignore
-
-        process = psutil.Process(os.getpid())
-        return process.memory_info().rss / (1024.0 * 1024.0)
-    except Exception:
-        pass
-
-    # Fallback for Unix-like systems.
-    try:
-        import resource
-
-        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # Linux returns KiB, macOS returns bytes.
-        if sys.platform == "darwin":
-            return rss / (1024.0 * 1024.0)
-        return rss / 1024.0
-    except Exception:
-        return None
-
-
-def _safe_object_nbytes_mb(obj: Any) -> Optional[float]:
-    """Best-effort byte-size estimate for arrays and tensors."""
-
-    try:
-        if isinstance(obj, xr.DataArray):
-            return _safe_object_nbytes_mb(obj.values)
-        if isinstance(obj, np.ndarray):
-            return float(obj.nbytes) / (1024.0 * 1024.0)
-        if isinstance(obj, (list, tuple)):
-            total = 0.0
-            found = False
-            for item in obj:
-                item_mb = _safe_object_nbytes_mb(item)
-                if item_mb is None:
-                    continue
-                total += item_mb
-                found = True
-            return total if found else None
-        if hasattr(obj, "numel") and hasattr(obj, "element_size"):
-            numel = int(obj.numel())
-            elem_size = int(obj.element_size())
-            return float(numel * elem_size) / (1024.0 * 1024.0)
-    except Exception:
-        return None
-    return None
-
-
-def _summarize_memory_object(obj: Any) -> Optional[Dict[str, Any]]:
-    """Small structured summary for a potentially memory-heavy runtime object."""
-
-    try:
-        if isinstance(obj, xr.DataArray):
-            summary = _summarize_memory_object(obj.values) or {}
-            summary.update(
-                {
-                    "kind": "xarray.DataArray",
-                    "dims": tuple(str(dim) for dim in obj.dims),
-                }
-            )
-            return summary
-
-        if isinstance(obj, np.ndarray):
-            return {
-                "kind": "numpy.ndarray",
-                "shape": tuple(int(v) for v in obj.shape),
-                "dtype": str(obj.dtype),
-                "nbytes_mb": float(obj.nbytes) / (1024.0 * 1024.0),
-                "c_contiguous": bool(obj.flags.c_contiguous),
-                "owns_data": bool(obj.flags.owndata),
-                "base_type": type(obj.base).__name__ if obj.base is not None else None,
-            }
-
-        if hasattr(obj, "numel") and hasattr(obj, "element_size"):
-            numel = int(obj.numel())
-            elem_size = int(obj.element_size())
-            return {
-                "kind": type(obj).__name__,
-                "shape": tuple(int(v) for v in getattr(obj, "shape", (numel,))),
-                "dtype": str(getattr(obj, "dtype", "unknown")),
-                "device": str(getattr(obj, "device", "unknown")),
-                "nbytes_mb": float(numel * elem_size) / (1024.0 * 1024.0),
-            }
-
-        if isinstance(obj, (list, tuple)):
-            return {
-                "kind": type(obj).__name__,
-                "len": len(obj),
-                "nbytes_mb": _safe_object_nbytes_mb(obj),
-                "item_types": sorted({type(item).__name__ for item in obj}),
-            }
-    except Exception:
-        return None
-    return None
-
-
-def _format_memory_summary(name: str, summary: Mapping[str, Any]) -> str:
-    parts = [f"{name}: {summary.get('kind', 'object')}"]
-    nbytes_mb = summary.get("nbytes_mb")
-    if nbytes_mb is not None:
-        parts.append(f"size={float(nbytes_mb):.2f}MB")
-    for key in (
-        "shape",
-        "dtype",
-        "device",
-        "dims",
-        "len",
-        "c_contiguous",
-        "owns_data",
-        "base_type",
-    ):
-        value = summary.get(key)
-        if value is not None:
-            parts.append(f"{key}={value}")
-    return ", ".join(parts)
-
-
-class _MemoryTrace:
-    """Small helper for opt-in memory checkpoints in UDF execution."""
-
-    def __init__(self, enabled: bool, *, verbose: bool = False) -> None:
-        self.enabled = enabled
-        self.verbose = verbose
-        self._records: List[Dict[str, Any]] = []
-        self._object_records: List[Dict[str, Any]] = []
-        self._start_ts = time.perf_counter()
-        self._last_ts = self._start_ts
-        if not self.enabled:
-            return
-        if not tracemalloc.is_tracing():
-            tracemalloc.start()
-
-    def checkpoint(self, label: str) -> None:
-        if not self.enabled:
-            return
-        now = time.perf_counter()
-        elapsed_s = now - self._start_ts
-        delta_s = now - self._last_ts
-        self._last_ts = now
-        current, peak = tracemalloc.get_traced_memory()
-        current_mb = current / (1024.0 * 1024.0)
-        peak_mb = peak / (1024.0 * 1024.0)
-        rss_mb = _safe_rss_megabytes()
-        self._records.append(
-            {
-                "label": label,
-                "elapsed_s": elapsed_s,
-                "delta_s": delta_s,
-                "current_mb": current_mb,
-                "peak_mb": peak_mb,
-                "rss_mb": rss_mb,
-            }
-        )
-        if self.verbose:
-            rss_text = f", rss={rss_mb:.2f}MB" if rss_mb is not None else ""
-            logger.info(
-                f"[mem] {label}: elapsed={elapsed_s:.3f}s (+{delta_s:.3f}s), "
-                f"traced_current={current_mb:.2f}MB, traced_peak={peak_mb:.2f}MB{rss_text}"
-            )
-
-    def observe(self, label: str, /, **objects: Any) -> None:
-        if not self.enabled:
-            return
-        lines: List[str] = []
-        for name, obj in objects.items():
-            summary = _summarize_memory_object(obj)
-            if summary is None:
-                continue
-            self._object_records.append({"label": label, "name": name, **summary})
-            if self.verbose:
-                lines.append(
-                    f"[mem-obj] {label} | {_format_memory_summary(name, summary)}"
-                )
-        if lines:
-            logger.info("\n".join(lines))
-
-    def report(self, *, title: str = "runtime", top_n: int = 8) -> None:
-        if not self.enabled or len(self._records) < 2:
-            return
-
-        stage_rows: List[Dict[str, Any]] = []
-        for idx in range(1, len(self._records)):
-            prev = self._records[idx - 1]
-            cur = self._records[idx]
-            rss_prev = prev.get("rss_mb")
-            rss_cur = cur.get("rss_mb")
-            rss_delta = (
-                float(rss_cur) - float(rss_prev)
-                if rss_prev is not None and rss_cur is not None
-                else None
-            )
-            stage_rows.append(
-                {
-                    "stage": f"{prev['label']} -> {cur['label']}",
-                    "duration_s": float(cur["elapsed_s"]) - float(prev["elapsed_s"]),
-                    "traced_delta_mb": float(cur["current_mb"]) - float(prev["current_mb"]),
-                    "peak_mb": float(cur["peak_mb"]),
-                    "rss_delta_mb": rss_delta,
-                }
-            )
-
-        total_duration = float(self._records[-1]["elapsed_s"])
-        max_peak = max(float(row["peak_mb"]) for row in stage_rows)
-        rss_values = [
-            float(row["rss_mb"])
-            for row in self._records
-            if row.get("rss_mb") is not None
-        ]
-        max_rss = max(rss_values) if rss_values else None
-        final_rss = rss_values[-1] if rss_values else None
-
-        slowest = sorted(stage_rows, key=lambda r: r["duration_s"], reverse=True)[:top_n]
-        memory_heavy = sorted(
-            stage_rows, key=lambda r: r["traced_delta_mb"], reverse=True
-        )[:top_n]
-
-        rss_summary = ""
-        if max_rss is not None:
-            rss_summary = f" | max_rss={max_rss:.2f}MB"
-            if final_rss is not None:
-                rss_summary += f" | final_rss={final_rss:.2f}MB"
-
-        lines: List[str] = [
-            f"[profile] ===== {title} summary =====",
-            f"[profile] total_time={total_duration:.3f}s | checkpoints={len(self._records)} | traced_peak={max_peak:.2f}MB{rss_summary}",
-            "[profile] slowest stages:",
-        ]
-        for idx, row in enumerate(slowest, start=1):
-            lines.append(
-                f"[profile]   {idx}. {row['stage']} | {row['duration_s']:.3f}s | "
-                f"traced_delta={row['traced_delta_mb']:+.2f}MB | peak={row['peak_mb']:.2f}MB"
-            )
-
-        lines.append("[profile] largest traced memory increases:")
-        for idx, row in enumerate(memory_heavy, start=1):
-            rss_delta = row.get("rss_delta_mb")
-            rss_text = f" | rss_delta={rss_delta:+.2f}MB" if rss_delta is not None else ""
-            lines.append(
-                f"[profile]   {idx}. {row['stage']} | traced_delta={row['traced_delta_mb']:+.2f}MB | "
-                f"duration={row['duration_s']:.3f}s | peak={row['peak_mb']:.2f}MB{rss_text}"
-            )
-        if self._object_records:
-            largest_objects = sorted(
-                self._object_records,
-                key=lambda row: float(row.get("nbytes_mb") or 0.0),
-                reverse=True,
-            )[:top_n]
-            lines.append("[profile] largest observed objects:")
-            for idx, row in enumerate(largest_objects, start=1):
-                lines.append(
-                    f"[profile]   {idx}. {row['label']}::{row['name']} | "
-                    f"{_format_memory_summary(row['name'], row)}"
-                )
-        lines.append("[profile] ============================")
-        logger.info("\n".join(lines))
 
 
 def _lazy_import_torch():
@@ -1233,9 +968,6 @@ class SeasonalInferenceEngine:
         auto_tune_batch_size: bool = False,
         cpu_num_threads: Optional[int] = None,
         cpu_num_interop_threads: Optional[int] = None,
-        memory_logging: bool = False,
-        memory_logging_verbose: bool = False,
-        memory_report_top_n: int = 5,
     ) -> None:
 
         from worldcereal.utils.models import load_model_artifact
@@ -1307,9 +1039,6 @@ class SeasonalInferenceEngine:
         self._cropland_enabled = enable_cropland_head
         self._cropland_postprocess = _build_postprocess_options(cropland_postprocess)
         self._croptype_postprocess = _build_postprocess_options(croptype_postprocess)
-        self._memory_logging = bool(memory_logging)
-        self._memory_logging_verbose = bool(memory_logging_verbose)
-        self._memory_report_top_n = max(1, int(memory_report_top_n))
         self._export_embeddings_enabled = False  # Will be set to True if export_embeddings is used
         from worldcereal.train import GLOBAL_SEASON_IDS
 
@@ -1335,10 +1064,7 @@ class SeasonalInferenceEngine:
             f"croptype_postprocess={self._croptype_postprocess.enabled}, "
             f"auto_tune_batch_size={self._auto_tune_batch_size}, "
             f"cpu_num_threads={self._cpu_num_threads}, "
-            f"cpu_num_interop_threads={self._cpu_num_interop_threads}, "
-            f"memory_logging={self._memory_logging}, "
-            f"memory_logging_verbose={self._memory_logging_verbose}, "
-            f"memory_report_top_n={self._memory_report_top_n})"
+            f"cpu_num_interop_threads={self._cpu_num_interop_threads})"
         )
 
     def infer(
@@ -1356,104 +1082,75 @@ class SeasonalInferenceEngine:
         # Gate embedding collection based on whether they will be exported.
         self._export_embeddings_enabled = export_embeddings
 
-        mem = _MemoryTrace(
-            enabled=self._memory_logging, verbose=self._memory_logging_verbose
+        dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
+        logger.info(
+            f"Seasonal inference request received (epsg={epsg}, enforce_gate={enforce_cropland_gate}, "
+            f"dims={dims_summary})"
         )
-        try:
-            dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
-            logger.info(
-                f"Seasonal inference request received (epsg={epsg}, enforce_gate={enforce_cropland_gate}, "
-                f"dims={dims_summary})"
-            )
-            mem.checkpoint("infer:start")
-            mem.observe("infer:input", input_array=arr)
-            prepped = self._prepare_array(arr, epsg)
-            mem.checkpoint("infer:after_prepare_array")
-            mem.observe("infer:prepared", prepped=prepped)
-            from worldcereal.train.predictors import generate_predictor
+        prepped = self._prepare_array(arr, epsg)
+        from worldcereal.train.predictors import generate_predictor
 
-            prepped_summary = {
-                dim: size for dim, size in zip(prepped.dims, prepped.shape)
-            }
-            logger.debug(
-                f"Prepared inference cube (dims={prepped_summary}, dtype={prepped.dtype})"
-            )
+        prepped_summary = {
+            dim: size for dim, size in zip(prepped.dims, prepped.shape)
+        }
+        logger.debug(
+            f"Prepared inference cube (dims={prepped_summary}, dtype={prepped.dtype})"
+        )
 
-            # Log input cube statistics for debugging
-            self._log_input_statistics(prepped)
-            mem.checkpoint("infer:after_input_stats")
+        # Log input cube statistics for debugging
+        self._log_input_statistics(prepped)
 
-            predictor_cube = prepped.transpose("bands", "t", "x", "y")
-            predictor_view = predictor_cube.values
-            mem.observe(
-                "infer:predictor_materialization",
-                predictor_view=predictor_view,
-            )
+        predictor_cube = prepped.transpose("bands", "t", "x", "y")
+        predictor_view = predictor_cube.values
 
-            predictors = generate_predictor(
-                predictor_cube, epsg
+        predictors = generate_predictor(
+            predictor_cube, epsg
+        )
+        del predictor_cube, predictor_view
+        num_samples = getattr(predictors, "B", None)
+        num_timesteps = getattr(predictors, "T", None)
+        expected_timesteps = self._get_expected_timesteps()
+        if (
+            num_timesteps is not None
+            and expected_timesteps is not None
+            and num_timesteps > expected_timesteps
+        ):
+            raise ValueError(
+                f"Input has {num_timesteps} timesteps but the model was trained "
+                f"with {expected_timesteps}.  Positional indices beyond "
+                f"{expected_timesteps - 1} are out-of-distribution and "
+                f"self-attention context will differ drastically.  Subset "
+                f"the input temporally before calling infer()."
             )
-            del predictor_cube, predictor_view
-            mem.checkpoint("infer:after_generate_predictor")
-            num_samples = getattr(predictors, "B", None)
-            num_timesteps = getattr(predictors, "T", None)
-            expected_timesteps = self._get_expected_timesteps()
-            if (
-                num_timesteps is not None
-                and expected_timesteps is not None
-                and num_timesteps > expected_timesteps
-            ):
-                raise ValueError(
-                    f"Input has {num_timesteps} timesteps but the model was trained "
-                    f"with {expected_timesteps}.  Positional indices beyond "
-                    f"{expected_timesteps - 1} are out-of-distribution and "
-                    f"self-attention context will differ drastically.  Subset "
-                    f"the input temporally before calling infer()."
-                )
-            logger.info(
-                f"Predictors ready (samples={num_samples}, timesteps={num_timesteps}, batch_size={self.batch_size})"
-            )
-            mask_array, active_season_ids = self._resolve_season_masks(
-                timestamps=prepped.t.values,
-                batch_size=predictors.B,
-                season_windows=season_windows,
-                season_masks=season_masks,
-                season_ids=season_ids,
-            )
-            logger.info(
-                f"Season masks resolved for {active_season_ids} (shape={mask_array.shape})"
-            )
-            mem.checkpoint("infer:after_resolve_season_masks")
-            mem.observe("infer:season_masks", season_masks=mask_array)
-            outputs = self._run_batches(predictors, mask_array, memory_trace=mem)
-            mem.checkpoint("infer:after_run_batches")
-            mem.observe(
-                "infer:batch_outputs",
-                landcover_logits=outputs[0],
-                croptype_logits=outputs[1],
-                global_embeddings=outputs[2],
-            )
-            logger.info(
-                f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
-            )
+        logger.info(
+            f"Predictors ready (samples={num_samples}, timesteps={num_timesteps}, batch_size={self.batch_size})"
+        )
+        mask_array, active_season_ids = self._resolve_season_masks(
+            timestamps=prepped.t.values,
+            batch_size=predictors.B,
+            season_windows=season_windows,
+            season_masks=season_masks,
+            season_ids=season_ids,
+        )
+        logger.info(
+            f"Season masks resolved for {active_season_ids} (shape={mask_array.shape})"
+        )
+        outputs = self._run_batches(predictors, mask_array)
+        logger.info(
+            f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
+        )
 
-            output_array = self._format_outputs(
-                arr=prepped,
-                outputs=outputs,
-                season_ids=active_season_ids,
-                enforce_cropland_gate=enforce_cropland_gate,
-                export_embeddings=export_embeddings,
-                export_ndvi=export_ndvi,
-                memory_trace=mem,
-            )
-            del outputs, predictors, mask_array
+        output_array = self._format_outputs(
+            arr=prepped,
+            outputs=outputs,
+            season_ids=active_season_ids,
+            enforce_cropland_gate=enforce_cropland_gate,
+            export_embeddings=export_embeddings,
+            export_ndvi=export_ndvi,
+        )
+        del outputs, predictors, mask_array
 
-            mem.checkpoint("infer:after_format_outputs")
-            mem.observe("infer:output_array", output_array=output_array)
-            return output_array
-        finally:
-            mem.checkpoint("infer:end")
-            mem.report(title="seasonal_inference", top_n=self._memory_report_top_n)
+        return output_array
 
     def _get_expected_timesteps(self) -> Optional[int]:
         """Derive the number of timesteps the model was trained with.
@@ -1625,7 +1322,6 @@ class SeasonalInferenceEngine:
         self,
         predictors: "Predictors",
         season_masks: np.ndarray,
-        memory_trace: Optional[_MemoryTrace] = None,
     ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]]:
         torch = _lazy_import_torch()
         from prometheo.predictors import to_torchtensor
@@ -1647,8 +1343,6 @@ class SeasonalInferenceEngine:
             logger.info(
                 f"Running seasonal heads on {total_samples} samples (~{estimated_batches or 1} batches)"
             )
-        if memory_trace is not None:
-            memory_trace.checkpoint("run_batches:start")
         processed_batches = 0
         start = 0
 
@@ -1669,12 +1363,6 @@ class SeasonalInferenceEngine:
             device=self.device,
             dtype=torch.bool,
         )
-        if memory_trace is not None:
-            memory_trace.observe(
-                "run_batches:inputs",
-                season_masks=season_masks,
-                season_masks_tensor=season_masks_tensor,
-            )
         log_every = max(1, (estimated_batches or 1) // 10)
         for processed_batches, batch in enumerate(
             predictors.as_batches(self.batch_size), start=1
@@ -1709,14 +1397,6 @@ class SeasonalInferenceEngine:
                 global_embeddings,
                 output.global_embedding if collect_embeddings else None,
             )
-            if memory_trace is not None and processed_batches == 1:
-                memory_trace.observe(
-                    "run_batches:first_batch",
-                    mask_tensor=mask_tensor,
-                    global_logits=output.global_logits,
-                    season_logits=output.season_logits,
-                    global_embedding=output.global_embedding,
-                )
             # Transfer to CPU buffers as fp32.
             if output.global_logits is not None:
                 assert landcover_logits is not None
@@ -1733,14 +1413,6 @@ class SeasonalInferenceEngine:
                 global_embeddings[start - batch_size : start].copy_(
                     output.global_embedding.detach().float().to("cpu")
                 )
-            if memory_trace is not None and (
-                processed_batches == 1
-                or processed_batches % log_every == 0
-                or (estimated_batches and processed_batches == estimated_batches)
-            ):
-                memory_trace.checkpoint(
-                    f"run_batches:after_batch_{processed_batches}"
-                )
             # Release per-batch tensors so the CPU allocator can reuse the slabs
             # before the next forward pass allocates fresh activations.
             del output, batch_predictors, batch, mask_tensor
@@ -1750,14 +1422,6 @@ class SeasonalInferenceEngine:
             f"croptype={int(croptype_logits is not None)}, embeddings={int(global_embeddings is not None)})"
         )
 
-        if memory_trace is not None:
-            memory_trace.checkpoint("run_batches:after_concat")
-            memory_trace.observe(
-                "run_batches:concatenated_outputs",
-                landcover_logits=landcover_logits,
-                croptype_logits=croptype_logits,
-                global_embeddings=global_embeddings,
-            )
         return landcover_logits, croptype_logits, global_embeddings
 
     def _format_outputs(
@@ -1771,7 +1435,6 @@ class SeasonalInferenceEngine:
         enforce_cropland_gate: bool,
         export_embeddings: bool = False,
         export_ndvi: bool = False,
-        memory_trace: Optional[_MemoryTrace] = None,
     ) -> xr.DataArray:
         torch = _lazy_import_torch()
         height = arr.sizes["y"]
@@ -1799,14 +1462,6 @@ class SeasonalInferenceEngine:
             )
             prob_cube = np.transpose(prob_cube, (2, 0, 1))
             preds_np = preds.to(dtype=torch.uint8).cpu().numpy().reshape(height, width)
-            if memory_trace is not None:
-                memory_trace.observe(
-                    "format_outputs:landcover",
-                    landcover_logits=landcover_logits,
-                    landcover_probs=probs,
-                    landcover_prob_cube=prob_cube,
-                    landcover_preds=preds_np,
-                )
 
             landcover_classes = list(self.bundle.landcover_spec.class_names)
             cropland_gate_labels = list(self.bundle.cropland_gate_classes)
@@ -1843,14 +1498,6 @@ class SeasonalInferenceEngine:
                 [cropland_prob_other, cropland_prob_crops], axis=0
             )
             cropland_prob_cube = raw_cropland_prob_cube
-            if memory_trace is not None:
-                memory_trace.observe(
-                    "format_outputs:cropland_probability_buffers",
-                    cropland_prob_other=cropland_prob_other,
-                    cropland_prob_crops=cropland_prob_crops,
-                    raw_cropland_prob_cube=raw_cropland_prob_cube,
-                    cropland_prob_cube=cropland_prob_cube,
-                )
 
             if cropland_gate_labels:
                 if cropland_indices:
@@ -1942,15 +1589,6 @@ class SeasonalInferenceEngine:
                 ), "Cropland mask required when gating is enabled"
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
-            if memory_trace is not None:
-                memory_trace.observe(
-                    "format_outputs:croptype",
-                    croptype_logits=croptype_logits,
-                    croptype_probs=probs,
-                    croptype_preds=preds_np,
-                    croptype_prob_np=prob_np,
-                    croptype_prob_cube=prob_cube,
-                )
             class_value_to_index = {
                 idx: idx for idx in range(self.bundle.croptype_spec.num_classes)
             }
@@ -2006,12 +1644,6 @@ class SeasonalInferenceEngine:
             if self._export_class_probabilities and raw_probability_cubes is not None:
                 # Use raw probabilities (before postprocessing) for per-class outputs
                 raw_prob_stack = np.stack(raw_probability_cubes, axis=0)
-                if memory_trace is not None:
-                    memory_trace.observe(
-                        "format_outputs:croptype_class_probabilities",
-                        raw_probability_cubes=raw_probability_cubes,
-                        raw_prob_stack=raw_prob_stack,
-                    )
                 prob_uint8 = _probabilities_to_uint8(raw_prob_stack)
                 if gate_applicable and cropland_mask_bool is not None:
                     gate = cropland_mask_bool[None, None, :, :]
@@ -2047,13 +1679,6 @@ class SeasonalInferenceEngine:
                 global_embeddings.detach().cpu().numpy().reshape(height, width, -1)
             )
             embedding_cube = np.transpose(embedding_np, (2, 0, 1))
-            if memory_trace is not None:
-                memory_trace.observe(
-                    "format_outputs:embeddings",
-                    global_embeddings=global_embeddings,
-                    embedding_np=embedding_np,
-                    embedding_cube=embedding_cube,
-                )
 
             # Perform embedding quantization
             embedding_quantized, embedding_scale = _quantize_embedding_cube(
@@ -2075,25 +1700,16 @@ class SeasonalInferenceEngine:
         if export_ndvi:
             logger.info("Exporting NDVI time series as separate bands")
             ndvi_scaled = _get_scaled_ndvi(arr)
-            if memory_trace is not None:
-                memory_trace.observe("format_outputs:ndvi", ndvi_scaled=ndvi_scaled)
             for t in range(ndvi_scaled.shape[0]):
                 band_label = _format_ndvi_band_label(arr.t.values[t], t)
                 _register_band(band_label, ndvi_scaled[t, ...])
             del ndvi_scaled
 
-        if memory_trace is not None:
-            memory_trace.observe("format_outputs:final_bands", band_layers=band_layers)
         if not band_layers:
             raise ValueError("Seasonal workflow produced an empty dataset")
 
         band_names = [name for name, _ in band_layers]
         stacked_values = np.stack([values for _, values in band_layers], axis=0)
-        if memory_trace is not None:
-            memory_trace.observe(
-                "format_outputs:stacked_output",
-                stacked_output=stacked_values,
-            )
         return xr.DataArray(
             stacked_values,
             dims=("bands", "y", "x"),
@@ -2131,9 +1747,6 @@ def run_seasonal_workflow(
     cpu_num_interop_threads: Optional[int] = None,
     export_embeddings: bool = False,
     export_ndvi: bool = False,
-    memory_logging: bool = False,
-    memory_logging_verbose: bool = False,
-    memory_report_top_n: int = 5,
 ) -> xr.DataArray:
     """Run the full seasonal workflow and return a multi-band array."""
 
@@ -2155,9 +1768,6 @@ def run_seasonal_workflow(
         auto_tune_batch_size=auto_tune_batch_size,
         cpu_num_threads=cpu_num_threads,
         cpu_num_interop_threads=cpu_num_interop_threads,
-        memory_logging=memory_logging,
-        memory_logging_verbose=memory_logging_verbose,
-        memory_report_top_n=memory_report_top_n,
     )
     datacube = engine.infer(
         arr,
@@ -2595,15 +2205,6 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         raise ValueError("cpu_num_threads must be >= 1 when provided")
     if cpu_num_interop_threads is not None and cpu_num_interop_threads < 1:
         raise ValueError("cpu_num_interop_threads must be >= 1 when provided")
-    memory_logging = _as_bool(runtime_cfg.get("memory_logging"), False)
-    memory_logging_verbose = _as_bool(runtime_cfg.get("memory_logging_verbose"), False)
-    memory_report_top_n_value = runtime_cfg.get("memory_report_top_n", 5)
-    try:
-        memory_report_top_n = max(1, int(memory_report_top_n_value))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"memory_report_top_n must be an integer, got {memory_report_top_n_value!r}"
-        ) from exc
 
     export_probs_value = season_cfg.get("export_class_probabilities")
     export_class_probabilities = _as_bool(export_probs_value, False)
@@ -2668,9 +2269,6 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "auto_tune_batch_size": auto_tune_batch_size,
         "cpu_num_threads": cpu_num_threads,
         "cpu_num_interop_threads": cpu_num_interop_threads,
-        "memory_logging": memory_logging,
-        "memory_logging_verbose": memory_logging_verbose,
-        "memory_report_top_n": memory_report_top_n,
         "season_ids": season_ids,
         "season_windows": season_windows,
         "season_masks": season_masks,
@@ -2758,22 +2356,6 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         workflow_cfg["runtime"]["cpu_num_interop_threads"] = context.get(
             "cpu_num_interop_threads"
         )
-    if "memory_logging" in context:
-        workflow_cfg["runtime"]["memory_logging"] = _as_bool(
-            context.get("memory_logging"), False
-        )
-    if "profile_memory" in context:
-        workflow_cfg["runtime"]["memory_logging"] = _as_bool(
-            context.get("profile_memory"), False
-        )
-    if "memory_logging_verbose" in context:
-        workflow_cfg["runtime"]["memory_logging_verbose"] = _as_bool(
-            context.get("memory_logging_verbose"), False
-        )
-    if "memory_report_top_n" in context:
-        workflow_cfg["runtime"]["memory_report_top_n"] = context.get(
-            "memory_report_top_n"
-        )
 
     season_id_override = context.get("season_ids") or context.get("season_id")
     if season_id_override is not None:
@@ -2832,28 +2414,19 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
 
     context = udf_data.user_context or {}
     config = _extract_udf_configuration(context)
-    memory_logging = bool(config.get("memory_logging", False))
-    mem = _MemoryTrace(enabled=memory_logging, verbose=False)
     epsg = _infer_udf_epsg(udf_data)
-    mem.checkpoint("udf:after_config")
 
+    input_array = udf_data.datacube_list[0].get_array()
     try:
-        input_array = udf_data.datacube_list[0].get_array()
-        try:
-            prepared = input_array.transpose("bands", "t", "y", "x")
-        except ValueError as exc:  # pragma: no cover - guard unexpected layouts
-            raise ValueError(
-                "Input cube must expose dimensions ('bands', 't', 'y', 'x') for seasonal inference"
-            ) from exc
-        mem.checkpoint("udf:after_input_prepare")
+        prepared = input_array.transpose("bands", "t", "y", "x")
+    except ValueError as exc:  # pragma: no cover - guard unexpected layouts
+        raise ValueError(
+            "Input cube must expose dimensions ('bands', 't', 'y', 'x') for seasonal inference"
+        ) from exc
 
-        datacube = run_seasonal_workflow(arr=prepared, epsg=epsg, **config)
-        mem.checkpoint("udf:after_run_seasonal_workflow")
-        udf_data.datacube_list = [XarrayDataCube(datacube)]
-        mem.checkpoint("udf:before_return")
-        return udf_data
-    finally:
-        mem.checkpoint("udf:end")
+    datacube = run_seasonal_workflow(arr=prepared, epsg=epsg, **config)
+    udf_data.datacube_list = [XarrayDataCube(datacube)]
+    return udf_data
 
 
 def apply_metadata(metadata: Any, context: Optional[Mapping[str, Any]]) -> Any:
