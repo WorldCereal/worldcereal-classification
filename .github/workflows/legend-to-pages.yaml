@@ -1,7 +1,11 @@
-name: Publish UDP JSONs to GitHub Pages
+name: Publish Legend Browser to GitHub Pages
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "pages/**"
 
 permissions:
   contents: read
@@ -14,8 +18,8 @@ concurrency:
 
 jobs:
   deploy:
-    # Only allow running this workflow from the main branch
-    if: github.ref == 'refs/heads/main'
+    # Auto-deploy only from main; manual dispatch is allowed from any branch (for testing)
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     environment:
@@ -23,17 +27,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout main
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: main
 
-      - name: Prepare site (copy UDP JSONs)
+      - name: Prepare site
         run: |
           set -euo pipefail
-          mkdir -p site/udp
-          ls -la src/worldcereal/udp
-          cp -v src/worldcereal/udp/*.json site/udp/
+          cp -rv pages/. site/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
