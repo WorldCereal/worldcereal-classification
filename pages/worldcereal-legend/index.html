@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WorldCereal Legend Browser</title>
+  <style>
+    :root {
+      --primary: #2e7d32;
+      --primary-light: #4caf50;
+      --primary-dark: #1b5e20;
+      --bg: #f5f7f5;
+      --card: #ffffff;
+      --text: #1a1a1a;
+      --muted: #666;
+      --border: #dde5dd;
+      --row-hover: #f0f7f0;
+      --tag-bg: #e8f5e9;
+      --tag-text: #1b5e20;
+      --code-bg: #f1f8e9;
+      --code-text: #33691e;
+      --lc-bg: #e3f2fd;
+      --lc-text: #0d47a1;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%);
+      color: white;
+      padding: 24px 32px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+    }
+
+    header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    header p {
+      margin-top: 6px;
+      font-size: 0.9rem;
+      opacity: 0.85;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px 24px 48px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+    }
+
+    .search-box {
+      flex: 1;
+      min-width: 220px;
+      position: relative;
+    }
+
+    .search-box input {
+      width: 100%;
+      padding: 10px 14px 10px 38px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      background: var(--card);
+      color: var(--text);
+      transition: border-color 0.15s;
+      outline: none;
+    }
+
+    .search-box input:focus { border-color: var(--primary-light); }
+
+    .search-box::before {
+      content: "🔍";
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 0.85rem;
+      pointer-events: none;
+    }
+
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 160px;
+    }
+
+    .filter-group label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .filter-group select {
+      padding: 10px 12px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.9rem;
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .filter-group select:focus { border-color: var(--primary-light); }
+
+    .stats {
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding: 8px 0 16px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .stats strong { color: var(--primary-dark); }
+
+    .table-wrapper {
+      background: var(--card);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    thead {
+      background: var(--primary-dark);
+      color: white;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    thead th {
+      padding: 12px 14px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.8rem;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.1s;
+    }
+
+    thead th:hover { background: var(--primary); }
+    thead th.sorted-asc::after { content: " ↑"; }
+    thead th.sorted-desc::after { content: " ↓"; }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+      cursor: pointer;
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--row-hover); }
+
+    td {
+      padding: 10px 14px;
+      vertical-align: top;
+    }
+
+    .code {
+      font-family: 'Courier New', monospace;
+      font-size: 0.85rem;
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .label-full {
+      font-weight: 500;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: var(--tag-bg);
+      color: var(--tag-text);
+      white-space: nowrap;
+    }
+
+    .tag.lc {
+      background: var(--lc-bg);
+      color: var(--lc-text);
+    }
+
+    .hierarchy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .hierarchy-level {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .hierarchy-level span {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .definition-cell {
+      max-width: 250px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    /* Detail modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.2);
+      max-width: 640px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 28px;
+      position: relative;
+    }
+
+    .modal h2 {
+      font-size: 1.15rem;
+      margin-bottom: 4px;
+      color: var(--primary-dark);
+    }
+
+    .modal .code-big {
+      font-family: monospace;
+      font-size: 1.1rem;
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      margin-bottom: 18px;
+      display: inline-block;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: none;
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      transition: all 0.15s;
+    }
+
+    .modal-close:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 10px 16px;
+    }
+
+    .detail-grid dt {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding-top: 2px;
+    }
+
+    .detail-grid dd {
+      font-size: 0.9rem;
+    }
+
+    .breadcrumb {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .breadcrumb-item {
+      background: var(--tag-bg);
+      color: var(--tag-text);
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+
+    .breadcrumb-sep {
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    /* Loading / error states */
+    .state-box {
+      text-align: center;
+      padding: 80px 20px;
+      color: var(--muted);
+    }
+
+    .state-box .icon { font-size: 2.5rem; margin-bottom: 12px; }
+    .state-box p { font-size: 1rem; }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty-row td {
+      text-align: center;
+      padding: 48px;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    mark {
+      background: #fff176;
+      border-radius: 2px;
+      padding: 0 1px;
+    }
+
+    /* Responsive */
+    @media (max-width: 800px) {
+      .col-definition, .col-sampling-v0 { display: none; }
+    }
+
+    @media (max-width: 600px) {
+      .col-lc, .col-sampling { display: none; }
+      header { padding: 16px; }
+      header h1 { font-size: 1.2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🌾 WorldCereal Legend Browser</h1>
+  <p>Browse and search the WorldCereal land cover / crop type legend — from original EWOC code to full label and typical mappings.</p>
+</header>
+
+<div class="container">
+  <div class="controls">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="Search code, label, definition…" autocomplete="off" />
+    </div>
+
+    <div class="filter-group">
+      <label>Level 1</label>
+      <select id="filterL1">
+        <option value="">All</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>Level 2</label>
+      <select id="filterL2">
+        <option value="">All</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>LC Label</label>
+      <select id="filterLC">
+        <option value="">All</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>Sampling label</label>
+      <select id="filterSampling">
+        <option value="">All</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="stats" id="statsBar">Loading…</div>
+
+  <div class="table-wrapper">
+    <div class="state-box" id="loadingState">
+      <div class="spinner"></div>
+      <p>Loading WorldCereal legend…</p>
+    </div>
+
+    <div class="state-box" id="errorState" style="display:none">
+      <div class="icon">⚠️</div>
+      <p id="errorMsg">Failed to load legend.</p>
+    </div>
+
+    <table id="legendTable" style="display:none">
+      <thead>
+        <tr>
+          <th data-col="ewoc_code">EWOC Code</th>
+          <th data-col="label_full">Full Label</th>
+          <th data-col="level_1" class="col-lc">Level 1</th>
+          <th data-col="level_2" class="col-lc">Level 2</th>
+          <th data-col="level_3" class="col-lc">Level 3</th>
+          <th data-col="LC_label" class="col-lc">LC Label</th>
+          <th data-col="sampling_label" class="col-sampling">Sampling Label</th>
+          <th data-col="sampling_label_v0" class="col-sampling-v0">Sampling (v0)</th>
+          <th data-col="definition" class="col-definition">Definition</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true">
+  <div class="modal">
+    <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+  const CSV_URL = 'https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/legend/WorldCereal_LC_CT_legend_latest.csv';
+  const COLS = ['ewoc_code','level_1','level_2','level_3','level_4','level_5','definition','label_full','LC_code','LC_label','sampling_label','sampling_label_v0'];
+
+  let allRows = [];
+  let filtered = [];
+  let sortCol = 'ewoc_code';
+  let sortDir = 1; // 1 = asc, -1 = desc
+
+  /* ── CSV parser (handles semicolon-separated, quoted fields) ── */
+  function parseCSV(text) {
+    const lines = text.trim().split(/\r?\n/);
+    const headers = splitCSVLine(lines[0]);
+    return lines.slice(1).map(line => {
+      const vals = splitCSVLine(line);
+      const row = {};
+      headers.forEach((h, i) => { row[h.trim()] = (vals[i] || '').trim(); });
+      return row;
+    });
+  }
+
+  function splitCSVLine(line) {
+    const result = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuotes = !inQuotes; }
+      else if (ch === ';' && !inQuotes) { result.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+    result.push(cur);
+    return result;
+  }
+
+  /* ── Fetch and initialise ── */
+  async function loadLegend() {
+    try {
+      const res = await fetch(CSV_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      allRows = parseCSV(text);
+      init();
+    } catch (e) {
+      document.getElementById('loadingState').style.display = 'none';
+      document.getElementById('errorState').style.display = 'block';
+      document.getElementById('errorMsg').textContent = `Failed to load legend: ${e.message}`;
+    }
+  }
+
+  function uniqueValues(col) {
+    return [...new Set(allRows.map(r => r[col]).filter(Boolean))].sort();
+  }
+
+  function populateSelect(id, values) {
+    const sel = document.getElementById(id);
+    values.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      sel.appendChild(opt);
+    });
+  }
+
+  function init() {
+    populateSelect('filterL1', uniqueValues('level_1'));
+    populateSelect('filterL2', uniqueValues('level_2'));
+    populateSelect('filterLC', uniqueValues('LC_label'));
+    populateSelect('filterSampling', uniqueValues('sampling_label'));
+
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('legendTable').style.display = 'table';
+
+    setupSort();
+    applyFilters();
+  }
+
+  /* ── Filtering & rendering ── */
+  function getFilters() {
+    return {
+      search: document.getElementById('searchInput').value.trim().toLowerCase(),
+      l1: document.getElementById('filterL1').value,
+      l2: document.getElementById('filterL2').value,
+      lc: document.getElementById('filterLC').value,
+      sampling: document.getElementById('filterSampling').value,
+    };
+  }
+
+  function rowMatches(row, f) {
+    if (f.l1 && row.level_1 !== f.l1) return false;
+    if (f.l2 && row.level_2 !== f.l2) return false;
+    if (f.lc && row.LC_label !== f.lc) return false;
+    if (f.sampling && row.sampling_label !== f.sampling) return false;
+    if (f.search) {
+      const haystack = COLS.map(c => row[c] || '').join(' ').toLowerCase();
+      if (!haystack.includes(f.search)) return false;
+    }
+    return true;
+  }
+
+  function applyFilters() {
+    const f = getFilters();
+    filtered = allRows.filter(r => rowMatches(r, f));
+    sortRows();
+    renderTable(f.search);
+    updateStats();
+  }
+
+  function sortRows() {
+    filtered.sort((a, b) => {
+      const va = a[sortCol] || '';
+      const vb = b[sortCol] || '';
+      return va.localeCompare(vb, undefined, { numeric: true }) * sortDir;
+    });
+  }
+
+  function hl(text, term) {
+    if (!term || !text) return esc(text);
+    const re = new RegExp(`(${escRe(term)})`, 'gi');
+    return esc(text).replace(re, '<mark>$1</mark>');
+  }
+
+  function esc(s) {
+    return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function escRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function renderTable(term) {
+    const tbody = document.getElementById('tableBody');
+    if (filtered.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No entries match your search.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = filtered.map((row, idx) => `
+      <tr data-idx="${idx}">
+        <td><span class="code">${hl(row.ewoc_code, term)}</span></td>
+        <td class="label-full">${hl(row.label_full, term)}</td>
+        <td class="col-lc">${row.level_1 ? `<span class="tag">${hl(row.level_1, term)}</span>` : ''}</td>
+        <td class="col-lc">${row.level_2 ? `<span class="tag">${hl(row.level_2, term)}</span>` : ''}</td>
+        <td class="col-lc">${row.level_3 ? `<span class="tag">${hl(row.level_3, term)}</span>` : ''}</td>
+        <td class="col-lc">${row.LC_label ? `<span class="tag lc">${hl(row.LC_label, term)}</span>` : ''}</td>
+        <td class="col-sampling">${hl(row.sampling_label, term)}</td>
+        <td class="col-sampling-v0">${hl(row.sampling_label_v0, term)}</td>
+        <td class="definition-cell col-definition">${hl(row.definition, term)}</td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('tr[data-idx]').forEach(tr => {
+      tr.addEventListener('click', () => openModal(filtered[+tr.dataset.idx]));
+    });
+  }
+
+  function updateStats() {
+    document.getElementById('statsBar').innerHTML =
+      `Showing <strong>${filtered.length}</strong> of <strong>${allRows.length}</strong> entries. Click a row for full details.`;
+  }
+
+  /* ── Sort ── */
+  function setupSort() {
+    document.querySelectorAll('thead th[data-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (sortCol === col) { sortDir *= -1; }
+        else { sortCol = col; sortDir = 1; }
+        document.querySelectorAll('thead th').forEach(t => t.classList.remove('sorted-asc','sorted-desc'));
+        th.classList.add(sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
+        sortRows();
+        renderTable(document.getElementById('searchInput').value.trim().toLowerCase());
+      });
+    });
+  }
+
+  /* ── Modal ── */
+  function openModal(row) {
+    const levels = ['level_1','level_2','level_3','level_4','level_5']
+      .map(l => row[l]).filter(Boolean);
+
+    const breadcrumb = levels.map(l =>
+      `<span class="breadcrumb-item">${esc(l)}</span>`
+    ).join('<span class="breadcrumb-sep"> › </span>');
+
+    const def = row.definition ? `<dt>Definition</dt><dd>${esc(row.definition)}</dd>` : '';
+    const sv0 = row.sampling_label_v0 ? `<dt>Sampling (v0)</dt><dd>${esc(row.sampling_label_v0)}</dd>` : '';
+
+    document.getElementById('modalContent').innerHTML = `
+      <h2>${esc(row.label_full) || esc(row.ewoc_code)}</h2>
+      <div class="code-big">${esc(row.ewoc_code)}</div>
+      ${levels.length ? `<div class="breadcrumb">${breadcrumb}</div>` : ''}
+      <dl class="detail-grid">
+        <dt>Full Label</dt><dd>${esc(row.label_full)}</dd>
+        <dt>LC Code</dt><dd>${esc(row.LC_code)}</dd>
+        <dt>LC Label</dt><dd><span class="tag lc">${esc(row.LC_label)}</span></dd>
+        <dt>Sampling Label</dt><dd>${esc(row.sampling_label)}</dd>
+        ${sv0}
+        ${def}
+      </dl>
+    `;
+    document.getElementById('modalOverlay').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('modalOverlay').classList.remove('open');
+  }
+
+  document.getElementById('modalClose').addEventListener('click', closeModal);
+  document.getElementById('modalOverlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeModal();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  /* ── Event wiring ── */
+  ['searchInput','filterL1','filterL2','filterLC','filterSampling'].forEach(id => {
+    document.getElementById(id).addEventListener('input', applyFilters);
+  });
+
+  // Cascade L2 based on L1
+  document.getElementById('filterL1').addEventListener('change', () => {
+    const l1 = document.getElementById('filterL1').value;
+    const selL2 = document.getElementById('filterL2');
+    selL2.innerHTML = '<option value="">All</option>';
+    const vals = [...new Set(
+      allRows.filter(r => !l1 || r.level_1 === l1).map(r => r.level_2).filter(Boolean)
+    )].sort();
+    vals.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      selL2.appendChild(opt);
+    });
+    applyFilters();
+  });
+
+  loadLegend();
+</script>
+</body>
+</html>
