@@ -13,6 +13,8 @@ from worldcereal.train.datasets import (
     WorldCerealDataset,
     WorldCerealLabelledDataset,
     WorldCerealTrainingDataset,
+    _get_per_bin_class_weights,
+    _get_spatial_density_weights,
     _is_lc_only_dataset,
     align_to_composite_window,
     get_dekad_timestamp_components,
@@ -270,6 +272,127 @@ class TestWorldCerealDataset(unittest.TestCase):
             batch_size=4, num_batches=7
         )
         self.assertEqual(len(sampler), 7)
+
+    def test_dual_head_batch_sampler_per_bin_scope(self):
+        """`class_balancing_scope='per_bin'` produces valid batches and
+        different LC sampling probabilities than the default global scope
+        (with the same density factor applied to both)."""
+
+        batch_size = 4
+        spatial_bin_size = 0.2
+
+        global_sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=batch_size,
+            class_weight_method="balanced",
+            spatial_bin_size_degrees=spatial_bin_size,
+            spatial_weight_method="log",
+            class_balancing_scope="global",
+            min_samples_per_bin=1,
+            num_batches=5,
+        )
+        per_bin_sampler = self.binary_ds.get_dual_head_batch_sampler(
+            batch_size=batch_size,
+            class_weight_method="balanced",
+            spatial_bin_size_degrees=spatial_bin_size,
+            spatial_weight_method="log",
+            class_balancing_scope="per_bin",
+            min_samples_per_bin=1,
+            num_batches=5,
+        )
+
+        # Same density factor in both samplers; only the class-weight source
+        # differs. Probabilities should still differ because per-bin and
+        # global produce different class weights.
+        self.assertFalse(
+            np.allclose(
+                global_sampler._lc_probs.numpy(),
+                per_bin_sampler._lc_probs.numpy(),
+            ),
+            "Per-bin scope unexpectedly produced identical LC probabilities to global scope",
+        )
+
+        # Sampler should still yield well-formed batches.
+        N = len(self.binary_ds)
+        batches = list(per_bin_sampler)
+        self.assertEqual(len(batches), 5)
+        for batch in batches:
+            self.assertEqual(len(batch), batch_size)
+            for idx in batch:
+                self.assertTrue(N <= idx < 3 * N)
+
+    def test_dual_head_batch_sampler_per_bin_requires_spatial(self):
+        """Per-bin scope without spatial_bin_size_degrees should error."""
+        with self.assertRaises(ValueError):
+            self.binary_ds.get_dual_head_batch_sampler(
+                batch_size=4,
+                class_balancing_scope="per_bin",
+                spatial_bin_size_degrees=None,
+                num_batches=1,
+            )
+
+    def test_dual_head_batch_sampler_density_axis_independent(self):
+        """`spatial_weight_method` is orthogonal to `class_balancing_scope`:
+        toggling between 'none' and 'log' (with all else fixed) changes the
+        sampling distribution under both global and per_bin scopes."""
+
+        batch_size = 4
+        spatial_bin_size = 0.2
+
+        common_kwargs = dict(
+            batch_size=batch_size,
+            class_weight_method="balanced",
+            spatial_bin_size_degrees=spatial_bin_size,
+            min_samples_per_bin=1,
+            num_batches=5,
+        )
+
+        # Same scope, different density method → different probs.
+        per_bin_no_density = self.binary_ds.get_dual_head_batch_sampler(
+            **common_kwargs,
+            class_balancing_scope="per_bin",
+            spatial_weight_method="none",
+        )
+        per_bin_log_density = self.binary_ds.get_dual_head_batch_sampler(
+            **common_kwargs,
+            class_balancing_scope="per_bin",
+            spatial_weight_method="log",
+        )
+        self.assertFalse(
+            np.allclose(
+                per_bin_no_density._lc_probs.numpy(),
+                per_bin_log_density._lc_probs.numpy(),
+            ),
+            "spatial_weight_method should change the distribution under per_bin scope",
+        )
+
+        # Same axis under global scope.
+        global_no_density = self.binary_ds.get_dual_head_batch_sampler(
+            **common_kwargs,
+            class_balancing_scope="global",
+            spatial_weight_method="none",
+        )
+        global_log_density = self.binary_ds.get_dual_head_batch_sampler(
+            **common_kwargs,
+            class_balancing_scope="global",
+            spatial_weight_method="log",
+        )
+        self.assertFalse(
+            np.allclose(
+                global_no_density._lc_probs.numpy(),
+                global_log_density._lc_probs.numpy(),
+            ),
+            "spatial_weight_method should change the distribution under global scope",
+        )
+
+    def test_dual_head_batch_sampler_invalid_scope(self):
+        """Unknown class_balancing_scope should error."""
+        with self.assertRaises(ValueError):
+            self.binary_ds.get_dual_head_batch_sampler(
+                batch_size=4,
+                class_balancing_scope="invalid_mode",  # type: ignore[arg-type]
+                spatial_bin_size_degrees=0.2,
+                num_batches=1,
+            )
 
     def test_getitem_lc_virtual_index(self):
         """Feeding an LC virtual index [N, 2N) should override label_task to 'landcover'."""
@@ -1607,6 +1730,162 @@ class TestLcOnlyDatasetHelperAndSeasonMasks(unittest.TestCase):
             )
 
         mocked.assert_called()
+
+
+class TestPerBinClassWeights(unittest.TestCase):
+    """Unit tests for :func:`_get_per_bin_class_weights`."""
+
+    def test_balanced_bin_equal_weights(self):
+        """A bin with a balanced class distribution should yield equal weights."""
+        labels = np.array(["a", "a", "b", "b"])
+        bins = np.array(["B0", "B0", "B0", "B0"])
+        weights = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1
+        )
+        np.testing.assert_allclose(weights, np.ones_like(weights))
+
+    def test_within_bin_class_balancing(self):
+        """Rare classes within a bin receive higher weight than dominant classes."""
+        # Bin has 1 'a' and 9 'b' → 'a' weight should be ~9× 'b' weight (balanced).
+        labels = np.array(["a"] + ["b"] * 9)
+        bins = np.array(["B0"] * 10)
+        weights = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1
+        )
+        a_weight = weights[labels == "a"][0]
+        b_weight = weights[labels == "b"][0]
+        self.assertGreater(a_weight, b_weight)
+        np.testing.assert_allclose(a_weight / b_weight, 9.0, rtol=1e-6)
+
+    def test_global_mean_is_one(self):
+        """The assembled per-sample array should have mean = 1 after normalisation."""
+        rng = np.random.default_rng(0)
+        labels = rng.choice(["a", "b", "c"], size=200, p=[0.6, 0.3, 0.1])
+        bins = rng.choice(["B0", "B1", "B2", "B3"], size=200)
+        weights = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=10
+        )
+        self.assertAlmostEqual(float(weights.mean()), 1.0, places=6)
+
+    def test_decouples_class_weight_per_bin(self):
+        """Different bins with different class distributions yield different weights
+        for the same class label."""
+        # Bin 0: 'a' is rare (1/10) → high weight
+        # Bin 1: 'a' is dominant (9/10) → low weight
+        labels = np.array(
+            ["a"] + ["b"] * 9  # bin 0
+            + ["a"] * 9 + ["b"]  # bin 1
+        )
+        bins = np.array(["B0"] * 10 + ["B1"] * 10)
+        weights = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1
+        )
+        a_in_b0 = weights[(bins == "B0") & (labels == "a")][0]
+        a_in_b1 = weights[(bins == "B1") & (labels == "a")][0]
+        self.assertGreater(a_in_b0, a_in_b1)
+
+    def test_sparse_bin_falls_back_to_global(self):
+        """Bins below min_samples_per_bin use global class weights, not within-bin.
+
+        Setup designed to make fallback observable:
+          * Dense bin B0: 100 'b' samples (single class) → within-bin gives 1.0.
+          * Sparse bin B1: 1 'a' + 1 'b' (size 2, below the threshold).
+
+        If B1 *incorrectly* used within-bin weights, both samples there would
+        receive the same weight (single 'a' + single 'b' → balanced 1:1).
+        With the correct fallback to global, 'a' is globally rare (1 of 102)
+        so its weight should be far higher than 'b'.
+        """
+        labels = np.array(["b"] * 100 + ["a", "b"])
+        bins = np.array(["B0"] * 100 + ["B1", "B1"])
+        weights = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=10
+        )
+        sparse_a = float(weights[(bins == "B1") & (labels == "a")][0])
+        sparse_b = float(weights[(bins == "B1") & (labels == "b")][0])
+        # Fallback applied → 'a' weight ≫ 'b' weight (no fallback would give equal).
+        self.assertGreater(sparse_a, 10 * sparse_b)
+
+    def test_clip_range_applied(self):
+        """Clipping should bound the final per-sample weights."""
+        # Extreme imbalance within bin → uncapped weights would exceed 5.0
+        labels = np.array(["a"] + ["b"] * 99)
+        bins = np.array(["B0"] * 100)
+        clipped = _get_per_bin_class_weights(
+            labels,
+            bins,
+            method="balanced",
+            clip_range=(0.5, 5.0),
+            min_samples_per_bin=1,
+        )
+        self.assertLessEqual(float(clipped.max()), 5.0 + 1e-9)
+        self.assertGreaterEqual(float(clipped.min()), 0.5 - 1e-9)
+
+    def test_shape_mismatch_raises(self):
+        labels = np.array(["a", "b"])
+        bins = np.array(["B0", "B0", "B0"])
+        with self.assertRaises(ValueError):
+            _get_per_bin_class_weights(
+                labels,
+                bins,
+                method="balanced",
+                clip_range=None,
+                min_samples_per_bin=1,
+            )
+
+    def test_invalid_min_samples_raises(self):
+        labels = np.array(["a", "b"])
+        bins = np.array(["B0", "B0"])
+        with self.assertRaises(ValueError):
+            _get_per_bin_class_weights(
+                labels,
+                bins,
+                method="balanced",
+                clip_range=None,
+                min_samples_per_bin=0,
+            )
+
+
+class TestSpatialDensityWeights(unittest.TestCase):
+    """Unit tests for :func:`_get_spatial_density_weights`."""
+
+    def test_sparse_bin_overridden_to_one(self):
+        """Singleton bins should be set to 1.0 instead of the inverse-density value."""
+        # 100 samples in bin "dense", 1 sample in bin "sparse".
+        bins = np.array(["dense"] * 100 + ["sparse"])
+        weights = _get_spatial_density_weights(
+            bins, method="log", clip_range=(0.1, 10.0), min_samples_per_bin=10
+        )
+        # The sparse-bin sample should be exactly 1.0 (overridden).
+        self.assertAlmostEqual(float(weights[-1]), 1.0)
+        # Without override, the singleton sparse bin would have a high
+        # log-inverse-density weight; with override it's 1.0, well below
+        # the clip ceiling.
+        self.assertLess(float(weights[-1]), 10.0)
+
+    def test_no_sparse_bins_keeps_normalized_weights(self):
+        """When all bins exceed min_samples_per_bin, output matches the
+        un-protected normalized weights."""
+        # Two bins, both above threshold.
+        bins = np.array(["a"] * 50 + ["b"] * 50)
+        with_protection = _get_spatial_density_weights(
+            bins, method="log", clip_range=(0.1, 10.0), min_samples_per_bin=10
+        )
+        # Re-import to compute the un-protected baseline directly.
+        from worldcereal.train.datasets import _get_normalized_weights
+        without_protection = _get_normalized_weights(bins, "log", (0.1, 10.0))
+        np.testing.assert_allclose(with_protection, without_protection)
+
+    def test_min_samples_one_disables_protection(self):
+        """min_samples_per_bin=1 means no override; behaviour matches the un-
+        protected helper exactly."""
+        bins = np.array(["a"] * 100 + ["b"])  # one singleton bin
+        with_protection = _get_spatial_density_weights(
+            bins, method="log", clip_range=(0.1, 10.0), min_samples_per_bin=1
+        )
+        from worldcereal.train.datasets import _get_normalized_weights
+        without_protection = _get_normalized_weights(bins, "log", (0.1, 10.0))
+        np.testing.assert_allclose(with_protection, without_protection)
 
 
 if __name__ == "__main__":
