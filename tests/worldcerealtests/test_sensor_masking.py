@@ -102,3 +102,20 @@ def test_dem_dropout():
     ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
     sample = ds[0]
     assert np.all(sample.dem == NODATAVALUE), "DEM dropout failed"
+
+
+def test_s2_cloud_timestep_full_dropout():
+    # Regression: s2_cloud_timestep_prob=1.0 must mask every S2 timestep,
+    # independent of the cloud-block path. A previous bug guarded this path
+    # with a check against the (never-populated) B1 band, making it a no-op.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s2_cloud_block_prob=0.0,
+        s2_cloud_timestep_prob=1.0,
+        seed=42,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.s2 == NODATAVALUE), "S2 per-timestep full dropout failed"

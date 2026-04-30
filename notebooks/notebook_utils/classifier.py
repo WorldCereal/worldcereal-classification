@@ -191,7 +191,7 @@ def compute_seasonal_presto_embeddings(
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
     season_window: Optional[TemporalContext] = None,
     min_season_coverage: float = 0.5,
-    use_spatial_split: bool = True,
+    use_spatial_split: bool = False,
     bin_size_degrees: float = 0.25,
     val_size: float = 0.15,
     test_size: float = 0.15,
