@@ -33,6 +33,7 @@ jobs:
       - name: Prepare site
         run: |
           set -euo pipefail
+          mkdir -p site/legend
           cp -rv pages/. site/
           # Download legend CSV at build time to avoid CORS issues when served from Pages
           curl -fsSL \
