@@ -476,11 +476,11 @@ def get_class_weights(
         raise ValueError(f"Unknown method: {method}")
 
     if normalize:
-        logger.info("Normalizing weights to mean = 1")
+        logger.debug("Normalizing weights to mean = 1")
         weights = weights / weights.mean()
 
     if clip_range:
-        logger.info(f"Clipping weights to range {clip_range}")
+        logger.debug(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
     rounded = np.round(weights, 3)
@@ -513,6 +513,44 @@ def _get_normalized_weights(
     return np.array([w_dict[str(lbl)] for lbl in labels], dtype=np.float64)
 
 
+def _get_spatial_density_weights(
+    spatial_bins: np.ndarray,
+    method: str,
+    clip_range: Optional[Tuple[float, float]],
+    min_samples_per_bin: int = 50,
+) -> np.ndarray:
+    """Per-sample spatial-density weight, with a sparse-bin override.
+
+    Computes density weights for all bins via `_get_normalized_weights`,
+    then overrides bins below *min_samples_per_bin* to the dataset-mean weight
+    (= 1.0). Without this protection, singleton/sparse bins would be assigned
+    extreme weights from the inverse-density formula (e.g. a 1-sample bin in
+    the Arctic can pin the density factor to its upper clip),
+    blowing up the multiplicative composition with class weights downstream.
+
+    Mirrors the analogous safeguard in `_get_per_bin_class_weights`:
+    a bin is considered too sparse to estimate a stable density weight from,
+    and is treated as "average density" instead.
+    """
+    sp_arr = _get_normalized_weights(spatial_bins, method, clip_range)
+
+    if min_samples_per_bin > 1:
+        bin_counts = pd.Series(spatial_bins).value_counts()
+        sparse_bins = set(bin_counts.index[bin_counts < min_samples_per_bin])
+        if sparse_bins:
+            sparse_mask = pd.Series(spatial_bins).isin(sparse_bins).to_numpy()
+            n_sparse_samples = int(sparse_mask.sum())
+            sp_arr = sp_arr.copy()
+            sp_arr[sparse_mask] = 1.0
+            logger.info(
+                f"_get_spatial_density_weights: {len(sparse_bins)}/"
+                f"{bin_counts.size} bins ({n_sparse_samples}/{len(spatial_bins)} "
+                f"samples) below min_samples_per_bin={min_samples_per_bin}; "
+                "density factor set to 1.0 for those samples."
+            )
+    return sp_arr
+
+
 def _spatial_bins_from_latlon(
     latitudes: pd.Series, longitudes: pd.Series, bin_size: float
 ) -> np.ndarray:
@@ -535,6 +573,98 @@ def _spatial_bins_from_latlon(
     lat_str = lat_bins.astype(str)
     lon_str = lon_bins.astype(str)
     return np.char.add(np.char.add(lat_str, "_"), lon_str)
+
+
+def _get_per_bin_class_weights(
+    labels: np.ndarray,
+    bins: np.ndarray,
+    method: str,
+    clip_range: Optional[Tuple[float, float]],
+    min_samples_per_bin: int = 50,
+    pool_name: str = "",
+) -> np.ndarray:
+    """Per-sample class weights computed *within* each spatial bin.
+
+    For each unique value in *bins*, class weights are derived from the
+    within-bin label distribution via `get_class_weights` (with
+    ``normalize=True`` and no clipping).  Bins containing fewer than
+    *min_samples_per_bin* samples fall back to globally-computed class
+    weights — within-bin counts are too sparse to estimate a stable class
+    distribution otherwise.
+
+    The assembled per-sample array is mean-normalised globally to mean = 1
+    and then clipped to *clip_range*, mirroring the convention used by
+    `_get_normalized_weights` so that downstream multiplicative
+    composition (e.g. with sample-quality weights) behaves predictably.
+
+    With ``method="balanced"`` and dense bins, this gives every (bin, class)
+    pair equal total weight mass, which is the spatial analogue of class
+    balancing: each spatial unit contributes a balanced training signal
+    across classes, regardless of how dominant any single class is in the
+    bin's empirical distribution.
+    """
+    if labels.shape != bins.shape:
+        raise ValueError(
+            f"labels and bins must have the same shape; got "
+            f"labels={labels.shape}, bins={bins.shape}"
+        )
+    if min_samples_per_bin < 1:
+        raise ValueError(
+            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
+        )
+
+    global_w_dict = _stringify_weight_dict(
+        get_class_weights(labels, method=method, clip_range=None, normalize=True)
+    )
+
+    weights = np.empty(len(labels), dtype=np.float64)
+    unique_bins = np.unique(bins)
+    n_fallback_bins = 0
+    n_fallback_samples = 0
+
+    for bin_id in unique_bins:
+        mask = bins == bin_id
+        bin_labels = labels[mask]
+
+        if len(bin_labels) < min_samples_per_bin:
+            n_fallback_bins += 1
+            n_fallback_samples += int(mask.sum())
+            weights[mask] = np.array(
+                [global_w_dict[str(lbl)] for lbl in bin_labels],
+                dtype=np.float64,
+            )
+            continue
+
+        bin_w_dict = _stringify_weight_dict(
+            get_class_weights(
+                bin_labels, method=method, clip_range=None, normalize=True
+            )
+        )
+        weights[mask] = np.array(
+            [bin_w_dict[str(lbl)] for lbl in bin_labels], dtype=np.float64
+        )
+
+    if n_fallback_bins > 0:
+        prefix = (
+            f"_get_per_bin_class_weights[{pool_name}]"
+            if pool_name
+            else "_get_per_bin_class_weights"
+        )
+        logger.info(
+            f"{prefix}: {n_fallback_bins}/{len(unique_bins)} "
+            f"bins ({n_fallback_samples}/{len(labels)} samples) below "
+            f"min_samples_per_bin={min_samples_per_bin}; using global class "
+            "weights for those samples."
+        )
+
+    mean = weights.mean()
+    if mean > 0:
+        weights = weights / mean
+
+    if clip_range is not None:
+        weights = np.clip(weights, clip_range[0], clip_range[1])
+
+    return weights
 
 
 @dataclass
@@ -934,16 +1064,11 @@ class WorldCerealDataset(Dataset):
             #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
             # )
 
-        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps)
+        # 4. Per-timestep S2 cloud dropout
         if cfg.s2_cloud_timestep_prob > 0:
             s2_mask = np.random.rand(T) < cfg.s2_cloud_timestep_prob
-            # Avoid double logging of block; still mask independent timesteps not in block
-            newly_masked = s2_mask & (s2[0, 0, :, 0] != NODATAVALUE)
-            if newly_masked.any():
-                s2[..., newly_masked, :] = NODATAVALUE
-                # logger.debug(
-                #     f"Applied S2 per-timestep cloud masking on {newly_masked.sum()} timesteps"
-                # )
+            if s2_mask.any():
+                s2[..., s2_mask, :] = NODATAVALUE
 
         # 5. Meteo per-timestep dropout
         if cfg.meteo_timestep_dropout_prob > 0:
@@ -1664,6 +1789,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         clip_range: Optional[Tuple[float, float]] = (0.1, 10.0),
         spatial_bin_size_degrees: Optional[float] = None,
         spatial_weight_method: str = "log",
+        class_balancing_scope: Literal["global", "per_bin"] = "global",
+        min_samples_per_bin: int = 50,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> "DualHeadBatchSampler":
@@ -1682,6 +1809,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             clip_range=clip_range,
             spatial_bin_size_degrees=spatial_bin_size_degrees,
             spatial_weight_method=spatial_weight_method,
+            class_balancing_scope=class_balancing_scope,
+            min_samples_per_bin=min_samples_per_bin,
             num_batches=num_batches,
             generator=generator,
         )
@@ -1707,11 +1836,29 @@ class DualHeadBatchSampler(Sampler):
     ``croptype_label``, weighted by the ``croptype_label`` class distribution
     over that subset.  The "no-crop" class is included naturally.
 
-    **Spatial weighting** (optional): spatial-density weights are computed and
-    independently clipped to *clip_range* before being multiplied with the class
-    weights.  Both components are normalised to mean = 1 and re-clipped to the
-    same *clip_range* prior to combination, so neither can dominate the other
-    due to differences in absolute range.
+    Sample weighting is composed from two **orthogonal** factors:
+
+    * **Class-weight source** (``class_balancing_scope``):
+
+      - ``"global"`` (default) — class weights computed once over the full
+        training set via `_get_normalized_weights`.
+      - ``"per_bin"`` — class weights computed *within* each lat/lon bin via
+        `_get_per_bin_class_weights`. Bins with fewer than
+        ``min_samples_per_bin`` samples fall back to global class weights.
+        Requires ``spatial_bin_size_degrees`` to be set and lat/lon columns
+        to be present.
+
+    * **Spatial-density factor** (``spatial_weight_method``):
+
+      Applied multiplicatively to whichever class weights are produced above,
+      whenever ``spatial_bin_size_degrees`` is set and
+      ``spatial_weight_method != "none"``.  Normalised to mean = 1 and clipped
+      to *clip_range* independently before multiplication, so the two factors
+      cannot dominate each other due to differences in absolute range.
+      Bins with fewer than ``min_samples_per_bin`` samples are treated as
+      "average density" (weight = 1.0) so that singleton/sparse bins cannot
+      pin the density factor to its upper clip and blow up the composed
+      sampling distribution (see `_get_spatial_density_weights`).
     """
 
     _LC_OFFSET: int = 1  # virtual offset factor for LC pool
@@ -1728,10 +1875,19 @@ class DualHeadBatchSampler(Sampler):
         clip_range: Optional[Tuple[float, float]] = (0.1, 10.0),
         spatial_bin_size_degrees: Optional[float] = None,
         spatial_weight_method: str = "log",
+        class_balancing_scope: Literal["global", "per_bin"] = "global",
+        min_samples_per_bin: int = 50,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> None:
         import math
+
+        valid_scopes = ("global", "per_bin")
+        if class_balancing_scope not in valid_scopes:
+            raise ValueError(
+                f"class_balancing_scope must be one of {valid_scopes}, got "
+                f"'{class_balancing_scope}'"
+            )
 
         N = len(dataframe)
         self._n = N
@@ -1741,11 +1897,7 @@ class DualHeadBatchSampler(Sampler):
             num_batches if num_batches is not None else math.ceil(N / batch_size)
         )
 
-        # ---- LC pool: all N samples weighted by landcover class distribution ----
         lc_labels = dataframe[landcover_column].astype(str).to_numpy()
-        lc_class_arr = _get_normalized_weights(
-            lc_labels, method=class_weight_method, clip_range=clip_range
-        )
 
         # ---- CT pool: samples with a valid (non-null, non-ignore) croptype label ----
         ct_valid = dataframe[croptype_column].notna() & (
@@ -1758,15 +1910,9 @@ class DualHeadBatchSampler(Sampler):
                 "DualHeadBatchSampler requires at least one CT-eligible sample."
             )
         ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
-        ct_class_arr = _get_normalized_weights(
-            ct_labels, method=class_weight_method, clip_range=clip_range
-        )
 
-        # ---- Optional spatial weighting ----
-        # Both class and spatial arrays are independently normalised to mean=1 and
-        # re-clipped to clip_range (see _get_normalized_weights) before being
-        # multiplied.  This guarantees that neither component can overrule the
-        # other due to differences in absolute weight range.
+        # ---- Compute spatial bins if degree size is set ----
+        spatial_bins: Optional[np.ndarray] = None
         if (
             spatial_bin_size_degrees is not None
             and "lat" in dataframe.columns
@@ -1775,11 +1921,78 @@ class DualHeadBatchSampler(Sampler):
             spatial_bins = _spatial_bins_from_latlon(
                 dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
             )
-            sp_arr = _get_normalized_weights(
-                spatial_bins, method=spatial_weight_method, clip_range=clip_range
+
+        # ---- Class weights: source controlled by class_balancing_scope ----
+        if class_balancing_scope == "per_bin":
+            if spatial_bins is None:
+                raise ValueError(
+                    "class_balancing_scope='per_bin' requires "
+                    "spatial_bin_size_degrees to be set and lat/lon columns to "
+                    "be present in the dataframe."
+                )
+            lc_class_arr = _get_per_bin_class_weights(
+                lc_labels,
+                spatial_bins,
+                method=class_weight_method,
+                clip_range=clip_range,
+                min_samples_per_bin=min_samples_per_bin,
+                pool_name="LC",
+            )
+            ct_class_arr = _get_per_bin_class_weights(
+                ct_labels,
+                spatial_bins[ct_real_indices],
+                method=class_weight_method,
+                clip_range=clip_range,
+                min_samples_per_bin=min_samples_per_bin,
+                pool_name="CT",
+            )
+        else:
+            lc_class_arr = _get_normalized_weights(
+                lc_labels, method=class_weight_method, clip_range=clip_range
+            )
+            ct_class_arr = _get_normalized_weights(
+                ct_labels, method=class_weight_method, clip_range=clip_range
+            )
+
+        # ---- Spatial-density factor: independent, applied uniformly ----
+        # Both class and spatial arrays are independently normalised to mean=1
+        # and re-clipped to clip_range (see _get_normalized_weights) before
+        # being multiplied, so neither can dominate due to differences in
+        # absolute weight range. spatial_weight_method='none' or no bins
+        # means the density factor is skipped. Sparse bins (< min_samples_per_bin)
+        # get density weight = 1.0 to prevent singleton bins from blowing up
+        # the multiplicative composition.
+        density_applied = (
+            spatial_bins is not None and spatial_weight_method != "none"
+        )
+        if density_applied:
+            sp_arr = _get_spatial_density_weights(
+                spatial_bins,
+                method=spatial_weight_method,
+                clip_range=clip_range,
+                min_samples_per_bin=min_samples_per_bin,
             )
             lc_class_arr = lc_class_arr * sp_arr  # full N-sample array
-            ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset only
+            ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset
+
+        density_msg = (
+            f"× spatial-density factor (method={spatial_weight_method})"
+            if density_applied
+            else "(no spatial-density factor)"
+        )
+        if class_balancing_scope == "per_bin":
+            logger.info(
+                "DualHeadBatchSampler: per-bin class balancing "
+                f"(method={class_weight_method}, "
+                f"min_samples_per_bin={min_samples_per_bin}) "
+                f"{density_msg}."
+            )
+        else:
+            logger.info(
+                "DualHeadBatchSampler: global class balancing "
+                f"(method={class_weight_method}) "
+                f"{density_msg}."
+            )
 
         # Convert to float64 probability tensors for torch.multinomial
         self._lc_probs = torch.as_tensor(
