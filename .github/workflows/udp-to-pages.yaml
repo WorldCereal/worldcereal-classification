@@ -1,7 +1,12 @@
-name: Publish UDP JSONs to GitHub Pages
+name: Publish UDP JSONs and Legend Browser to GitHub Pages
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "src/worldcereal/udp/*.json"
+      - "pages/**"
 
 permissions:
   contents: read
@@ -28,12 +33,14 @@ jobs:
         with:
           ref: main
 
-      - name: Prepare site (copy UDP JSONs)
+      - name: Prepare site (copy UDP JSONs and static pages)
         run: |
           set -euo pipefail
           mkdir -p site/udp
           ls -la src/worldcereal/udp
           cp -v src/worldcereal/udp/*.json site/udp/
+          # Copy static pages (legend browser, etc.)
+          cp -rv pages/. site/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
