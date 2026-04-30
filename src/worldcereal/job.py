@@ -45,10 +45,10 @@ FEATURE_DEPS_URL = (
 PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.0.5-py3-none-any.whl"
 WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/worldcereal-2.6.1-py3-none-any.whl"
 DEFAULT_INFERENCE_JOB_OPTIONS = {
-    "driver-memory": "4g",
+    "driver-memory": "8g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "3g",
-    "executor-request-cores": "1800m",
+    "executor-memoryOverhead": "4g",
+    "executor-request-cores": "1400m",
     "max-executors": 20,
     "python-memory": "disable",
     "soft-errors": 0.1,
