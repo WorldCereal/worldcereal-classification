@@ -611,7 +611,10 @@
             if (f.sampling && row.sampling_label !== f.sampling) return false;
             if (f.search) {
                 const haystack = COLS.map(c => row[c] || '').join(' ').toLowerCase();
-                if (!haystack.includes(f.search)) return false;
+                // Also match ewoc_code without dashes so e.g. "1101060000" finds "11-01-06-000-0"
+                const haystackNoDashes = haystack.replace(/-/g, '');
+                const searchNoDashes = f.search.replace(/-/g, '');
+                if (!haystackNoDashes.includes(searchNoDashes) && !haystack.includes(f.search)) return false;
             }
             return true;
         }
