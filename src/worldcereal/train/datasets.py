@@ -667,6 +667,185 @@ def _get_per_bin_class_weights(
     return weights
 
 
+def _get_smoothed_per_bin_class_weights(
+    labels: np.ndarray,
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+    bin_size: float,
+    method: str,
+    clip_range: Optional[Tuple[float, float]],
+    min_samples_per_bin: int = 50,
+    pool_name: str = "",
+) -> np.ndarray:
+    """Per-sample class weights with bilinear interpolation between bin centers.
+
+    Smooths the step changes that ``_get_per_bin_class_weights`` produces at
+    bin boundaries. For each sample, the weight for its class is computed as
+    the bilinear blend of the per-class weight from the four neighbouring
+    bin centers, using the sample's continuous (lat, lon) position.
+
+    Bins below *min_samples_per_bin* are treated as missing in the per-class
+    grid, and the bilinear kernel renormalises over the remaining valid
+    corners only. Samples with all four corners NaN fall back to the global
+    class weight individually.
+
+    A sample exactly at a bin centre yields the same weight as hard
+    binning; a sample at the corner between four bins yields the average
+    of the four corner weights.
+    """
+    if labels.shape != latitudes.shape or labels.shape != longitudes.shape:
+        raise ValueError(
+            "labels, latitudes, longitudes must have the same shape; got "
+            f"{labels.shape}, {latitudes.shape}, {longitudes.shape}"
+        )
+    if min_samples_per_bin < 1:
+        raise ValueError(
+            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
+        )
+    if bin_size <= 0:
+        raise ValueError(f"bin_size must be > 0, got {bin_size}")
+
+    str_labels = labels.astype(str)
+
+    # Hard bin assignment (same as _spatial_bins_from_latlon)
+    lat_bin = np.floor((latitudes + 90.0) / bin_size).astype(np.int64)
+    lon_bin = np.floor((longitudes + 180.0) / bin_size).astype(np.int64)
+
+    # Continuous bin-centre coordinates for bilinear interpolation.
+    u_cont = (latitudes + 90.0) / bin_size - 0.5
+    v_cont = (longitudes + 180.0) / bin_size - 0.5
+    u_floor = np.floor(u_cont).astype(np.int64)
+    v_floor = np.floor(v_cont).astype(np.int64)
+    fu = (u_cont - u_floor).astype(np.float64)
+    fv = (v_cont - v_floor).astype(np.float64)
+
+    # Build the per-class lookup grid (sparse bins → NaN cells, handled by
+    # the valid-only kernel below).
+    all_lat_idx = np.concatenate([u_floor, u_floor + 1])
+    all_lon_idx = np.concatenate([v_floor, v_floor + 1])
+    lat_min, lat_max = int(all_lat_idx.min()), int(all_lat_idx.max())
+    lon_min, lon_max = int(all_lon_idx.min()), int(all_lon_idx.max())
+    grid, class_to_idx, global_w_dict, n_dense_bins, n_total_bins = (
+        _build_per_class_weight_grid(
+            str_labels, lat_bin, lon_bin, method, min_samples_per_bin,
+            lat_min, lat_max, lon_min, lon_max,
+        )
+    )
+    n_lat = grid.shape[1]
+    n_lon = grid.shape[2]
+
+    sample_class_idx = np.array(
+        [class_to_idx[c] for c in str_labels], dtype=np.int64
+    )
+    sample_global_w = np.array(
+        [global_w_dict[c] for c in str_labels], dtype=np.float64
+    )
+
+    def _lookup_corner(
+        li_offset: int, lo_offset: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        gi = u_floor + li_offset - lat_min
+        gj = v_floor + lo_offset - lon_min
+        in_bounds = (gi >= 0) & (gi < n_lat) & (gj >= 0) & (gj < n_lon)
+        gi_clip = np.clip(gi, 0, n_lat - 1)
+        gj_clip = np.clip(gj, 0, n_lon - 1)
+        vals = grid[sample_class_idx, gi_clip, gj_clip]
+        valid = in_bounds & ~np.isnan(vals)
+        # Replace NaN with 0 so the masked-out contribution doesn't pollute math.
+        return np.where(valid, vals, 0.0), valid.astype(np.float64)
+
+    v_sw, m_sw = _lookup_corner(0, 0)
+    v_nw, m_nw = _lookup_corner(1, 0)
+    v_se, m_se = _lookup_corner(0, 1)
+    v_ne, m_ne = _lookup_corner(1, 1)
+
+    # Valid-only kernel: weighted sum over real corners; renormalise by the
+    # weight of valid corners only. Samples with no valid corner at all fall
+    # back to the global class weight.
+    b_sw = (1 - fu) * (1 - fv)
+    b_nw = fu * (1 - fv)
+    b_se = (1 - fu) * fv
+    b_ne = fu * fv
+    weighted_sum = b_sw * v_sw + b_nw * v_nw + b_se * v_se + b_ne * v_ne
+    weight_sum = b_sw * m_sw + b_nw * m_nw + b_se * m_se + b_ne * m_ne
+    weights = np.where(
+        weight_sum > 0,
+        weighted_sum / np.maximum(weight_sum, 1e-12),
+        sample_global_w,
+    )
+
+    mean = weights.mean()
+    if mean > 0:
+        weights = weights / mean
+    if clip_range is not None:
+        weights = np.clip(weights, clip_range[0], clip_range[1])
+
+    prefix = (
+        f"_get_smoothed_per_bin_class_weights[{pool_name}]"
+        if pool_name
+        else "_get_smoothed_per_bin_class_weights"
+    )
+    n_sparse_bins = n_total_bins - n_dense_bins
+    logger.info(
+        f"{prefix}: bilinear interpolation across {n_dense_bins}/{n_total_bins} "
+        f"dense bins (min_samples_per_bin={min_samples_per_bin}); "
+        f"{n_sparse_bins} sparse bins and absent (bin, class) corners fall back "
+        "to global class weights."
+    )
+
+    return weights
+
+
+def _build_per_class_weight_grid(
+    str_labels: np.ndarray,
+    lat_bin: np.ndarray,
+    lon_bin: np.ndarray,
+    method: str,
+    min_samples_per_bin: int,
+    grid_lat_min: int, grid_lat_max: int,
+    grid_lon_min: int, grid_lon_max: int,
+) -> Tuple[np.ndarray, Dict[str, int], Dict[str, float], int, int]:
+    """Build a (n_classes, n_lat, n_lon) per-class lookup grid.
+
+    Cells with no data (sparse bin or class absent in a dense bin) are NaN.
+    Returns the grid plus class index map, global weight dict, and
+    (n_dense_bins, n_total_bins) for logging.
+    """
+    df = pd.DataFrame({"lat_bin": lat_bin, "lon_bin": lon_bin, "label": str_labels})
+    bin_groups = df.groupby(["lat_bin", "lon_bin"])
+    bin_weights: Dict[Tuple[int, int], Dict[str, float]] = {}
+    for (li, lo), group in bin_groups:
+        if len(group) < min_samples_per_bin:
+            continue
+        bin_weights[(li, lo)] = _stringify_weight_dict(
+            get_class_weights(
+                group["label"].to_numpy(),
+                method=method, clip_range=None, normalize=True,
+            )
+        )
+    n_total_bins = bin_groups.ngroups
+    n_dense_bins = len(bin_weights)
+
+    global_w_dict = _stringify_weight_dict(
+        get_class_weights(str_labels, method=method, clip_range=None, normalize=True)
+    )
+    unique_classes = sorted(set(str_labels))
+    class_to_idx = {c: i for i, c in enumerate(unique_classes)}
+
+    n_lat = grid_lat_max - grid_lat_min + 1
+    n_lon = grid_lon_max - grid_lon_min + 1
+    grid = np.full((len(unique_classes), n_lat, n_lon), np.nan, dtype=np.float64)
+    for (li, lo), wdict in bin_weights.items():
+        gi = li - grid_lat_min
+        gj = lo - grid_lon_min
+        if not (0 <= gi < n_lat and 0 <= gj < n_lon):
+            continue
+        for cls, w in wdict.items():
+            if cls in class_to_idx:
+                grid[class_to_idx[cls], gi, gj] = w
+    return grid, class_to_idx, global_w_dict, n_dense_bins, n_total_bins
+
+
 @dataclass
 class SensorMaskingConfig:
     """Configuration for simulating real-world missing data scenarios.
@@ -1794,6 +1973,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         spatial_weight_method: str = "log",
         class_balancing_scope: Literal["global", "per_bin"] = "global",
         min_samples_per_bin: int = 50,
+        smoothing: Literal["none", "bilinear"] = "none",
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> "DualHeadBatchSampler":
@@ -1814,6 +1994,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             spatial_weight_method=spatial_weight_method,
             class_balancing_scope=class_balancing_scope,
             min_samples_per_bin=min_samples_per_bin,
+            smoothing=smoothing,
             num_batches=num_batches,
             generator=generator,
         )
@@ -1851,6 +2032,10 @@ class DualHeadBatchSampler(Sampler):
         Requires ``spatial_bin_size_degrees`` to be set and lat/lon columns
         to be present.
 
+        With ``smoothing="bilinear"`` (per_bin scope only), each sample's
+        class weight is the bilinear blend of the four neighbouring bin
+        centres' weights (see `_get_smoothed_per_bin_class_weights`).
+
     * **Spatial-density factor** (``spatial_weight_method``):
 
       Applied multiplicatively to whichever class weights are produced above,
@@ -1880,6 +2065,7 @@ class DualHeadBatchSampler(Sampler):
         spatial_weight_method: str = "log",
         class_balancing_scope: Literal["global", "per_bin"] = "global",
         min_samples_per_bin: int = 50,
+        smoothing: Literal["none", "bilinear"] = "none",
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> None:
@@ -1890,6 +2076,16 @@ class DualHeadBatchSampler(Sampler):
             raise ValueError(
                 f"class_balancing_scope must be one of {valid_scopes}, got "
                 f"'{class_balancing_scope}'"
+            )
+        valid_smoothing = ("none", "bilinear")
+        if smoothing not in valid_smoothing:
+            raise ValueError(
+                f"smoothing must be one of {valid_smoothing}, got '{smoothing}'"
+            )
+        if smoothing != "none" and class_balancing_scope != "per_bin":
+            raise ValueError(
+                f"smoothing='{smoothing}' only meaningful with "
+                "class_balancing_scope='per_bin'."
             )
 
         N = len(dataframe)
@@ -1933,22 +2129,43 @@ class DualHeadBatchSampler(Sampler):
                     "spatial_bin_size_degrees to be set and lat/lon columns to "
                     "be present in the dataframe."
                 )
-            lc_class_arr = _get_per_bin_class_weights(
-                lc_labels,
-                spatial_bins,
-                method=class_weight_method,
-                clip_range=clip_range,
-                min_samples_per_bin=min_samples_per_bin,
-                pool_name="LC",
-            )
-            ct_class_arr = _get_per_bin_class_weights(
-                ct_labels,
-                spatial_bins[ct_real_indices],
-                method=class_weight_method,
-                clip_range=clip_range,
-                min_samples_per_bin=min_samples_per_bin,
-                pool_name="CT",
-            )
+            if smoothing == "bilinear":
+                lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
+                lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
+                lc_class_arr = _get_smoothed_per_bin_class_weights(
+                    lc_labels, lat_arr, lon_arr, spatial_bin_size_degrees,
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    min_samples_per_bin=min_samples_per_bin,
+                    pool_name="LC",
+                )
+                ct_class_arr = _get_smoothed_per_bin_class_weights(
+                    ct_labels,
+                    lat_arr[ct_real_indices],
+                    lon_arr[ct_real_indices],
+                    spatial_bin_size_degrees,
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    min_samples_per_bin=min_samples_per_bin,
+                    pool_name="CT",
+                )
+            else:
+                lc_class_arr = _get_per_bin_class_weights(
+                    lc_labels,
+                    spatial_bins,
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    min_samples_per_bin=min_samples_per_bin,
+                    pool_name="LC",
+                )
+                ct_class_arr = _get_per_bin_class_weights(
+                    ct_labels,
+                    spatial_bins[ct_real_indices],
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    min_samples_per_bin=min_samples_per_bin,
+                    pool_name="CT",
+                )
         else:
             lc_class_arr = _get_normalized_weights(
                 lc_labels, method=class_weight_method, clip_range=clip_range
@@ -1984,10 +2201,14 @@ class DualHeadBatchSampler(Sampler):
             else "(no spatial-density factor)"
         )
         if class_balancing_scope == "per_bin":
+            if smoothing == "bilinear":
+                smoothing_msg = " smoothing=bilinear"
+            else:
+                smoothing_msg = ""
             logger.info(
                 "DualHeadBatchSampler: per-bin class balancing "
                 f"(method={class_weight_method}, "
-                f"min_samples_per_bin={min_samples_per_bin}) "
+                f"min_samples_per_bin={min_samples_per_bin}{smoothing_msg}) "
                 f"{density_msg}."
             )
         else:
