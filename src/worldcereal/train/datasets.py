@@ -582,6 +582,7 @@ def _get_per_bin_class_weights(
     clip_range: Optional[Tuple[float, float]],
     min_samples_per_bin: int = 50,
     pool_name: str = "",
+    min_samples_per_class_per_bin: Optional[int] = None,
 ) -> np.ndarray:
     """Per-sample class weights computed *within* each spatial bin.
 
@@ -592,16 +593,13 @@ def _get_per_bin_class_weights(
     weights — within-bin counts are too sparse to estimate a stable class
     distribution otherwise.
 
-    The assembled per-sample array is mean-normalised globally to mean = 1
-    and then clipped to *clip_range*, mirroring the convention used by
-    `_get_normalized_weights` so that downstream multiplicative
-    composition (e.g. with sample-quality weights) behaves predictably.
-
-    With ``method="balanced"`` and dense bins, this gives every (bin, class)
-    pair equal total weight mass, which is the spatial analogue of class
-    balancing: each spatial unit contributes a balanced training signal
-    across classes, regardless of how dominant any single class is in the
-    bin's empirical distribution.
+    Within a bin, classes with fewer than *min_samples_per_class_per_bin*
+    samples are excluded from the within-bin weight computation entirely
+    (they don't count toward ``num_classes`` either, removing the
+    destabilising effect of rare classes on dense ones via the ``k_bin``
+    factor in the ``balanced`` recipe). Samples of those filtered classes
+    inherit the global class weight individually. ``None`` (default)
+    auto-derives as ``max(1, min_samples_per_bin // 10)``.
     """
     if labels.shape != bins.shape:
         raise ValueError(
@@ -612,6 +610,13 @@ def _get_per_bin_class_weights(
         raise ValueError(
             f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
         )
+    if min_samples_per_class_per_bin is None:
+        min_samples_per_class_per_bin = max(1, min_samples_per_bin // 10)
+    if min_samples_per_class_per_bin < 1:
+        raise ValueError(
+            f"min_samples_per_class_per_bin must be >= 1, got "
+            f"{min_samples_per_class_per_bin}"
+        )
 
     global_w_dict = _stringify_weight_dict(
         get_class_weights(labels, method=method, clip_range=None, normalize=True)
@@ -621,6 +626,7 @@ def _get_per_bin_class_weights(
     unique_bins = np.unique(bins)
     n_fallback_bins = 0
     n_fallback_samples = 0
+    n_class_filtered_samples = 0
 
     for bin_id in unique_bins:
         mask = bins == bin_id
@@ -635,26 +641,59 @@ def _get_per_bin_class_weights(
             )
             continue
 
+        # Per-class filtering: drop classes with too few samples in this bin.
+        class_counts = pd.Series(bin_labels).value_counts()
+        well_represented = set(
+            class_counts.index[class_counts >= min_samples_per_class_per_bin]
+        )
+        if not well_represented:
+            # No class meets the per-class threshold; fall back wholesale.
+            weights[mask] = np.array(
+                [global_w_dict[str(lbl)] for lbl in bin_labels],
+                dtype=np.float64,
+            )
+            continue
+
+        kept_mask = np.array(
+            [lbl in well_represented for lbl in bin_labels], dtype=bool
+        )
+        filtered_labels = bin_labels[kept_mask]
         bin_w_dict = _stringify_weight_dict(
             get_class_weights(
-                bin_labels, method=method, clip_range=None, normalize=True
+                filtered_labels, method=method,
+                clip_range=None, normalize=True,
             )
         )
-        weights[mask] = np.array(
-            [bin_w_dict[str(lbl)] for lbl in bin_labels], dtype=np.float64
+        per_sample = np.array(
+            [
+                bin_w_dict[str(lbl)] if lbl in well_represented
+                else global_w_dict[str(lbl)]
+                for lbl in bin_labels
+            ],
+            dtype=np.float64,
         )
+        weights[mask] = per_sample
+        n_class_filtered_samples += int((~kept_mask).sum())
 
+    prefix = (
+        f"_get_per_bin_class_weights[{pool_name}]"
+        if pool_name
+        else "_get_per_bin_class_weights"
+    )
     if n_fallback_bins > 0:
-        prefix = (
-            f"_get_per_bin_class_weights[{pool_name}]"
-            if pool_name
-            else "_get_per_bin_class_weights"
-        )
         logger.info(
             f"{prefix}: {n_fallback_bins}/{len(unique_bins)} "
             f"bins ({n_fallback_samples}/{len(labels)} samples) below "
             f"min_samples_per_bin={min_samples_per_bin}; using global class "
             "weights for those samples."
+        )
+    if n_class_filtered_samples > 0:
+        logger.info(
+            f"{prefix}: {n_class_filtered_samples}/{len(labels)} samples "
+            f"belong to a class with < min_samples_per_class_per_bin="
+            f"{min_samples_per_class_per_bin} in their bin; using global "
+            "class weights for those samples (other classes in their bin "
+            "compute as if those samples weren't there)."
         )
 
     mean = weights.mean()
@@ -676,6 +715,7 @@ def _get_smoothed_per_bin_class_weights(
     clip_range: Optional[Tuple[float, float]],
     min_samples_per_bin: int = 50,
     pool_name: str = "",
+    min_samples_per_class_per_bin: Optional[int] = None,
 ) -> np.ndarray:
     """Per-sample class weights with bilinear interpolation between bin centers.
 
@@ -684,10 +724,12 @@ def _get_smoothed_per_bin_class_weights(
     the bilinear blend of the per-class weight from the four neighbouring
     bin centers, using the sample's continuous (lat, lon) position.
 
-    Bins below *min_samples_per_bin* are treated as missing in the per-class
-    grid, and the bilinear kernel renormalises over the remaining valid
-    corners only. Samples with all four corners NaN fall back to the global
-    class weight individually.
+    Bins below *min_samples_per_bin* and (bin, class) pairs below
+    *min_samples_per_class_per_bin* (default ``max(1, min_samples_per_bin //
+    10)``) are treated as missing — both are excluded from the per-bin
+    class-weight computation, and the bilinear kernel renormalises over the
+    remaining valid corners. Samples with all four corners NaN fall back to the
+    global class weight.
 
     A sample exactly at a bin centre yields the same weight as hard
     binning; a sample at the corner between four bins yields the average
@@ -719,8 +761,7 @@ def _get_smoothed_per_bin_class_weights(
     fu = (u_cont - u_floor).astype(np.float64)
     fv = (v_cont - v_floor).astype(np.float64)
 
-    # Build the per-class lookup grid (sparse bins → NaN cells, handled by
-    # the valid-only kernel below).
+    # Build the per-class lookup grid (with sparse-bin and per-class filtering).
     all_lat_idx = np.concatenate([u_floor, u_floor + 1])
     all_lon_idx = np.concatenate([v_floor, v_floor + 1])
     lat_min, lat_max = int(all_lat_idx.min()), int(all_lat_idx.max())
@@ -729,6 +770,7 @@ def _get_smoothed_per_bin_class_weights(
         _build_per_class_weight_grid(
             str_labels, lat_bin, lon_bin, method, min_samples_per_bin,
             lat_min, lat_max, lon_min, lon_max,
+            min_samples_per_class_per_bin=min_samples_per_class_per_bin,
         )
     )
     n_lat = grid.shape[1]
@@ -804,23 +846,41 @@ def _build_per_class_weight_grid(
     min_samples_per_bin: int,
     grid_lat_min: int, grid_lat_max: int,
     grid_lon_min: int, grid_lon_max: int,
+    min_samples_per_class_per_bin: Optional[int] = None,
 ) -> Tuple[np.ndarray, Dict[str, int], Dict[str, float], int, int]:
     """Build a (n_classes, n_lat, n_lon) per-class lookup grid.
 
-    Cells with no data (sparse bin or class absent in a dense bin) are NaN.
+    Cells with no data (sparse bin, class absent in dense bin, or class with
+    fewer than *min_samples_per_class_per_bin* samples in its bin) are NaN.
     Returns the grid plus class index map, global weight dict, and
     (n_dense_bins, n_total_bins) for logging.
+
+    *min_samples_per_class_per_bin* defaults to ``max(1, min_samples_per_bin //
+    10)`` — within each dense bin, classes below this in-bin count are dropped
+    from the per-bin weight computation entirely (no entry in the grid for
+    that class in that bin), so they don't contribute to the ``num_classes``
+    factor for the remaining classes.
     """
+    if min_samples_per_class_per_bin is None:
+        min_samples_per_class_per_bin = max(1, min_samples_per_bin // 10)
+
     df = pd.DataFrame({"lat_bin": lat_bin, "lon_bin": lon_bin, "label": str_labels})
     bin_groups = df.groupby(["lat_bin", "lon_bin"])
     bin_weights: Dict[Tuple[int, int], Dict[str, float]] = {}
     for (li, lo), group in bin_groups:
         if len(group) < min_samples_per_bin:
             continue
+        bin_labels = group["label"].to_numpy()
+        class_counts = pd.Series(bin_labels).value_counts()
+        well_represented = set(
+            class_counts.index[class_counts >= min_samples_per_class_per_bin]
+        )
+        if not well_represented:
+            continue
+        kept = bin_labels[np.isin(bin_labels, list(well_represented))]
         bin_weights[(li, lo)] = _stringify_weight_dict(
             get_class_weights(
-                group["label"].to_numpy(),
-                method=method, clip_range=None, normalize=True,
+                kept, method=method, clip_range=None, normalize=True,
             )
         )
     n_total_bins = bin_groups.ngroups
@@ -1974,6 +2034,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         class_balancing_scope: Literal["global", "per_bin"] = "global",
         min_samples_per_bin: int = 50,
         smoothing: Literal["none", "bilinear"] = "none",
+        min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> "DualHeadBatchSampler":
@@ -1995,6 +2056,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             class_balancing_scope=class_balancing_scope,
             min_samples_per_bin=min_samples_per_bin,
             smoothing=smoothing,
+            min_samples_per_class_per_bin=min_samples_per_class_per_bin,
             num_batches=num_batches,
             generator=generator,
         )
@@ -2066,6 +2128,7 @@ class DualHeadBatchSampler(Sampler):
         class_balancing_scope: Literal["global", "per_bin"] = "global",
         min_samples_per_bin: int = 50,
         smoothing: Literal["none", "bilinear"] = "none",
+        min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> None:
@@ -2137,6 +2200,7 @@ class DualHeadBatchSampler(Sampler):
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
+                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
                 ct_class_arr = _get_smoothed_per_bin_class_weights(
@@ -2147,6 +2211,7 @@ class DualHeadBatchSampler(Sampler):
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
+                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="CT",
                 )
             else:
@@ -2156,6 +2221,7 @@ class DualHeadBatchSampler(Sampler):
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
+                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
                 ct_class_arr = _get_per_bin_class_weights(
@@ -2164,6 +2230,7 @@ class DualHeadBatchSampler(Sampler):
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
+                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="CT",
                 )
         else:
