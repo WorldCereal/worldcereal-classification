@@ -2192,6 +2192,9 @@ class DualHeadBatchSampler(Sampler):
                     "spatial_bin_size_degrees to be set and lat/lon columns to "
                     "be present in the dataframe."
                 )
+            # spatial_bins is not None implies spatial_bin_size_degrees is not None;
+            # the assert is for mypy's type narrowing.
+            assert spatial_bin_size_degrees is not None
             if smoothing == "bilinear":
                 lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
                 lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
