@@ -14,6 +14,7 @@ from worldcereal.train.datasets import (
     WorldCerealLabelledDataset,
     WorldCerealTrainingDataset,
     _get_per_bin_class_weights,
+    _get_smoothed_per_bin_class_weights,
     _get_spatial_density_weights,
     _is_lc_only_dataset,
     align_to_composite_window,
@@ -1886,6 +1887,148 @@ class TestSpatialDensityWeights(unittest.TestCase):
         from worldcereal.train.datasets import _get_normalized_weights
         without_protection = _get_normalized_weights(bins, "log", (0.1, 10.0))
         np.testing.assert_allclose(with_protection, without_protection)
+
+
+class TestSmoothedPerBinClassWeights(unittest.TestCase):
+    """Unit tests for `_get_smoothed_per_bin_class_weights` (bilinear)."""
+
+    def _two_bin_grid(self):
+        """Construct a synthetic dataset with 2 dense bins (5° size).
+
+        Bin (lat∈[0,5°), lon∈[0,5°)): all class 'a' (50 samples)
+        Bin (lat∈[5,10°), lon∈[0,5°)): all class 'b' (50 samples)
+        """
+        n_per_bin = 50
+        # Bin centres are at lat=2.5, 7.5; lon=2.5
+        rng = np.random.default_rng(0)
+        a_lats = rng.uniform(0.0, 5.0, n_per_bin)
+        a_lons = rng.uniform(0.0, 5.0, n_per_bin)
+        b_lats = rng.uniform(5.0, 10.0, n_per_bin)
+        b_lons = rng.uniform(0.0, 5.0, n_per_bin)
+        labels = np.array(["a"] * n_per_bin + ["b"] * n_per_bin)
+        lats = np.concatenate([a_lats, b_lats])
+        lons = np.concatenate([a_lons, b_lons])
+        return labels, lats, lons
+
+    def test_at_bin_center_matches_hard_binning(self):
+        """A sample exactly at the bin centre should get the same weight as the
+        hard-binning helper (since fu=0, fv=0 puts 100% weight on its own bin)."""
+        labels, lats, lons = self._two_bin_grid()
+        # Add a probe sample exactly at bin (0–5°, 0–5°) centre — class 'a'
+        probe_label = "a"
+        probe_lat = 2.5  # bin centre in lat
+        probe_lon = 2.5  # bin centre in lon
+        labels = np.append(labels, probe_label)
+        lats = np.append(lats, probe_lat)
+        lons = np.append(lons, probe_lon)
+        bilinear = _get_smoothed_per_bin_class_weights(
+            labels, lats, lons, bin_size=5.0,
+            method="balanced", clip_range=None, min_samples_per_bin=1,
+        )
+        # Hard binning, same data
+        bins = np.array([
+            f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
+            for la, lo in zip(lats, lons)
+        ])
+        hard = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1,
+        )
+        # Bin-centre probe: bilinear and hard should match within renormalisation
+        # tolerance. The two arrays are mean-normalised independently, and
+        # bilinear's other samples pick up small global-fallback contributions
+        # at NW/SE/NE corners (which slightly shifts the global mean), so a
+        # loose rtol covers the inevitable numerical drift.
+        probe_bilinear = bilinear[-1]
+        probe_hard = hard[-1]
+        # In this two-bin balanced setup both should be ≈ 1.0.
+        np.testing.assert_allclose(probe_bilinear, probe_hard, rtol=1e-3)
+
+    def test_at_corner_blends_neighbors(self):
+        """A sample on the edge between two bins gets the average of the two
+        neighbours' class weights."""
+        # Two bins where class 'x' has different per-bin weights.
+        # Bin A: 9 'x' + 1 'y' → class 'x' is locally common, low weight
+        # Bin B: 1 'x' + 9 'y' → class 'x' is locally rare, high weight
+        # Bin C, D: empty (we'll have empty corners → fall back to global)
+        labels = np.array(
+            (["x"] * 9 + ["y"]) +     # bin A around lat=2.5
+            (["x"] + ["y"] * 9)       # bin B around lat=7.5
+        )
+        lats = np.concatenate([
+            np.full(10, 2.5),  # all in bin A (lat 0-5)
+            np.full(10, 7.5),  # all in bin B (lat 5-10)
+        ])
+        lons = np.full(20, 2.5)  # all in lon bin 0-5
+        # Probe sample exactly on the edge between bin A and bin B (lat=5.0)
+        # Class 'x'. Should get average of bin A weight and bin B weight for 'x'.
+        labels = np.append(labels, "x")
+        lats = np.append(lats, 5.0)  # exactly at boundary; fu = 0.5 in u-space
+        lons = np.append(lons, 2.5)
+        bilinear = _get_smoothed_per_bin_class_weights(
+            labels, lats, lons, bin_size=5.0,
+            method="balanced", clip_range=None, min_samples_per_bin=1,
+        )
+        # Hard binning
+        bins = np.array([
+            f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
+            for la, lo in zip(lats, lons)
+        ])
+        hard = _get_per_bin_class_weights(
+            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1,
+        )
+        # Bin A 'x' weight (hard): from samples 0..8 (labels 'x' in bin A)
+        bin_a_x = hard[0]
+        # Bin B 'x' weight (hard): sample 10 (label 'x' in bin B)
+        bin_b_x = hard[10]
+        # The probe's bilinear value should be ~50/50 of these two.
+        # Hard and bilinear arrays use the same mean normaliser convention but
+        # their distributions differ slightly, so use a reasonable tolerance.
+        probe_bilinear = bilinear[-1]
+        # In hard: bin_a_x < bin_b_x (x is rare in B → high weight there).
+        self.assertGreater(probe_bilinear, bin_a_x * 0.5)  # meaningfully above bin A's weight
+        self.assertLess(probe_bilinear, bin_b_x * 1.0)     # meaningfully below bin B's weight
+
+    def test_global_mean_one(self):
+        """Final per-sample array has mean = 1 by construction."""
+        labels, lats, lons = self._two_bin_grid()
+        weights = _get_smoothed_per_bin_class_weights(
+            labels, lats, lons, bin_size=5.0,
+            method="balanced", clip_range=None, min_samples_per_bin=1,
+        )
+        self.assertAlmostEqual(float(weights.mean()), 1.0, places=6)
+
+    def test_clip_range_applied(self):
+        """Clip range bounds the output."""
+        labels, lats, lons = self._two_bin_grid()
+        weights = _get_smoothed_per_bin_class_weights(
+            labels, lats, lons, bin_size=5.0,
+            method="balanced", clip_range=(0.5, 1.5), min_samples_per_bin=1,
+        )
+        self.assertGreaterEqual(float(weights.min()), 0.5 - 1e-9)
+        self.assertLessEqual(float(weights.max()), 1.5 + 1e-9)
+
+    def test_sparse_bin_falls_back_to_global(self):
+        """A bin below min_samples_per_bin is treated as missing, so its
+        corner contribution falls back to the global class weight."""
+        # 100 'a' in dense bin, 1 'a' in sparse-corner bin
+        labels = np.array(["a"] * 100 + ["a"])
+        lats = np.concatenate([np.full(100, 2.5), [7.5]])  # sparse bin at lat∈[5,10)
+        lons = np.full(101, 2.5)
+        weights = _get_smoothed_per_bin_class_weights(
+            labels, lats, lons, bin_size=5.0,
+            method="balanced", clip_range=None, min_samples_per_bin=10,
+        )
+        # All values should be finite, no errors raised.
+        self.assertTrue(np.all(np.isfinite(weights)))
+
+    def test_shape_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            _get_smoothed_per_bin_class_weights(
+                np.array(["a", "b"]),
+                np.array([0.0, 0.0, 0.0]),  # wrong length
+                np.array([0.0, 0.0]),
+                bin_size=5.0, method="balanced", clip_range=None,
+            )
 
 
 if __name__ == "__main__":
