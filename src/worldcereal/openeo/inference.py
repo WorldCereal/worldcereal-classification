@@ -218,26 +218,6 @@ def _lazy_import_torch():
     return torch
 
 
-def _cpu_autotuned_batch_size(requested_batch_size: int, logical_cores: int) -> int:
-    """Heuristic CPU batch-size tuning for better cache locality.
-
-    Only adjusts the default oversized CPU batch (2048). User-specified values are respected.
-    """
-
-    if requested_batch_size <= 0:
-        raise ValueError("batch_size must be a positive integer")
-
-    # Keep explicit user overrides unchanged.
-    if requested_batch_size != 2048:
-        return requested_batch_size
-
-    if logical_cores <= 4:
-        return 256
-    if logical_cores <= 8:
-        return 512
-    return 1024
-
-
 def _seasonal_workflow_presets():
     from worldcereal.openeo import parameters as _seasonal_parameters
 
@@ -1092,7 +1072,6 @@ class SeasonalInferenceEngine:
         enable_cropland_head: bool = True,
         cropland_postprocess: Optional[Mapping[str, Any]] = None,
         croptype_postprocess: Optional[Mapping[str, Any]] = None,
-        auto_tune_batch_size: bool = False,
         cpu_num_threads: Optional[int] = None,
         cpu_num_interop_threads: Optional[int] = None,
         memory_logging: bool = False,
@@ -1114,7 +1093,6 @@ class SeasonalInferenceEngine:
         )
         torch = _lazy_import_torch()
         self.device = torch.device(device)
-        self._auto_tune_batch_size = bool(auto_tune_batch_size)
         self._cpu_num_threads = (
             int(cpu_num_threads) if cpu_num_threads is not None else None
         )
@@ -1148,21 +1126,7 @@ class SeasonalInferenceEngine:
             except Exception:
                 pass  # Thread tuning is optional.
 
-        effective_batch_size = batch_size
-        if self._auto_tune_batch_size and (device == "cpu" or str(device).lower() == "cpu"):
-            try:
-                logical_cores = os.cpu_count() or 1
-                tuned_batch_size = _cpu_autotuned_batch_size(batch_size, logical_cores)
-                if tuned_batch_size != batch_size:
-                    logger.info(
-                        f"Auto-tuned CPU batch_size from {batch_size} to {tuned_batch_size} "
-                        f"(logical_cores={logical_cores})."
-                    )
-                effective_batch_size = tuned_batch_size
-            except Exception:
-                effective_batch_size = batch_size
-
-        self.batch_size = effective_batch_size
+        self.batch_size = batch_size
         self._season_composite_frequency = season_composite_frequency
         self._export_class_probabilities = export_class_probabilities
         self._croptype_enabled = enable_croptype_head
@@ -1195,7 +1159,6 @@ class SeasonalInferenceEngine:
             f"croptype_enabled={self._croptype_enabled}, cropland_enabled={self._cropland_enabled}, "
             f"cropland_postprocess={self._cropland_postprocess.enabled}, "
             f"croptype_postprocess={self._croptype_postprocess.enabled}, "
-            f"auto_tune_batch_size={self._auto_tune_batch_size}, "
             f"cpu_num_threads={self._cpu_num_threads}, "
             f"cpu_num_interop_threads={self._cpu_num_interop_threads}, "
             f"memory_logging={self._memory_logging}, "
@@ -1863,7 +1826,6 @@ def run_seasonal_workflow(
     enable_cropland_head: bool = True,
     cropland_postprocess: Optional[Mapping[str, Any]] = None,
     croptype_postprocess: Optional[Mapping[str, Any]] = None,
-    auto_tune_batch_size: bool = False,
     cpu_num_threads: Optional[int] = 2,
     cpu_num_interop_threads: Optional[int] = 2,
     export_embeddings: bool = False,
@@ -1889,7 +1851,6 @@ def run_seasonal_workflow(
         enable_cropland_head=enable_cropland_head,
         cropland_postprocess=cropland_postprocess,
         croptype_postprocess=croptype_postprocess,
-        auto_tune_batch_size=auto_tune_batch_size,
         cpu_num_threads=cpu_num_threads,
         cpu_num_interop_threads=cpu_num_interop_threads,
         memory_logging=memory_logging,
@@ -2304,7 +2265,6 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
             f"batch_size must be an integer, got {batch_size_value!r}"
         ) from exc
     device = runtime_cfg.get("device", "cpu")
-    auto_tune_batch_size = _as_bool(runtime_cfg.get("auto_tune_batch_size"), False)
     cpu_num_threads_raw = runtime_cfg.get("cpu_num_threads")
     cpu_num_interop_threads_raw = runtime_cfg.get("cpu_num_interop_threads")
     cpu_num_threads: Optional[int]
@@ -2402,7 +2362,6 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "cache_root": cache_root,
         "device": device,
         "batch_size": batch_size_int,
-        "auto_tune_batch_size": auto_tune_batch_size,
         "cpu_num_threads": cpu_num_threads,
         "cpu_num_interop_threads": cpu_num_interop_threads,
         "memory_logging": memory_logging,
@@ -2485,10 +2444,6 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         workflow_cfg["runtime"]["device"] = context.get("device")
     if "batch_size" in context:
         workflow_cfg["runtime"]["batch_size"] = context.get("batch_size")
-    if "auto_tune_batch_size" in context:
-        workflow_cfg["runtime"]["auto_tune_batch_size"] = _as_bool(
-            context.get("auto_tune_batch_size"), False
-        )
     if "cpu_num_threads" in context:
         workflow_cfg["runtime"]["cpu_num_threads"] = context.get("cpu_num_threads")
     if "cpu_num_interop_threads" in context:
