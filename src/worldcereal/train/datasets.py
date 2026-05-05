@@ -420,6 +420,8 @@ def get_class_weights(
     clip_range: Optional[tuple] = None,  # e.g. (0.2, 10.0)
     normalize: bool = True,
     counts_override: Optional[Mapping[Any, int]] = None,
+    verbose: bool = True,
+    pool_name: str = "",
 ) -> Dict[Hashable, float]:
     """
     Compute class weights for classification tasks.
@@ -485,7 +487,12 @@ def get_class_weights(
 
     rounded = np.round(weights, 3)
     result = {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
-    logger.info(f"Class weights ({method}): {result}")
+    if verbose:
+        display = {
+            str(cls): float(weight) for cls, weight in zip(classes, rounded.tolist())
+        }
+        prefix = f"[{pool_name}] " if pool_name else ""
+        logger.info(f"{prefix}Class weights ({method}): {display}")
     return result
 
 
@@ -499,6 +506,7 @@ def _get_normalized_weights(
     labels: np.ndarray,
     method: str,
     clip_range: Optional[Tuple[float, float]],
+    pool_name: str = "",
 ) -> np.ndarray:
     """Return a per-sample float64 weight array.
 
@@ -508,7 +516,10 @@ def _get_normalized_weights(
     within *clip_range* (when provided).
     """
     w_dict = _stringify_weight_dict(
-        get_class_weights(labels, method=method, clip_range=clip_range, normalize=True)
+        get_class_weights(
+            labels, method=method, clip_range=clip_range, normalize=True,
+            pool_name=pool_name,
+        )
     )
     return np.array([w_dict[str(lbl)] for lbl in labels], dtype=np.float64)
 
@@ -539,7 +550,9 @@ def _get_spatial_density_weights(
         raise ValueError(
             f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
         )
-    sp_arr = _get_normalized_weights(spatial_bins, method, clip_range)
+    sp_arr = _get_normalized_weights(
+        spatial_bins, method, clip_range, pool_name="spatial-density"
+    )
 
     if min_samples_per_bin > 1:
         bin_counts = pd.Series(spatial_bins).value_counts()
@@ -626,7 +639,10 @@ def _get_per_bin_class_weights(
         )
 
     global_w_dict = _stringify_weight_dict(
-        get_class_weights(labels, method=method, clip_range=None, normalize=True)
+        get_class_weights(
+            labels, method=method, clip_range=None, normalize=True,
+            pool_name=pool_name,
+        )
     )
 
     weights = np.empty(len(labels), dtype=np.float64)
@@ -668,7 +684,7 @@ def _get_per_bin_class_weights(
         bin_w_dict = _stringify_weight_dict(
             get_class_weights(
                 filtered_labels, method=method,
-                clip_range=None, normalize=True,
+                clip_range=None, normalize=True, verbose=False,
             )
         )
         per_sample = np.array(
@@ -888,13 +904,17 @@ def _build_per_class_weight_grid(
         bin_weights[(li, lo)] = _stringify_weight_dict(
             get_class_weights(
                 kept, method=method, clip_range=None, normalize=True,
+                verbose=False,
             )
         )
     n_total_bins = bin_groups.ngroups
     n_dense_bins = len(bin_weights)
 
     global_w_dict = _stringify_weight_dict(
-        get_class_weights(str_labels, method=method, clip_range=None, normalize=True)
+        get_class_weights(
+            str_labels, method=method, clip_range=None, normalize=True,
+            pool_name=pool_name,
+        )
     )
     unique_classes = sorted(set(str_labels))
     class_to_idx = {c: i for i, c in enumerate(unique_classes)}
@@ -2245,10 +2265,12 @@ class DualHeadBatchSampler(Sampler):
                 )
         else:
             lc_class_arr = _get_normalized_weights(
-                lc_labels, method=class_weight_method, clip_range=clip_range
+                lc_labels, method=class_weight_method, clip_range=clip_range,
+                pool_name="LC",
             )
             ct_class_arr = _get_normalized_weights(
-                ct_labels, method=class_weight_method, clip_range=clip_range
+                ct_labels, method=class_weight_method, clip_range=clip_range,
+                pool_name="CT",
             )
 
         # ---- Spatial-density factor: independent, applied uniformly ----
