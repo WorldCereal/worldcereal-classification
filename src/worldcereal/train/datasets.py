@@ -531,7 +531,14 @@ def _get_spatial_density_weights(
     Mirrors the analogous safeguard in `_get_per_bin_class_weights`:
     a bin is considered too sparse to estimate a stable density weight from,
     and is treated as "average density" instead.
+
+    ``min_samples_per_bin=1`` is a no-op for the sparse-bin override (every
+    non-empty bin trivially has >=1 sample); values <1 are rejected.
     """
+    if min_samples_per_bin < 1:
+        raise ValueError(
+            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
+        )
     sp_arr = _get_normalized_weights(spatial_bins, method, clip_range)
 
     if min_samples_per_bin > 1:
