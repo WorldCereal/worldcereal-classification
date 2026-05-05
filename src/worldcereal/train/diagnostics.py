@@ -25,7 +25,6 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
-
 try:
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
