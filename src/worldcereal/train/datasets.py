@@ -92,6 +92,7 @@ SAMPLE_ATTR_COLUMNS: Tuple[str, ...] = (
     "lon",
     "ref_id",
     "sample_id",
+    "region",
     "finetune_class",
     "downstream_class",
     "landcover_label",
@@ -999,7 +1000,16 @@ class WorldCerealDataset(Dataset):
         attrs: Dict[str, Any] = {}
         for key in SAMPLE_ATTR_COLUMNS:
             value = row.get(key)
-            if key in row and not _is_missing_value(value):
+            if key == "region":
+                # Always emit "region" with a fallback so _collate_attrs sees a
+                # consistent key across all samples in a batch, even when some
+                # rows have a missing/NaN region value.
+                attrs["region"] = (
+                    str(value)
+                    if (value is not None and not _is_missing_value(value))
+                    else "unknown"
+                )
+            elif key in row and not _is_missing_value(value):
                 attrs[key] = value
 
         label_task = row.get("label_task")

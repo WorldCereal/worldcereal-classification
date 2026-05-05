@@ -494,6 +494,58 @@ def _records_to_scalar_metrics(records: List[dict]) -> dict[str, float]:
         return {}
 
 
+def _log_regional_metrics(
+    records: List[dict],
+    task_name: str,
+    class_names: Optional[List[str]] = None,
+) -> None:
+    """Log per-region macro F1 summary derived from prediction records.
+
+    Groups records by the ``region`` field and logs a sorted table of
+    macro-averaged precision, recall and F1 per region so that training
+    logs reveal which regions are doing better or worse each epoch.
+    Silently returns when no region information is present.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    if "region" not in df.columns or df["region"].isna().all():
+        logger.debug(
+            f"{task_name}: no region information available; skipping regional metrics."
+        )
+        return
+
+    region_col = df["region"].fillna("unknown")
+    regions = sorted(region_col.unique())
+    row_list = []
+    for region in regions:
+        mask = region_col == region
+        region_df = df[mask]
+        y_true = region_df["target_class"].tolist()
+        y_pred = region_df["pred_class"].tolist()
+        labels = list(class_names) if class_names else None
+        report = classification_report(
+            y_true, y_pred, labels=labels, output_dict=True, zero_division=0
+        )
+        macro = report.get("macro avg", {})
+        row_list.append(
+            {
+                "region": region,
+                "n_samples": len(region_df),
+                "macro_f1": macro.get("f1-score", float("nan")),
+                "macro_prec": macro.get("precision", float("nan")),
+                "macro_recall": macro.get("recall", float("nan")),
+            }
+        )
+    if not row_list:
+        return
+    summary_df = pd.DataFrame(row_list).sort_values("macro_f1", ascending=False)
+    logger.info(
+        f"{task_name} regional metrics ({len(row_list)} regions):\n"
+        + summary_df.to_string(index=False, float_format="{:.3f}".format)
+    )
+
+
 def build_confusion_matrix_figure(
     y_true: Sequence[Any],
     y_pred: Sequence[Any],
@@ -1323,6 +1375,12 @@ def evaluate_finetuned_model(
         croptype_df, croptype_cm, croptype_cm_norm = _compute_metrics_from_records(
             seasonal_croptype_records, seasonal_croptype_classes
         )
+        _log_regional_metrics(
+            seasonal_landcover_records, "landcover", seasonal_landcover_classes
+        )
+        _log_regional_metrics(
+            seasonal_croptype_records, "croptype", seasonal_croptype_classes
+        )
         if croptype_gate_rejections:
             rejection_row = pd.DataFrame(
                 [
@@ -1740,6 +1798,7 @@ def summarize_seasonal_predictions(
         _lons = _ensure_list(attrs.get("lon"), batch_size, fill=None)
         _sample_ids = _ensure_list(attrs.get("sample_id"), batch_size, fill=None)
         _ref_ids = _ensure_list(attrs.get("ref_id"), batch_size, fill=None)
+        _regions = _ensure_list(attrs.get("region"), batch_size, fill=None)
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
@@ -1755,6 +1814,7 @@ def summarize_seasonal_predictions(
                     "lon": _lons[sample_idx],
                     "sample_id": _sample_ids[sample_idx],
                     "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -1825,6 +1885,7 @@ def summarize_seasonal_predictions(
                     "lon": _lons[sample_idx],
                     "sample_id": _sample_ids[sample_idx],
                     "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -2224,6 +2285,17 @@ def run_finetuning(
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
                         seasonal_gate_rejections / total_attempts
                     )
+
+            _log_regional_metrics(
+                seasonal_landcover_records,
+                f"[val epoch {epoch + 1}] landcover",
+                seasonal_loss.landcover_classes if seasonal_loss is not None else None,
+            )
+            _log_regional_metrics(
+                seasonal_croptype_records,
+                f"[val epoch {epoch + 1}] croptype",
+                seasonal_loss.croptype_classes if seasonal_loss is not None else None,
+            )
 
         del seasonal_landcover_records, seasonal_croptype_records
         del val_pred_chunks
