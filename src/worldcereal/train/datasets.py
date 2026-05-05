@@ -794,6 +794,7 @@ def _get_smoothed_per_bin_class_weights(
             str_labels, lat_bin, lon_bin, method, min_samples_per_bin,
             lat_min, lat_max, lon_min, lon_max,
             min_samples_per_class_per_bin=min_samples_per_class_per_bin,
+            pool_name=pool_name,
         )
     )
     n_lat = grid.shape[1]
@@ -870,6 +871,7 @@ def _build_per_class_weight_grid(
     grid_lat_min: int, grid_lat_max: int,
     grid_lon_min: int, grid_lon_max: int,
     min_samples_per_class_per_bin: Optional[int] = None,
+    pool_name: str = "",
 ) -> Tuple[np.ndarray, Dict[str, int], Dict[str, float], int, int]:
     """Build a (n_classes, n_lat, n_lon) per-class lookup grid.
 
