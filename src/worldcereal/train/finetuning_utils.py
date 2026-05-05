@@ -546,6 +546,73 @@ def _log_regional_metrics(
     )
 
 
+def _plot_spatial_predictions(
+    records: List[dict],
+    task_name: str,
+    output_path: Path,
+    *,
+    title: Optional[str] = None,
+) -> None:
+    """Save a scatter-map PNG colouring each sample green (correct) or red (wrong).
+
+    Points with ``correct == 1`` are drawn in green on top of red incorrect
+    points so that sparse correct predictions are still visible.  A world
+    outline is drawn when *geopandas* is available; otherwise a plain blue
+    ocean background is used.  Silently returns when no records with valid
+    coordinates are present.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    df = df.dropna(subset=["lat", "lon"])
+    if df.empty:
+        logger.debug(f"{task_name}: no lat/lon coordinates in records; skipping spatial plot.")
+        return
+
+    correct = df[df["correct"] == 1]
+    wrong = df[df["correct"] == 0]
+    acc = len(correct) / len(df)
+
+    fig, ax = plt.subplots(figsize=(18, 9))
+
+    # World background (geopandas naturalearth, optional)
+    try:
+        import geopandas as gpd  # noqa: PLC0415
+        world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+        world.plot(ax=ax, color="#d9d9d9", edgecolor="white", linewidth=0.3)
+    except Exception:  # noqa: BLE001
+        ax.set_facecolor("#cce5ff")
+        ax.axhspan(-90, 90, facecolor="#cce5ff", zorder=0)
+
+    # Wrong predictions first (underneath), then correct on top
+    if not wrong.empty:
+        ax.scatter(
+            wrong["lon"], wrong["lat"],
+            c="#e74c3c", s=5, alpha=0.45, linewidths=0,
+            label=f"Wrong ({len(wrong):,})", rasterized=True, zorder=2,
+        )
+    if not correct.empty:
+        ax.scatter(
+            correct["lon"], correct["lat"],
+            c="#2ecc71", s=5, alpha=0.45, linewidths=0,
+            label=f"Correct ({len(correct):,})", rasterized=True, zorder=3,
+        )
+
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-90, 90)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    plot_title = title or task_name
+    ax.set_title(f"{plot_title}  |  n={len(df):,}  |  accuracy={acc:.3f}")
+    ax.legend(markerscale=3, loc="lower left", fontsize=9)
+    plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"Saved spatial prediction map ({task_name}) → {output_path}")
+
+
 def build_confusion_matrix_figure(
     y_true: Sequence[Any],
     y_pred: Sequence[Any],
@@ -2295,6 +2362,22 @@ def run_finetuning(
                 seasonal_croptype_records,
                 f"[val epoch {epoch + 1}] croptype",
                 seasonal_loss.croptype_classes if seasonal_loss is not None else None,
+            )
+
+            _spatial_eval_dir = (
+                Path(output_dir) / "intermediate_evals" / "spatial_evals"
+            )
+            _plot_spatial_predictions(
+                seasonal_landcover_records,
+                f"val epoch {epoch + 1} landcover",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_landcover.png",
+                title=f"Val Epoch {epoch + 1} – Landcover",
+            )
+            _plot_spatial_predictions(
+                seasonal_croptype_records,
+                f"val epoch {epoch + 1} croptype",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_croptype.png",
+                title=f"Val Epoch {epoch + 1} – Croptype",
             )
 
         del seasonal_landcover_records, seasonal_croptype_records
