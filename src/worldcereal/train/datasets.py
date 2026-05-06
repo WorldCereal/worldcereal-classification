@@ -2089,6 +2089,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
+        class_weight_multipliers: Optional[Mapping[str, float]] = None,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2111,6 +2112,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             min_samples_per_class_per_bin=min_samples_per_class_per_bin,
             num_batches=num_batches,
             generator=generator,
+            class_weight_multipliers=class_weight_multipliers,
         )
 
 
@@ -2183,6 +2185,7 @@ class DualHeadBatchSampler(Sampler):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
+        class_weight_multipliers: Optional[Mapping[str, float]] = None,
     ) -> None:
         import math
 
@@ -2304,6 +2307,37 @@ class DualHeadBatchSampler(Sampler):
                 clip_range=clip_range,
                 pool_name="CT",
             )
+
+        # ---- Optional per-class weight multipliers (routed to LC or CT by label membership) ----
+        if class_weight_multipliers:
+            lc_label_set = set(lc_labels.tolist())
+            ct_label_set = set(ct_labels.tolist())
+            lc_multipliers: Dict[str, float] = {}
+            ct_multipliers: Dict[str, float] = {}
+            for key, val in class_weight_multipliers.items():
+                if key in lc_label_set:
+                    lc_multipliers[key] = val
+                elif key in ct_label_set:
+                    ct_multipliers[key] = val
+                else:
+                    logger.warning(
+                        f"class_weight_multipliers key '{key}' not found in LC or CT "
+                        "labels; ignoring."
+                    )
+            if lc_multipliers:
+                lc_multiplier_arr = np.array(
+                    [lc_multipliers.get(str(lbl), 1.0) for lbl in lc_labels],
+                    dtype=np.float64,
+                )
+                lc_class_arr = lc_class_arr * lc_multiplier_arr
+                logger.info(f"Applied LC class weight multipliers: {lc_multipliers}")
+            if ct_multipliers:
+                ct_multiplier_arr = np.array(
+                    [ct_multipliers.get(str(lbl), 1.0) for lbl in ct_labels],
+                    dtype=np.float64,
+                )
+                ct_class_arr = ct_class_arr * ct_multiplier_arr
+                logger.info(f"Applied CT class weight multipliers: {ct_multipliers}")
 
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1
