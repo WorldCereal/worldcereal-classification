@@ -639,20 +639,6 @@ def plot_spatial_predictions(
         zorder=2,
     )
 
-    # Overlay hexbin count (same grid) to grey-out sparse cells
-    hb_count = ax.hexbin(
-        df["lon"],
-        df["lat"],
-        gridsize=gridsize,
-        extent=(x_min, x_max, y_min, y_max),
-        cmap="Greys",
-        alpha=0.0,   # invisible — only used to read counts below
-        mincnt=1,
-        linewidths=0.0,
-        zorder=0,
-    )
-    plt.close()  # close the invisible hexbin figure artefact — reuse fig/ax
-
     cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
     cb.set_label("Local accuracy", fontsize=9)
     cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
