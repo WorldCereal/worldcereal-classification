@@ -2251,7 +2251,10 @@ class DualHeadBatchSampler(Sampler):
                 lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
                 lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
                 lc_class_arr = _get_smoothed_per_bin_class_weights(
-                    lc_labels, lat_arr, lon_arr, spatial_bin_size_degrees,
+                    lc_labels,
+                    lat_arr,
+                    lon_arr,
+                    spatial_bin_size_degrees,
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
@@ -2290,11 +2293,15 @@ class DualHeadBatchSampler(Sampler):
                 )
         else:
             lc_class_arr = _get_normalized_weights(
-                lc_labels, method=class_weight_method, clip_range=clip_range,
+                lc_labels,
+                method=class_weight_method,
+                clip_range=clip_range,
                 pool_name="LC",
             )
             ct_class_arr = _get_normalized_weights(
-                ct_labels, method=class_weight_method, clip_range=clip_range,
+                ct_labels,
+                method=class_weight_method,
+                clip_range=clip_range,
                 pool_name="CT",
             )
 
@@ -2306,9 +2313,7 @@ class DualHeadBatchSampler(Sampler):
         # means the density factor is skipped. Sparse bins (< min_samples_per_bin)
         # get density weight = 1.0 to prevent singleton bins from blowing up
         # the multiplicative composition.
-        density_applied = (
-            spatial_bins is not None and spatial_weight_method != "none"
-        )
+        density_applied = spatial_bins is not None and spatial_weight_method != "none"
         if density_applied:
             sp_arr = _get_spatial_density_weights(
                 spatial_bins,
