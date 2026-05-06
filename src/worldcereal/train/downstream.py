@@ -357,7 +357,6 @@ class TorchTrainer:
             clip_range=self.weights_clip_range,
             normalize=normalize,
         )
-        logger.info(f"Class weights: {class_weights}")
 
         # per‐sample weight for sampling (class balance only)
         sample_weights = np.ones_like(bc_vals).astype(np.float32)

@@ -1344,6 +1344,7 @@ def evaluate_finetuned_model(
                 "cm_norm": landcover_cm_norm,
                 "classes": seasonal_landcover_classes,
                 "num_samples": len(seasonal_landcover_records),
+                "records": seasonal_landcover_records,
             },
             "croptype": {
                 "results": croptype_df,
@@ -1352,6 +1353,7 @@ def evaluate_finetuned_model(
                 "classes": seasonal_croptype_classes,
                 "num_samples": len(seasonal_croptype_records),
                 "gate_rejections": croptype_gate_rejections,
+                "records": seasonal_croptype_records,
             },
         }
 
@@ -1734,15 +1736,25 @@ def summarize_seasonal_predictions(
         and float(lc_weights[idx]) > lc_weight_threshold
     ]
     if lc_probs is not None:
+        _lats = _ensure_list(attrs.get("lat"), batch_size, fill=None)
+        _lons = _ensure_list(attrs.get("lon"), batch_size, fill=None)
+        _sample_ids = _ensure_list(attrs.get("sample_id"), batch_size, fill=None)
+        _ref_ids = _ensure_list(attrs.get("ref_id"), batch_size, fill=None)
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = landcover_classes[pred_idx]
             landcover_records.append(
                 {
-                    "pred_class": landcover_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
                 }
             )
 
@@ -1802,11 +1814,17 @@ def summarize_seasonal_predictions(
 
             probs = torch.softmax(logits, dim=-1).mean(dim=0)
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = croptype_classes[pred_idx]
             croptype_records.append(
                 {
-                    "pred_class": croptype_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
                 }
             )
 
@@ -2182,6 +2200,7 @@ def run_finetuning(
             metrics_dict, _ = compute_validation_metrics(
                 val_preds, val_targets, task_type
             )
+        del val_preds, val_targets
 
         seasonal_metrics_flat: dict[str, float] = {}
         if seasonal_metrics_supported:
@@ -2205,6 +2224,9 @@ def run_finetuning(
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
                         seasonal_gate_rejections / total_attempts
                     )
+
+        del seasonal_landcover_records, seasonal_croptype_records
+        del val_pred_chunks
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
