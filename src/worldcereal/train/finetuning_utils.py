@@ -611,7 +611,7 @@ def plot_spatial_predictions(
     lat_span = y_max - y_min
     gridsize_lon = int(lon_span * 1.5)
     gridsize_lat = int(lat_span * 1.5)
-    gridsize = max(30, min(300, int((gridsize_lon * gridsize_lat) ** 0.5)))
+    gridsize = max(30, min(250, int((gridsize_lon * gridsize_lat) ** 0.5)))
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
@@ -623,7 +623,24 @@ def plot_spatial_predictions(
     except Exception:  # noqa: BLE001
         ax.set_facecolor("#ddeeff")
 
+    # Grey underlay: show all hexagons that have at least 1 point but fewer than
+    # min_count, so sparse cells appear as grey rather than invisible.
+    ax.hexbin(
+        df["lon"],
+        df["lat"],
+        gridsize=gridsize,
+        extent=(x_min, x_max, y_min, y_max),
+        cmap="Greys",
+        vmin=0,
+        vmax=1,
+        mincnt=1,
+        linewidths=0.0,
+        alpha=0.35,
+        zorder=2,
+    )
+
     # Hexbin: each cell coloured by mean(correct) in [0, 1] → red–yellow–green
+    # Only drawn for cells with >= min_count points; sparse cells show as grey above.
     hb = ax.hexbin(
         df["lon"],
         df["lat"],
@@ -636,8 +653,9 @@ def plot_spatial_predictions(
         vmax=1.0,
         mincnt=min_count,
         linewidths=0.0,
-        zorder=2,
+        zorder=3,
     )
+    print(f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "f"accuracy={acc:.3f}, n={n_total}")
 
     cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
     cb.set_label("Local accuracy", fontsize=9)
