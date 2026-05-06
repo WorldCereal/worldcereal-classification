@@ -47,8 +47,8 @@ WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/wor
 DEFAULT_INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
     "executor-memory": "2g",
-    "executor-memoryOverhead": "3g",
-    "executor-request-cores": "1800m",
+    "executor-memoryOverhead": "4g",
+    "executor-request-cores": "1400m",
     "max-executors": 20,
     "python-memory": "disable",
     "soft-errors": 0.1,
