@@ -494,6 +494,198 @@ def _records_to_scalar_metrics(records: List[dict]) -> dict[str, float]:
         return {}
 
 
+def _log_regional_metrics(
+    records: List[dict],
+    task_name: str,
+    class_names: Optional[List[str]] = None,
+) -> None:
+    """Log per-region macro F1 summary derived from prediction records.
+
+    Groups records by the ``region`` field and logs a sorted table of
+    macro-averaged precision, recall and F1 per region so that training
+    logs reveal which regions are doing better or worse each epoch.
+    Silently returns when no region information is present.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    if "region" not in df.columns or df["region"].isna().all():
+        logger.debug(
+            f"{task_name}: no region information available; skipping regional metrics."
+        )
+        return
+
+    region_col = df["region"].fillna("unknown")
+    regions = sorted(region_col.unique())
+
+    # Skip when all labels collapsed to a single bucket or everything is "unknown"
+    # — the regional breakdown adds no information over the global metrics in that case.
+    meaningful_regions = [r for r in regions if r != "unknown"]
+    if len(meaningful_regions) <= 1:
+        logger.debug(
+            f"{task_name}: only {len(meaningful_regions)} meaningful region(s) "
+            f"({regions}); skipping regional metrics."
+        )
+        return
+
+    row_list = []
+    for region in regions:
+        mask = region_col == region
+        region_df = df[mask]
+        y_true = region_df["target_class"].tolist()
+        y_pred = region_df["pred_class"].tolist()
+        labels = list(class_names) if class_names else None
+        report = classification_report(
+            y_true, y_pred, labels=labels, output_dict=True, zero_division=0
+        )
+        macro = report.get("macro avg", {})
+        row_list.append(
+            {
+                "region": region,
+                "n_samples": len(region_df),
+                "macro_f1": macro.get("f1-score", float("nan")),
+                "macro_prec": macro.get("precision", float("nan")),
+                "macro_recall": macro.get("recall", float("nan")),
+            }
+        )
+    if not row_list:
+        return
+    summary_df = pd.DataFrame(row_list).sort_values("macro_f1", ascending=False)
+    logger.info(
+        f"{task_name} regional metrics ({len(row_list)} regions):\n"
+        + summary_df.to_string(index=False, float_format="{:.3f}".format)
+    )
+
+
+def plot_spatial_predictions(
+    records: List[dict],
+    task_name: str,
+    output_path: Path,
+    *,
+    title: Optional[str] = None,
+    min_count: int = 3,
+) -> None:
+    """Save a hexbin accuracy map showing local model performance spatially.
+
+    Points are binned into a hexagonal grid; each hexagon is coloured by the
+    fraction of correct predictions within it (red = 0 %, green = 100 %).
+    Hexagons with fewer than *min_count* points are hidden so isolated pixels
+    don't mislead.  The map is zoomed to the actual point extent with padding,
+    so regional runs produce a useful close-up rather than an empty globe.
+
+    ``matplotlib.hexbin`` with ``reduce_C_function=np.mean`` runs in a single
+    vectorised call and handles >500 k points in well under a second.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    df = df.dropna(subset=["lat", "lon"])
+    if df.empty:
+        logger.debug(f"{task_name}: no lat/lon coordinates in records; skipping spatial plot.")
+        return
+
+    n_total = len(df)
+    acc = float(df["correct"].mean())
+
+    # Compute padded extent from actual point locations
+    lon_min, lon_max = df["lon"].min(), df["lon"].max()
+    lat_min, lat_max = df["lat"].min(), df["lat"].max()
+    lon_pad = max((lon_max - lon_min) * 0.08, 1.0)
+    lat_pad = max((lat_max - lat_min) * 0.08, 1.0)
+    x_min = max(lon_min - lon_pad, -180)
+    x_max = min(lon_max + lon_pad, 180)
+    y_min = max(lat_min - lat_pad, -90)
+    y_max = min(lat_max + lat_pad, 90)
+
+    # Scale figure width to the aspect ratio of the zoom window
+    aspect = (x_max - x_min) / max(y_max - y_min, 0.01)
+    fig_h = 9.0
+    fig_w = min(max(fig_h * aspect, 6.0), 22.0)
+
+    # Choose hexbin grid size that balances geographic resolution with point
+    # density.  Two independent limits are computed and the smaller is used:
+    #
+    #   1. Geography limit – scales with the extent so global maps get finer
+    #      grids than small regional tiles.
+    #   2. Density limit – sqrt(n / min_count) ensures the *average* hex has at
+    #      least min_count points, preventing the common failure mode where a
+    #      small regional run with few samples produces an almost all-grey map
+    #      because every cell falls below the threshold.
+    #
+    # The two limits are combined with min() so whichever is more restrictive
+    # wins; a floor of 10 prevents degenerate 1×1 grids on tiny datasets.
+    lon_span = x_max - x_min
+    lat_span = y_max - y_min
+    gridsize_geo = int((lon_span * 1.5 * lat_span * 1.5) ** 0.4)
+    gridsize_density = int((n_total / max(min_count, 1)) ** 0.4)
+    gridsize = max(10, min(220, gridsize_geo, gridsize_density))
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    # World background (geopandas naturalearth, optional)
+    try:
+        import geopandas as gpd  # noqa: PLC0415
+        world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+        world.plot(ax=ax, color="#e8e8e8", edgecolor="white", linewidth=0.3, zorder=1)
+    except Exception:  # noqa: BLE001
+        ax.set_facecolor("#ddeeff")
+
+    # Grey underlay: show all hexagons that have at least 1 point but fewer than
+    # min_count, so sparse cells appear as grey rather than invisible.
+    ax.hexbin(
+        df["lon"],
+        df["lat"],
+        gridsize=gridsize,
+        extent=(x_min, x_max, y_min, y_max),
+        cmap="Greys",
+        vmin=0,
+        vmax=1,
+        mincnt=1,
+        linewidths=0.0,
+        alpha=0.35,
+        zorder=2,
+    )
+
+    # Hexbin: each cell coloured by mean(correct) in [0, 1] → red–yellow–green
+    # Only drawn for cells with >= min_count points; sparse cells show as grey above.
+    hb = ax.hexbin(
+        df["lon"],
+        df["lat"],
+        C=df["correct"].values.astype(float),
+        reduce_C_function=np.mean,
+        gridsize=gridsize,
+        extent=(x_min, x_max, y_min, y_max),
+        cmap="RdYlGn",
+        vmin=0.0,
+        vmax=1.0,
+        mincnt=min_count,
+        linewidths=0.0,
+        zorder=3,
+    )
+    print(f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "f"accuracy={acc:.3f}, n={n_total}")
+
+    cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
+    cb.set_label("Local accuracy", fontsize=9)
+    cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    cb.set_ticklabels(["0 %", "25 %", "50 %", "75 %", "100 %"])
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    plot_title = title or task_name
+    ax.set_title(
+        f"{plot_title}  |  n={n_total:,}  |  global accuracy={acc:.3f}  "
+        f"(hex grid={gridsize}, min_count={min_count})"
+    )
+    plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"Saved spatial accuracy map ({task_name}) → {output_path}")
+
+
 def build_confusion_matrix_figure(
     y_true: Sequence[Any],
     y_pred: Sequence[Any],
@@ -1323,6 +1515,12 @@ def evaluate_finetuned_model(
         croptype_df, croptype_cm, croptype_cm_norm = _compute_metrics_from_records(
             seasonal_croptype_records, seasonal_croptype_classes
         )
+        _log_regional_metrics(
+            seasonal_landcover_records, "landcover", seasonal_landcover_classes
+        )
+        _log_regional_metrics(
+            seasonal_croptype_records, "croptype", seasonal_croptype_classes
+        )
         if croptype_gate_rejections:
             rejection_row = pd.DataFrame(
                 [
@@ -1740,6 +1938,7 @@ def summarize_seasonal_predictions(
         _lons = _ensure_list(attrs.get("lon"), batch_size, fill=None)
         _sample_ids = _ensure_list(attrs.get("sample_id"), batch_size, fill=None)
         _ref_ids = _ensure_list(attrs.get("ref_id"), batch_size, fill=None)
+        _regions = _ensure_list(attrs.get("region"), batch_size, fill=None)
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
@@ -1755,6 +1954,7 @@ def summarize_seasonal_predictions(
                     "lon": _lons[sample_idx],
                     "sample_id": _sample_ids[sample_idx],
                     "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -1825,6 +2025,7 @@ def summarize_seasonal_predictions(
                     "lon": _lons[sample_idx],
                     "sample_id": _sample_ids[sample_idx],
                     "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -2224,6 +2425,33 @@ def run_finetuning(
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
                         seasonal_gate_rejections / total_attempts
                     )
+
+            _log_regional_metrics(
+                seasonal_landcover_records,
+                f"[val epoch {epoch + 1}] landcover",
+                seasonal_loss.landcover_classes if seasonal_loss is not None else None,
+            )
+            _log_regional_metrics(
+                seasonal_croptype_records,
+                f"[val epoch {epoch + 1}] croptype",
+                seasonal_loss.croptype_classes if seasonal_loss is not None else None,
+            )
+
+            _spatial_eval_dir = (
+                Path(output_dir) / "intermediate_evals" / "spatial_evals"
+            )
+            plot_spatial_predictions(
+                seasonal_landcover_records,
+                f"val epoch {epoch + 1} landcover",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_landcover.png",
+                title=f"Val Epoch {epoch + 1} – Landcover",
+            )
+            plot_spatial_predictions(
+                seasonal_croptype_records,
+                f"val epoch {epoch + 1} croptype",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_croptype.png",
+                title=f"Val Epoch {epoch + 1} – Croptype",
+            )
 
         del seasonal_landcover_records, seasonal_croptype_records
         del val_pred_chunks
