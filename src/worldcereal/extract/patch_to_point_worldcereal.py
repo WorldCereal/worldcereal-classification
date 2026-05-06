@@ -1,6 +1,7 @@
 import copy
+import os
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import geopandas as gpd
 import openeo
@@ -122,7 +123,7 @@ def get_label_points(
 
     Returns
     -------
-    gpd.GeoDataFrame, bool, list[tuple[str | None, shapely.geometry.base.BaseGeometry]], dict[str, dict[str, int]]
+    gpd.GeoDataFrame, bool, list[tuple[str | None, shapely.geometry.base.BaseGeometry]], dict[str, dict[str, int]], dict[str, dict[str, int]]
         A tuple containing:
         - gpd.GeoDataFrame: The sampled GeoDataFrame with label points.
         - bool: A flag indicating whether S1 extraction is disabled
@@ -134,6 +135,10 @@ def get_label_points(
           the EPSG of its S1 patch per orbit. Used to detect UTM-zone
           boundary samples whose S1 patch is stored under a different EPSG
           than their S2 patch.
+        - dict {sample_id: {orbit_state: size_bytes}} of S1 asset file sizes,
+          a monotonic proxy for per-sample, per-orbit time-series density
+          (~4 KB per timestep). Used to route ambiguous "BOTH" samples to
+          the orbit that has more acquisitions for that specific sample.
 
     """
 
@@ -172,11 +177,16 @@ def get_label_points(
         - a dict {sample_id: {orbit_state: epsg_int}} that lets the caller
           discover boundary samples whose S1 patch lives in a UTM zone other
           than the one their S2 patch was indexed under.
+        - a dict {sample_id: {orbit_state: size_bytes}} of asset file sizes,
+          used as a cheap proxy for per-orbit time-series density. ~4 KB per
+          S1 timestep, monotonic with the actual t-length, so the larger file
+          is always the orbit with more acquisitions for that sample.
         """
         items: dict = {}
         seen_ids: set = set()
         orbit_records: List[Tuple[Optional[str], object]] = []
         sample_orbit_epsg: dict = {}
+        sample_orbit_size: dict = {}
         for query in queries:
             search = client.search(collections=[collection], query=query)
             for item in search.items():
@@ -207,11 +217,25 @@ def get_label_points(
                                 break
                     if item_epsg is not None:
                         sample_orbit_epsg.setdefault(sid, {})[orbit_state] = item_epsg
+                    # Best-effort file-size lookup for per-sample orbit
+                    # density signal. Silently skipped if the asset href is
+                    # not a locally-accessible filesystem path.
+                    for asset in item.assets.values():
+                        try:
+                            sz = os.path.getsize(asset.href)
+                        except (OSError, TypeError):
+                            continue
+                        prev = sample_orbit_size.setdefault(sid, {}).get(orbit_state, 0)
+                        if sz > prev:
+                            sample_orbit_size[sid][orbit_state] = sz
+                        break
         return (
-            (items, orbit_records, sample_orbit_epsg) if capture_orbit else items
+            (items, orbit_records, sample_orbit_epsg, sample_orbit_size)
+            if capture_orbit
+            else items
         )
 
-    items_s1, s1_patches, s1_sample_orbit_epsg = _collect_items(
+    items_s1, s1_patches, s1_sample_orbit_epsg, s1_sample_orbit_size = _collect_items(
         "worldcereal_sentinel_1_patch_extractions",
         queries=(s1_query_no_epsg,),
         capture_orbit=True,
@@ -367,7 +391,13 @@ def get_label_points(
 
     sampled_gdf = gdf_to_points(gdf)
 
-    return sampled_gdf, disable_s1, s1_patches, s1_sample_orbit_epsg
+    return (
+        sampled_gdf,
+        disable_s1,
+        s1_patches,
+        s1_sample_orbit_epsg,
+        s1_sample_orbit_size,
+    )
 
 
 def generate_output_path_patch_to_point_worldcereal(
@@ -438,12 +468,20 @@ def _has_s1_patches_for_cell_epsg(
 def _classify_samples_by_orbit(
     group_df: gpd.GeoDataFrame,
     s1_patches: List[Tuple[Optional[str], object]],
+    s1_sample_orbit_size: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> pd.Series:
     """Classify each sample by which S1 orbit(s) cover it.
 
     Returns a pd.Series aligned to ``group_df.index`` with values in
     {"ASCENDING", "DESCENDING", "BOTH", NaN}. NaN means no S1 patch covers
     the sample.
+
+    When ``s1_sample_orbit_size`` is provided and a sample's geometry is
+    covered by both orbits, the per-sample asset file sizes are used to
+    pick the orbit with more acquisitions for that specific sample (file
+    size is a monotonic proxy for t-length). Samples with tied or missing
+    sizes stay tagged "BOTH" so the downstream CDSE-based resolver can
+    still assign them.
     """
     if not s1_patches:
         return pd.Series([None] * len(group_df), index=group_df.index, dtype=object)
@@ -456,14 +494,35 @@ def _classify_samples_by_orbit(
     for s_idx, p_idx in zip(hits[0], hits[1]):
         orbit_sets[s_idx].add(orbits[p_idx])
 
+    sample_ids = group_df["sample_id"].tolist() if "sample_id" in group_df.columns else None
+    size_lookup = s1_sample_orbit_size or {}
+    refined_via_size = 0
     labels = []
-    for o in orbit_sets:
+    for i, o in enumerate(orbit_sets):
         if not o:
             labels.append(None)
         elif len(o) == 1:
             labels.append(next(iter(o)))
         else:
-            labels.append("BOTH")
+            # Sample geometry intersects both orbits. Prefer the orbit whose
+            # OWN patch for this sample has the larger file (more timesteps);
+            # only fall back to "BOTH" when sizes are unavailable or equal.
+            picked = "BOTH"
+            if sample_ids is not None:
+                sizes = size_lookup.get(sample_ids[i], {})
+                asc = sizes.get("ASCENDING", 0)
+                desc = sizes.get("DESCENDING", 0)
+                if asc > desc:
+                    picked = "ASCENDING"
+                    refined_via_size += 1
+                elif desc > asc:
+                    picked = "DESCENDING"
+                    refined_via_size += 1
+            labels.append(picked)
+    if refined_via_size:
+        logger.info(
+            f"Per-sample file-size routing resolved {refined_via_size} BOTH samples."
+        )
     return pd.Series(labels, index=group_df.index, dtype=object)
 
 
@@ -657,7 +716,13 @@ def create_job_dataframe_patch_to_point_worldcereal(
         # Get the ground truth in the patches
         # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
-        gdf, disable_s1, s1_patches, s1_sample_orbit_epsg = get_label_points(
+        (
+            gdf,
+            disable_s1,
+            s1_patches,
+            s1_sample_orbit_epsg,
+            s1_sample_orbit_size,
+        ) = get_label_points(
             row,
             ground_truth_file=row["ground_truth_file"],
             only_flagged_samples=only_flagged_samples,
@@ -751,7 +816,9 @@ def create_job_dataframe_patch_to_point_worldcereal(
                 ]
                 logger.info(f"{cell_label}: S1 disabled -> 1 job")
             else:
-                sample_orbit = _classify_samples_by_orbit(group_df, s1_patches)
+                sample_orbit = _classify_samples_by_orbit(
+                    group_df, s1_patches, s1_sample_orbit_size
+                )
                 n_asc_only = int((sample_orbit == "ASCENDING").sum())
                 n_desc_only = int((sample_orbit == "DESCENDING").sum())
                 n_both = int((sample_orbit == "BOTH").sum())
