@@ -581,7 +581,9 @@ def plot_spatial_predictions(
     df = pd.DataFrame(records)
     df = df.dropna(subset=["lat", "lon"])
     if df.empty:
-        logger.debug(f"{task_name}: no lat/lon coordinates in records; skipping spatial plot.")
+        logger.debug(
+            f"{task_name}: no lat/lon coordinates in records; skipping spatial plot."
+        )
         return
 
     n_total = len(df)
@@ -625,6 +627,7 @@ def plot_spatial_predictions(
     # World background (geopandas naturalearth, optional)
     try:
         import geopandas as gpd  # noqa: PLC0415
+
         world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
         world.plot(ax=ax, color="#e8e8e8", edgecolor="white", linewidth=0.3, zorder=1)
     except Exception:  # noqa: BLE001
