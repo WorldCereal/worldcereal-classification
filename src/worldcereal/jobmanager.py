@@ -246,13 +246,6 @@ class WorldCerealJobManager(MultiBackendJobManager):
         self._grid_size = grid_size
         self._poll_sleep = poll_sleep
 
-        # Check whether we have information on temporal extent before proceeding
-        if temporal_extent is None:
-            if not {"start_date", "end_date"}.issubset(aoi_gdf.columns):
-                if year is None:
-                    raise ValueError(
-                        "Provide temporal_extent, year or include 'start_date' and 'end_date' in aoi_gdf."
-                    )
         self._temporal_extent = temporal_extent
         self._season_specifications = season_specifications
         self._product_type = product_type
@@ -263,11 +256,19 @@ class WorldCerealJobManager(MultiBackendJobManager):
         # We check whether a job database already exists
         self.job_db = CsvJobDatabase(path=self._job_db_path())
         if self.job_db.exists():
+            # Resuming production from an already existing job tracking file.
             logger.info("Job tracking file already exists, resuming from disk.")
             job_df = self.job_db.read()
             self._validate_job_db_df(job_df)
             self.prepared_grid = self._load_production_grid()
         else:
+            # New run: temporal extent must be derivable before we can create the job DB.
+            if temporal_extent is None:
+                if not {"start_date", "end_date"}.issubset(aoi_gdf.columns):
+                    if year is None:
+                        raise ValueError(
+                            "Provide temporal_extent, year or include 'start_date' and 'end_date' in aoi_gdf."
+                        )
             logger.info(
                 "No existing job tracking file found, preparing production grid and creating new job database."
             )
@@ -555,7 +556,9 @@ class WorldCerealJobManager(MultiBackendJobManager):
         ), "The grid file must contain a geometry column."
         geom_types = aoi_gdf.geometry.type.unique().tolist()
         if not all(aoi_gdf.geometry.type == "Polygon"):
-            invalid_types = [t for t in geom_types if t not in ("Polygon", "MultiPolygon")]
+            invalid_types = [
+                t for t in geom_types if t not in ("Polygon", "MultiPolygon")
+            ]
             if invalid_types:
                 raise ValueError(
                     f"All geometries must be Polygon or MultiPolygon. "
@@ -572,9 +575,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
                     f"Please provide a GeoDataFrame with only Polygon geometries."
                 )
             aoi_gdf = exploded
-            logger.info(
-                f"Converted {n_original} MultiPolygon feature(s) to Polygons."
-            )
+            logger.info(f"Converted {n_original} MultiPolygon feature(s) to Polygons.")
         if aoi_gdf.crs is None:
             raise ValueError("Input GeoDataFrame must have a CRS.")
 
@@ -944,7 +945,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
         job_df = job_db.read()
         if restart_failed and not job_df.empty:
             job_df.loc[
-                job_df["status"].isin(["error", "start_failed"]),
+                job_df["status"].isin(["error", "start_failed", "canceled"]),
                 "status",
             ] = "not_started"
             job_db.persist(job_df)

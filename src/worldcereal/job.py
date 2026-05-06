@@ -39,8 +39,10 @@ from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
 from worldcereal.utils.models import load_model_artifact
 
-FEATURE_DEPS_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/torch_deps_python311.zip"
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/prometheo-0.0.3-py3-none-any.whl"
+FEATURE_DEPS_URL = (
+    "https://s3.waw3-1.cloudferro.com/project_dependencies/torch_deps_python311.zip"
+)
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.0.5-py3-none-any.whl"
 WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/worldcereal-2.6.1-py3-none-any.whl"
 DEFAULT_INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",

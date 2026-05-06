@@ -1212,11 +1212,14 @@ def evaluate_finetuned_model(
     finetuned_model.eval()
 
     # Construct the dataloader
+    # Cap workers at 4: inference is bottlenecked on the forward pass in the
+    # main process,
+    eval_num_workers = min(num_workers, 4)
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        num_workers=num_workers,
+        num_workers=eval_num_workers,
         collate_fn=collate_fn,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
@@ -1230,7 +1233,8 @@ def evaluate_finetuned_model(
     seasonal_croptype_records: List[dict[str, Any]] = []
     croptype_gate_rejections = 0
 
-    for batch in val_dl:
+    logger.info("Starting evaluation loop ...")
+    for batch in tqdm(val_dl, desc="Evaluating", leave=False):
         predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
             model_output = _forward_with_optional_attrs(
@@ -1340,6 +1344,7 @@ def evaluate_finetuned_model(
                 "cm_norm": landcover_cm_norm,
                 "classes": seasonal_landcover_classes,
                 "num_samples": len(seasonal_landcover_records),
+                "records": seasonal_landcover_records,
             },
             "croptype": {
                 "results": croptype_df,
@@ -1348,6 +1353,7 @@ def evaluate_finetuned_model(
                 "classes": seasonal_croptype_classes,
                 "num_samples": len(seasonal_croptype_records),
                 "gate_rejections": croptype_gate_rejections,
+                "records": seasonal_croptype_records,
             },
         }
 
@@ -1730,15 +1736,25 @@ def summarize_seasonal_predictions(
         and float(lc_weights[idx]) > lc_weight_threshold
     ]
     if lc_probs is not None:
+        _lats = _ensure_list(attrs.get("lat"), batch_size, fill=None)
+        _lons = _ensure_list(attrs.get("lon"), batch_size, fill=None)
+        _sample_ids = _ensure_list(attrs.get("sample_id"), batch_size, fill=None)
+        _ref_ids = _ensure_list(attrs.get("ref_id"), batch_size, fill=None)
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = landcover_classes[pred_idx]
             landcover_records.append(
                 {
-                    "pred_class": landcover_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
                 }
             )
 
@@ -1798,11 +1814,17 @@ def summarize_seasonal_predictions(
 
             probs = torch.softmax(logits, dim=-1).mean(dim=0)
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = croptype_classes[pred_idx]
             croptype_records.append(
                 {
-                    "pred_class": croptype_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
                 }
             )
 
@@ -2029,6 +2051,7 @@ def run_finetuning(
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
         )
 
+        logger.info("Starting training loop ...")
         for batch in tqdm(train_dl, desc="Training", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
@@ -2088,7 +2111,8 @@ def run_finetuning(
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
 
-        for batch in val_dl:
+        logger.info("Starting validation loop ...")
+        for batch in tqdm(val_dl, desc="Validating", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
                 preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
@@ -2176,6 +2200,7 @@ def run_finetuning(
             metrics_dict, _ = compute_validation_metrics(
                 val_preds, val_targets, task_type
             )
+        del val_preds, val_targets
 
         seasonal_metrics_flat: dict[str, float] = {}
         if seasonal_metrics_supported:
@@ -2199,6 +2224,9 @@ def run_finetuning(
                     seasonal_metrics_flat["croptype/gate_rejection_rate"] = (
                         seasonal_gate_rejections / total_attempts
                     )
+
+        del seasonal_landcover_records, seasonal_croptype_records
+        del val_pred_chunks
 
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
@@ -2324,7 +2352,7 @@ def run_finetuning(
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
             _ckpt_model = ema_model if ema_model is not None else model
-            best_model_dict = deepcopy(_ckpt_model.state_dict())
+            best_model_dict = _ckpt_model.state_dict()
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
@@ -2364,8 +2392,7 @@ def run_finetuning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            checkpoint_model = deepcopy(_ckpt_model)
-            _save_best(epoch + 1, checkpoint_model, best_loss)
+            _save_best(epoch + 1, _ckpt_model, best_loss)
 
         _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
