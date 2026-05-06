@@ -9,8 +9,19 @@ from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping,
-                    Optional, Sequence, Tuple, Union)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 try:  # Python 3.10+
     from typing import TypeAlias
@@ -50,6 +61,7 @@ from openeo.udf.udf_data import UdfData
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from prometheo.predictors import Predictors
+
     from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
     from worldcereal.utils.models import ModelArtifact
 
@@ -555,8 +567,11 @@ class SeasonalModelBundle:
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
         from prometheo.models import Presto
-        from worldcereal.train.seasonal_head import (SeasonalFinetuningHead,
-                                                     WorldCerealSeasonalModel)
+
+        from worldcereal.train.seasonal_head import (
+            SeasonalFinetuningHead,
+            WorldCerealSeasonalModel,
+        )
 
         backbone = Presto()
         head = SeasonalFinetuningHead(
@@ -1648,6 +1663,7 @@ def _require_openeo_runtime() -> None:
     try:
         import prometheo
         import torch
+
         import worldcereal
 
         logger.debug(f"Loading worldcereal from {worldcereal.__file__}")
