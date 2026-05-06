@@ -2575,11 +2575,19 @@ def run_finetuning(
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
         cur_mean_f1 = (cur_lc_f1 + cur_ct_f1) / 2.0
 
-        if checkpoint_metric == "lc_f1":
+        # F1-based metrics require seasonal outputs; fall back to val_loss for
+        # non-seasonal models where seasonal_metrics_flat is always empty.
+        _effective_metric = (
+            checkpoint_metric
+            if checkpoint_metric == "val_loss" or seasonal_metrics_supported
+            else "val_loss"
+        )
+
+        if _effective_metric == "lc_f1":
             loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
-        elif checkpoint_metric == "ct_f1":
+        elif _effective_metric == "ct_f1":
             loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
-        elif checkpoint_metric == "mean_f1":
+        elif _effective_metric == "mean_f1":
             loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
         else:
             loss_improved = best_loss is None or current_val_loss < best_loss
@@ -2590,17 +2598,17 @@ def run_finetuning(
             best_ct_f1 = cur_ct_f1
             best_mean_f1 = cur_mean_f1
             epochs_since_improvement = 0
-            if checkpoint_metric == "lc_f1":
+            if _effective_metric == "lc_f1":
                 logger.info(
                     f"Epoch {epoch + 1}: val LC F1 improved to {cur_lc_f1:.4f} "
                     f"(val_loss={current_val_loss:.4f})"
                 )
-            elif checkpoint_metric == "ct_f1":
+            elif _effective_metric == "ct_f1":
                 logger.info(
                     f"Epoch {epoch + 1}: val CT F1 improved to {cur_ct_f1:.4f} "
                     f"(val_loss={current_val_loss:.4f})"
                 )
-            elif checkpoint_metric == "mean_f1":
+            elif _effective_metric == "mean_f1":
                 logger.info(
                     f"Epoch {epoch + 1}: val mean F1 improved to {cur_mean_f1:.4f} "
                     f"(lc={cur_lc_f1:.4f}, ct={cur_ct_f1:.4f}, val_loss={current_val_loss:.4f})"
@@ -2665,11 +2673,11 @@ def run_finetuning(
         _f1_str = ""
         if cur_lc_f1 > 0 or cur_ct_f1 > 0:
             _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
-        if checkpoint_metric == "lc_f1":
+        if _effective_metric == "lc_f1":
             _best_str = f"{best_lc_f1:.3f} (lc_f1)" if best_lc_f1 is not None else "n/a"
-        elif checkpoint_metric == "ct_f1":
+        elif _effective_metric == "ct_f1":
             _best_str = f"{best_ct_f1:.3f} (ct_f1)" if best_ct_f1 is not None else "n/a"
-        elif checkpoint_metric == "mean_f1":
+        elif _effective_metric == "mean_f1":
             _best_str = (
                 f"{best_mean_f1:.3f} (mean_f1)" if best_mean_f1 is not None else "n/a"
             )
