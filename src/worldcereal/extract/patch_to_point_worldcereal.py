@@ -1099,29 +1099,26 @@ def worldcereal_preprocessed_inputs_from_patches(
     # string like "EPSG:32634" for new-style `proj:code`.
     epsg_filter_value = f"EPSG:{epsg}" if epsg_property == "proj:code" else epsg
 
-    # Build the S1 EPSG filter. When samples in this job sit near a UTM-zone
-    # boundary, their S1 patch can be indexed under a different EPSG than the
-    # job's S2 EPSG; the filter must accept the union or those samples lose
-    # their S1 data entirely.
+    # Decide whether to scope the S1 STAC query by EPSG. The openEO backend's
+    # property filter only supports {eq, lte, gte, array_contains}, so when
+    # this job needs S1 patches from multiple UTM zones (boundary samples),
+    # we drop the EPSG filter altogether and rely on resample_spatial below
+    # to bring everything into the target EPSG before merging with S2.
     s1_epsg_values = sorted(set(s1_epsgs)) if s1_epsgs else [epsg]
-    if epsg_property == "proj:code":
-        s1_epsg_filter_values = [f"EPSG:{e}" for e in s1_epsg_values]
-    else:
-        s1_epsg_filter_values = list(s1_epsg_values)
-    multi_s1_epsg = len(s1_epsg_filter_values) > 1
-
-    def _s1_epsg_filter(x, _values=s1_epsg_filter_values):
-        cond = eq(x, _values[0])
-        for v in _values[1:]:
-            cond = or_(cond, eq(x, v))
-        return cond
+    multi_s1_epsg = len(s1_epsg_values) > 1
+    single_s1_epsg_value = (
+        f"EPSG:{s1_epsg_values[0]}" if epsg_property == "proj:code" else s1_epsg_values[0]
+    )
 
     # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
-        epsg_property: _s1_epsg_filter,
         "sat:orbit_state": lambda x: eq(x, s1_orbit_state),
     }
+    if not multi_s1_epsg:
+        s1_stac_property_filter[epsg_property] = (
+            lambda x, _v=single_s1_epsg_value: eq(x, _v)
+        )
 
     s2_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
