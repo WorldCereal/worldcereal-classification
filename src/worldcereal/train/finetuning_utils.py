@@ -665,7 +665,10 @@ def plot_spatial_predictions(
         linewidths=0.0,
         zorder=3,
     )
-    print(f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "f"accuracy={acc:.3f}, n={n_total}")
+    logger.info(
+        f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "
+        f"accuracy={acc:.3f}, n={n_total}"
+    )
 
     cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
     cb.set_label("Local accuracy", fontsize=9)
