@@ -1438,7 +1438,7 @@ class SeasonalInferenceEngine:
         memory_trace: Optional[_MemoryTrace] = None,
     ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]]:
         torch = _lazy_import_torch()
-        from prometheo.predictors import Predictors, to_torchtensor
+        from prometheo.predictors import Predictors
 
         landcover_logits: List[TorchTensor] = []
         croptype_logits: List[TorchTensor] = []
@@ -1475,11 +1475,17 @@ class SeasonalInferenceEngine:
                 logger.debug(
                     f"Processing predictor batch {processed_batches}/{estimated_batches} (size={batch_size})"
                 )
-            batch_dict = {
-                field: to_torchtensor(getattr(batch, field), device=self.device)
-                for field in batch._fields
-                if getattr(batch, field) is not None
-            }
+            batch_dict = {}
+            for field in batch._fields:
+                value = getattr(batch, field)
+                if value is None:
+                    continue
+                # Keep predictor payloads on host memory: the upstream Presto
+                # wrapper stages them through NumPy before moving tensors to
+                # the model device internally.
+                if torch.is_tensor(value) and value.is_cuda:
+                    value = value.detach().cpu()
+                batch_dict[field] = value
             batch_predictors = Predictors(**batch_dict)
             mask_tensor = season_masks_tensor[start : start + batch_size]
             start += batch_size
