@@ -19,6 +19,7 @@ from pandas.core.dtypes.dtypes import CategoricalDtype
 from shapely import wkb
 from shapely.geometry import MultiPolygon, shape
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
 from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
@@ -121,11 +122,18 @@ def get_label_points(
 
     Returns
     -------
-    gpd.GeoDataFrame, bool
+    gpd.GeoDataFrame, bool, list[tuple[str | None, shapely.geometry.base.BaseGeometry]], dict[str, dict[str, int]]
         A tuple containing:
         - gpd.GeoDataFrame: The sampled GeoDataFrame with label points.
         - bool: A flag indicating whether S1 extraction is disabled
                 (True if no S1 sample_ids found).
+        - list of (orbit_state, patch_geometry) for every S1 STAC patch
+          matching (ref_id, epsg). Used downstream to classify samples by
+          which orbit(s) actually cover them and to split jobs per orbit.
+        - dict {sample_id: {orbit_state: epsg_int}} mapping each sample to
+          the EPSG of its S1 patch per orbit. Used to detect UTM-zone
+          boundary samples whose S1 patch is stored under a different EPSG
+          than their S2 patch.
 
     """
 
@@ -146,19 +154,72 @@ def get_label_points(
 
     logger.info("Querying S1/S2 STAC collections ...")
 
-    def _collect_items(collection: str) -> dict:
-        """Search a STAC collection with both old and new EPSG property names."""
+    # For S1 we deliberately drop the EPSG filter: samples near a UTM-zone
+    # boundary can have their S1 patch indexed under a different EPSG than
+    # their S2 patch, and we want to discover those so they don't silently
+    # lose S1 data.
+    s1_query_no_epsg = {"ref_id": {"eq": ref_id}}
+
+    def _collect_items(collection: str, queries, capture_orbit: bool = False):
+        """Search a STAC collection.
+
+        ``queries`` is an iterable of STAC query dicts; results from each are
+        deduplicated by item id.
+
+        When `capture_orbit` is True, also returns:
+        - a list of (orbit_state, geometry) records deduplicated by item id,
+          used to classify samples by S1 orbit coverage downstream.
+        - a dict {sample_id: {orbit_state: epsg_int}} that lets the caller
+          discover boundary samples whose S1 patch lives in a UTM zone other
+          than the one their S2 patch was indexed under.
+        """
         items: dict = {}
-        for query in (stac_query_old, stac_query_new):
+        seen_ids: set = set()
+        orbit_records: List[Tuple[Optional[str], object]] = []
+        sample_orbit_epsg: dict = {}
+        for query in queries:
             search = client.search(collections=[collection], query=query)
             for item in search.items():
+                if item.id in seen_ids:
+                    continue
+                seen_ids.add(item.id)
                 sid = item.properties["sample_id"]
+                geom = shape(item.geometry).buffer(1e-9)
                 if sid not in items:
-                    items[sid] = shape(item.geometry).buffer(1e-9)
-        return items
+                    items[sid] = geom
+                if capture_orbit:
+                    orbit_state = item.properties.get("sat:orbit_state")
+                    orbit_records.append((orbit_state, geom))
+                    item_epsg: Optional[int] = None
+                    if "proj:epsg" in item.properties:
+                        item_epsg = int(item.properties["proj:epsg"])
+                    elif "proj:code" in item.properties:
+                        item_epsg = int(item.properties["proj:code"].split(":")[-1])
+                    else:
+                        for asset in item.assets.values():
+                            asset_code = asset.extra_fields.get("proj:code")
+                            asset_epsg = asset.extra_fields.get("proj:epsg")
+                            if asset_code:
+                                item_epsg = int(str(asset_code).split(":")[-1])
+                                break
+                            if asset_epsg is not None:
+                                item_epsg = int(asset_epsg)
+                                break
+                    if item_epsg is not None:
+                        sample_orbit_epsg.setdefault(sid, {})[orbit_state] = item_epsg
+        return (
+            (items, orbit_records, sample_orbit_epsg) if capture_orbit else items
+        )
 
-    items_s1 = _collect_items("worldcereal_sentinel_1_patch_extractions")
-    items_s2 = _collect_items("worldcereal_sentinel_2_patch_extractions")
+    items_s1, s1_patches, s1_sample_orbit_epsg = _collect_items(
+        "worldcereal_sentinel_1_patch_extractions",
+        queries=(s1_query_no_epsg,),
+        capture_orbit=True,
+    )
+    items_s2 = _collect_items(
+        "worldcereal_sentinel_2_patch_extractions",
+        queries=(stac_query_old, stac_query_new),
+    )
     logger.info(
         f"Found {len(items_s1)} S1 items and {len(items_s2)} S2 items"
     )
@@ -197,9 +258,8 @@ def get_label_points(
         # low (the full file can be multi-GB). For each row group we check
         # the h3_l3_cell statistics to skip irrelevant groups, then spatially
         # intersect with the actual patch footprints to capture collaterals.
-        from shapely import prepare
-        from shapely.strtree import STRtree
         import pyarrow.parquet as pq
+        from shapely import prepare
 
         logger.info(f"Reading ground truth from: {ground_truth_file}")
 
@@ -307,7 +367,7 @@ def get_label_points(
 
     sampled_gdf = gdf_to_points(gdf)
 
-    return sampled_gdf, disable_s1
+    return sampled_gdf, disable_s1, s1_patches, s1_sample_orbit_epsg
 
 
 def generate_output_path_patch_to_point_worldcereal(
@@ -349,32 +409,116 @@ def generate_output_path_patch_to_point_worldcereal(
     return subfolder / output_file
 
 
-def _dominant_s1_epsg_for_cell(
-    client: pystac_client.Client, ref_id: str, h3_cell: str
-) -> Optional[Tuple[int, str]]:
-    """Return the (epsg, epsg_property) most common among S1 patches for a given
-    (ref_id, h3_l3_cell). Returns None if no S1 patches are found.
+def _has_s1_patches_for_cell_epsg(
+    client: pystac_client.Client, ref_id: str, h3_cell: str, epsg: int
+) -> bool:
+    """Return True if the S1 STAC has any patches for the given
+    (ref_id, h3_l3_cell, epsg).
 
-    H3 cells near a UTM-zone boundary can have S1 patches stored under a UTM zone
-    that differs from the dominant one for the ref_id, which would silently make
-    the per-cell load_stac call return an empty datacube.
+    H3 cells near a UTM-zone boundary may have S1 patches stored under one UTM
+    zone only. Without this check, the outer EPSG loop emits a job for the
+    cell under the EPSG that has zero S1 patches, and the backend's
+    load_stac then crashes on an empty list.
     """
-    counts: dict = {}
-    search = client.search(
-        collections=["worldcereal_sentinel_1_patch_extractions"],
-        query={"ref_id": {"eq": ref_id}, "h3_l3_cell": {"eq": h3_cell}},
-    )
-    for item in search.items():
-        if "proj:epsg" in item.properties:
-            key = (int(item.properties["proj:epsg"]), "proj:epsg")
-        elif "proj:code" in item.properties:
-            key = (int(item.properties["proj:code"].split(":")[-1]), "proj:code")
+    for prop, value in (("proj:code", f"EPSG:{epsg}"), ("proj:epsg", int(epsg))):
+        search = client.search(
+            collections=["worldcereal_sentinel_1_patch_extractions"],
+            query={
+                "ref_id": {"eq": ref_id},
+                "h3_l3_cell": {"eq": h3_cell},
+                prop: {"eq": value},
+            },
+            limit=1,
+        )
+        if any(True for _ in search.items()):
+            return True
+    return False
+
+
+def _classify_samples_by_orbit(
+    group_df: gpd.GeoDataFrame,
+    s1_patches: List[Tuple[Optional[str], object]],
+) -> pd.Series:
+    """Classify each sample by which S1 orbit(s) cover it.
+
+    Returns a pd.Series aligned to ``group_df.index`` with values in
+    {"ASCENDING", "DESCENDING", "BOTH", NaN}. NaN means no S1 patch covers
+    the sample.
+    """
+    if not s1_patches:
+        return pd.Series([None] * len(group_df), index=group_df.index, dtype=object)
+
+    orbits = [o for o, _ in s1_patches]
+    tree = STRtree([g for _, g in s1_patches])
+    hits = tree.query(group_df.geometry.values, predicate="intersects")
+
+    orbit_sets: List[set] = [set() for _ in range(len(group_df))]
+    for s_idx, p_idx in zip(hits[0], hits[1]):
+        orbit_sets[s_idx].add(orbits[p_idx])
+
+    labels = []
+    for o in orbit_sets:
+        if not o:
+            labels.append(None)
+        elif len(o) == 1:
+            labels.append(next(iter(o)))
         else:
-            continue
-        counts[key] = counts.get(key, 0) + 1
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda kv: kv[1])[0]
+            labels.append("BOTH")
+    return pd.Series(labels, index=group_df.index, dtype=object)
+
+
+def _resolve_orbit_split(
+    sample_orbit: pd.Series,
+    s1_patches: List[Tuple[Optional[str], object]],
+    group_df: gpd.GeoDataFrame,
+    temporal_extent: TemporalContext,
+) -> pd.Series:
+    """Resolve the "BOTH" and no-coverage buckets into a concrete orbit label.
+
+    The target orbit for ambiguous samples (BOTH / no-coverage) is picked by
+    querying CDSE for actual S1 acquisition density via
+    ``select_s1_orbitstate_vvvh``. WorldCereal STAC entries can exist for an
+    orbit that has near-empty time series in a region (e.g. ASC over
+    Madagascar), so STAC item counts alone are not a reliable signal.
+
+    Falls back to STAC patch counts (ties -> ASCENDING) when CDSE is
+    inconclusive or unreachable.
+    """
+    ambiguous_mask = (sample_orbit == "BOTH") | sample_orbit.isna()
+    if not ambiguous_mask.any():
+        return sample_orbit
+
+    target: Optional[str] = None
+    try:
+        ambiguous_df = group_df.loc[ambiguous_mask]
+        bbox = (
+            ambiguous_df.to_crs(epsg=3857)
+            .buffer(1)
+            .to_crs(epsg=4326)
+            .total_bounds
+        )
+        target = select_s1_orbitstate_vvvh(
+            BackendContext(Backend.CDSE),
+            BoundingBoxExtent(*bbox),
+            temporal_extent,
+        )
+        logger.info(f"CDSE-selected orbit for ambiguous samples: {target}")
+    except UncoveredS1Exception:
+        logger.warning("CDSE reports no S1 coverage; falling back to STAC counts.")
+    except Exception as e:
+        logger.warning(f"CDSE orbit query failed ({e}); falling back to STAC counts.")
+
+    if target is None:
+        n_asc_only = (sample_orbit == "ASCENDING").sum()
+        n_desc_only = (sample_orbit == "DESCENDING").sum()
+        if n_asc_only or n_desc_only:
+            target = "ASCENDING" if n_asc_only >= n_desc_only else "DESCENDING"
+        else:
+            asc_patches = sum(1 for o, _ in s1_patches if o == "ASCENDING")
+            desc_patches = sum(1 for o, _ in s1_patches if o == "DESCENDING")
+            target = "ASCENDING" if asc_patches >= desc_patches else "DESCENDING"
+
+    return sample_orbit.replace("BOTH", target).fillna(target)
 
 
 def create_job_dataframe_patch_to_point_worldcereal(
@@ -513,7 +657,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
         # Get the ground truth in the patches
         # Note that we can work around RDM by specifically providing a ground truth file
         logger.info("Finding ground truth samples ...")
-        gdf, disable_s1 = get_label_points(
+        gdf, disable_s1, s1_patches, s1_sample_orbit_epsg = get_label_points(
             row,
             ground_truth_file=row["ground_truth_file"],
             only_flagged_samples=only_flagged_samples,
@@ -576,91 +720,134 @@ def create_job_dataframe_patch_to_point_worldcereal(
 
         for cell_value, group_df in groups:
             cell_str = None if cell_value is None or pd.isna(cell_value) else str(cell_value)
-            job_row_dict = row.to_dict()
-            job_row_dict["h3l3_cell"] = (
+            h3l3_cell_value = (
                 cell_str if split_applied and cell_str is not None else ""
             )
 
-            # Override EPSG per cell when the dominant S1 EPSG for this cell
-            # differs from the group's EPSG (cells near a UTM-zone boundary).
-            # Without this, the per-cell load_stac call would filter on an EPSG
-            # that has no S1 patches and the backend crashes on an empty list.
+            # Skip cells with no S1 patches in the current EPSG group: the
+            # per-cell load_stac would return an empty datacube and the backend
+            # crashes on an empty list. Such cells are picked up by the outer
+            # EPSG loop iteration where their S1 patches actually live.
             if split_applied and cell_str is not None:
-                dominant = _dominant_s1_epsg_for_cell(client, row.ref_id, cell_str)
-                if dominant is not None and dominant[0] != int(row.epsg):
+                if not _has_s1_patches_for_cell_epsg(
+                    client, row.ref_id, cell_str, int(row.epsg)
+                ):
                     logger.warning(
-                        f"Cell {cell_str}: dominant S1 EPSG is {dominant[0]} "
-                        f"but job group is EPSG {row.epsg}. Overriding to "
-                        f"{dominant[0]} for this cell."
+                        f"Cell {cell_str}: no S1 patches in EPSG {row.epsg}; "
+                        "skipping (handled by the EPSG group where its S1 "
+                        "patches exist)."
                     )
-                    job_row_dict["epsg"] = dominant[0]
-                    job_row_dict["epsg_property"] = dominant[1]
+                    continue
 
-            if not disable_s1:
-                # Determine S1 orbit; very small buffer to cover cases with < 3 samples
-                try:
-                    orbit_state = select_s1_orbitstate_vvvh(
-                        BackendContext(Backend.CDSE),
-                        BoundingBoxExtent(
-                            *group_df.to_crs(epsg=3857)
-                            .buffer(1)
-                            .to_crs(epsg=4326)
-                            .total_bounds
-                        ),
-                        TemporalContext(row.start_date, row.end_date),
-                    )
-                except UncoveredS1Exception:
-                    logger.warning(
-                        f"No S1 orbit state found for {row.epsg} and {row.ref_id}. "
-                        "This will result in no S1 data being extracted."
-                    )
-                    orbit_state = "DESCENDING"  # Just a placeholder
+            # Decide orbit buckets. If S1 is disabled altogether, emit a single
+            # bucket with orbit_state=None. Otherwise classify each sample by
+            # which orbit(s) cover it and split into per-orbit jobs.
+            cell_label = f"EPSG {row.epsg}" + (
+                f" cell {cell_str}" if cell_str is not None else ""
+            )
+            if disable_s1 or not s1_patches:
+                orbit_buckets: List[Tuple[Optional[str], gpd.GeoDataFrame]] = [
+                    (None, group_df.copy())
+                ]
+                logger.info(f"{cell_label}: S1 disabled -> 1 job")
             else:
-                # Disabling S1 which cannot be automatically handled yet by openEO
-                orbit_state = None
+                sample_orbit = _classify_samples_by_orbit(group_df, s1_patches)
+                n_asc_only = int((sample_orbit == "ASCENDING").sum())
+                n_desc_only = int((sample_orbit == "DESCENDING").sum())
+                n_both = int((sample_orbit == "BOTH").sum())
+                n_none = int(sample_orbit.isna().sum())
+                sample_orbit = _resolve_orbit_split(
+                    sample_orbit,
+                    s1_patches,
+                    group_df,
+                    TemporalContext(row.start_date, row.end_date),
+                )
+                orbit_buckets = [
+                    (orbit, group_df.loc[idx].copy())
+                    for orbit, idx in sample_orbit.groupby(sample_orbit).groups.items()
+                ]
+                bucket_summary = ", ".join(
+                    f"{o}={len(sub)}" for o, sub in orbit_buckets
+                )
+                logger.info(
+                    f"{cell_label}: {n_asc_only} ASC-only, {n_desc_only} DESC-only, "
+                    f"{n_both} BOTH, {n_none} no-coverage -> "
+                    f"{len(orbit_buckets)} job(s) ({bucket_summary})"
+                )
 
-            job_row_dict["orbit_state"] = orbit_state
+            for orbit, sub_df in orbit_buckets:
+                # Determine S2 tiles (per sub-group so each job has its own upload)
+                logger.info(f"Finding S2 tiles for orbit {orbit} ...")
+                original_crs = sub_df.crs
+                sub_df = sub_df.to_crs(epsg=3857)
+                sub_df["centroid"] = sub_df.geometry.centroid
 
-            # Determine S2 tiles
-            logger.info("Finding S2 tiles ...")
-            original_crs = group_df.crs
-            group_df = group_df.to_crs(epsg=3857)
-            group_df["centroid"] = group_df.geometry.centroid
+                sub_df = gpd.sjoin(
+                    sub_df.set_geometry("centroid"),
+                    S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
+                    predicate="intersects",
+                ).drop(columns=["index_right", "centroid"])
+                sub_df = sub_df.set_geometry("geometry").to_crs(original_crs)
 
-            group_df = gpd.sjoin(
-                group_df.set_geometry("centroid"),
-                S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
-                predicate="intersects",
-            ).drop(columns=["index_right", "centroid"])
-            group_df = group_df.set_geometry("geometry").to_crs(original_crs)
+                # Set back the valid_time in the geometry as string
+                sub_df["valid_time"] = sub_df.valid_time.dt.strftime("%Y-%m-%d")
 
-            # Set back the valid_time in the geometry as string
-            group_df["valid_time"] = group_df.valid_time.dt.strftime("%Y-%m-%d")
+                # Add other attributes we want to keep in the result
+                logger.info(
+                    f"Determined start and end date: {row.start_date} - {row.end_date}"
+                )
+                sub_df["start_date"] = row.start_date
+                sub_df["end_date"] = row.end_date
+                sub_df["lat"] = sub_df.geometry.y
+                sub_df["lon"] = sub_df.geometry.x
 
-            # Add other attributes we want to keep in the result
-            logger.info(
-                f"Determined start and end date: {row.start_date} - {row.end_date}"
-            )
-            group_df["start_date"] = row.start_date
-            group_df["end_date"] = row.end_date
-            group_df["lat"] = group_df.geometry.y
-            group_df["lon"] = group_df.geometry.x
+                # Reset index for certain openEO compatibility
+                sub_df = sub_df.reset_index(drop=True)
 
-            # Reset index for certain openEO compatibility
-            group_df = group_df.reset_index(drop=True)
+                # Upload the geoparquet file to Artifactory
+                logger.info(
+                    f"Deploying geoparquet file ({len(sub_df)} samples, "
+                    f"orbit={orbit}) to Artifactory ..."
+                )
+                collection_suffix = f"{row.epsg}"
+                if split_applied and cell_str is not None:
+                    collection_suffix = f"{collection_suffix}_{cell_str}"
+                if orbit is not None:
+                    collection_suffix = f"{collection_suffix}_{orbit[:3]}"
 
-            # Upload the geoparquet file to Artifactory
-            logger.info("Deploying geoparquet file to Artifactory ...")
-            collection_suffix = f"{job_row_dict['epsg']}"
-            if split_applied and cell_str is not None:
-                collection_suffix = f"{collection_suffix}_{cell_str}"
+                url = upload_geoparquet_artifactory(
+                    sub_df, ref_id, collection=collection_suffix
+                )
 
-            url = upload_geoparquet_artifactory(
-                group_df, ref_id, collection=collection_suffix
-            )
+                # Discover S1 EPSGs for this bucket's samples. When samples
+                # near a UTM-zone boundary have their S1 patch indexed under
+                # an EPSG different from the job's S2 EPSG, the S1 STAC filter
+                # has to accept the union of those EPSGs or those samples lose
+                # their S1 data.
+                s1_epsgs_set: set = set()
+                for sid in sub_df["sample_id"]:
+                    orbit_map = s1_sample_orbit_epsg.get(sid, {})
+                    if orbit is not None and orbit in orbit_map:
+                        s1_epsgs_set.add(orbit_map[orbit])
+                    else:
+                        s1_epsgs_set.update(orbit_map.values())
+                s1_epsgs_set.discard(None)
+                if not s1_epsgs_set:
+                    s1_epsgs_set.add(int(row.epsg))
+                s1_epsgs_str = ",".join(str(e) for e in sorted(s1_epsgs_set))
+                if s1_epsgs_set != {int(row.epsg)}:
+                    logger.info(
+                        f"{cell_label} (orbit={orbit}): S1 patches span EPSGs "
+                        f"{sorted(s1_epsgs_set)}; S2 job EPSG is {row.epsg}. "
+                        "S1 STAC filter will accept the union."
+                    )
 
-            job_row_dict["geometry_url"] = url
-            final_rows.append(job_row_dict)
+                job_row_dict = row.to_dict()
+                job_row_dict["h3l3_cell"] = h3l3_cell_value
+                job_row_dict["orbit_state"] = orbit
+                job_row_dict["geometry_url"] = url
+                job_row_dict["s1_epsgs"] = s1_epsgs_str
+                final_rows.append(job_row_dict)
 
     final_job_df = pd.DataFrame(final_rows)
     if final_job_df.empty:
@@ -701,6 +888,14 @@ def create_job_patch_to_point_worldcereal(
 
     temporal_extent = TemporalContext(start_date=row.start_date, end_date=row.end_date)
 
+    # Optional set of S1 EPSGs to accept (handles UTM-zone boundary samples
+    # whose S1 patch is indexed under a different EPSG than their S2 patch).
+    s1_epsgs_raw = row.get("s1_epsgs")
+    if s1_epsgs_raw is not None and not (isinstance(s1_epsgs_raw, float) and pd.isna(s1_epsgs_raw)) and str(s1_epsgs_raw):
+        s1_epsgs = [int(e) for e in str(s1_epsgs_raw).split(",") if e]
+    else:
+        s1_epsgs = None
+
     # Get preprocessed cube from patch extractions
     logger.info(f"Creating cube with compositing window: {period}")
     cube = worldcereal_preprocessed_inputs_from_patches(
@@ -712,6 +907,7 @@ def create_job_patch_to_point_worldcereal(
         period=period,
         optical_mask_method=optical_mask_method,
         epsg_property=row.get("epsg_property", "proj:epsg"),
+        s1_epsgs=s1_epsgs,
     )
 
     # Do spatial aggregation
@@ -828,6 +1024,7 @@ def worldcereal_preprocessed_inputs_from_patches(
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
     epsg_property: str = "proj:epsg",
+    s1_epsgs: Optional[List[int]] = None,
 ):
     assert period in ["month", "dekad"], "period must be either 'month' or 'dekad'"
 
@@ -835,10 +1032,27 @@ def worldcereal_preprocessed_inputs_from_patches(
     # string like "EPSG:32634" for new-style `proj:code`.
     epsg_filter_value = f"EPSG:{epsg}" if epsg_property == "proj:code" else epsg
 
+    # Build the S1 EPSG filter. When samples in this job sit near a UTM-zone
+    # boundary, their S1 patch can be indexed under a different EPSG than the
+    # job's S2 EPSG; the filter must accept the union or those samples lose
+    # their S1 data entirely.
+    s1_epsg_values = sorted(set(s1_epsgs)) if s1_epsgs else [epsg]
+    if epsg_property == "proj:code":
+        s1_epsg_filter_values = [f"EPSG:{e}" for e in s1_epsg_values]
+    else:
+        s1_epsg_filter_values = list(s1_epsg_values)
+    multi_s1_epsg = len(s1_epsg_filter_values) > 1
+
+    def _s1_epsg_filter(x, _values=s1_epsg_filter_values):
+        cond = eq(x, _values[0])
+        for v in _values[1:]:
+            cond = or_(cond, eq(x, v))
+        return cond
+
     # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
-        epsg_property: lambda x: eq(x, epsg_filter_value),
+        epsg_property: _s1_epsg_filter,
         "sat:orbit_state": lambda x: eq(x, s1_orbit_state),
     }
 
@@ -855,6 +1069,12 @@ def worldcereal_preprocessed_inputs_from_patches(
             bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
         )
         s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
+        if multi_s1_epsg:
+            # Patches loaded from multiple UTM zones must be reprojected onto a
+            # single CRS before merge_cubes with S2 (which lives in `epsg`).
+            s1_raw = s1_raw.resample_spatial(
+                resolution=10.0, projection=epsg, method="bilinear"
+            )
         s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
         s1 = mean_compositing(s1, period=period)
         s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
