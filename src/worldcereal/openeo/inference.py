@@ -520,8 +520,7 @@ class SeasonalModelBundle:
         )
         self._custom_head_backbone_fingerprints: Dict[str, str] = {}
 
-        dropout = base_artifact.manifest.get("backbone", {}).get("head_dropout", 0.0)
-        self.model = self._build_model(dropout)
+        self.model = self._build_model()
 
         # Apply custom head overrides if provided
         if landcover_head_zip and self._cropland_head_enabled:
@@ -547,7 +546,7 @@ class SeasonalModelBundle:
 
         self._update_cropland_gate()
 
-    def _build_model(self, dropout: float) -> "WorldCerealSeasonalModel":
+    def _build_model(self) -> "WorldCerealSeasonalModel":
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
         from prometheo.models import Presto
@@ -566,7 +565,6 @@ class SeasonalModelBundle:
             crop_num_outputs=(
                 self.croptype_spec.num_classes if self._croptype_head_enabled else None
             ),
-            dropout=dropout,
             landcover_head_type=self.landcover_spec.head_type,
             croptype_head_type=self.croptype_spec.head_type,
             landcover_hidden_dim=self.landcover_spec.hidden_dim,
@@ -1023,7 +1021,11 @@ class SeasonalInferenceEngine:
         num_samples = getattr(predictors, "B", None)
         num_timesteps = getattr(predictors, "T", None)
         expected_timesteps = self._get_expected_timesteps()
-        if num_timesteps is not None and expected_timesteps is not None and num_timesteps > expected_timesteps:
+        if (
+            num_timesteps is not None
+            and expected_timesteps is not None
+            and num_timesteps > expected_timesteps
+        ):
             raise ValueError(
                 f"Input has {num_timesteps} timesteps but the model was trained "
                 f"with {expected_timesteps}.  Positional indices beyond "
@@ -1067,9 +1069,7 @@ class SeasonalInferenceEngine:
         back to the encoder's positional-embedding capacity when the
         artifact metadata is incomplete.
         """
-        result = get_expected_timesteps_from_artifact(
-            self.bundle.base_artifact
-        )
+        result = get_expected_timesteps_from_artifact(self.bundle.base_artifact)
         if result is not None:
             return result
 
@@ -1435,17 +1435,17 @@ class SeasonalInferenceEngine:
                 and cropland_mask_bool is not None
             )
             if gate_applicable:
-                assert (
-                    cropland_mask_bool is not None
-                ), "Cropland mask required when gating is enabled"
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gate = cropland_mask_bool[:, :, None]
                 preds_np = np.where(gate, preds_np, NOCROP_VALUE)
 
             prob_cube = np.transpose(prob_np, (2, 3, 0, 1))  # season, class, y, x
             if gate_applicable:
-                assert (
-                    cropland_mask_bool is not None
-                ), "Cropland mask required when gating is enabled"
+                assert cropland_mask_bool is not None, (
+                    "Cropland mask required when gating is enabled"
+                )
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
