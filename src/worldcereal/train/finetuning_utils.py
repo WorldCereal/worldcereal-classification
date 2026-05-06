@@ -602,16 +602,23 @@ def plot_spatial_predictions(
     fig_h = 9.0
     fig_w = min(max(fig_h * aspect, 6.0), 22.0)
 
-    # Choose hexbin grid size based on both lon and lat extent so that hexagons
-    # stay roughly square regardless of the zoom region.  The geometric mean of
-    # the two span-derived sizes gives a balanced value that scales up for global
-    # views and down for small regional runs.  Cap raised to 300 for more
-    # granularity on full-world maps.
+    # Choose hexbin grid size that balances geographic resolution with point
+    # density.  Two independent limits are computed and the smaller is used:
+    #
+    #   1. Geography limit – scales with the extent so global maps get finer
+    #      grids than small regional tiles.
+    #   2. Density limit – sqrt(n / min_count) ensures the *average* hex has at
+    #      least min_count points, preventing the common failure mode where a
+    #      small regional run with few samples produces an almost all-grey map
+    #      because every cell falls below the threshold.
+    #
+    # The two limits are combined with min() so whichever is more restrictive
+    # wins; a floor of 10 prevents degenerate 1×1 grids on tiny datasets.
     lon_span = x_max - x_min
     lat_span = y_max - y_min
-    gridsize_lon = int(lon_span * 1.5)
-    gridsize_lat = int(lat_span * 1.5)
-    gridsize = max(30, min(250, int((gridsize_lon * gridsize_lat) ** 0.5)))
+    gridsize_geo = int((lon_span * 1.5 * lat_span * 1.5) ** 0.4)
+    gridsize_density = int((n_total / max(min_count, 1)) ** 0.4)
+    gridsize = max(10, min(220, gridsize_geo, gridsize_density))
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
