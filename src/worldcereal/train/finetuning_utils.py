@@ -2196,6 +2196,21 @@ def run_finetuning(
     originally_frozen_layers = set()
 
     track_croptype_supervision = isinstance(loss_fn, SeasonalMultiTaskLoss)
+    # Hoisted here: loss_fn is constant for the entire run so these never change.
+    seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
+    seasonal_metrics_supported = seasonal_loss is not None
+    # _effective_metric similarly depends only on checkpoint_metric and
+    # seasonal_metrics_supported, both constant → compute once.
+    _effective_metric = (
+        checkpoint_metric
+        if checkpoint_metric == "val_loss" or seasonal_metrics_supported
+        else "val_loss"
+    )
+    if _effective_metric != checkpoint_metric:
+        logger.warning(
+            f"checkpoint_metric='{checkpoint_metric}' requires seasonal outputs but "
+            "this model does not use SeasonalMultiTaskLoss; falling back to 'val_loss'."
+        )
 
     # Define checkpoint paths
     best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
@@ -2316,8 +2331,6 @@ def run_finetuning(
         fallback_batches = 0
         val_pred_chunks: List[torch.Tensor] = []
         val_target_chunks: List[torch.Tensor] = []
-        seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
-        seasonal_metrics_supported = seasonal_loss is not None
         seasonal_landcover_records: List[dict[str, Any]] = []
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
@@ -2573,15 +2586,9 @@ def run_finetuning(
         # --- Early stopping: patience resets only when the monitored metric improves ---
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
-        cur_mean_f1 = (cur_lc_f1 + cur_ct_f1) / 2.0
-
-        # F1-based metrics require seasonal outputs; fall back to val_loss for
-        # non-seasonal models where seasonal_metrics_flat is always empty.
-        _effective_metric = (
-            checkpoint_metric
-            if checkpoint_metric == "val_loss" or seasonal_metrics_supported
-            else "val_loss"
-        )
+        # Clamp -1.0 sentinel (metric unavailable, e.g. all CT samples gate-rejected)
+        # to 0.0 so the mean is not pulled negative when one head has no data.
+        cur_mean_f1 = (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
 
         if _effective_metric == "lc_f1":
             loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1

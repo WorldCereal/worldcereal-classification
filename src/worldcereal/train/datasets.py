@@ -2315,11 +2315,14 @@ class DualHeadBatchSampler(Sampler):
             lc_multipliers: Dict[str, float] = {}
             ct_multipliers: Dict[str, float] = {}
             for key, val in class_weight_multipliers.items():
+                found = False
                 if key in lc_label_set:
                     lc_multipliers[key] = val
-                elif key in ct_label_set:
+                    found = True
+                if key in ct_label_set:
                     ct_multipliers[key] = val
-                else:
+                    found = True
+                if not found:
                     logger.warning(
                         f"class_weight_multipliers key '{key}' not found in LC or CT "
                         "labels; ignoring."
