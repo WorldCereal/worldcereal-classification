@@ -15,6 +15,10 @@ from worldcereal.job import (
     WorldCerealProductType,
     create_inference_process_graph,
 )
+from worldcereal.openeo.parameters import (
+    DEFAULT_POSTPROCESS_SECTION,
+    DEFAULT_SEASONAL_MODEL_URL,
+)
 from worldcereal.openeo.workflow_config import (
     ModelSection,
     SeasonSection,
@@ -23,14 +27,8 @@ from worldcereal.openeo.workflow_config import (
 
 default_job_options = DEFAULT_INFERENCE_JOB_OPTIONS.copy()
 
-default_job_options.update(
-    {
-        "driver-memory": "8g",
-        "executor-memory": "4g",
-        "executor-memoryOverhead": "6g"
-    }
-)
-
+CROPLAND_DEFAULTS = DEFAULT_POSTPROCESS_SECTION["cropland"]
+CROPTYPE_DEFAULTS = DEFAULT_POSTPROCESS_SECTION["croptype"]
 
 # -------------------------------------------------------------------------------
 # PROCESS GRAPH CREATION
@@ -85,20 +83,21 @@ def create_process_graph_with_parameters() -> openeo.MultiResult:
     if enable_cropland_postprocess:
         postprocess_config["cropland"] = {
             "enabled": True,
-            "method": "majority_vote",
-            "kernel_size": 5,
+            "method": CROPLAND_DEFAULTS["method"],
+            "kernel_size": CROPLAND_DEFAULTS["kernel_size"],
         }
     if enable_croptype_postprocess:
         postprocess_config["croptype"] = {
             "enabled": True,
-            "method": "majority_vote",
-            "kernel_size": 5,
+            "method": CROPTYPE_DEFAULTS["method"],
+            "kernel_size": CROPTYPE_DEFAULTS["kernel_size"],
         }
 
     workflow_cfg = WorldCerealWorkflowConfig(
         model=ModelSection(
             export_embeddings=export_embeddings,
             export_ndvi=export_ndvi,
+            enable_cropland_head=True,
         ),
         season=SeasonSection(
             export_class_probabilities=export_class_probabilities,
@@ -212,29 +211,111 @@ def replace_season_windows(obj):
         for item in obj:
             replace_season_windows(item)
 
-
-def replace_postprocess_method(obj, target_postprocess_method="majority_vote"):
+def replace_postprocess_method_cropland(obj, target_postprocess_method=CROPLAND_DEFAULTS["method"]):
     if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "method" and value == target_postprocess_method:
-                obj[key] = {"from_parameter": "postprocess_method"}
-            else:
-                replace_postprocess_method(value, target_postprocess_method)
+        if "postprocess" in obj:
+            cropland = obj["postprocess"].get("cropland")
+            if isinstance(cropland, dict) and cropland.get("method") == target_postprocess_method:
+                cropland["method"] = {"from_parameter": "postprocess_method_cropland"}
+        for value in obj.values():
+            replace_postprocess_method_cropland(value, target_postprocess_method)
     elif isinstance(obj, list):
         for item in obj:
-            replace_postprocess_method(item, target_postprocess_method)
+            replace_postprocess_method_cropland(item, target_postprocess_method)
 
-
-def replace_kernel_size(obj, target_kernel_size=5):
+def replace_kernel_size_cropland(obj, target_kernel_size=CROPLAND_DEFAULTS["kernel_size"]):
     if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "kernel_size" and value == target_kernel_size:
-                obj[key] = {"from_parameter": "postprocess_kernel_size"}
-            else:
-                replace_kernel_size(value, target_kernel_size)
+        if "postprocess" in obj:
+            cropland = obj["postprocess"].get("cropland")
+            if isinstance(cropland, dict) and cropland.get("kernel_size") == target_kernel_size:
+                cropland["kernel_size"] = {"from_parameter": "postprocess_kernel_size_cropland"}
+        for value in obj.values():
+            replace_kernel_size_cropland(value, target_kernel_size)
     elif isinstance(obj, list):
         for item in obj:
-            replace_kernel_size(item, target_kernel_size)
+            replace_kernel_size_cropland(item, target_kernel_size)
+
+
+def replace_postprocess_method_croptype(obj, target_postprocess_method=CROPTYPE_DEFAULTS["method"]):
+    if isinstance(obj, dict):
+        if "postprocess" in obj:
+            croptype = obj["postprocess"].get("croptype")
+            if isinstance(croptype, dict) and croptype.get("method") == target_postprocess_method:
+                croptype["method"] = {"from_parameter": "postprocess_method_croptype"}
+        for value in obj.values():
+            replace_postprocess_method_croptype(value, target_postprocess_method)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_postprocess_method_croptype(item, target_postprocess_method)
+
+def replace_kernel_size_croptype(obj, target_kernel_size=CROPTYPE_DEFAULTS["kernel_size"]):
+    if isinstance(obj, dict):
+        if "postprocess" in obj:
+            croptype = obj["postprocess"].get("croptype")
+            if isinstance(croptype, dict) and croptype.get("kernel_size") == target_kernel_size:
+                croptype["kernel_size"] = {"from_parameter": "postprocess_kernel_size_croptype"}
+        for value in obj.values():
+            replace_kernel_size_croptype(value, target_kernel_size)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_kernel_size_croptype(item, target_kernel_size)
+
+
+def replace_seasonal_head_zip(
+    obj,
+    target_seasonal_head_zip=DEFAULT_SEASONAL_MODEL_URL,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "seasonal_model_zip" and value == target_seasonal_head_zip:
+                obj[key] = {"from_parameter": "seasonal_head_zip"}
+            else:
+                replace_seasonal_head_zip(value, target_seasonal_head_zip)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_seasonal_head_zip(item, target_seasonal_head_zip)
+
+def replace_landcover_head_zip(
+    obj,
+    target_landcover_head_zip=None,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "landcover_head_zip" and value == target_landcover_head_zip:
+                obj[key] = {"from_parameter": "landcover_head_zip"}
+            else:
+                replace_landcover_head_zip(value, target_landcover_head_zip)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_landcover_head_zip(item, target_landcover_head_zip)
+
+def replace_mask_cropland(
+    obj,
+    target_mask_cropland=True,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "mask_cropland" and value == target_mask_cropland:
+                obj[key] = {"from_parameter": "mask_cropland"}
+            else:
+                replace_mask_cropland(value, target_mask_cropland)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_mask_cropland(item, target_mask_cropland)
+
+def replace_enable_cropland_head(
+    obj,
+    target_enable_cropland_head=True,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "enable_cropland_head" and value == target_enable_cropland_head:
+                obj[key] = {"from_parameter": "enable_cropland_head"}
+            else:
+                replace_enable_cropland_head(value, target_enable_cropland_head)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_enable_cropland_head(item, target_enable_cropland_head)
 
 def remove_filter_bands(obj: dict):
     obj["process_graph"].pop("filterbands1", None)
@@ -253,32 +334,50 @@ def main():
     results = create_process_graph_with_parameters()
 
     spatial_extent_param = Parameter.spatial_extent()
+
     temporal_extent_param = Parameter.temporal_interval()
-    model_url_param = Parameter.string(
-        "model_url", description="URL to the seasonal model zip to use for inference."
-    )
+
     orbit_state_param = Parameter.string(
         "orbit_state",
         description="Sentinel-1 orbit state.",
         values=["ASCENDING", "DESCENDING"],
     )
-    postprocess_method_param = Parameter.string(
-        "postprocess_method",
-        description="Method used for postprocessing.",
+    postprocess_method_cropland_param = Parameter.string(
+        "postprocess_method_cropland",
+        description="Method used for postprocessing cropland.",
         values=["majority_vote", "smooth_probabilities"],
         optional=True,
-        default="smooth_probabilities",
+        default=CROPLAND_DEFAULTS["method"],
     )
-    postprocess_kernel_size_param = Parameter(
-        "postprocess_kernel_size",
-        description="Size of the kernel used for postprocessing. Only used if postprocess_method is set to majority_vote.",
+    postprocess_kernel_size_cropland_param = Parameter(
+        "postprocess_kernel_size_cropland",
+        description="Size of the kernel used for postprocessing cropland. Only used if postprocess_method_cropland is set to majority_vote.",
         schema={
             "type": "integer",
             "maximum": 25,
             "allOf": [{"not": {"multipleOf": 2}}],
         },
         optional=True,
-        default=5,
+        default=CROPLAND_DEFAULTS["kernel_size"],
+    )
+
+    postprocess_method_croptype_param = Parameter.string(
+        "postprocess_method_croptype",
+        description="Method used for postprocessing crop type.",
+        values=["majority_vote", "smooth_probabilities"],
+        optional=True,
+        default=CROPTYPE_DEFAULTS["method"],
+    )
+    postprocess_kernel_size_croptype_param = Parameter(
+        "postprocess_kernel_size_croptype",
+        description="Size of the kernel used for postprocessing crop type. Only used if postprocess_method_croptype is set to majority_vote.",
+        schema={
+            "type": "integer",
+            "maximum": 25,
+            "allOf": [{"not": {"multipleOf": 2}}],
+        },
+        optional=True,
+        default=CROPTYPE_DEFAULTS["kernel_size"],
     )
 
     season_ids_param = Parameter(
@@ -305,6 +404,34 @@ def main():
         },
     )
 
+    seasonal_model_zip_param = Parameter.string(
+        "seasonal_model_zip",
+        description="Model to be used for feature computation. Also used for classification if no custom landcover_head_zip is provided.",
+        optional=True,
+        default=DEFAULT_SEASONAL_MODEL_URL,
+    )
+
+    landcover_head_zip_param = Parameter.string(
+        "landcover_head_zip",
+        description="Custom land cover classification head to be applied.",
+        optional=True,
+        default=None
+    )
+
+    enable_cropland_head_param = Parameter.boolean(
+        "enable_cropland_head",
+        description="Whether to generate a cropland product or not.",
+        optional=True,
+        default=True,
+    )
+
+    mask_cropland_param = Parameter.boolean(
+        "mask_cropland",
+        description="Whether to mask non-cropland areas from the crop type product based on the generated cropland product.",
+        optional=True,
+        default=True,
+    )
+
 
 
     spec = build_process_dict(
@@ -313,12 +440,17 @@ def main():
         parameters=[
             spatial_extent_param,
             temporal_extent_param,
-            model_url_param,
             orbit_state_param,
-            postprocess_method_param,
-            postprocess_kernel_size_param,
             season_ids_param,
             season_windows_param,
+            postprocess_method_cropland_param,
+            postprocess_kernel_size_cropland_param,
+            postprocess_method_croptype_param,
+            postprocess_kernel_size_croptype_param,
+            seasonal_model_zip_param,
+            landcover_head_zip_param,
+            enable_cropland_head_param,
+            mask_cropland_param,
         ],
         default_job_options=default_job_options,
     )
@@ -326,11 +458,16 @@ def main():
     replace_temporal_extent(spec)
     replace_spatial_extent(spec)
     replace_orbit_state(spec)
-    replace_model_url(spec)
     replace_season_ids(spec)
     replace_season_windows(spec)
-    replace_postprocess_method(spec)
-    replace_kernel_size(spec)
+    replace_postprocess_method_cropland(spec)
+    replace_kernel_size_cropland(spec)
+    replace_postprocess_method_croptype(spec)
+    replace_kernel_size_croptype(spec)
+    replace_seasonal_head_zip(spec)
+    replace_landcover_head_zip(spec)
+    replace_mask_cropland(spec)
+    replace_enable_cropland_head(spec)
     remove_filter_bands(spec)
 
     path_to_udp_json = "./worldcereal_crop_type.json"
