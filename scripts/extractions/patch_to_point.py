@@ -115,6 +115,7 @@ def main(
     optical_mask_method: Literal[
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
+    max_retries: int = 1,
 ):
     """
     Main function to orchestrate patch-to-point extractions.
@@ -148,6 +149,12 @@ def main(
         This method is the fastest.
         'mask_scl_raw_values' uses the raw SCL values for masking without erosion/dilation.
         This option is available for patch-to-point only.
+    max_retries : int, optional
+        Number of automatic retry passes for jobs that ended in 'error' or
+        'postprocessing-error' after a run_jobs cycle. Many failures are
+        transient (Spark task evictions, intermittent backend errors); a
+        single retry typically clears them without manual intervention.
+        Default is 1 (i.e. up to 2 attempts per job within one script run).
 
     Returns
     -------
@@ -189,15 +196,36 @@ def main(
     manager.add_backend(
         "terrascope", connection=connection, parallel_jobs=parallel_jobs
     )
-    manager.run_jobs(
-        start_job=partial(
-            create_job_patch_to_point_worldcereal,
-            period=period,
-            job_options=job_options,
-            optical_mask_method=optical_mask_method,
-        ),
-        job_db=job_db,
+
+    start_job_fn = partial(
+        create_job_patch_to_point_worldcereal,
+        period=period,
+        job_options=job_options,
+        optical_mask_method=optical_mask_method,
     )
+
+    # Run, then auto-reset transient failures and re-run up to `max_retries`
+    # extra times. The job manager itself only re-submits rows in
+    # 'not_started' state, so we flip 'error'/'postprocessing-error' rows
+    # back to 'not_started' between passes.
+    for attempt in range(max_retries + 1):
+        manager.run_jobs(start_job=start_job_fn, job_db=job_db)
+
+        if attempt >= max_retries:
+            break
+
+        latest_df = job_db.read()
+        failed_mask = latest_df["status"].isin(["error", "postprocessing-error"])
+        n_failed = int(failed_mask.sum())
+        if n_failed == 0:
+            break
+
+        logger.warning(
+            f"Auto-retry {attempt + 1}/{max_retries}: {n_failed} job(s) "
+            "ended in error; resetting to 'not_started' for re-submission."
+        )
+        latest_df.loc[failed_mask, "status"] = "not_started"
+        job_db.persist(latest_df)
 
     # Merge all subparquets
     logger.info("Merging individual files ...")
@@ -309,6 +337,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--organization_id", type=int, default=None, help="Organization id."
     )
+    parser.add_argument(
+        "--max_retries",
+        type=int,
+        default=1,
+        help=(
+            "Number of automatic retry passes for jobs that ended in 'error' "
+            "or 'postprocessing-error'. Default 1 (so up to 2 attempts per "
+            "job within one script run). Set to 0 to disable auto-retry."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -320,6 +358,7 @@ if __name__ == "__main__":
     only_flagged_samples = args.only_flagged_samples
     max_samples_per_job = args.max_samples_per_job
     parallel_jobs = args.parallel_jobs or 1
+    max_retries = args.max_retries
     job_options = parse_job_options_from_args(args)
 
     logger.info("Starting patch to point extractions ...")
@@ -346,6 +385,7 @@ if __name__ == "__main__":
             parallel_jobs=parallel_jobs,
             job_options=job_options,
             optical_mask_method=optical_mask_method,
+            max_retries=max_retries,
         )
 
     logger.success("All done!")
