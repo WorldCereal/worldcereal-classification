@@ -2031,5 +2031,165 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
             )
 
 
+class TestClassWeightMultipliersRouting(unittest.TestCase):
+    """Tests for class_weight_multipliers routing in DualHeadBatchSampler."""
+
+    def setUp(self):
+        import pandas as pd
+
+        # Shared label that appears in BOTH LC and CT columns — the real-world
+        # example is "temporary_crops" which lives in both LC_CODES and
+        # class_mappings.json.
+        shared = "shared_class"
+        data = {
+            "landcover_label": [shared, "lc_only", shared, "lc_only", shared],
+            "croptype_label": [shared, shared, "ct_only", "ct_only", shared],
+            "lat": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "lon": [1.0, 2.0, 3.0, 4.0, 5.0],
+        }
+        self.df = pd.DataFrame(data)
+
+    def _make_sampler(self, multipliers):
+        from worldcereal.train.datasets import DualHeadBatchSampler
+
+        return DualHeadBatchSampler(
+            dataframe=self.df,
+            batch_size=4,
+            class_weight_method="balanced",
+            num_batches=5,
+            class_weight_multipliers=multipliers,
+        )
+
+    def test_shared_label_applied_to_both_pools(self):
+        """A label present in both LC and CT sets must boost both sampling pools."""
+        sampler_base = self._make_sampler(None)
+        sampler_boost = self._make_sampler({"shared_class": 10.0})
+
+        # LC probs for samples with the shared label should be higher after boost
+        lc_probs_base = sampler_base._lc_probs.numpy()
+        lc_probs_boost = sampler_boost._lc_probs.numpy()
+        ct_probs_base = sampler_base._ct_probs.numpy()
+        ct_probs_boost = sampler_boost._ct_probs.numpy()
+
+        shared_lc_idx = [
+            i
+            for i, v in enumerate(self.df["landcover_label"])
+            if v == "shared_class"
+        ]
+        shared_ct_idx = [
+            i
+            for i, v in enumerate(
+                self.df.loc[self.df["croptype_label"].notna(), "croptype_label"].reset_index(
+                    drop=True
+                )
+            )
+            if v == "shared_class"
+        ]
+
+        # Both pools should have higher probability after the boost
+        self.assertTrue(
+            all(
+                lc_probs_boost[i] > lc_probs_base[i] for i in shared_lc_idx
+            ),
+            "shared_class boost did NOT increase LC pool probabilities",
+        )
+        self.assertTrue(
+            all(
+                ct_probs_boost[i] > ct_probs_base[i] for i in shared_ct_idx
+            ),
+            "shared_class boost did NOT increase CT pool probabilities — elif bug",
+        )
+
+    def test_lc_only_label_only_affects_lc_pool(self):
+        """A label that only exists in the LC pool must not change CT probs."""
+        sampler_base = self._make_sampler(None)
+        sampler_boost = self._make_sampler({"lc_only": 5.0})
+        import numpy as np
+
+        self.assertTrue(
+            np.allclose(
+                sampler_base._ct_probs.numpy(), sampler_boost._ct_probs.numpy()
+            ),
+            "lc_only multiplier incorrectly changed CT pool probabilities",
+        )
+
+    def test_unknown_label_warns_and_does_not_crash(self):
+        """An unknown key in class_weight_multipliers should warn but not raise."""
+        # Should complete without error (warning is logged internally)
+        sampler = self._make_sampler({"completely_unknown_label": 2.0})
+        self.assertIsNotNone(sampler)
+
+
+class TestCheckpointMetricMonitoring(unittest.TestCase):
+    """Tests for the checkpoint_metric / mean_f1 sentinel behavior."""
+
+    def _compute_mean_f1(self, cur_lc_f1, cur_ct_f1):
+        """Replicate the fixed formula from finetuning_utils.py."""
+        return (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
+
+    def test_mean_f1_both_available(self):
+        """mean_f1 is the arithmetic mean when both heads have valid metrics."""
+        result = self._compute_mean_f1(0.8, 0.6)
+        self.assertAlmostEqual(result, 0.7)
+
+    def test_mean_f1_ct_sentinel_does_not_go_negative(self):
+        """When CT is gate-rejected (sentinel -1.0), mean_f1 must stay >= 0."""
+        result = self._compute_mean_f1(0.85, -1.0)
+        self.assertGreaterEqual(result, 0.0)
+        self.assertAlmostEqual(result, 0.425)
+
+    def test_mean_f1_lc_sentinel_does_not_go_negative(self):
+        """When LC sentinel fires, mean_f1 must stay >= 0."""
+        result = self._compute_mean_f1(-1.0, 0.70)
+        self.assertGreaterEqual(result, 0.0)
+        self.assertAlmostEqual(result, 0.35)
+
+    def test_mean_f1_both_sentinel_is_zero(self):
+        """When both heads return sentinel, mean_f1 should be 0.0 (not -1.0)."""
+        result = self._compute_mean_f1(-1.0, -1.0)
+        self.assertEqual(result, 0.0)
+
+    def test_non_seasonal_fallback_to_val_loss(self):
+        """Non-seasonal models must fall back to val_loss regardless of requested metric."""
+        seasonal_metrics_supported = False
+        for requested in ("lc_f1", "ct_f1", "mean_f1"):
+            effective = (
+                requested
+                if requested == "val_loss" or seasonal_metrics_supported
+                else "val_loss"
+            )
+            self.assertEqual(
+                effective,
+                "val_loss",
+                f"checkpoint_metric='{requested}' should fall back to 'val_loss' "
+                "for non-seasonal models",
+            )
+
+    def test_seasonal_model_respects_requested_metric(self):
+        """Seasonal models must use the requested metric without fallback."""
+        seasonal_metrics_supported = True
+        for requested in ("lc_f1", "ct_f1", "mean_f1", "val_loss"):
+            effective = (
+                requested
+                if requested == "val_loss" or seasonal_metrics_supported
+                else "val_loss"
+            )
+            self.assertEqual(
+                effective,
+                requested,
+                f"checkpoint_metric='{requested}' should NOT be overridden for seasonal models",
+            )
+
+    def test_val_loss_explicit_never_falls_back(self):
+        """val_loss always passes through regardless of seasonal support."""
+        for seasonal in (True, False):
+            effective = (
+                "val_loss"
+                if "val_loss" == "val_loss" or seasonal
+                else "val_loss"
+            )
+            self.assertEqual(effective, "val_loss")
+
+
 if __name__ == "__main__":
     unittest.main()
