@@ -787,7 +787,7 @@
                     "description": "Phase II multitask seasonal backbone with dual landcover/croptype heads",
                     "model": {
                       "seasonal_model_zip": {
-                        "from_parameter": "seasonal_head_zip"
+                        "from_parameter": "seasonal_model_zip"
                       },
                       "landcover_head_zip": {
                         "from_parameter": "landcover_head_zip"

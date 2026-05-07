@@ -261,19 +261,19 @@ def replace_kernel_size_croptype(obj, target_kernel_size=CROPTYPE_DEFAULTS["kern
             replace_kernel_size_croptype(item, target_kernel_size)
 
 
-def replace_seasonal_head_zip(
+def replace_seasonal_model_zip(
     obj,
-    target_seasonal_head_zip=DEFAULT_SEASONAL_MODEL_URL,
+    target_seasonal_model_zip=DEFAULT_SEASONAL_MODEL_URL,
 ):
     if isinstance(obj, dict):
         for key, value in obj.items():
-            if key == "seasonal_model_zip" and value == target_seasonal_head_zip:
-                obj[key] = {"from_parameter": "seasonal_head_zip"}
+            if key == "seasonal_model_zip" and value == target_seasonal_model_zip:
+                obj[key] = {"from_parameter": "seasonal_model_zip"}
             else:
-                replace_seasonal_head_zip(value, target_seasonal_head_zip)
+                replace_seasonal_model_zip(value, target_seasonal_model_zip)
     elif isinstance(obj, list):
         for item in obj:
-            replace_seasonal_head_zip(item, target_seasonal_head_zip)
+            replace_seasonal_model_zip(item, target_seasonal_model_zip)
 
 def replace_landcover_head_zip(
     obj,
@@ -464,7 +464,7 @@ def main():
     replace_kernel_size_cropland(spec)
     replace_postprocess_method_croptype(spec)
     replace_kernel_size_croptype(spec)
-    replace_seasonal_head_zip(spec)
+    replace_seasonal_model_zip(spec)
     replace_landcover_head_zip(spec)
     replace_mask_cropland(spec)
     replace_enable_cropland_head(spec)
