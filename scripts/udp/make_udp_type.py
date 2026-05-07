@@ -173,21 +173,6 @@ def replace_orbit_state(obj, target_orbit_state="DESCENDING"):
             replace_orbit_state(item, target_orbit_state)
 
 
-def replace_model_url(
-    obj,
-    target_model_url="https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip",
-):
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "seasonal_model_zip" and value == target_model_url:
-                obj[key] = {"from_parameter": "model_url"}
-            else:
-                replace_model_url(value, target_model_url)
-    elif isinstance(obj, list):
-        for item in obj:
-            replace_model_url(item, target_model_url)
-
-
 def replace_season_ids(obj):
     if isinstance(obj, dict):
         for key in list(obj.keys()):
@@ -333,7 +318,9 @@ def main():
 
     results = create_process_graph_with_parameters()
 
-    spatial_extent_param = Parameter.spatial_extent()
+    spatial_extent_param = Parameter.bounding_box(
+        name="spatial_extent"
+    )
 
     temporal_extent_param = Parameter.temporal_interval()
 

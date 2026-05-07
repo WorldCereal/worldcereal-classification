@@ -1184,7 +1184,7 @@ class SeasonalInferenceEngine:
         try:
             dims_summary = {dim: size for dim, size in zip(arr.dims, arr.shape)}
             logger.info(
-                f"Seasonal inference request received (epsg={epsg}, enforce_gate={enforce_cropland_gate}, "
+                f"Seasonal inference request received (epsg={epsg}, mask_cropland={mask_cropland}, "
                 f"dims={dims_summary})"
             )
             mem.checkpoint("infer:start")
@@ -1250,14 +1250,14 @@ class SeasonalInferenceEngine:
                 f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
             )
 
-        dataset = self._format_outputs(
-            arr=prepped,
-            outputs=outputs,
-            season_ids=active_season_ids,
-            mask_cropland=mask_cropland,
-            export_embeddings=export_embeddings,
-            export_ndvi=export_ndvi,
-        )
+            dataset = self._format_outputs(
+                arr=prepped,
+                outputs=outputs,
+                season_ids=active_season_ids,
+                mask_cropland=mask_cropland,
+                export_embeddings=export_embeddings,
+                export_ndvi=export_ndvi,
+            )
 
             mem.checkpoint("infer:after_format_outputs")
             out = _dataset_to_multiband_array(dataset)
