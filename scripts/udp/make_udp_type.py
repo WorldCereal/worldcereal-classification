@@ -2,7 +2,10 @@
 Script that generates the worldcereal_crop_type UDP from the source code.
 """
 
+import argparse
 import json
+from pathlib import Path
+from typing import Optional
 
 import openeo
 from openeo.api.process import Parameter
@@ -314,7 +317,7 @@ def remove_filter_bands(obj: dict):
 # -------------------------------------------------------------------------------
 
 
-def main():
+def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_type.json")):
 
     results = create_process_graph_with_parameters()
 
@@ -457,10 +460,30 @@ def main():
     replace_enable_cropland_head(spec)
     remove_filter_bands(spec)
 
-    path_to_udp_json = "./worldcereal_crop_type.json"
-    with open(path_to_udp_json, "w") as f:
-        json.dump(spec, f, indent=2)
+    if path_to_udp_json is not None:
+        path_to_udp_json = Path(path_to_udp_json)
+        with open(path_to_udp_json, "w") as f:
+            json.dump(spec, f, indent=2)
+
+    return spec
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Generate the worldcereal_crop_type UDP."
+    )
+    parser.add_argument(
+        "--path-to-udp-json",
+        type=str,
+        default="./worldcereal_crop_type.json",
+        help="Path to write the UDP JSON to. Defaults to ./worldcereal_crop_type.json.",
+    )
+    parser.add_argument(
+        "--no-write",
+        action="store_true",
+        help="Do not write the UDP JSON to disk.",
+    )
+    args = parser.parse_args()
+
+    udp_path = None if args.no_write else args.path_to_udp_json
+    main(path_to_udp_json=udp_path)

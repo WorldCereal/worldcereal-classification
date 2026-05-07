@@ -2,7 +2,10 @@
 Script that generates the worldcereal_crop_extent UDP from the source code.
 """
 
+import argparse
 import json
+from pathlib import Path
+from typing import Optional
 
 import openeo
 from openeo.api.process import Parameter
@@ -15,6 +18,10 @@ from worldcereal.job import (
     WorldCerealProductType,
     create_inference_process_graph,
 )
+from worldcereal.openeo.parameters import (
+    DEFAULT_POSTPROCESS_SECTION,
+    DEFAULT_SEASONAL_MODEL_URL,
+)
 from worldcereal.openeo.workflow_config import (
     ModelSection,
     SeasonSection,
@@ -22,15 +29,7 @@ from worldcereal.openeo.workflow_config import (
 )
 
 default_job_options = DEFAULT_INFERENCE_JOB_OPTIONS.copy()
-
-default_job_options.update(
-    {
-        "driver-memory": "8g",
-        "executor-memory": "4g",
-        "executor-memoryOverhead": "6g"
-    }
-)
-
+CROPLAND_DEFAULTS = DEFAULT_POSTPROCESS_SECTION["cropland"]
 
 # -------------------------------------------------------------------------------
 # PROCESS GRAPH CREATION
@@ -81,8 +80,8 @@ def create_process_graph_with_parameters() -> openeo.MultiResult:
     if enable_cropland_postprocess:
         postprocess_config["cropland"] = {
             "enabled": True,
-            "method": "majority_vote",
-            "kernel_size": 5,
+            "method": CROPLAND_DEFAULTS["method"],
+            "kernel_size": CROPLAND_DEFAULTS["kernel_size"],
         }
 
     workflow_cfg = WorldCerealWorkflowConfig(
@@ -187,7 +186,7 @@ def replace_season_windows(obj):
             replace_season_windows(item)
 
 
-def replace_postprocess_method(obj, target_postprocess_method="majority_vote"):
+def replace_postprocess_method(obj, target_postprocess_method=CROPLAND_DEFAULTS["method"]):
     if isinstance(obj, dict):
         for key, value in obj.items():
             if key == "method" and value == target_postprocess_method:
@@ -199,7 +198,35 @@ def replace_postprocess_method(obj, target_postprocess_method="majority_vote"):
             replace_postprocess_method(item, target_postprocess_method)
 
 
-def replace_kernel_size(obj, target_kernel_size=5):
+def replace_seasonal_model_zip(
+    obj,
+    target_seasonal_model_zip=DEFAULT_SEASONAL_MODEL_URL,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "seasonal_model_zip" and value == target_seasonal_model_zip:
+                obj[key] = {"from_parameter": "seasonal_model_zip"}
+            else:
+                replace_seasonal_model_zip(value, target_seasonal_model_zip)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_seasonal_model_zip(item, target_seasonal_model_zip)
+
+def replace_landcover_head_zip(
+    obj,
+    target_landcover_head_zip=None,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "landcover_head_zip" and value == target_landcover_head_zip:
+                obj[key] = {"from_parameter": "landcover_head_zip"}
+            else:
+                replace_landcover_head_zip(value, target_landcover_head_zip)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_landcover_head_zip(item, target_landcover_head_zip)
+
+def replace_kernel_size(obj, target_kernel_size=CROPLAND_DEFAULTS["kernel_size"]):
     if isinstance(obj, dict):
         for key, value in obj.items():
             if key == "kernel_size" and value == target_kernel_size:
@@ -220,12 +247,16 @@ def remove_filter_bands(obj: dict):
 # -------------------------------------------------------------------------------
 
 
-def main():
+def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_extent.json")):
 
     results = create_process_graph_with_parameters()
 
-    spatial_extent_param = Parameter.spatial_extent()
+    spatial_extent_param = Parameter.bounding_box(
+        name="spatial_extent"
+    )
+
     temporal_extent_param = Parameter.temporal_interval()
+
     orbit_state_param = Parameter.string(
         "orbit_state",
         description="Sentinel-1 orbit state.",
@@ -236,7 +267,7 @@ def main():
         description="Method used for postprocessing.",
         values=["majority_vote", "smooth_probabilities"],
         optional=True,
-        default="smooth_probabilities",
+        default="majority_vote",
     )
     postprocess_kernel_size_param = Parameter(
         "postprocess_kernel_size",
@@ -247,7 +278,21 @@ def main():
             "allOf": [{"not": {"multipleOf": 2}}],
         },
         optional=True,
-        default=5,
+        default=CROPLAND_DEFAULTS["kernel_size"],
+    )
+
+    seasonal_model_zip_param = Parameter.string(
+        "seasonal_model_zip",
+        description="Model to be used for feature computation. Also used for classification if no custom landcover_head_zip is provided.",
+        optional=True,
+        default=DEFAULT_SEASONAL_MODEL_URL,
+    )
+
+    landcover_head_zip_param = Parameter.string(
+        "landcover_head_zip",
+        description="Custom land cover classification head to be applied.",
+        optional=True,
+        default=None
     )
 
     season_ids_param = Parameter(
@@ -282,12 +327,13 @@ def main():
         parameters=[
             spatial_extent_param,
             temporal_extent_param,
-            # model_url_param,
             orbit_state_param,
-            postprocess_method_param,
-            postprocess_kernel_size_param,
             season_ids_param,
             season_windows_param,
+            postprocess_method_param,
+            postprocess_kernel_size_param,
+            seasonal_model_zip_param,
+            landcover_head_zip_param,
         ],
         default_job_options=default_job_options,
     )
@@ -297,14 +343,36 @@ def main():
     replace_orbit_state(spec)
     replace_season_ids(spec)
     replace_season_windows(spec)
+    replace_seasonal_model_zip(spec)
+    replace_landcover_head_zip(spec)
     replace_postprocess_method(spec)
     replace_kernel_size(spec)
     remove_filter_bands(spec)
 
-    path_to_udp_json = "./worldcereal_crop_extent.json"
-    with open(path_to_udp_json, "w") as f:
-        json.dump(spec, f, indent=2)
+    if path_to_udp_json is not None:
+        path_to_udp_json = Path(path_to_udp_json)
+        with open(path_to_udp_json, "w") as f:
+            json.dump(spec, f, indent=2)
+
+    return spec
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Generate the worldcereal_crop_extent UDP."
+    )
+    parser.add_argument(
+        "--path-to-udp-json",
+        type=str,
+        default="./worldcereal_crop_extent.json",
+        help="Path to write the UDP JSON to. Defaults to ./worldcereal_crop_extent.json.",
+    )
+    parser.add_argument(
+        "--no-write",
+        action="store_true",
+        help="Do not write the UDP JSON to disk.",
+    )
+    args = parser.parse_args()
+
+    udp_path = None if args.no_write else args.path_to_udp_json
+    main(path_to_udp_json=udp_path)
