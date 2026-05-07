@@ -581,7 +581,9 @@ def plot_spatial_predictions(
     df = pd.DataFrame(records)
     df = df.dropna(subset=["lat", "lon"])
     if df.empty:
-        logger.debug(f"{task_name}: no lat/lon coordinates in records; skipping spatial plot.")
+        logger.debug(
+            f"{task_name}: no lat/lon coordinates in records; skipping spatial plot."
+        )
         return
 
     n_total = len(df)
@@ -625,6 +627,7 @@ def plot_spatial_predictions(
     # World background (geopandas naturalearth, optional)
     try:
         import geopandas as gpd  # noqa: PLC0415
+
         world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
         world.plot(ax=ax, color="#e8e8e8", edgecolor="white", linewidth=0.3, zorder=1)
     except Exception:  # noqa: BLE001
@@ -662,7 +665,10 @@ def plot_spatial_predictions(
         linewidths=0.0,
         zorder=3,
     )
-    print(f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "f"accuracy={acc:.3f}, n={n_total}")
+    logger.info(
+        f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "
+        f"accuracy={acc:.3f}, n={n_total}"
+    )
 
     cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
     cb.set_label("Local accuracy", fontsize=9)
@@ -2082,6 +2088,7 @@ def run_finetuning(
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
     model_ema_alpha: float = 0.0,
+    checkpoint_metric: Literal["val_loss", "lc_f1", "ct_f1", "mean_f1"] = "mean_f1",
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -2101,6 +2108,9 @@ def run_finetuning(
     train_loss = []
     val_loss = []
     best_loss = None
+    best_ct_f1: Optional[float] = None
+    best_lc_f1: Optional[float] = None
+    best_mean_f1: Optional[float] = None
     best_model_dict = None
     epochs_since_improvement = 0
     ema_model: Optional[torch.nn.Module] = (
@@ -2186,6 +2196,21 @@ def run_finetuning(
     originally_frozen_layers = set()
 
     track_croptype_supervision = isinstance(loss_fn, SeasonalMultiTaskLoss)
+    # Hoisted here: loss_fn is constant for the entire run so these never change.
+    seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
+    seasonal_metrics_supported = seasonal_loss is not None
+    # _effective_metric similarly depends only on checkpoint_metric and
+    # seasonal_metrics_supported, both constant → compute once.
+    _effective_metric = (
+        checkpoint_metric
+        if checkpoint_metric == "val_loss" or seasonal_metrics_supported
+        else "val_loss"
+    )
+    if _effective_metric != checkpoint_metric:
+        logger.warning(
+            f"checkpoint_metric='{checkpoint_metric}' requires seasonal outputs but "
+            "this model does not use SeasonalMultiTaskLoss; falling back to 'val_loss'."
+        )
 
     # Define checkpoint paths
     best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
@@ -2306,8 +2331,6 @@ def run_finetuning(
         fallback_batches = 0
         val_pred_chunks: List[torch.Tensor] = []
         val_target_chunks: List[torch.Tensor] = []
-        seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
-        seasonal_metrics_supported = seasonal_loss is not None
         seasonal_landcover_records: List[dict[str, Any]] = []
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
@@ -2560,17 +2583,47 @@ def run_finetuning(
                 f"Failed to append validation metrics history at epoch {epoch + 1}: {exc}"
             )
 
-        # --- Early stopping: patience resets only when loss improves ---
-        loss_improved = best_loss is None or current_val_loss < best_loss
+        # --- Early stopping: patience resets only when the monitored metric improves ---
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
+        # Clamp -1.0 sentinel (metric unavailable, e.g. all CT samples gate-rejected)
+        # to 0.0 so the mean is not pulled negative when one head has no data.
+        cur_mean_f1 = (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
+
+        if _effective_metric == "lc_f1":
+            loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
+        elif _effective_metric == "ct_f1":
+            loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
+        elif _effective_metric == "mean_f1":
+            loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
+        else:
+            loss_improved = best_loss is None or current_val_loss < best_loss
 
         if loss_improved:
             best_loss = current_val_loss
+            best_lc_f1 = cur_lc_f1
+            best_ct_f1 = cur_ct_f1
+            best_mean_f1 = cur_mean_f1
             epochs_since_improvement = 0
-            logger.info(
-                f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
-            )
+            if _effective_metric == "lc_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val LC F1 improved to {cur_lc_f1:.4f} "
+                    f"(val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "ct_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val CT F1 improved to {cur_ct_f1:.4f} "
+                    f"(val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "mean_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val mean F1 improved to {cur_mean_f1:.4f} "
+                    f"(lc={cur_lc_f1:.4f}, ct={cur_ct_f1:.4f}, val_loss={current_val_loss:.4f})"
+                )
+            else:
+                logger.info(
+                    f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
+                )
         else:
             epochs_since_improvement += 1
             if epochs_since_improvement >= hyperparams.patience:
@@ -2608,8 +2661,9 @@ def run_finetuning(
             setattr(_ckpt_model, "_last_validation_context", validation_context)
 
             # best_loss is guaranteed non-None here: on the first epoch
-            # best_loss is None → loss_improved is True → best_loss is set
-            # before we ever reach this block.
+            # loss_improved is always True so best_loss is set before this block.
+            # For all checkpoint_metric values, best_loss is always updated from
+            # current_val_loss above, so the assert holds either way.
             assert best_loss is not None
 
             if on_validation_improved is not None:
@@ -2626,11 +2680,21 @@ def run_finetuning(
         _f1_str = ""
         if cur_lc_f1 > 0 or cur_ct_f1 > 0:
             _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
+        if _effective_metric == "lc_f1":
+            _best_str = f"{best_lc_f1:.3f} (lc_f1)" if best_lc_f1 is not None else "n/a"
+        elif _effective_metric == "ct_f1":
+            _best_str = f"{best_ct_f1:.3f} (ct_f1)" if best_ct_f1 is not None else "n/a"
+        elif _effective_metric == "mean_f1":
+            _best_str = (
+                f"{best_mean_f1:.3f} (mean_f1)" if best_mean_f1 is not None else "n/a"
+            )
+        else:
+            _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
             f"Val Loss: {_val_loss_str} | "
-            f"Best: {best_loss:.4f}{_f1_str}"
+            f"Best: {_best_str}{_f1_str}"
         )
 
         description += (

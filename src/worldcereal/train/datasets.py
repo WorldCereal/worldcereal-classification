@@ -518,7 +518,10 @@ def _get_normalized_weights(
     """
     w_dict = _stringify_weight_dict(
         get_class_weights(
-            labels, method=method, clip_range=clip_range, normalize=True,
+            labels,
+            method=method,
+            clip_range=clip_range,
+            normalize=True,
             pool_name=pool_name,
         )
     )
@@ -548,9 +551,7 @@ def _get_spatial_density_weights(
     non-empty bin trivially has >=1 sample); values <1 are rejected.
     """
     if min_samples_per_bin < 1:
-        raise ValueError(
-            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
-        )
+        raise ValueError(f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}")
     sp_arr = _get_normalized_weights(
         spatial_bins, method, clip_range, pool_name="spatial-density"
     )
@@ -628,9 +629,7 @@ def _get_per_bin_class_weights(
             f"labels={labels.shape}, bins={bins.shape}"
         )
     if min_samples_per_bin < 1:
-        raise ValueError(
-            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
-        )
+        raise ValueError(f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}")
     if min_samples_per_class_per_bin is None:
         min_samples_per_class_per_bin = max(1, min_samples_per_bin // 10)
     if min_samples_per_class_per_bin < 1:
@@ -641,7 +640,10 @@ def _get_per_bin_class_weights(
 
     global_w_dict = _stringify_weight_dict(
         get_class_weights(
-            labels, method=method, clip_range=None, normalize=True,
+            labels,
+            method=method,
+            clip_range=None,
+            normalize=True,
             pool_name=pool_name,
         )
     )
@@ -684,13 +686,17 @@ def _get_per_bin_class_weights(
         filtered_labels = bin_labels[kept_mask]
         bin_w_dict = _stringify_weight_dict(
             get_class_weights(
-                filtered_labels, method=method,
-                clip_range=None, normalize=True, verbose=False,
+                filtered_labels,
+                method=method,
+                clip_range=None,
+                normalize=True,
+                verbose=False,
             )
         )
         per_sample = np.array(
             [
-                bin_w_dict[str(lbl)] if lbl in well_represented
+                bin_w_dict[str(lbl)]
+                if lbl in well_represented
                 else global_w_dict[str(lbl)]
                 for lbl in bin_labels
             ],
@@ -765,9 +771,7 @@ def _get_smoothed_per_bin_class_weights(
             f"{labels.shape}, {latitudes.shape}, {longitudes.shape}"
         )
     if min_samples_per_bin < 1:
-        raise ValueError(
-            f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}"
-        )
+        raise ValueError(f"min_samples_per_bin must be >= 1, got {min_samples_per_bin}")
     if bin_size <= 0:
         raise ValueError(f"bin_size must be > 0, got {bin_size}")
 
@@ -792,8 +796,15 @@ def _get_smoothed_per_bin_class_weights(
     lon_min, lon_max = int(all_lon_idx.min()), int(all_lon_idx.max())
     grid, class_to_idx, global_w_dict, n_dense_bins, n_total_bins = (
         _build_per_class_weight_grid(
-            str_labels, lat_bin, lon_bin, method, min_samples_per_bin,
-            lat_min, lat_max, lon_min, lon_max,
+            str_labels,
+            lat_bin,
+            lon_bin,
+            method,
+            min_samples_per_bin,
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
             min_samples_per_class_per_bin=min_samples_per_class_per_bin,
             pool_name=pool_name,
         )
@@ -801,16 +812,10 @@ def _get_smoothed_per_bin_class_weights(
     n_lat = grid.shape[1]
     n_lon = grid.shape[2]
 
-    sample_class_idx = np.array(
-        [class_to_idx[c] for c in str_labels], dtype=np.int64
-    )
-    sample_global_w = np.array(
-        [global_w_dict[c] for c in str_labels], dtype=np.float64
-    )
+    sample_class_idx = np.array([class_to_idx[c] for c in str_labels], dtype=np.int64)
+    sample_global_w = np.array([global_w_dict[c] for c in str_labels], dtype=np.float64)
 
-    def _lookup_corner(
-        li_offset: int, lo_offset: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _lookup_corner(li_offset: int, lo_offset: int) -> Tuple[np.ndarray, np.ndarray]:
         gi = u_floor + li_offset - lat_min
         gj = v_floor + lo_offset - lon_min
         in_bounds = (gi >= 0) & (gi < n_lat) & (gj >= 0) & (gj < n_lon)
@@ -869,8 +874,10 @@ def _build_per_class_weight_grid(
     lon_bin: np.ndarray,
     method: str,
     min_samples_per_bin: int,
-    grid_lat_min: int, grid_lat_max: int,
-    grid_lon_min: int, grid_lon_max: int,
+    grid_lat_min: int,
+    grid_lat_max: int,
+    grid_lon_min: int,
+    grid_lon_max: int,
     min_samples_per_class_per_bin: Optional[int] = None,
     pool_name: str = "",
 ) -> Tuple[np.ndarray, Dict[str, int], Dict[str, float], int, int]:
@@ -906,7 +913,10 @@ def _build_per_class_weight_grid(
         kept = bin_labels[np.isin(bin_labels, list(well_represented))]
         bin_weights[(li, lo)] = _stringify_weight_dict(
             get_class_weights(
-                kept, method=method, clip_range=None, normalize=True,
+                kept,
+                method=method,
+                clip_range=None,
+                normalize=True,
                 verbose=False,
             )
         )
@@ -915,7 +925,10 @@ def _build_per_class_weight_grid(
 
     global_w_dict = _stringify_weight_dict(
         get_class_weights(
-            str_labels, method=method, clip_range=None, normalize=True,
+            str_labels,
+            method=method,
+            clip_range=None,
+            normalize=True,
             pool_name=pool_name,
         )
     )
@@ -2076,6 +2089,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
+        class_weight_multipliers: Optional[Mapping[str, float]] = None,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2098,6 +2112,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             min_samples_per_class_per_bin=min_samples_per_class_per_bin,
             num_batches=num_batches,
             generator=generator,
+            class_weight_multipliers=class_weight_multipliers,
         )
 
 
@@ -2170,6 +2185,7 @@ class DualHeadBatchSampler(Sampler):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
+        class_weight_multipliers: Optional[Mapping[str, float]] = None,
     ) -> None:
         import math
 
@@ -2238,7 +2254,10 @@ class DualHeadBatchSampler(Sampler):
                 lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
                 lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
                 lc_class_arr = _get_smoothed_per_bin_class_weights(
-                    lc_labels, lat_arr, lon_arr, spatial_bin_size_degrees,
+                    lc_labels,
+                    lat_arr,
+                    lon_arr,
+                    spatial_bin_size_degrees,
                     method=class_weight_method,
                     clip_range=clip_range,
                     min_samples_per_bin=min_samples_per_bin,
@@ -2277,13 +2296,51 @@ class DualHeadBatchSampler(Sampler):
                 )
         else:
             lc_class_arr = _get_normalized_weights(
-                lc_labels, method=class_weight_method, clip_range=clip_range,
+                lc_labels,
+                method=class_weight_method,
+                clip_range=clip_range,
                 pool_name="LC",
             )
             ct_class_arr = _get_normalized_weights(
-                ct_labels, method=class_weight_method, clip_range=clip_range,
+                ct_labels,
+                method=class_weight_method,
+                clip_range=clip_range,
                 pool_name="CT",
             )
+
+        # ---- Optional per-class weight multipliers (routed to LC or CT by label membership) ----
+        if class_weight_multipliers:
+            lc_label_set = set(lc_labels.tolist())
+            ct_label_set = set(ct_labels.tolist())
+            lc_multipliers: Dict[str, float] = {}
+            ct_multipliers: Dict[str, float] = {}
+            for key, val in class_weight_multipliers.items():
+                found = False
+                if key in lc_label_set:
+                    lc_multipliers[key] = val
+                    found = True
+                if key in ct_label_set:
+                    ct_multipliers[key] = val
+                    found = True
+                if not found:
+                    logger.warning(
+                        f"class_weight_multipliers key '{key}' not found in LC or CT "
+                        "labels; ignoring."
+                    )
+            if lc_multipliers:
+                lc_multiplier_arr = np.array(
+                    [lc_multipliers.get(str(lbl), 1.0) for lbl in lc_labels],
+                    dtype=np.float64,
+                )
+                lc_class_arr = lc_class_arr * lc_multiplier_arr
+                logger.info(f"Applied LC class weight multipliers: {lc_multipliers}")
+            if ct_multipliers:
+                ct_multiplier_arr = np.array(
+                    [ct_multipliers.get(str(lbl), 1.0) for lbl in ct_labels],
+                    dtype=np.float64,
+                )
+                ct_class_arr = ct_class_arr * ct_multiplier_arr
+                logger.info(f"Applied CT class weight multipliers: {ct_multipliers}")
 
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1
@@ -2293,9 +2350,7 @@ class DualHeadBatchSampler(Sampler):
         # means the density factor is skipped. Sparse bins (< min_samples_per_bin)
         # get density weight = 1.0 to prevent singleton bins from blowing up
         # the multiplicative composition.
-        density_applied = (
-            spatial_bins is not None and spatial_weight_method != "none"
-        )
+        density_applied = spatial_bins is not None and spatial_weight_method != "none"
         if density_applied:
             sp_arr = _get_spatial_density_weights(
                 spatial_bins,
