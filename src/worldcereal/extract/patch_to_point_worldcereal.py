@@ -843,78 +843,86 @@ def create_job_dataframe_patch_to_point_worldcereal(
                 )
 
             for orbit, sub_df in orbit_buckets:
-                # Determine S2 tiles (per sub-group so each job has its own upload)
-                logger.info(f"Finding S2 tiles for orbit {orbit} ...")
-                original_crs = sub_df.crs
-                sub_df = sub_df.to_crs(epsg=3857)
-                sub_df["centroid"] = sub_df.geometry.centroid
-
-                sub_df = gpd.sjoin(
-                    sub_df.set_geometry("centroid"),
-                    S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
-                    predicate="intersects",
-                ).drop(columns=["index_right", "centroid"])
-                sub_df = sub_df.set_geometry("geometry").to_crs(original_crs)
-
-                # Set back the valid_time in the geometry as string
-                sub_df["valid_time"] = sub_df.valid_time.dt.strftime("%Y-%m-%d")
-
-                # Add other attributes we want to keep in the result
-                logger.info(
-                    f"Determined start and end date: {row.start_date} - {row.end_date}"
-                )
-                sub_df["start_date"] = row.start_date
-                sub_df["end_date"] = row.end_date
-                sub_df["lat"] = sub_df.geometry.y
-                sub_df["lon"] = sub_df.geometry.x
-
-                # Reset index for certain openEO compatibility
-                sub_df = sub_df.reset_index(drop=True)
-
-                # Upload the geoparquet file to Artifactory
-                logger.info(
-                    f"Deploying geoparquet file ({len(sub_df)} samples, "
-                    f"orbit={orbit}) to Artifactory ..."
-                )
-                collection_suffix = f"{row.epsg}"
-                if split_applied and cell_str is not None:
-                    collection_suffix = f"{collection_suffix}_{cell_str}"
-                if orbit is not None:
-                    collection_suffix = f"{collection_suffix}_{orbit[:3]}"
-
-                url = upload_geoparquet_artifactory(
-                    sub_df, ref_id, collection=collection_suffix
-                )
-
-                # Discover S1 EPSGs for this bucket's samples. When samples
-                # near a UTM-zone boundary have their S1 patch indexed under
-                # an EPSG different from the job's S2 EPSG, the S1 STAC filter
-                # has to accept the union of those EPSGs or those samples lose
-                # their S1 data.
-                s1_epsgs_set: set = set()
+                # Split the orbit bucket by per-sample S1 EPSG so each job
+                # has a single S1 EPSG. This avoids merging S1 cubes across
+                # CRSes within one job (which the openEO backend rejects).
+                # Boundary samples whose S1 patch lives in a UTM zone other
+                # than their S2 patch get their own job; the regular samples
+                # stay in the dominant-S1-EPSG job.
+                bucket_default_s1_epsg = int(row.epsg)
+                sample_s1_epsg_for_bucket: dict = {}
                 for sid in sub_df["sample_id"]:
-                    orbit_map = s1_sample_orbit_epsg.get(sid, {})
-                    if orbit is not None and orbit in orbit_map:
-                        s1_epsgs_set.add(orbit_map[orbit])
-                    else:
-                        s1_epsgs_set.update(orbit_map.values())
-                s1_epsgs_set.discard(None)
-                if not s1_epsgs_set:
-                    s1_epsgs_set.add(int(row.epsg))
-                s1_epsgs_str = ",".join(str(e) for e in sorted(s1_epsgs_set))
-                if s1_epsgs_set != {int(row.epsg)}:
+                    om = s1_sample_orbit_epsg.get(sid, {})
+                    e = om.get(orbit) if orbit is not None else None
+                    sample_s1_epsg_for_bucket[sid] = (
+                        e if e is not None else bucket_default_s1_epsg
+                    )
+                sub_df_with_s1 = sub_df.copy()
+                sub_df_with_s1["__s1_epsg"] = sub_df_with_s1["sample_id"].map(
+                    sample_s1_epsg_for_bucket
+                )
+                s1_epsg_groups = list(sub_df_with_s1.groupby("__s1_epsg"))
+                if len(s1_epsg_groups) > 1:
+                    s1_summary = ", ".join(
+                        f"S1={int(e)}:{len(g)}" for e, g in s1_epsg_groups
+                    )
                     logger.info(
-                        f"{cell_label} (orbit={orbit}): S1 patches span EPSGs "
-                        f"{sorted(s1_epsgs_set)}; S2 job EPSG is {row.epsg}. "
-                        "S1 STAC filter will accept the union."
+                        f"{cell_label} orbit={orbit}: splitting by S1 EPSG -> "
+                        f"{len(s1_epsg_groups)} job(s) ({s1_summary})"
                     )
 
-                job_row_dict = row.to_dict()
-                job_row_dict["h3l3_cell"] = h3l3_cell_value
-                job_row_dict["orbit_state"] = orbit
-                job_row_dict["geometry_url"] = url
-                job_row_dict["s1_epsgs"] = s1_epsgs_str
-                final_rows.append(job_row_dict)
+                for s1_epsg_int, s1_group_df in s1_epsg_groups:
+                    s1_epsg_int = int(s1_epsg_int)
+                    s1_sub_df = s1_group_df.drop(columns=["__s1_epsg"]).copy()
+
+                    # Determine S2 tiles (per sub-group so each job has its own upload)
+                    logger.info(
+                        f"Finding S2 tiles for orbit={orbit}, S1 EPSG={s1_epsg_int} "
+                        f"({len(s1_sub_df)} samples) ..."
+                    )
+                    original_crs = s1_sub_df.crs
+                    s1_sub_df = s1_sub_df.to_crs(epsg=3857)
+                    s1_sub_df["centroid"] = s1_sub_df.geometry.centroid
+
+                    s1_sub_df = gpd.sjoin(
+                        s1_sub_df.set_geometry("centroid"),
+                        S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
+                        predicate="intersects",
+                    ).drop(columns=["index_right", "centroid"])
+                    s1_sub_df = s1_sub_df.set_geometry("geometry").to_crs(original_crs)
+
+                    # Set back the valid_time in the geometry as string
+                    s1_sub_df["valid_time"] = s1_sub_df.valid_time.dt.strftime("%Y-%m-%d")
+
+                    s1_sub_df["start_date"] = row.start_date
+                    s1_sub_df["end_date"] = row.end_date
+                    s1_sub_df["lat"] = s1_sub_df.geometry.y
+                    s1_sub_df["lon"] = s1_sub_df.geometry.x
+
+                    s1_sub_df = s1_sub_df.reset_index(drop=True)
+
+                    collection_suffix = f"{row.epsg}"
+                    if split_applied and cell_str is not None:
+                        collection_suffix = f"{collection_suffix}_{cell_str}"
+                    if orbit is not None:
+                        collection_suffix = f"{collection_suffix}_{orbit[:3]}"
+                    if s1_epsg_int != int(row.epsg):
+                        collection_suffix = f"{collection_suffix}_S1{s1_epsg_int}"
+
+                    logger.info(
+                        f"Deploying geoparquet file ({len(s1_sub_df)} samples, "
+                        f"orbit={orbit}, S1 EPSG={s1_epsg_int}) to Artifactory ..."
+                    )
+                    url = upload_geoparquet_artifactory(
+                        s1_sub_df, ref_id, collection=collection_suffix
+                    )
+
+                    job_row_dict = row.to_dict()
+                    job_row_dict["h3l3_cell"] = h3l3_cell_value
+                    job_row_dict["orbit_state"] = orbit
+                    job_row_dict["geometry_url"] = url
+                    job_row_dict["s1_epsgs"] = str(s1_epsg_int)
+                    final_rows.append(job_row_dict)
 
     final_job_df = pd.DataFrame(final_rows)
     if final_job_df.empty:
@@ -1099,31 +1107,37 @@ def worldcereal_preprocessed_inputs_from_patches(
     # string like "EPSG:32634" for new-style `proj:code`.
     epsg_filter_value = f"EPSG:{epsg}" if epsg_property == "proj:code" else epsg
 
-    # Decide whether to scope the S1 STAC query by EPSG. The openEO backend's
-    # property filter only supports {eq, lte, gte, array_contains}, so when
-    # this job needs S1 patches from multiple UTM zones (boundary samples),
-    # we drop the EPSG filter altogether and rely on resample_spatial below
-    # to bring everything into the target EPSG before merging with S2.
-    s1_epsg_values = sorted(set(s1_epsgs)) if s1_epsgs else [epsg]
-    multi_s1_epsg = len(s1_epsg_values) > 1
-    single_s1_epsg_value = (
-        f"EPSG:{s1_epsg_values[0]}" if epsg_property == "proj:code" else s1_epsg_values[0]
+    # Each job is constrained to a single S1 EPSG (jobs are split by S1 EPSG
+    # at the job-dataframe stage). For boundary samples whose S1 patch lives
+    # in a different UTM zone than their S2 patch, the loaded S1 cube is
+    # resampled into the job's target EPSG so the subsequent merge with S2
+    # stays within a single CRS.
+    s1_epsg_value = s1_epsgs[0] if s1_epsgs else epsg
+    s1_epsg_filter_value = (
+        f"EPSG:{s1_epsg_value}" if epsg_property == "proj:code" else s1_epsg_value
     )
 
-    # TODO: move preprocessing to separate functions 'preprocess_cube_x(cube: openeo.DataCube) -> openeo.DataCube' which will be the same across the different extraction workflows
     s1_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
+        epsg_property: lambda x, _v=s1_epsg_filter_value: eq(x, _v),
         "sat:orbit_state": lambda x: eq(x, s1_orbit_state),
     }
-    if not multi_s1_epsg:
-        s1_stac_property_filter[epsg_property] = (
-            lambda x, _v=single_s1_epsg_value: eq(x, _v)
-        )
 
     s2_stac_property_filter = {
         "ref_id": lambda x: eq(x, ref_id),
         epsg_property: lambda x: eq(x, epsg_filter_value),
     }
+
+    # Load S2 first so it can be used as the alignment target for any S1
+    # cube that has to be reprojected from a different UTM zone (boundary
+    # samples). Keeping the masking/compositing steps below the S1 block
+    # preserves the original ordering of derived cubes.
+    s2_raw = connection.load_stac(
+        url=STAC_ENDPOINT_S2,
+        properties=s2_stac_property_filter,
+        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
+        bands=S2_BANDS,
+    ).filter_bands(S2_BANDS_SELECTED)
 
     if s1_orbit_state is not None:
         s1_raw = connection.load_stac(
@@ -1133,24 +1147,17 @@ def worldcereal_preprocessed_inputs_from_patches(
             bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
         )
         s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
-        if multi_s1_epsg:
-            # Patches loaded from multiple UTM zones must be reprojected onto a
-            # single CRS before merge_cubes with S2 (which lives in `epsg`).
-            s1_raw = s1_raw.resample_spatial(
-                resolution=10.0, projection=epsg, method="bilinear"
-            )
         s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
         s1 = mean_compositing(s1, period=period)
         s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
+        if s1_epsg_value != epsg:
+            # Align the foreign-zone S1 cube to the S2 grid (CRS + layout) so
+            # aggregate_spatial samples both cubes at the same physical point.
+            # Plain resample_spatial(projection=epsg) was leaving the S1 grid
+            # offset from S2's, causing 0 values at the sample points.
+            s1 = s1.resample_cube_spatial(target=s2_raw, method="near")
     else:
         logger.warning("No S1 orbit state provided, S1 extraction will be disabled.")
-
-    s2_raw = connection.load_stac(
-        url=STAC_ENDPOINT_S2,
-        properties=s2_stac_property_filter,
-        temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
-        bands=S2_BANDS,
-    ).filter_bands(S2_BANDS_SELECTED)
 
     def optimized_mask_precomputed(input: ProcessBuilder):
         """
