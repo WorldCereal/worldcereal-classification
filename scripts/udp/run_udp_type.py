@@ -27,6 +27,19 @@ orbit_state = "DESCENDING"  # "ASCENDING" or "DESCENDING"
 season_ids = ["tc-s1"]
 season_windows = {"tc-s1": ("2020-12-01", "2021-07-31")}
 
+##########
+# Optional parameters that can be used to override the defaults in the UDP.
+##########
+# seasonal_model_zip = "http_link_to_custom_presto_backbone_model.zip"
+# landcover_head_zip = "http_link_to_custom_landcover_head.zip"
+# croptype_head_zip = "http_link_to_custom_croptype_head.zip"
+# enable_cropland_head = True # Set to False to disable the landcover head and only run the croptype head.
+# mask_cropland = True # Set to False to disable masking of the croptype predictions based on the cropland predictions.
+# postprocess_method_cropland = "majority_vote" # or "smooth_probabilities"
+# postprocess_kernel_size_cropland = 3 # Must be an odd integer not larger than 25.
+# postprocess_method_croptype = "majority_vote" # or "smooth_probabilities"
+# postprocess_kernel_size_croptype = 3 # Must be an odd integer not larger than 25.
+###########
 
 # -------------------------------------------------------------------------------
 # CREATE OPENEO PROCESS GRAPH FROM UDP AND RUN IT
@@ -41,7 +54,16 @@ inference_cube = c.datacube_from_process(
     temporal_extent=temporal_extent,
     orbit_state=orbit_state,
     season_ids=season_ids,
-    season_windows=season_windows
+    season_windows=season_windows,
+    # seasonal_model_zip=seasonal_model_zip,
+    # landcover_head_zip=landcover_head_zip,
+    # croptype_head_zip=croptype_head_zip,
+    # enable_cropland_head=enable_cropland_head,
+    # mask_cropland=mask_cropland,
+    # postprocess_method_cropland=postprocess_method_cropland,
+    # postprocess_kernel_size_cropland=postprocess_kernel_size_cropland,
+    # postprocess_method_croptype=postprocess_method_croptype,
+    # postprocess_kernel_size_croptype=postprocess_kernel_size_croptype,
 )
 
 

@@ -24,8 +24,17 @@ temporal_extent = ["2020-11-01", "2021-10-31"]
 
 orbit_state = "DESCENDING"  # "ASCENDING" or "DESCENDING"
 
-season_ids = ["tc-s1"]
-season_windows = {"tc-s1": ("2020-12-01", "2021-07-31")}
+season_ids = ["2021"]
+season_windows = {"2021": ("2020-12-01", "2021-07-31")}
+
+##########
+# Optional parameters that can be used to override the defaults in the UDP.
+##########
+# seasonal_model_zip = "http_link_to_custom_presto_backbone_model.zip"
+# landcover_head_zip = "http_link_to_custom_landcover_head.zip"
+# postprocess_method = "majority_vote" # or "smooth_probabilities"
+# postprocess_kernel_size = 3 # Must be an odd integer not larger than 25.
+###########
 
 # -------------------------------------------------------------------------------
 # CREATE OPENEO PROCESS GRAPH FROM UDP AND RUN IT
@@ -41,6 +50,10 @@ inference_cube = c.datacube_from_process(
     orbit_state=orbit_state,
     season_ids=season_ids,
     season_windows=season_windows,
+    # seasonal_model_zip=seasonal_model_zip,
+    # landcover_head_zip=landcover_head_zip,
+    # postprocess_method=postprocess_method,
+    # postprocess_kernel_size=postprocess_kernel_size,
 )
 
 
