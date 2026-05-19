@@ -17,7 +17,7 @@ DEFAULT_POSTPROCESS_SECTION: Dict[str, Dict[str, Any]] = {
     "cropland": {
         "enabled": False,
         "method": "majority_vote",
-        "kernel_size": 5,
+        "kernel_size": 3,
     },
     "croptype": {
         "enabled": False,
