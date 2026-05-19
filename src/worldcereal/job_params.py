@@ -287,10 +287,14 @@ def resolve_job_params(
     poll_sleep_default = 60
     backend_context_default = BackendContext(Backend.CDSE)
 
+    # Keep explicit None for grid_size (e.g. --grid_size none) to skip tiling,
+    # while still defaulting to 20 when the key is omitted.
+    grid_size = params["grid_size"] if "grid_size" in params else grid_size_default
+
     resolved: Dict[str, Any] = {
         "aoi_gdf": aoi_gdf,
         "output_dir": output_dir,
-        "grid_size": _with_default(params.get("grid_size"), grid_size_default),
+        "grid_size": grid_size,
         "temporal_extent": params.get("temporal_extent"),
         "year": params.get("year"),
         "s1_orbit_state": params.get("s1_orbit_state"),

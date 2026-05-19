@@ -121,6 +121,12 @@ def _validate_classification_flags(
     return enable_cropland_head, enable_croptype_head, enforce_cropland_gate
 
 
+def _parse_optional_int(value: str) -> Optional[int]:
+    if value.lower() == "none":
+        return None
+    return int(value)
+
+
 def main(task: WorldCerealTask, params: WorldCerealJobParams) -> None:
     run_worldcereal_task(task, dict(params))
 
@@ -160,9 +166,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--grid_size",
-        type=int,
+        type=_parse_optional_int,
         default=20,
-        help="Tile size in kilometers for splitting AOIs. If not specified, the original AOI geometries will be used.",
+        help="Tile size in kilometers for splitting AOIs. Use 'none' to use original geometries.",
     )
     parser.add_argument(
         "--start_date",
