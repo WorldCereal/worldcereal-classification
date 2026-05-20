@@ -792,7 +792,9 @@
                       "landcover_head_zip": {
                         "from_parameter": "landcover_head_zip"
                       },
-                      "croptype_head_zip": null,
+                      "croptype_head_zip": {
+                        "from_parameter": "croptype_head_zip"
+                      },
                       "export_embeddings": false,
                       "enable_cropland_head": {
                         "from_parameter": "enable_cropland_head"
@@ -1086,7 +1088,7 @@
         ]
       },
       "optional": true,
-      "default": 5
+      "default": 3
     },
     {
       "name": "postprocess_method_croptype",
@@ -1130,6 +1132,15 @@
     {
       "name": "landcover_head_zip",
       "description": "Custom land cover classification head to be applied.",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "croptype_head_zip",
+      "description": "Custom crop type classification head to be applied.",
       "schema": {
         "type": "string"
       },

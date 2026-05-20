@@ -277,6 +277,20 @@ def replace_landcover_head_zip(
         for item in obj:
             replace_landcover_head_zip(item, target_landcover_head_zip)
 
+def replace_croptype_head_zip(
+    obj,
+    target_croptype_head_zip=None,
+):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "croptype_head_zip" and value == target_croptype_head_zip:
+                obj[key] = {"from_parameter": "croptype_head_zip"}
+            else:
+                replace_croptype_head_zip(value, target_croptype_head_zip)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_croptype_head_zip(item, target_croptype_head_zip)
+
 def replace_mask_cropland(
     obj,
     target_mask_cropland=True,
@@ -408,6 +422,13 @@ def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_type.json")
         default=None
     )
 
+    croptype_head_zip_param = Parameter.string(
+        "croptype_head_zip",
+        description="Custom crop type classification head to be applied.",
+        optional=True,
+        default=None
+    )
+
     enable_cropland_head_param = Parameter.boolean(
         "enable_cropland_head",
         description="Whether to generate a cropland product or not.",
@@ -439,6 +460,7 @@ def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_type.json")
             postprocess_kernel_size_croptype_param,
             seasonal_model_zip_param,
             landcover_head_zip_param,
+            croptype_head_zip_param,
             enable_cropland_head_param,
             mask_cropland_param,
         ],
@@ -456,6 +478,7 @@ def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_type.json")
     replace_kernel_size_croptype(spec)
     replace_seasonal_model_zip(spec)
     replace_landcover_head_zip(spec)
+    replace_croptype_head_zip(spec)
     replace_mask_cropland(spec)
     replace_enable_cropland_head(spec)
     remove_filter_bands(spec)
