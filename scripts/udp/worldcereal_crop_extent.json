@@ -830,9 +830,7 @@
                         "method": {
                           "from_parameter": "postprocess_method"
                         },
-                        "kernel_size": {
-                          "from_parameter": "postprocess_kernel_size"
-                        }
+                        "kernel_size": 5
                       }
                     }
                   },
@@ -1083,7 +1081,7 @@
         ]
       },
       "optional": true,
-      "default": 5
+      "default": 3
     },
     {
       "name": "seasonal_model_zip",
@@ -1092,7 +1090,7 @@
         "type": "string"
       },
       "optional": true,
-      "default": "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip"
+      "default": "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/WorldCerealPresto-NoSpatialGlobalMLP-month-augment=True-balance=TruePerBin-SpatialBin5.0deg-timeexplicit=True-masking=enabled-ema0.2-clamp=0.2-8.0-run=202605192112.zip"
     },
     {
       "name": "landcover_head_zip",

@@ -5,11 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
-DEFAULT_SEASONAL_MODEL_URL = (
-    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
-    "presto-prometheo-dualtask-SeasonalMultiTaskLoss-month-augment=True-"
-    "balance=True-timeexplicit=True-masking=enabled-run=202601240103.zip"
-)
+DEFAULT_SEASONAL_MODEL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/WorldCerealPresto-NoSpatialGlobalMLP-month-augment=True-balance=TruePerBin-SpatialBin5.0deg-timeexplicit=True-masking=enabled-ema0.2-clamp=0.2-8.0-run=202605192112.zip"
+
 
 DEFAULT_SEASONAL_WORKFLOW_PRESET = "phase_ii_multitask"
 
