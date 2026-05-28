@@ -129,7 +129,7 @@ class WorldCerealMapProductionParams(WorldCerealJobParams, total=False):
         Override croptype head enablement.
     croptype_head_zip : Optional[str]
         Optional override for the croptype head artifact.
-    enforce_cropland_gate : Optional[bool]
+    mask_cropland : Optional[bool]
         Mask croptype outputs using cropland predictions.
     export_class_probs : Optional[bool]
         Export per-class probabilities in outputs.
@@ -161,7 +161,7 @@ class WorldCerealMapProductionParams(WorldCerealJobParams, total=False):
     landcover_head_zip: Optional[str]
     enable_croptype_head: Optional[bool]
     croptype_head_zip: Optional[str]
-    enforce_cropland_gate: Optional[bool]
+    mask_cropland: Optional[bool]
     export_class_probs: Optional[bool]
     enable_cropland_postprocess: Optional[bool]
     cropland_postprocess_method: Optional[
@@ -231,14 +231,18 @@ def build_workflow_config_from_params(
     product_type = _normalize_product_type(resolved["product_type"])
     enable_cropland_head = resolved.get("enable_cropland_head")
     enable_croptype_head = resolved.get("enable_croptype_head")
-    enforce_cropland_gate = resolved.get("enforce_cropland_gate")
+    mask_cropland = resolved.get("mask_cropland")
 
     if product_type.value == "cropland":
         enable_cropland_head = True
         enable_croptype_head = False
-        enforce_cropland_gate = False
+        mask_cropland = False
     else:
         enable_croptype_head = True
+        # For croptype products, mask_cropland defaults to True unless
+        # explicitly overridden by the caller.
+        if mask_cropland is None:
+            mask_cropland = True
 
     season_ids, season_windows = _season_windows_from_specifications(
         resolved.get("season_specifications")
@@ -247,7 +251,7 @@ def build_workflow_config_from_params(
     return build_config_from_params(
         enable_cropland_head=enable_cropland_head,
         enable_croptype_head=enable_croptype_head,
-        enforce_cropland_gate=enforce_cropland_gate,
+        mask_cropland=mask_cropland,
         croptype_head_zip=resolved.get("croptype_head_zip"),
         landcover_head_zip=resolved.get("landcover_head_zip"),
         seasonal_model_zip=resolved.get("seasonal_model_zip"),
@@ -352,7 +356,7 @@ def resolve_job_params(
         resolved["landcover_head_zip"] = params.get("landcover_head_zip")
         resolved["enable_croptype_head"] = params.get("enable_croptype_head")
         resolved["croptype_head_zip"] = params.get("croptype_head_zip")
-        resolved["enforce_cropland_gate"] = params.get("enforce_cropland_gate")
+        resolved["mask_cropland"] = params.get("mask_cropland")
         resolved["export_class_probs"] = params.get("export_class_probs")
         resolved["enable_cropland_postprocess"] = params.get(
             "enable_cropland_postprocess"
@@ -461,7 +465,7 @@ def build_job_params_from_args(
     product_type: Optional[WorldCerealProductType] = None,
     enable_cropland_head: Optional[bool] = None,
     enable_croptype_head: Optional[bool] = None,
-    enforce_cropland_gate: Optional[bool] = None,
+    mask_cropland: Optional[bool] = None,
 ) -> WorldCerealJobParams:
     """Build workflow params from CLI args for the selected job type."""
     base_params: WorldCerealJobParams = {
@@ -512,7 +516,7 @@ def build_job_params_from_args(
             "landcover_head_zip": args.landcover_head_zip,
             "enable_croptype_head": enable_croptype_head,
             "croptype_head_zip": args.croptype_head_zip,
-            "enforce_cropland_gate": enforce_cropland_gate,
+            "mask_cropland": mask_cropland,
             "enable_cropland_postprocess": args.enable_cropland_postprocess,
             "cropland_postprocess_method": args.cropland_postprocess_method,
             "cropland_postprocess_kernel_size": args.cropland_postprocess_kernel_size,

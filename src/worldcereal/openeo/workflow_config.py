@@ -18,7 +18,7 @@ def build_config_from_params(
     seasonal_model_zip: Optional[str] = None,
     enable_cropland_head: Optional[bool] = None,
     enable_croptype_head: Optional[bool] = None,
-    enforce_cropland_gate: Optional[bool] = None,
+    mask_cropland: Optional[bool] = None,
     export_class_probabilities: Optional[bool] = None,
     season_ids: Optional[Sequence[str]] = None,
     season_windows: Optional[SeasonWindowMapping] = None,
@@ -50,8 +50,8 @@ def build_config_from_params(
         workflow_builder.enable_cropland_head(enable_cropland_head)
     if enable_croptype_head is not None:
         workflow_builder.enable_croptype_head(enable_croptype_head)
-    if enforce_cropland_gate is not None:
-        workflow_builder.enforce_cropland_gate(enforce_cropland_gate)
+    if mask_cropland is not None:
+        workflow_builder.mask_cropland(mask_cropland)
     if export_class_probabilities is not None:
         workflow_builder.export_class_probabilities(export_class_probabilities)
     if season_ids is not None:
@@ -72,13 +72,21 @@ def build_config_from_params(
         workflow_builder.cropland_postprocess(
             enabled=enable_cropland_postprocess,
             method=cropland_postprocess_method if enable_cropland_postprocess else None,
-            kernel_size=cropland_postprocess_kernel_size if enable_cropland_postprocess else None,
+            kernel_size=(
+                cropland_postprocess_kernel_size
+                if enable_cropland_postprocess
+                else None
+            ),
         )
     if enable_croptype_postprocess is not None:
         workflow_builder.croptype_postprocess(
             enabled=enable_croptype_postprocess,
             method=croptype_postprocess_method if enable_croptype_postprocess else None,
-            kernel_size=croptype_postprocess_kernel_size if enable_croptype_postprocess else None,
+            kernel_size=(
+                croptype_postprocess_kernel_size
+                if enable_croptype_postprocess
+                else None
+            ),
         )
     if export_embeddings is not None:
         workflow_builder.export_embeddings(export_embeddings)
@@ -150,7 +158,7 @@ class SeasonSection:
     season_windows: Optional[SeasonWindowMapping] = None
     season_masks: Optional[Sequence[Any]] = None
     composite_frequency: Optional[str] = None
-    enforce_cropland_gate: Optional[bool] = None
+    mask_cropland: Optional[bool] = None
     export_class_probabilities: Optional[bool] = None
     merge_classification_products: Optional[bool] = None
 
@@ -164,8 +172,8 @@ class SeasonSection:
             data["season_masks"] = self.season_masks
         if self.composite_frequency is not None:
             data["composite_frequency"] = self.composite_frequency
-        if self.enforce_cropland_gate is not None:
-            data["enforce_cropland_gate"] = self.enforce_cropland_gate
+        if self.mask_cropland is not None:
+            data["mask_cropland"] = self.mask_cropland
         if self.export_class_probabilities is not None:
             data["export_class_probabilities"] = self.export_class_probabilities
         if self.merge_classification_products is not None:
@@ -281,10 +289,8 @@ class WorldCerealWorkflowConfigBuilder:
         self.season.export_class_probabilities = bool(enabled)
         return self
 
-    def enforce_cropland_gate(
-        self, enabled: bool = True
-    ) -> "WorldCerealWorkflowConfigBuilder":
-        self.season.enforce_cropland_gate = bool(enabled)
+    def mask_cropland(self, enabled: bool = True) -> "WorldCerealWorkflowConfigBuilder":
+        self.season.mask_cropland = bool(enabled)
         return self
 
     def season_ids(self, ids: Sequence[str]) -> "WorldCerealWorkflowConfigBuilder":
@@ -374,8 +380,8 @@ class WorldCerealWorkflowConfigBuilder:
         return self
 
     def build(self) -> WorldCerealWorkflowConfig:
-        if self.season.enforce_cropland_gate:
-            # Cropland gating relies on the cropland head outputs, so force-enable it.
+        if self.season.mask_cropland:
+            # Cropland masking relies on the cropland head outputs, so force-enable it.
             if self.model.enable_cropland_head is not True:
                 self.model.enable_cropland_head = True
         model = self.model if self.model.to_dict() else None

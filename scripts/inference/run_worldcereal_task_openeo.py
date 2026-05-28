@@ -91,11 +91,6 @@ def _validate_classification_flags(
         raise ValueError(
             "Choose only one of --enable-croptype-head or --disable-croptype-head."
         )
-    if args.enforce_cropland_gate and args.disable_cropland_gate:
-        raise ValueError(
-            "Choose only one of --enforce-cropland-gate or --disable-cropland-gate."
-        )
-
     enable_cropland_head = (
         True
         if args.enable_cropland_head
@@ -106,11 +101,9 @@ def _validate_classification_flags(
         if args.enable_croptype_head
         else False if args.disable_croptype_head else None
     )
-    enforce_cropland_gate = (
-        True
-        if args.enforce_cropland_gate
-        else False if args.disable_cropland_gate else None
-    )
+    # mask_cropland=True when flag is present; None otherwise (default is
+    # product-type-dependent and resolved in build_workflow_config_from_params).
+    mask_cropland = True if args.mask_cropland else None
 
     if args.class_probabilities and (not enable_croptype_head):
         raise ValueError(
@@ -118,7 +111,7 @@ def _validate_classification_flags(
             "classification. Enable the croptype head to use it."
         )
 
-    return enable_cropland_head, enable_croptype_head, enforce_cropland_gate
+    return enable_cropland_head, enable_croptype_head, mask_cropland
 
 
 def _parse_optional_int(value: str) -> Optional[int]:
@@ -320,14 +313,9 @@ if __name__ == "__main__":
         help="Path to .zip file of a croptype head override.",
     )
     parser.add_argument(
-        "--enforce-cropland-gate",
+        "--mask-cropland",
         action="store_true",
-        help="Force enable the cropland gate for croptype outputs.",
-    )
-    parser.add_argument(
-        "--disable-cropland-gate",
-        action="store_true",
-        help="Force disable the cropland gate for croptype outputs.",
+        help="Force enable cropland masking for croptype outputs (default: True for croptype, False for cropland).",
     )
     parser.add_argument(
         "--enable-cropland-postprocess",
@@ -504,7 +492,7 @@ if __name__ == "__main__":
     product_type = None
     enable_cropland_head = None
     enable_croptype_head = None
-    enforce_cropland_gate = None
+    mask_cropland = None
     season_specifications = None
 
     if task == WorldCerealTask.EMBEDDINGS:
@@ -520,7 +508,7 @@ if __name__ == "__main__":
         if not args.product:
             raise ValueError("--product is required when --task=classification.")
         product_type = WorldCerealProductType(args.product)
-        enable_cropland_head, enable_croptype_head, enforce_cropland_gate = (
+        enable_cropland_head, enable_croptype_head, mask_cropland = (
             _validate_classification_flags(args)
         )
         season_specifications = _load_season_specifications(args)
@@ -535,7 +523,7 @@ if __name__ == "__main__":
         product_type=product_type,
         enable_cropland_head=enable_cropland_head,
         enable_croptype_head=enable_croptype_head,
-        enforce_cropland_gate=enforce_cropland_gate,
+        mask_cropland=mask_cropland,
         embeddings_parameters=embeddings_parameters,
         scale_uint16=scale_uint16,
     )

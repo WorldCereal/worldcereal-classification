@@ -145,8 +145,7 @@ def subset_ds_temporally(
     selected = None
     if wrap:
         expected = [
-            pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
-            for m in months
+            pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1)) for m in months
         ]
     else:
         expected = [pd.Timestamp(datetime(y, m, 1)) for m in months]
@@ -347,7 +346,7 @@ def run_seasonal_inference(
     export_class_probabilities: bool = False,
     enable_cropland_head: bool = True,
     enable_croptype_head: bool = True,
-    enforce_cropland_gate: bool = True,
+    mask_cropland: bool = True,
     batch_size: int = 2048,
     cache_root: Optional[Path] = None,
     device: str = "cpu",
@@ -443,7 +442,7 @@ def run_seasonal_inference(
         epsg=epsg,
         season_windows=season_windows,
         season_ids=season_ids,
-        enforce_cropland_gate=enforce_cropland_gate,
+        mask_cropland=mask_cropland,
     )
 
     if as_dataset and isinstance(result, xr.DataArray):
