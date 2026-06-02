@@ -319,6 +319,17 @@ def replace_enable_cropland_head(
         for item in obj:
             replace_enable_cropland_head(item, target_enable_cropland_head)
 
+def replace_filename_prefix(obj, target_filename_prefix="cropland-croptype_2020-11-01_2021-10-31"):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "filename_prefix" and value == target_filename_prefix:
+                obj[key] = "worldcereal_crop_type"
+            else:
+                replace_filename_prefix(value, target_filename_prefix)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_filename_prefix(item, target_filename_prefix)
+
 def remove_filter_bands(obj: dict):
     obj["process_graph"].pop("filterbands1", None)
     obj["process_graph"]["apply5"]["arguments"]["data"]["from_node"] = "reducedimension3"
@@ -481,6 +492,7 @@ def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_type.json")
     replace_croptype_head_zip(spec)
     replace_mask_cropland(spec)
     replace_enable_cropland_head(spec)
+    replace_filename_prefix(spec)
     remove_filter_bands(spec)
 
     if path_to_udp_json is not None:

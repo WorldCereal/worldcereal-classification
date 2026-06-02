@@ -915,7 +915,7 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "cropland_2020-11-01_2021-10-31"
+          "filename_prefix": "worldcereal_crop_extent"
         }
       },
       "result": true
