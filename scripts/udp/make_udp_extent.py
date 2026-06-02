@@ -237,6 +237,17 @@ def replace_kernel_size(obj, target_kernel_size=CROPLAND_DEFAULTS["kernel_size"]
         for item in obj:
             replace_kernel_size(item, target_kernel_size)
 
+def replace_filename_prefix(obj, target_filename_prefix="cropland_2020-11-01_2021-10-31"):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "filename_prefix" and value == target_filename_prefix:
+                obj[key] = "worldcereal_crop_extent"
+            else:
+                replace_filename_prefix(value, target_filename_prefix)
+    elif isinstance(obj, list):
+        for item in obj:
+            replace_filename_prefix(item, target_filename_prefix)
+
 def remove_filter_bands(obj: dict):
     obj["process_graph"].pop("filterbands1", None)
     obj["process_graph"]["apply5"]["arguments"]["data"]["from_node"] = "reducedimension3"
@@ -347,6 +358,7 @@ def main(path_to_udp_json: Optional[Path] = Path("./worldcereal_crop_extent.json
     replace_landcover_head_zip(spec)
     replace_postprocess_method(spec)
     replace_kernel_size(spec)
+    replace_filename_prefix(spec)
     remove_filter_bands(spec)
 
     if path_to_udp_json is not None:

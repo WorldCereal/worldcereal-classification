@@ -922,7 +922,7 @@
         },
         "format": "GTiff",
         "options": {
-          "filename_prefix": "cropland-croptype_2020-11-01_2021-10-31"
+          "filename_prefix": "worldcereal_crop_type"
         }
       },
       "result": true
