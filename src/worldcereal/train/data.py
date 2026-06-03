@@ -1171,6 +1171,10 @@ def get_training_dfs_from_parquet(
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
+    if force_recompute_regions and "region" in df.columns:
+        logger.info("force_recompute_regions=True: dropping existing 'region' column to trigger full recomputation.")
+        df = df.drop(columns=["region"])
+
     normalized_regions = _normalize_region_filter(region_filter)
     if normalized_regions is not None:
         logger.info(f"Region filter requested: {normalized_regions}")
@@ -1182,8 +1186,8 @@ def get_training_dfs_from_parquet(
         ).str.strip().eq("")
     else:
         region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
-    # only if region_missing_mask has more than 10 missings, or forced
-    redo_regions = force_recompute_regions or (region_missing_mask.sum() > 10)
+    # only if region_missing_mask has more than 10 missings
+    redo_regions = True if region_missing_mask.sum() > 10 else False
     should_enrich_regions = redo_regions and (
         existing_wide_parquet or normalized_regions is not None
     )
