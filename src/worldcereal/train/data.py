@@ -924,6 +924,7 @@ def get_training_dfs_from_parquet(
     debug: bool = False,
     overwrite: bool = False,
     wide_parquet_output_path: Optional[Union[Path, str]] = None,
+    force_recompute_regions: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -1181,8 +1182,8 @@ def get_training_dfs_from_parquet(
         ).str.strip().eq("")
     else:
         region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
-    # only if region_missing_mask has more than 10 missings
-    redo_regions = True if region_missing_mask.sum() > 10 else False
+    # only if region_missing_mask has more than 10 missings, or forced
+    redo_regions = force_recompute_regions or (region_missing_mask.sum() > 10)
     should_enrich_regions = redo_regions and (
         existing_wide_parquet or normalized_regions is not None
     )
