@@ -2089,7 +2089,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
-        class_weight_multipliers: Optional[Mapping[str, float]] = None,
+        class_weight_multipliers: Optional[Mapping[str, Any]] = None,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2114,6 +2114,36 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             generator=generator,
             class_weight_multipliers=class_weight_multipliers,
         )
+
+
+def _normalize_class_weight_multipliers(
+    mults: Optional[Mapping[str, Any]],
+) -> Dict[str, Dict[str, float]]:
+    """Accept per-class OR per-region multipliers; return canonical form.
+
+    - Per-class:  ``{"soy_soybeans": 0.6, "fibre_crops": 0.6}``
+      → wrapped as ``{"*": {"soy_soybeans": 0.6, "fibre_crops": 0.6}}``
+    - Per-region: ``{"Eastern Asia": {"temporary_crops": 1.5}, ...}``
+      → returned as-is (with all values coerced to float).
+    - Hybrid via "*": ``{"*": {...defaults...}, "Eastern Asia": {...overrides...}}``
+      → works naturally; lookup precedence is region-specific then wildcard "*".
+
+    Mixed (some top-level values dicts, others scalars) is rejected.
+    """
+    if not mults:
+        return {}
+    values_are_dicts = [isinstance(v, Mapping) for v in mults.values()]
+    if all(values_are_dicts):
+        return {
+            str(reg): {str(c): float(w) for c, w in cmults.items()}
+            for reg, cmults in mults.items()
+        }
+    if not any(values_are_dicts):
+        return {"*": {str(c): float(w) for c, w in mults.items()}}
+    raise ValueError(
+        "class_weight_multipliers must be either per-class (class→float) "
+        "or per-region (region→{class→float}), not mixed."
+    )
 
 
 class DualHeadBatchSampler(Sampler):
@@ -2185,7 +2215,7 @@ class DualHeadBatchSampler(Sampler):
         min_samples_per_class_per_bin: Optional[int] = None,
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
-        class_weight_multipliers: Optional[Mapping[str, float]] = None,
+        class_weight_multipliers: Optional[Mapping[str, Any]] = None,
     ) -> None:
         import math
 
@@ -2308,39 +2338,65 @@ class DualHeadBatchSampler(Sampler):
                 pool_name="CT",
             )
 
-        # ---- Optional per-class weight multipliers (routed to LC or CT by label membership) ----
+        # ---- Optional class weight multipliers (per-class or per-region) ----
+        # Accepts either {class: float} (legacy) or {region: {class: float}}.
+        # Wildcard region "*" applies to all regions; region-specific entries take
+        # precedence over the wildcard. Routed to LC or CT pool by label membership.
         if class_weight_multipliers:
+            mults_canonical = _normalize_class_weight_multipliers(
+                class_weight_multipliers
+            )
             lc_label_set = set(lc_labels.tolist())
             ct_label_set = set(ct_labels.tolist())
-            lc_multipliers: Dict[str, float] = {}
-            ct_multipliers: Dict[str, float] = {}
-            for key, val in class_weight_multipliers.items():
-                found = False
-                if key in lc_label_set:
-                    lc_multipliers[key] = val
-                    found = True
-                if key in ct_label_set:
-                    ct_multipliers[key] = val
-                    found = True
-                if not found:
-                    logger.warning(
-                        f"class_weight_multipliers key '{key}' not found in LC or CT "
-                        "labels; ignoring."
-                    )
-            if lc_multipliers:
-                lc_multiplier_arr = np.array(
-                    [lc_multipliers.get(str(lbl), 1.0) for lbl in lc_labels],
+            has_region = "region" in dataframe.columns
+            lc_regions = (
+                dataframe["region"].astype(str).to_numpy() if has_region else None
+            )
+            ct_regions = lc_regions[ct_real_indices] if has_region else None
+            wildcard = mults_canonical.get("*", {})
+
+            def _lookup(reg: Optional[str], lbl: str) -> float:
+                if reg is not None:
+                    reg_dict = mults_canonical.get(reg)
+                    if reg_dict is not None and lbl in reg_dict:
+                        return reg_dict[lbl]
+                return wildcard.get(lbl, 1.0)
+
+            def _apply(regions, labels, label_set, class_arr, pool_name):
+                regs_iter = regions if regions is not None else [None] * len(labels)
+                mult_arr = np.array(
+                    [_lookup(r, l) for r, l in zip(regs_iter, labels)],
                     dtype=np.float64,
                 )
-                lc_class_arr = lc_class_arr * lc_multiplier_arr
-                logger.info(f"Applied LC class weight multipliers: {lc_multipliers}")
-            if ct_multipliers:
-                ct_multiplier_arr = np.array(
-                    [ct_multipliers.get(str(lbl), 1.0) for lbl in ct_labels],
-                    dtype=np.float64,
+                if np.allclose(mult_arr, 1.0):
+                    return class_arr
+                # Surface only the (region, class) entries that hit this pool.
+                applied = {
+                    reg: {c: w for c, w in cmults.items() if c in label_set}
+                    for reg, cmults in mults_canonical.items()
+                }
+                applied = {k: v for k, v in applied.items() if v}
+                logger.info(
+                    f"Applied {pool_name} class weight multipliers: {applied}"
                 )
-                ct_class_arr = ct_class_arr * ct_multiplier_arr
-                logger.info(f"Applied CT class weight multipliers: {ct_multipliers}")
+                return class_arr * mult_arr
+
+            lc_class_arr = _apply(
+                lc_regions, lc_labels, lc_label_set, lc_class_arr, "LC"
+            )
+            ct_class_arr = _apply(
+                ct_regions, ct_labels, ct_label_set, ct_class_arr, "CT"
+            )
+
+            # Warn once about classes that don't appear in either pool.
+            all_labels = lc_label_set | ct_label_set
+            for reg, cmults in mults_canonical.items():
+                for c in cmults:
+                    if c not in all_labels:
+                        logger.warning(
+                            f"class_weight_multipliers[{reg!r}][{c!r}] not found "
+                            "in LC or CT labels; ignoring."
+                        )
 
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1

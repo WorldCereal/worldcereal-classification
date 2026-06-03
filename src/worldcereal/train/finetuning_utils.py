@@ -563,7 +563,7 @@ def plot_spatial_predictions(
     output_path: Path,
     *,
     title: Optional[str] = None,
-    min_count: int = 3,
+    min_count: int = 6,
 ) -> None:
     """Save a hexbin accuracy map showing local model performance spatially.
 
@@ -618,9 +618,9 @@ def plot_spatial_predictions(
     # wins; a floor of 10 prevents degenerate 1×1 grids on tiny datasets.
     lon_span = x_max - x_min
     lat_span = y_max - y_min
-    gridsize_geo = int((lon_span * 1.5 * lat_span * 1.5) ** 0.4)
+    gridsize_geo = int((lon_span * 2.0 * lat_span * 2.0) ** 0.4)
     gridsize_density = int((n_total / max(min_count, 1)) ** 0.4)
-    gridsize = max(10, min(220, gridsize_geo, gridsize_density))
+    gridsize = max(10, min(300, gridsize_geo, gridsize_density))
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
@@ -682,7 +682,8 @@ def plot_spatial_predictions(
     plot_title = title or task_name
     ax.set_title(
         f"{plot_title}  |  n={n_total:,}  |  global accuracy={acc:.3f}  "
-        f"(hex grid={gridsize}, min_count={min_count})"
+        f"(hex grid={gridsize}, min_count={min_count})",
+        fontsize=14,
     )
     plt.tight_layout()
 
@@ -2449,16 +2450,17 @@ def run_finetuning(
                         seasonal_gate_rejections / total_attempts
                     )
 
-            _log_regional_metrics(
-                seasonal_landcover_records,
-                f"[val epoch {epoch + 1}] landcover",
-                seasonal_loss.landcover_classes if seasonal_loss is not None else None,
-            )
-            _log_regional_metrics(
-                seasonal_croptype_records,
-                f"[val epoch {epoch + 1}] croptype",
-                seasonal_loss.croptype_classes if seasonal_loss is not None else None,
-            )
+            # Regional metrics logging suppressed during validation loop; only logged for eval/test.
+            # _log_regional_metrics(
+            #     seasonal_landcover_records,
+            #     f"[val epoch {epoch + 1}] landcover",
+            #     seasonal_loss.landcover_classes if seasonal_loss is not None else None,
+            # )
+            # _log_regional_metrics(
+            #     seasonal_croptype_records,
+            #     f"[val epoch {epoch + 1}] croptype",
+            #     seasonal_loss.croptype_classes if seasonal_loss is not None else None,
+            # )
 
             _spatial_eval_dir = (
                 Path(output_dir) / "intermediate_evals" / "spatial_evals"
