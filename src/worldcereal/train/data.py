@@ -1248,8 +1248,10 @@ def get_training_dfs_from_parquet(
             if region.casefold() not in available_regions
         ]
         if missing_regions:
-            logger.warning(
-                f"Requested regions not present in the dataset: {missing_regions}"
+            available_sorted = sorted(r for r in available_regions if r)
+            raise ValueError(
+                f"Requested region(s) not found in the dataset: {missing_regions}. "
+                f"Available regions: {available_sorted}"
             )
         filtered = df.loc[mask].copy()
         if filtered.empty:
