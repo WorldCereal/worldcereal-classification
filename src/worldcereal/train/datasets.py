@@ -2352,7 +2352,7 @@ class DualHeadBatchSampler(Sampler):
             lc_regions = (
                 dataframe["region"].astype(str).to_numpy() if has_region else None
             )
-            ct_regions = lc_regions[ct_real_indices] if has_region else None
+            ct_regions = lc_regions[ct_real_indices] if lc_regions is not None else None
             wildcard = mults_canonical.get("*", {})
 
             def _lookup(reg: Optional[str], lbl: str) -> float:
