@@ -2365,7 +2365,7 @@ class DualHeadBatchSampler(Sampler):
             def _apply(regions, labels, label_set, class_arr, pool_name):
                 regs_iter = regions if regions is not None else [None] * len(labels)
                 mult_arr = np.array(
-                    [_lookup(r, l) for r, l in zip(regs_iter, labels)],
+                    [_lookup(r, lbl) for r, lbl in zip(regs_iter, labels)],
                     dtype=np.float64,
                 )
                 if np.allclose(mult_arr, 1.0):
