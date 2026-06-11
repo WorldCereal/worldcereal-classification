@@ -924,6 +924,7 @@ def get_training_dfs_from_parquet(
     debug: bool = False,
     overwrite: bool = False,
     wide_parquet_output_path: Optional[Union[Path, str]] = None,
+    force_recompute_regions: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -1170,6 +1171,10 @@ def get_training_dfs_from_parquet(
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
+    if force_recompute_regions and "region" in df.columns:
+        logger.info("force_recompute_regions=True: dropping existing 'region' column to trigger full recomputation.")
+        df = df.drop(columns=["region"])
+
     normalized_regions = _normalize_region_filter(region_filter)
     if normalized_regions is not None:
         logger.info(f"Region filter requested: {normalized_regions}")
@@ -1243,8 +1248,10 @@ def get_training_dfs_from_parquet(
             if region.casefold() not in available_regions
         ]
         if missing_regions:
-            logger.warning(
-                f"Requested regions not present in the dataset: {missing_regions}"
+            available_sorted = sorted(r for r in available_regions if r)
+            raise ValueError(
+                f"Requested region(s) not found in the dataset: {missing_regions}. "
+                f"Available regions: {available_sorted}"
             )
         filtered = df.loc[mask].copy()
         if filtered.empty:

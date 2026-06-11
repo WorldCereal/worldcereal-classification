@@ -54,7 +54,7 @@ def _load_array_bounds_latlon(
             arr = src.read(window=window, boundless=boundless, fill_value=nodata_value)
             arr = arr.astype(
                 np.float32
-            )  # needed reprojecting with bilinear resampling  # noqa:e501
+            )  # needed reprojecting with bilinear resampling  # noqa: E501
 
             if nodata_value is not None:
                 arr[arr == nodata_value] = fill_value
