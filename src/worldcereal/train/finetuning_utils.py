@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover
     SummaryWriter = None  # type: ignore[misc,assignment]
 from tqdm.auto import tqdm
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.data import collate_fn
 from worldcereal.train.datasets import (
     SensorMaskingConfig,
@@ -46,6 +47,389 @@ from worldcereal.train.datasets import (
 from worldcereal.train.seasonal_head import SeasonalHeadOutput
 
 ValidationImprovementCallback = Callable[[int, torch.nn.Module, float], None]
+
+
+def _series_from_column(
+    df: pd.DataFrame, column: Optional[str], default: float = 1.0
+) -> pd.Series:
+    """Return a numeric Series from *column*, falling back to *default*.
+
+    If *column* is ``None`` or absent from *df*, a constant Series filled
+    with *default* is returned so that downstream arithmetic (e.g.
+    multiplicative sample weighting) always has a valid operand.
+    """
+    if column and column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce").fillna(default).astype(float)
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _normalize_score(series: pd.Series) -> pd.Series:
+    """Rescale 0-100 integer scores to 0-1 and clip to [0, 1].
+
+    Uses a threshold of 1.5 to distinguish genuine 0-100 encoded scores
+    from values already in [0, 1] that may slightly exceed 1.0 due to
+    floating-point noise.  The final clip handles any residual overshoot.
+    """
+    if series.max() > 1.5:
+        series = series / 100.0
+    return series.clip(0.0, 1.0)
+
+
+def attach_sample_weights(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_score_col: str,
+    outlier_score_col: str,
+    outlier_flag_col: str,
+    outlier_drop_mode: Literal[
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
+    ],
+    output_col: str,
+) -> pd.DataFrame:
+    """Compute and attach a per-sample weight column to *df*.
+
+    The final weight is the element-wise product of three independent factors,
+    each in ``[0, 1]``, clipped to that range after multiplication:
+
+        weight = quality_score × outlier_score × outlier_flag_mask
+
+    **quality_score** – read from *quality_score_col*; reflects annotation
+    confidence.  Scores on the 0–100 integer scale are automatically
+    rescaled to ``[0, 1]``.  Missing column → defaults to 1.0 (no effect).
+
+    **outlier_score** – read from *outlier_score_col*; a continuous confidence
+    score produced by the outlier-detection pipeline.  Same scale handling as
+    quality_score.  Missing column → defaults to 1.0.
+
+    **outlier_flag_mask** – a hard binary gate derived from *outlier_flag_col*
+    and *outlier_drop_mode* via :func:`identify_true_outliers`.  Samples
+    whose flag exceeds the chosen severity threshold receive 0; all others
+    receive 1.  Missing column → all samples treated as clean (mask = 1).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input split DataFrame.  Must contain a ``sample_id`` column when
+        *outlier_flag_col* is present.
+    split_name : str
+        Human-readable name of the split (e.g. ``"train"``, ``"val"``);
+        used only for log messages.
+    quality_score_col : str
+        Column holding the annotation quality score.  Pass an absent name to
+        disable quality-based down-weighting.
+    outlier_score_col : str
+        Column holding the continuous outlier confidence score.  Pass an
+        absent name to disable score-based down-weighting.
+    outlier_flag_col : str
+        Column holding categorical outlier flags (e.g.
+        ``"normal"``, ``"candidate"``, ``"suspect"``, ``"flagged"``).
+        Pass an absent name to disable hard outlier gating.
+    outlier_drop_mode : str
+        Severity threshold forwarded to :func:`identify_true_outliers`.
+        One of ``"keep"``, ``"drop_candidate"``, ``"drop_suspect"``, or
+        ``"drop_flagged"``.
+    output_col : str
+        Name of the new weight column written to the returned DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of *df* with *output_col* added.  The original DataFrame is
+        never modified in-place.  Weight stats (min / max / mean) are logged
+        at ``INFO`` level.
+    """
+    quality = _normalize_score(_series_from_column(df, quality_score_col, default=1.0))
+    outlier = _normalize_score(_series_from_column(df, outlier_score_col, default=1.0))
+    zero_outlier_weights = (
+        ~identify_true_outliers(df, split_name, outlier_flag_col, outlier_drop_mode)
+    ).astype(float)  # Invert to get 1 for non-outliers, 0 for outliers
+    combined = (quality * outlier * zero_outlier_weights).clip(0.0, 1.0)
+
+    updated = df.copy()
+    updated[output_col] = combined
+
+    # Log percentage of zero weights and stats on non-zero weights
+    zero_mask = combined == 0.0
+    pct_zero = 100 * zero_mask.sum() / len(combined)
+    non_zero = combined[~zero_mask]
+
+    if len(non_zero) == 0:
+        raise ValueError(
+            f"{split_name}: all sample weights are 0.0 for {output_col}. "
+            "Cannot proceed with training - check quality scores, outlier scores, "
+            "and outlier drop settings."
+        )
+
+    stats = {
+        "pct_zero": f"{pct_zero:.1f}%",
+        "non_zero_min": float(non_zero.min()),
+        "non_zero_max": float(non_zero.max()),
+        "non_zero_mean": float(non_zero.mean()),
+    }
+
+    logger.info(f"{split_name} {output_col} stats: {stats}")
+    return updated
+
+
+def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy ``quality_score_lc`` → ``quality_score_ct`` for LC-only datasets.
+
+    LC-only datasets (``ref_id`` ending in ``_100`` or ``_101``) have
+    ``quality_score_ct`` set to 0 by design — there is no crop-type
+    annotation to score.  When training a downstream croptype head that
+    includes a nocrop class, those samples would otherwise receive a
+    weight of 0 and be silently discarded from val/test filtering,
+    despite carrying valid landcover quality information.
+
+    This patch replaces the sentinel 0 with the landcover quality score
+    for those datasets only.  CT-dataset samples (``_110``) whose
+    ``quality_score_ct`` is 0 due to e.g. an OSM road intersection are
+    intentionally left untouched.
+    """
+    if "ref_id" not in df.columns or "quality_score_lc" not in df.columns:
+        return df
+    if "quality_score_ct" not in df.columns:
+        return df
+    is_lc_dataset = df["ref_id"].str.contains(r"_10[01]$", regex=True)
+    n_patched = int(is_lc_dataset.sum())
+    if n_patched:
+        logger.info(
+            f"Patching quality_score_ct → quality_score_lc for "
+            f"{n_patched} LC-only samples (ref_id ending _100/_101)."
+        )
+        df = df.copy()
+        df.loc[is_lc_dataset, "quality_score_ct"] = df.loc[
+            is_lc_dataset, "quality_score_lc"
+        ]
+    return df
+
+
+def identify_true_outliers(
+    df: pd.DataFrame,
+    split_name: str,
+    outlier_col: str = OUTLIER_COLUMNS["LC_outlier_flag"],
+    drop_level: Literal[
+        "keep", "drop_candidate", "drop_suspect", "drop_flagged"
+    ] = "drop_candidate",
+) -> pd.Series:
+    """Identify samples flagged as outliers from a split dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing sample records.
+    split_name : str
+        Name of the split (e.g., 'train', 'val', 'test') for logging purposes.
+    outlier_col : str, optional
+        Column name containing outlier flags. Default is the LC outlier column.
+    drop_level : {'keep', 'drop_candidate', 'drop_suspect', 'drop_flagged'}
+        Controls which flag values are considered outliers:
+
+        - ``'keep'`` – no samples are considered outliers.
+        - ``'drop_candidate'`` – only samples labelled ``'candidate'``.
+        - ``'drop_suspect'`` – samples labelled ``'candidate'`` or ``'suspect'``.
+        - ``'drop_flagged'`` – all of the above plus ``'flagged'``.
+
+    Returns
+    -------
+    pd.Series
+        Boolean Series with ``False`` for non-outlier samples and ``True`` for outliers.
+    """
+    if drop_level == "keep":
+        logger.info(
+            f"Outlier drop mode set to 'keep'; no samples will be treated as outliers in {split_name} split."
+        )
+        return pd.Series(False, index=df.index, dtype=bool)
+
+    if outlier_col not in df.columns:
+        logger.warning(
+            f"Outlier drop requested but '{outlier_col}' column is missing in {split_name} split."
+        )
+        return pd.Series(False, index=df.index, dtype=bool)
+
+    if drop_level == "drop_candidate":
+        outliers = df[df[outlier_col] == "candidate"]["sample_id"].tolist()
+    elif drop_level == "drop_suspect":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect"])][
+            "sample_id"
+        ].tolist()
+    elif drop_level == "drop_flagged":
+        outliers = df[df[outlier_col].isin(["candidate", "suspect", "flagged"])][
+            "sample_id"
+        ].tolist()
+    else:
+        raise ValueError(
+            f"Invalid drop_level '{drop_level}'; must be one of ['drop_candidate', 'drop_suspect', 'drop_flagged']"
+        )
+
+    if len(outliers) > 0:
+        logger.warning(
+            f"Identified {len(outliers)} samples from {split_name} split "
+            f"with outlier categories <= '{drop_level}'"
+        )
+    else:
+        logger.info(
+            f"No samples identified from {split_name} split for outlier level '{drop_level}'."
+        )
+    return df["sample_id"].isin(outliers)
+
+
+def drop_zero_quality_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    quality_cols: Sequence[str],
+) -> pd.DataFrame:
+    """Hard-exclude samples where *all* quality scores are exactly 0.
+
+    Samples with only one score at 0 (e.g. landcover-only datasets with
+    ``quality_score_ct == 0``) are kept — the non-zero score is sufficient
+    for the relevant task head.
+
+    A quality score of 0 across the board typically indicates a
+    fundamentally bad sample (e.g. road intersection) that should never
+    contribute to training.
+    """
+    if df.empty:
+        return df
+
+    present_cols = [col for col in quality_cols if col in df.columns]
+    if not present_cols:
+        logger.info(
+            f"{split_name}: no quality columns found ({quality_cols}); "
+            "skipping zero-quality exclusion."
+        )
+        return df
+
+    # Drop only when ALL quality scores are 0.
+    # fillna(1.0): treat missing scores as "not zero" so a NaN alone
+    # never causes a sample to be dropped — only explicit zeroes count.
+    all_zero = pd.Series(True, index=df.index)
+    for col in present_cols:
+        scores = pd.to_numeric(df[col], errors="coerce").fillna(1.0)
+        all_zero = all_zero & (scores == 0.0)
+
+    n_dropped = int(all_zero.sum())
+    if n_dropped > 0:
+        logger.warning(
+            f"{split_name}: dropping {n_dropped} samples where all quality "
+            f"scores are zero in columns {present_cols}."
+        )
+        df = df[~all_zero].copy()
+    else:
+        logger.info(f"{split_name}: no samples with all-zero quality scores found.")
+    return df
+
+
+def filter_low_weight_eval_samples(
+    df: pd.DataFrame,
+    split_name: str,
+    *,
+    weight_cols: Sequence[str] = ("sample_weight_lc", "sample_weight_ct"),
+    hard_floor: float = 0.5,
+    percentile: float = 20.0,
+    min_class_samples: int = 10,
+    label_columns: Sequence[str] = ("landcover_label", "croptype_label"),
+) -> pd.DataFrame:
+    """Remove low-quality samples from val/test using a hybrid filter.
+
+    A sample is *marked for removal* when **both** conditions hold:
+      1. Its combined weight is below the ``percentile``-th percentile
+         within its ref_id  (relatively bad within its dataset).
+      2. Its combined weight is below ``hard_floor``
+         (absolutely bad by a global standard).
+
+    Before actually removing, a **class safety net** ensures that no
+    label in ``label_columns`` drops below ``min_class_samples``.
+    """
+    if df.empty:
+        return df
+
+    present_weight_cols = [c for c in weight_cols if c in df.columns]
+    if not present_weight_cols:
+        logger.info(
+            f"{split_name}: weight columns {list(weight_cols)} not found; "
+            "skipping low-weight eval filtering."
+        )
+        return df
+
+    # Combined weight = minimum across task-specific weights
+    w = df[present_weight_cols].min(axis=1)
+
+    # Per-ref_id percentile threshold
+    pct_threshold = (
+        df.assign(_w=w)
+        .groupby("ref_id")["_w"]
+        .transform(lambda s: np.percentile(s, percentile))
+    )
+
+    # Mark: relatively bad AND absolutely bad
+    remove_mask = (w < pct_threshold) & (w < hard_floor)
+
+    # Class safety net: protect classes that would drop below min_class_samples
+    present_label_cols = [c for c in label_columns if c in df.columns]
+    if present_label_cols and remove_mask.any():
+        protected = pd.Series(False, index=df.index)
+        for label_col in present_label_cols:
+            labels = df[label_col].dropna()
+            remaining_counts = df.loc[
+                ~remove_mask & df[label_col].notna(), label_col
+            ].value_counts()
+            for cls_name in labels.unique():
+                if remaining_counts.get(cls_name, 0) < min_class_samples:
+                    # Protect all samples of this class from removal
+                    class_mask = (df[label_col] == cls_name) & remove_mask
+                    n_protected = int(class_mask.sum())
+                    if n_protected > 0:
+                        protected = protected | class_mask
+                        logger.warning(
+                            f"{split_name}: protecting {n_protected} sample(s) "
+                            f"of class '{cls_name}' (col={label_col}) from removal "
+                            f"to keep >= {min_class_samples} samples."
+                        )
+        remove_mask = remove_mask & ~protected
+
+    n_removed = int(remove_mask.sum())
+    if n_removed == 0:
+        logger.info(
+            f"{split_name}: no samples removed by low-weight eval filter "
+            f"(floor={hard_floor}, pct={percentile})."
+        )
+        return df
+
+    # --- Detailed logging ---
+    removed_df = df[remove_mask]
+    logger.warning(
+        f"{split_name}: removing {n_removed}/{len(df)} samples "
+        f"({100 * n_removed / len(df):.1f}%) with low combined weight "
+        f"(floor={hard_floor}, percentile={percentile})."
+    )
+
+    # Per-ref_id breakdown
+    ref_counts = removed_df["ref_id"].value_counts().sort_values(ascending=False)
+    champion_ref = ref_counts.index[0]
+    champion_count = int(ref_counts.iloc[0])
+    logger.warning(
+        f"{split_name}: top ref_id for removals: '{champion_ref}' "
+        f"({champion_count} samples). "
+        f"Total ref_ids affected: {len(ref_counts)}."
+    )
+    # Log up to top 15 ref_ids
+    top_refs = ref_counts.head(15)
+    logger.warning(
+        f"{split_name}: per-ref_id removal counts (top 15):\n" + top_refs.to_string()
+    )
+
+    # Weight distribution of removed samples
+    removed_weights = w[remove_mask]
+    logger.info(
+        f"{split_name}: removed samples weight stats: "
+        f"min={removed_weights.min():.4f}, "
+        f"max={removed_weights.max():.4f}, "
+        f"mean={removed_weights.mean():.4f}, "
+        f"median={removed_weights.median():.4f}"
+    )
+
+    return df[~remove_mask].copy()
 
 
 def _compute_metrics_from_records(
@@ -108,6 +492,205 @@ def _records_to_scalar_metrics(records: List[dict]) -> dict[str, float]:
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"Failed computing seasonal metrics: {exc}")
         return {}
+
+
+def _log_regional_metrics(
+    records: List[dict],
+    task_name: str,
+    class_names: Optional[List[str]] = None,
+) -> None:
+    """Log per-region macro F1 summary derived from prediction records.
+
+    Groups records by the ``region`` field and logs a sorted table of
+    macro-averaged precision, recall and F1 per region so that training
+    logs reveal which regions are doing better or worse each epoch.
+    Silently returns when no region information is present.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    if "region" not in df.columns or df["region"].isna().all():
+        logger.debug(
+            f"{task_name}: no region information available; skipping regional metrics."
+        )
+        return
+
+    region_col = df["region"].fillna("unknown")
+    regions = sorted(region_col.unique())
+
+    # Skip when all labels collapsed to a single bucket or everything is "unknown"
+    # — the regional breakdown adds no information over the global metrics in that case.
+    meaningful_regions = [r for r in regions if r != "unknown"]
+    if len(meaningful_regions) <= 1:
+        logger.debug(
+            f"{task_name}: only {len(meaningful_regions)} meaningful region(s) "
+            f"({regions}); skipping regional metrics."
+        )
+        return
+
+    row_list = []
+    for region in regions:
+        mask = region_col == region
+        region_df = df[mask]
+        y_true = region_df["target_class"].tolist()
+        y_pred = region_df["pred_class"].tolist()
+        labels = list(class_names) if class_names else None
+        report = classification_report(
+            y_true, y_pred, labels=labels, output_dict=True, zero_division=0
+        )
+        macro = report.get("macro avg", {})
+        row_list.append(
+            {
+                "region": region,
+                "n_samples": len(region_df),
+                "macro_f1": macro.get("f1-score", float("nan")),
+                "macro_prec": macro.get("precision", float("nan")),
+                "macro_recall": macro.get("recall", float("nan")),
+            }
+        )
+    if not row_list:
+        return
+    summary_df = pd.DataFrame(row_list).sort_values("macro_f1", ascending=False)
+    logger.info(
+        f"{task_name} regional metrics ({len(row_list)} regions):\n"
+        + summary_df.to_string(index=False, float_format="{:.3f}".format)
+    )
+
+
+def plot_spatial_predictions(
+    records: List[dict],
+    task_name: str,
+    output_path: Path,
+    *,
+    title: Optional[str] = None,
+    min_count: int = 6,
+) -> None:
+    """Save a hexbin accuracy map showing local model performance spatially.
+
+    Points are binned into a hexagonal grid; each hexagon is coloured by the
+    fraction of correct predictions within it (red = 0 %, green = 100 %).
+    Hexagons with fewer than *min_count* points are hidden so isolated pixels
+    don't mislead.  The map is zoomed to the actual point extent with padding,
+    so regional runs produce a useful close-up rather than an empty globe.
+
+    ``matplotlib.hexbin`` with ``reduce_C_function=np.mean`` runs in a single
+    vectorised call and handles >500 k points in well under a second.
+    """
+    if not records:
+        return
+    df = pd.DataFrame(records)
+    df = df.dropna(subset=["lat", "lon"])
+    if df.empty:
+        logger.debug(
+            f"{task_name}: no lat/lon coordinates in records; skipping spatial plot."
+        )
+        return
+
+    n_total = len(df)
+    acc = float(df["correct"].mean())
+
+    # Compute padded extent from actual point locations
+    lon_min, lon_max = df["lon"].min(), df["lon"].max()
+    lat_min, lat_max = df["lat"].min(), df["lat"].max()
+    lon_pad = max((lon_max - lon_min) * 0.08, 1.0)
+    lat_pad = max((lat_max - lat_min) * 0.08, 1.0)
+    x_min = max(lon_min - lon_pad, -180)
+    x_max = min(lon_max + lon_pad, 180)
+    y_min = max(lat_min - lat_pad, -90)
+    y_max = min(lat_max + lat_pad, 90)
+
+    # Scale figure width to the aspect ratio of the zoom window
+    aspect = (x_max - x_min) / max(y_max - y_min, 0.01)
+    fig_h = 9.0
+    fig_w = min(max(fig_h * aspect, 6.0), 22.0)
+
+    # Choose hexbin grid size that balances geographic resolution with point
+    # density.  Two independent limits are computed and the smaller is used:
+    #
+    #   1. Geography limit – scales with the extent so global maps get finer
+    #      grids than small regional tiles.
+    #   2. Density limit – sqrt(n / min_count) ensures the *average* hex has at
+    #      least min_count points, preventing the common failure mode where a
+    #      small regional run with few samples produces an almost all-grey map
+    #      because every cell falls below the threshold.
+    #
+    # The two limits are combined with min() so whichever is more restrictive
+    # wins; a floor of 10 prevents degenerate 1×1 grids on tiny datasets.
+    lon_span = x_max - x_min
+    lat_span = y_max - y_min
+    gridsize_geo = int((lon_span * 2.0 * lat_span * 2.0) ** 0.4)
+    gridsize_density = int((n_total / max(min_count, 1)) ** 0.4)
+    gridsize = max(10, min(300, gridsize_geo, gridsize_density))
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    # World background (geopandas naturalearth, optional)
+    try:
+        import geopandas as gpd  # noqa: PLC0415
+
+        world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+        world.plot(ax=ax, color="#e8e8e8", edgecolor="white", linewidth=0.3, zorder=1)
+    except Exception:  # noqa: BLE001
+        ax.set_facecolor("#ddeeff")
+
+    # Grey underlay: show all hexagons that have at least 1 point but fewer than
+    # min_count, so sparse cells appear as grey rather than invisible.
+    ax.hexbin(
+        df["lon"],
+        df["lat"],
+        gridsize=gridsize,
+        extent=(x_min, x_max, y_min, y_max),
+        cmap="Greys",
+        vmin=0,
+        vmax=1,
+        mincnt=1,
+        linewidths=0.0,
+        alpha=0.35,
+        zorder=2,
+    )
+
+    # Hexbin: each cell coloured by mean(correct) in [0, 1] → red–yellow–green
+    # Only drawn for cells with >= min_count points; sparse cells show as grey above.
+    hb = ax.hexbin(
+        df["lon"],
+        df["lat"],
+        C=df["correct"].values.astype(float),
+        reduce_C_function=np.mean,
+        gridsize=gridsize,
+        extent=(x_min, x_max, y_min, y_max),
+        cmap="RdYlGn",
+        vmin=0.0,
+        vmax=1.0,
+        mincnt=min_count,
+        linewidths=0.0,
+        zorder=3,
+    )
+    logger.info(
+        f"{task_name}: plotted spatial hexbin with gridsize={gridsize}, min_count={min_count}, "
+        f"accuracy={acc:.3f}, n={n_total}"
+    )
+
+    cb = fig.colorbar(hb, ax=ax, fraction=0.025, pad=0.02)
+    cb.set_label("Local accuracy", fontsize=9)
+    cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    cb.set_ticklabels(["0 %", "25 %", "50 %", "75 %", "100 %"])
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    plot_title = title or task_name
+    ax.set_title(
+        f"{plot_title}  |  n={n_total:,}  |  global accuracy={acc:.3f}  "
+        f"(hex grid={gridsize}, min_count={min_count})",
+        fontsize=14,
+    )
+    plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"Saved spatial accuracy map ({task_name}) → {output_path}")
 
 
 def build_confusion_matrix_figure(
@@ -640,6 +1223,7 @@ def prepare_training_datasets(
     train_min_season_coverage: float = 0.5,
     eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
+    season_windows: Optional[Mapping] = None,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -698,6 +1282,10 @@ def prepare_training_datasets(
         Season identifiers for crop-type supervision (e.g. ``("tc-s1", "tc-s2")``
         or ``("annual",)``).  When ``None`` the dataset falls back to
         ``GLOBAL_SEASON_IDS``.
+    season_windows : Optional[Mapping], default=None
+        Explicit season windows mapping season name to a ``(start, end)``
+        datetime-like tuple.  Mutually exclusive with ``season_ids``—pass one
+        or the other but never both.
 
     Returns
     -------
@@ -719,6 +1307,7 @@ def prepare_training_datasets(
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -735,6 +1324,7 @@ def prepare_training_datasets(
         label_window=0,  # No windowing for validation
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -751,6 +1341,7 @@ def prepare_training_datasets(
         label_window=0,  # No windowing for testing
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
+        season_windows=season_windows,
     )
     return train_ds, val_ds, test_ds
 
@@ -766,6 +1357,7 @@ def evaluate_finetuned_model(
     seasonal_landcover_classes: Optional[List[str]] = None,
     seasonal_croptype_classes: Optional[List[str]] = None,
     cropland_class_names: Optional[Sequence[str]] = None,
+    weight_threshold: float = 0.0,
 ) -> Union[dict, Tuple[pd.DataFrame, Figure, Figure]]:
     """Evaluate a fine-tuned model on a labelled dataset and report metrics.
 
@@ -793,6 +1385,12 @@ def evaluate_finetuned_model(
     cropland_class_names : Optional[Sequence[str]]
         Optional list of class names that should trigger cropland gating during
         seasonal evaluation.
+    weight_threshold : float, default 0.0
+        Samples whose task weight is at or below this value are excluded from
+        metrics.  For seasonal heads ``sample_weight_lc`` gates landcover
+        records and ``sample_weight_ct`` gates crop-type records independently.
+        For standard (non-seasonal) heads the minimum of both available weight
+        columns is used; samples at or below the threshold are skipped.
 
     Returns
     -------
@@ -813,11 +1411,14 @@ def evaluate_finetuned_model(
     finetuned_model.eval()
 
     # Construct the dataloader
+    # Cap workers at 4: inference is bottlenecked on the forward pass in the
+    # main process,
+    eval_num_workers = min(num_workers, 4)
     val_dl = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,  # keep as False!
-        num_workers=num_workers,
+        num_workers=eval_num_workers,
         collate_fn=collate_fn,
     )
     assert isinstance(val_dl.sampler, torch.utils.data.SequentialSampler)
@@ -831,7 +1432,8 @@ def evaluate_finetuned_model(
     seasonal_croptype_records: List[dict[str, Any]] = []
     croptype_gate_rejections = 0
 
-    for batch in val_dl:
+    logger.info("Starting evaluation loop ...")
+    for batch in tqdm(val_dl, desc="Evaluating", leave=False):
         predictors, attrs = _unpack_predictor_batch(batch)
         with torch.no_grad():
             model_output = _forward_with_optional_attrs(
@@ -851,6 +1453,8 @@ def evaluate_finetuned_model(
                     seasonal_landcover_classes,
                     seasonal_croptype_classes,
                     cropland_class_names=cropland_class_names,
+                    lc_weight_threshold=weight_threshold,
+                    ct_weight_threshold=weight_threshold,
                 )
                 seasonal_landcover_records.extend(batch_summary["landcover"])
                 seasonal_croptype_records.extend(batch_summary["croptype"])
@@ -858,6 +1462,16 @@ def evaluate_finetuned_model(
                 seasonal_mode = True
                 continue
             targets = predictors.label.cpu().numpy().astype(int)
+
+            # Exclude samples whose combined task weight is at or below
+            # weight_threshold before computing any metrics.
+            _wm = _compute_weight_mask(
+                attrs or {}, n_samples=targets.shape[0], threshold=weight_threshold
+            )
+            if not _wm.all():
+                _wm_t = torch.as_tensor(_wm, device=model_output.device)
+                model_output = model_output[_wm_t]
+                targets = targets[_wm]
 
             if test_ds.task_type == "binary":
                 probs = torch.sigmoid(model_output).cpu().numpy()
@@ -908,6 +1522,12 @@ def evaluate_finetuned_model(
         croptype_df, croptype_cm, croptype_cm_norm = _compute_metrics_from_records(
             seasonal_croptype_records, seasonal_croptype_classes
         )
+        _log_regional_metrics(
+            seasonal_landcover_records, "landcover", seasonal_landcover_classes
+        )
+        _log_regional_metrics(
+            seasonal_croptype_records, "croptype", seasonal_croptype_classes
+        )
         if croptype_gate_rejections:
             rejection_row = pd.DataFrame(
                 [
@@ -929,6 +1549,7 @@ def evaluate_finetuned_model(
                 "cm_norm": landcover_cm_norm,
                 "classes": seasonal_landcover_classes,
                 "num_samples": len(seasonal_landcover_records),
+                "records": seasonal_landcover_records,
             },
             "croptype": {
                 "results": croptype_df,
@@ -937,6 +1558,7 @@ def evaluate_finetuned_model(
                 "classes": seasonal_croptype_classes,
                 "num_samples": len(seasonal_croptype_records),
                 "gate_rejections": croptype_gate_rejections,
+                "records": seasonal_croptype_records,
             },
         }
 
@@ -1142,6 +1764,33 @@ def _ensure_list(value, expected_len: int, fill=None) -> List:
     return result
 
 
+def _compute_weight_mask(
+    attrs: dict,
+    n_samples: int,
+    threshold: float = 0.0,
+) -> np.ndarray:
+    """Return a boolean array of shape *(n_samples,)* marking valid samples.
+
+    A sample is considered valid when its combined sample weight is *strictly
+    above* ``threshold``.  The combined weight is the element-wise minimum of
+    ``sample_weight_lc`` and ``sample_weight_ct``, whichever keys are present
+    in *attrs*.  When neither key is present all samples are considered valid
+    (mask of all ``True``).
+    """
+    weights = np.ones(n_samples, dtype=float)
+    for key in ("sample_weight_lc", "sample_weight_ct"):
+        val = attrs.get(key)
+        if val is None:
+            continue
+        if torch.is_tensor(val):
+            w = val.detach().cpu().numpy().flatten().astype(float)
+        else:
+            w = np.asarray(val, dtype=float).flatten()
+        if w.shape[0] == n_samples:
+            weights = np.minimum(weights, w)
+    return weights > threshold
+
+
 def _select_representative_season(
     output: SeasonalHeadOutput,
     attrs: dict,
@@ -1226,6 +1875,8 @@ def summarize_seasonal_predictions(
     landcover_task_name: str = "landcover",
     croptype_task_name: str = "croptype",
     enforce_cropland_gate: bool = False,
+    lc_weight_threshold: float = 0.0,
+    ct_weight_threshold: float = 0.0,
 ) -> dict:
     """Convert seasonal logits into per-branch classification records.
 
@@ -1234,12 +1885,18 @@ def summarize_seasonal_predictions(
     they need. When ``enforce_cropland_gate`` is True, crop-type predictions are
     only emitted if either the predicted or labelled landcover class belongs to
     ``cropland_class_names``.
+
+    Samples whose ``sample_weight_lc`` (for landcover) or ``sample_weight_ct``
+    (for crop-type) is at or below the respective threshold are excluded from
+    the returned records.
     """
 
     batch_size = output.global_embedding.shape[0]
     landcover_labels = _ensure_list(attrs.get("landcover_label"), batch_size, fill=None)
     croptype_labels = _ensure_list(attrs.get("croptype_label"), batch_size, fill=None)
     label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
+    lc_weights = _ensure_list(attrs.get("sample_weight_lc"), batch_size, fill=1.0)
+    ct_weights = _ensure_list(attrs.get("sample_weight_ct"), batch_size, fill=1.0)
 
     tasks: List[str] = []
     for idx in range(batch_size):
@@ -1281,17 +1938,30 @@ def summarize_seasonal_predictions(
         if landcover_labels[idx] is not None
         and not _is_missing_value(landcover_labels[idx])
         and str(landcover_labels[idx]) in landcover_classes
+        and float(lc_weights[idx]) > lc_weight_threshold
     ]
     if lc_probs is not None:
+        _lats = _ensure_list(attrs.get("lat"), batch_size, fill=None)
+        _lons = _ensure_list(attrs.get("lon"), batch_size, fill=None)
+        _sample_ids = _ensure_list(attrs.get("sample_id"), batch_size, fill=None)
+        _ref_ids = _ensure_list(attrs.get("ref_id"), batch_size, fill=None)
+        _regions = _ensure_list(attrs.get("region"), batch_size, fill=None)
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = landcover_classes[pred_idx]
             landcover_records.append(
                 {
-                    "pred_class": landcover_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -1318,6 +1988,8 @@ def summarize_seasonal_predictions(
             if _is_missing_value(target_name):
                 continue
             if str(target_name) not in croptype_classes:
+                continue
+            if float(ct_weights[sample_idx]) <= ct_weight_threshold:
                 continue
 
             if gating_enabled:
@@ -1349,11 +2021,18 @@ def summarize_seasonal_predictions(
 
             probs = torch.softmax(logits, dim=-1).mean(dim=0)
             pred_idx = int(torch.argmax(probs).item())
+            pred_class = croptype_classes[pred_idx]
             croptype_records.append(
                 {
-                    "pred_class": croptype_classes[pred_idx],
+                    "pred_class": pred_class,
                     "target_class": str(target_name),
                     "prob": float(torch.max(probs).item()),
+                    "correct": int(pred_class == str(target_name)),
+                    "lat": _lats[sample_idx],
+                    "lon": _lons[sample_idx],
+                    "sample_id": _sample_ids[sample_idx],
+                    "ref_id": _ref_ids[sample_idx],
+                    "region": _regions[sample_idx],
                 }
             )
 
@@ -1409,7 +2088,8 @@ def run_finetuning(
     unfreeze_epoch: Optional[int] = None,
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
-    val_loss_ema_alpha: float = 0.0,
+    model_ema_alpha: float = 0.0,
+    checkpoint_metric: Literal["val_loss", "lc_f1", "ct_f1", "mean_f1"] = "mean_f1",
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -1429,9 +2109,14 @@ def run_finetuning(
     train_loss = []
     val_loss = []
     best_loss = None
+    best_ct_f1: Optional[float] = None
+    best_lc_f1: Optional[float] = None
+    best_mean_f1: Optional[float] = None
     best_model_dict = None
     epochs_since_improvement = 0
-    ema_val_loss: Optional[float] = None  # EMA-smoothed val loss (used when val_loss_ema_alpha > 0)
+    ema_model: Optional[torch.nn.Module] = (
+        None  # EMA of model weights (used when model_ema_alpha > 0)
+    )
 
     tb_writer: Optional[Any] = None
     if tensorboard_logdir:
@@ -1512,6 +2197,21 @@ def run_finetuning(
     originally_frozen_layers = set()
 
     track_croptype_supervision = isinstance(loss_fn, SeasonalMultiTaskLoss)
+    # Hoisted here: loss_fn is constant for the entire run so these never change.
+    seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
+    seasonal_metrics_supported = seasonal_loss is not None
+    # _effective_metric similarly depends only on checkpoint_metric and
+    # seasonal_metrics_supported, both constant → compute once.
+    _effective_metric = (
+        checkpoint_metric
+        if checkpoint_metric == "val_loss" or seasonal_metrics_supported
+        else "val_loss"
+    )
+    if _effective_metric != checkpoint_metric:
+        logger.warning(
+            f"checkpoint_metric='{checkpoint_metric}' requires seasonal outputs but "
+            "this model does not use SeasonalMultiTaskLoss; falling back to 'val_loss'."
+        )
 
     # Define checkpoint paths
     best_ckpt_path = Path(output_dir) / f"{experiment_name}.pt"
@@ -1568,9 +2268,9 @@ def run_finetuning(
                 f"was {epochs_since_improvement}/{hyperparams.patience}."
             )
             epochs_since_improvement = 0
-            if val_loss_ema_alpha > 0.0:
-                ema_val_loss = None  # Restart EMA for the new optimization regime.
-                logger.info("EMA val loss reset at encoder unfreeze.")
+            if model_ema_alpha > 0.0:
+                ema_model = None  # Restart EMA model for the new optimization regime.
+                logger.info("EMA model reset at encoder unfreeze.")
 
         epoch_train_loss = 0.0
         train_task_tracker = _make_task_tracker()
@@ -1578,6 +2278,7 @@ def run_finetuning(
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
         )
 
+        logger.info("Starting training loop ...")
         for batch in tqdm(train_dl, desc="Training", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
@@ -1598,7 +2299,29 @@ def run_finetuning(
 
         train_loss.append(epoch_train_loss / len(train_dl))
 
-        model.eval()
+        # --- EMA model weight update ---
+        if model_ema_alpha > 0.0:
+            if ema_model is None:
+                ema_model = deepcopy(model)
+                for p in ema_model.parameters():
+                    p.requires_grad_(False)
+                logger.info(
+                    f"EMA model initialised from epoch {epoch + 1} weights "
+                    f"(alpha={model_ema_alpha})."
+                )
+            else:
+                with torch.no_grad():
+                    for ema_p, cur_p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.copy_(
+                            (1.0 - model_ema_alpha) * ema_p + model_ema_alpha * cur_p
+                        )
+                    # Keep buffers (e.g. BatchNorm running stats) in sync.
+                    for ema_b, cur_b in zip(ema_model.buffers(), model.buffers()):
+                        ema_b.copy_(cur_b)
+
+        # Validate on the EMA model when available; fall back to the raw model.
+        eval_model = ema_model if ema_model is not None else model
+        eval_model.eval()
         val_task_tracker = _make_task_tracker()
         val_croptype_supervision = (
             _make_croptype_supervision_tracker() if track_croptype_supervision else None
@@ -1609,16 +2332,15 @@ def run_finetuning(
         fallback_batches = 0
         val_pred_chunks: List[torch.Tensor] = []
         val_target_chunks: List[torch.Tensor] = []
-        seasonal_loss = loss_fn if isinstance(loss_fn, SeasonalMultiTaskLoss) else None
-        seasonal_metrics_supported = seasonal_loss is not None
         seasonal_landcover_records: List[dict[str, Any]] = []
         seasonal_croptype_records: List[dict[str, Any]] = []
         seasonal_gate_rejections = 0
 
-        for batch in val_dl:
+        logger.info("Starting validation loop ...")
+        for batch in tqdm(val_dl, desc="Validating", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             with torch.no_grad():
-                preds = _forward_with_optional_attrs(model, predictors, attrs)
+                preds = _forward_with_optional_attrs(eval_model, predictors, attrs)
                 loss_value, flat_preds, flat_targets = _compute_loss(
                     loss_fn, preds, predictors, attrs
                 )
@@ -1703,6 +2425,7 @@ def run_finetuning(
             metrics_dict, _ = compute_validation_metrics(
                 val_preds, val_targets, task_type
             )
+        del val_preds, val_targets
 
         seasonal_metrics_flat: dict[str, float] = {}
         if seasonal_metrics_supported:
@@ -1727,6 +2450,37 @@ def run_finetuning(
                         seasonal_gate_rejections / total_attempts
                     )
 
+            # Regional metrics logging suppressed during validation loop; only logged for eval/test.
+            # _log_regional_metrics(
+            #     seasonal_landcover_records,
+            #     f"[val epoch {epoch + 1}] landcover",
+            #     seasonal_loss.landcover_classes if seasonal_loss is not None else None,
+            # )
+            # _log_regional_metrics(
+            #     seasonal_croptype_records,
+            #     f"[val epoch {epoch + 1}] croptype",
+            #     seasonal_loss.croptype_classes if seasonal_loss is not None else None,
+            # )
+
+            _spatial_eval_dir = (
+                Path(output_dir) / "intermediate_evals" / "spatial_evals"
+            )
+            plot_spatial_predictions(
+                seasonal_landcover_records,
+                f"val epoch {epoch + 1} landcover",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_landcover.png",
+                title=f"Val Epoch {epoch + 1} – Landcover",
+            )
+            plot_spatial_predictions(
+                seasonal_croptype_records,
+                f"val epoch {epoch + 1} croptype",
+                _spatial_eval_dir / f"epoch{epoch + 1:03d}_val_croptype.png",
+                title=f"Val Epoch {epoch + 1} – Croptype",
+            )
+
+        del seasonal_landcover_records, seasonal_croptype_records
+        del val_pred_chunks
+
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
         else:
@@ -1747,9 +2501,10 @@ def run_finetuning(
 
         if tb_writer is not None:
             global_step = epoch + 1
-            _loss_scalars: dict[str, float] = {"train": train_loss[-1], "val": current_val_loss}
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None:
-                _loss_scalars["val_ema"] = ema_val_loss
+            _loss_scalars: dict[str, float] = {
+                "train": train_loss[-1],
+                "val": current_val_loss,
+            }
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
             tb_writer.add_scalar(
                 "learning_rate", scheduler.get_last_lr()[0], global_step
@@ -1814,7 +2569,6 @@ def run_finetuning(
             "epoch": epoch + 1,
             "train_loss": train_loss[-1],
             "val_loss": current_val_loss,
-            "val_loss_ema": ema_val_loss,
             "task_losses": {
                 "train": train_task_loss_avgs,
                 "val": val_task_loss_avgs,
@@ -1831,34 +2585,47 @@ def run_finetuning(
                 f"Failed to append validation metrics history at epoch {epoch + 1}: {exc}"
             )
 
-        # ------ EMA smoothing of val loss for early stopping (Direction B) ------
-        if val_loss_ema_alpha > 0.0:
-            if ema_val_loss is None:
-                ema_val_loss = current_val_loss  # warm-start on first observation
-            else:
-                ema_val_loss = (
-                    val_loss_ema_alpha * current_val_loss
-                    + (1.0 - val_loss_ema_alpha) * ema_val_loss
-                )
-        # Metric used for early-stopping and best-model selection.
-        # Equals EMA-smoothed loss when val_loss_ema_alpha > 0, otherwise raw val loss.
-        early_stop_loss = (
-            ema_val_loss
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
-            else current_val_loss
-        )
-
-        # --- Early stopping: patience resets only when loss improves ---
-        loss_improved = best_loss is None or early_stop_loss < best_loss
+        # --- Early stopping: patience resets only when the monitored metric improves ---
         cur_lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
         cur_ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
+        # Clamp -1.0 sentinel (metric unavailable, e.g. all CT samples gate-rejected)
+        # to 0.0 so the mean is not pulled negative when one head has no data.
+        cur_mean_f1 = (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
+
+        if _effective_metric == "lc_f1":
+            loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
+        elif _effective_metric == "ct_f1":
+            loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
+        elif _effective_metric == "mean_f1":
+            loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
+        else:
+            loss_improved = best_loss is None or current_val_loss < best_loss
 
         if loss_improved:
-            best_loss = early_stop_loss
+            best_loss = current_val_loss
+            best_lc_f1 = cur_lc_f1
+            best_ct_f1 = cur_ct_f1
+            best_mean_f1 = cur_mean_f1
             epochs_since_improvement = 0
-            logger.info(
-                f"Epoch {epoch + 1}: val loss improved to {early_stop_loss:.4f}"
-            )
+            if _effective_metric == "lc_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val LC F1 improved to {cur_lc_f1:.4f} "
+                    f"(val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "ct_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val CT F1 improved to {cur_ct_f1:.4f} "
+                    f"(val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "mean_f1":
+                logger.info(
+                    f"Epoch {epoch + 1}: val mean F1 improved to {cur_mean_f1:.4f} "
+                    f"(lc={cur_lc_f1:.4f}, ct={cur_ct_f1:.4f}, val_loss={current_val_loss:.4f})"
+                )
+            else:
+                logger.info(
+                    f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
+                )
         else:
             epochs_since_improvement += 1
             if epochs_since_improvement >= hyperparams.patience:
@@ -1867,7 +2634,17 @@ def run_finetuning(
 
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
-            best_model_dict = deepcopy(model.state_dict())
+            _ckpt_model = ema_model if ema_model is not None else model
+            best_model_dict = _ckpt_model.state_dict()
+            _ckpt_label = (
+                f"EMA model (alpha={model_ema_alpha})"
+                if ema_model is not None
+                else "raw model"
+            )
+            logger.info(
+                f"Epoch {epoch + 1}: saving best checkpoint from {_ckpt_label} "
+                f"(val_loss={current_val_loss:.4f})."
+            )
 
             validation_context = {
                 "epoch": epoch + 1,
@@ -1883,37 +2660,43 @@ def run_finetuning(
                 validation_context["croptype_supervision"] = (
                     croptype_supervision_summary
                 )
-            setattr(model, "_last_validation_context", validation_context)
+            setattr(_ckpt_model, "_last_validation_context", validation_context)
 
             # best_loss is guaranteed non-None here: on the first epoch
-            # best_loss is None → loss_improved is True → best_loss is set
-            # before we ever reach this block.
+            # loss_improved is always True so best_loss is set before this block.
+            # For all checkpoint_metric values, best_loss is always updated from
+            # current_val_loss above, so the assert holds either way.
             assert best_loss is not None
 
             if on_validation_improved is not None:
                 try:
-                    on_validation_improved(epoch + 1, model, best_loss)
+                    on_validation_improved(epoch + 1, _ckpt_model, best_loss)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         f"Validation-improvement callback failed at epoch {epoch + 1}: {exc}"
                     )
 
-            checkpoint_model = deepcopy(model)
-            _save_best(epoch + 1, checkpoint_model, best_loss)
+            _save_best(epoch + 1, _ckpt_model, best_loss)
 
-        _val_loss_str = (
-            f"{current_val_loss:.4f} (EMA: {ema_val_loss:.4f})"
-            if val_loss_ema_alpha > 0.0 and ema_val_loss is not None
-            else f"{current_val_loss:.4f}"
-        )
+        _val_loss_str = f"{current_val_loss:.4f}"
         _f1_str = ""
         if cur_lc_f1 > 0 or cur_ct_f1 > 0:
             _f1_str = f" | F1 lc={cur_lc_f1:.3f} ct={cur_ct_f1:.3f}"
+        if _effective_metric == "lc_f1":
+            _best_str = f"{best_lc_f1:.3f} (lc_f1)" if best_lc_f1 is not None else "n/a"
+        elif _effective_metric == "ct_f1":
+            _best_str = f"{best_ct_f1:.3f} (ct_f1)" if best_ct_f1 is not None else "n/a"
+        elif _effective_metric == "mean_f1":
+            _best_str = (
+                f"{best_mean_f1:.3f} (mean_f1)" if best_mean_f1 is not None else "n/a"
+            )
+        else:
+            _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"
         description = (
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
             f"Val Loss: {_val_loss_str} | "
-            f"Best: {best_loss:.4f}{_f1_str}"
+            f"Best: {_best_str}{_f1_str}"
         )
 
         description += (
@@ -1930,6 +2713,10 @@ def run_finetuning(
 
     assert best_model_dict is not None
 
+    _restore_label = (
+        f"EMA model (alpha={model_ema_alpha})" if model_ema_alpha > 0.0 else "raw model"
+    )
+    logger.info(f"Restoring best {_restore_label} weights into model before returning.")
     model.load_state_dict(best_model_dict)
     model.eval()
 

@@ -45,7 +45,7 @@ PRODUCT="croptype"
 ## Note below we have set the following flags:
 # --enable-cropland-head \  --> meaning that the model will produce a cropland map.
 # --enable-croptype-head \  --> meaning that the model will produce a croptype map.
-# --enforce-cropland-gate \  --> meaning that the croptype classification will be masked using the cropland product.
+# --mask-cropland \  --> meaning that the croptype classification will be masked using the cropland product.
 # --merge-classification-products \  --> this will merge the cropland and croptype classification products into a single output.
 # --class-probabilities \  --> this will output class probabilities in addition to the final classification map.
 
@@ -85,6 +85,6 @@ POSTPROCESS_KERNEL_SIZE=3 # only used if method is "majority_vote"
 --class-probabilities \
 --enable-cropland-head \
 --enable-croptype-head \
---enforce-cropland-gate \
+--mask-cropland \
 --merge-classification-products
 

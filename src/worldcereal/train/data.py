@@ -1,4 +1,6 @@
 import gc
+import os
+import stat
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
@@ -6,6 +8,7 @@ import duckdb
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from loguru import logger
@@ -17,6 +20,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, default_collate
 from tqdm import tqdm
 
+from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
 from worldcereal.train.datasets import (
     SeasonCalendarMode,
@@ -35,8 +39,10 @@ _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
     "landcover_label",
     "croptype_label",
     "label_task",
-    "anomaly_flag",
-    "confidence_nonoutlier",
+    "LC10_confidence_nonoutlier",
+    "CTY24_confidence_nonoutlier",
+    "LC10_anomaly_flag",
+    "CTY24_anomaly_flag",
 }
 
 _BOUNDARIES_PATH = (
@@ -82,14 +88,12 @@ def _attach_regions_from_boundaries(
 
     world_df = world_df[["region", "geometry"]].copy()
 
-    result = df.copy()
-    if "region" in result.columns:
-        result["region"] = result["region"]
-    else:
-        result["region"] = pd.NA
+    # Mutate df in-place rather than copying the whole (potentially 7M-row) frame.
+    if "region" not in df.columns:
+        df["region"] = pd.NA
 
-    lat = pd.to_numeric(result["lat"], errors="coerce")
-    lon = pd.to_numeric(result["lon"], errors="coerce")
+    lat = pd.to_numeric(df["lat"], errors="coerce")
+    lon = pd.to_numeric(df["lon"], errors="coerce")
     valid_coords = lat.between(-90, 90) & lon.between(-180, 180)
 
     if target_mask is not None:
@@ -104,31 +108,58 @@ def _attach_regions_from_boundaries(
         )
 
     if valid_mask.any():
+        n_target = int(valid_mask.sum())
+        logger.info(
+            f"Assigning regions for {n_target:,} samples via spatial join ..."
+        )
         coords = pd.DataFrame(
             {"lon": lon[valid_mask], "lat": lat[valid_mask]},
-            index=result.index[valid_mask],
+            index=df.index[valid_mask],
         )
         gdf = gpd.GeoDataFrame(
             coords,
             geometry=gpd.GeoSeries.from_xy(coords["lon"], coords["lat"]),
             crs="EPSG:4326",
         )
-        joined = gpd.sjoin_nearest(
-            gdf.to_crs("EPSG:3857"),
-            world_df.to_crs("EPSG:3857"),
-            how="left",
-        )
-        joined = joined[~joined.index.duplicated(keep="first")]
-        region_series = joined["region"].reindex(coords.index)
-        result.loc[coords.index, "region"] = region_series
 
-    missing = int(result["region"].isna().sum())
+        # Two-pass strategy: fast point-in-polygon first, expensive nearest
+        # only for the handful of points that don't land inside any polygon
+        # (coastal / border edge-cases).  sjoin uses an R-tree index and is
+        # orders of magnitude faster than sjoin_nearest on large datasets.
+        world_4326 = world_df.to_crs("EPSG:4326")  # stay in 4326 for sjoin
+        joined = gpd.sjoin(gdf, world_4326, how="left", predicate="within")
+        joined = joined[~joined.index.duplicated(keep="first")]
+
+        unmatched_mask = joined["region"].isna()
+        n_unmatched = int(unmatched_mask.sum())
+
+        if n_unmatched > 0:
+            logger.info(
+                f"{n_unmatched:,} samples not inside any polygon; "
+                f"falling back to sjoin_nearest for those."
+            )
+            unmatched_idx = joined.index[unmatched_mask]
+            gdf_miss = gdf.loc[unmatched_idx].to_crs("EPSG:3857")
+            world_3857 = world_df.to_crs("EPSG:3857")
+            nearest = gpd.sjoin_nearest(gdf_miss, world_3857, how="left")
+            nearest = nearest[~nearest.index.duplicated(keep="first")]
+            joined.loc[unmatched_idx, "region"] = nearest["region"].reindex(
+                unmatched_idx
+            )
+            del gdf_miss, world_3857, nearest
+
+        del gdf, world_df, world_4326
+        region_series = joined["region"].reindex(coords.index)
+        del joined, coords
+        df.loc[region_series.index, "region"] = region_series
+
+    missing = int(df["region"].isna().sum())
     if missing:
         logger.warning(
             f"Region enrichment left {missing} samples without a region assignment."
         )
 
-    return result
+    return df
 
 
 def _ensure_label_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -503,6 +534,7 @@ def dataset_to_embeddings(
     )
 
     final_df = None
+    total_dropped = 0
 
     for predictors, attrs in tqdm(dl):
         with torch.no_grad():
@@ -533,12 +565,16 @@ def dataset_to_embeddings(
                 selected_mask = season_masks[:, season_index, :]
                 season_mask_float = selected_mask.to(dtype=time_embeddings.dtype)
                 weights = season_mask_float.sum(dim=-1, keepdim=True)
-                zero_weight = weights == 0
+                zero_weight = (weights == 0).squeeze(-1)
+                valid = None
                 if torch.any(zero_weight):
-                    # Handle zero weights by setting mask to all 1s for those samples
-                    season_mask_float = season_mask_float.clone()
-                    season_mask_float[zero_weight.squeeze(-1)] = 1.0
-                    weights = season_mask_float.sum(dim=-1, keepdim=True)
+                    # Drop samples that don't fall sufficiently inside the season
+                    n_dropped = int(zero_weight.sum().item())
+                    total_dropped += n_dropped
+                    valid = ~zero_weight
+                    season_mask_float = season_mask_float[valid]
+                    weights = weights[valid]
+                    time_embeddings = time_embeddings[valid]
 
                 encodings = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
                     dim=-2
@@ -553,13 +589,24 @@ def dataset_to_embeddings(
             k: v for k, v in attrs.items() if k not in ("season_masks", "in_seasons")
         }
 
+        # Drop the same samples from attrs if any were filtered out
+        if season_index is not None and valid is not None:
+            valid_np = valid.cpu().numpy()
+            attrs_frame = {
+                k: (np.asarray(v)[valid_np] if hasattr(v, "__len__") else v)
+                for k, v in attrs_frame.items()
+            }
+
         # Add in_season flag if seasonal mode and available
         if season_index is not None and attrs.get("in_seasons") is not None:
             in_seasons = np.asarray(attrs["in_seasons"])
             if in_seasons.ndim == 2:
-                attrs_frame["in_season"] = in_seasons[:, season_index]
+                col = in_seasons[:, season_index]
             else:
-                attrs_frame["in_season"] = in_seasons
+                col = in_seasons
+            if valid is not None:
+                col = col[valid.cpu().numpy()]
+            attrs_frame["in_season"] = col
 
         attrs_df = pd.DataFrame.from_dict(attrs_frame)
         encodings_df = pd.DataFrame(
@@ -568,6 +615,15 @@ def dataset_to_embeddings(
         result = pd.concat([encodings_df, attrs_df], axis=1)
 
         final_df = result if final_df is None else pd.concat([final_df, result])
+
+    if total_dropped > 0:
+        logger.warning(
+            f"{total_dropped} sample(s) were dropped because their season mask was "
+            f"all-zero (i.e. the sample does not fall sufficiently inside season "
+            f"{season_index}). Consider reviewing your season definition, lowering "
+            f"the min_season_coverage fraction, or checking the temporal coverage "
+            f"of those samples."
+        )
 
     return final_df
 
@@ -607,12 +663,12 @@ def compute_embeddings_from_splits(
 
     masking_config = SensorMaskingConfig(
         enable=mask_on_training,
-        s1_full_dropout_prob=0.05,
-        s1_timestep_dropout_prob=0.1,
-        s2_cloud_timestep_prob=0.1,
+        s1_full_dropout_prob=0.15,
+        s1_timestep_dropout_prob=0.15,
+        s2_cloud_timestep_prob=0.25,
         s2_cloud_block_prob=0.05,
         s2_cloud_block_min=2,
-        s2_cloud_block_max=3,
+        s2_cloud_block_max=5,
         meteo_timestep_dropout_prob=0.03,
         dem_dropout_prob=0.01,
     )
@@ -868,6 +924,7 @@ def get_training_dfs_from_parquet(
     debug: bool = False,
     overwrite: bool = False,
     wide_parquet_output_path: Optional[Union[Path, str]] = None,
+    force_recompute_regions: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -972,8 +1029,6 @@ def get_training_dfs_from_parquet(
     ]
     INT_COLS = [
         "extract",
-        "quality_score_ct",
-        "quality_score_lc",
         "ewoc_code",
         "S2-L2A-B02",
         "S2-L2A-B03",
@@ -992,15 +1047,24 @@ def get_training_dfs_from_parquet(
         "AGERA5-PRECIP",
         "AGERA5-TMEAN",
     ]
-    FLOAT_COLS = ["lon", "lat"]
+    FLOAT_COLS = [
+        "lon",
+        "lat",
+        "quality_score_ct",
+        "quality_score_lc",
+    ]
     REQUIRED_COLS = STRING_COLS + INT_COLS + FLOAT_COLS
 
     # Columns that may not exist in older data — fill with sensible defaults
     OPTIONAL_COLS: dict = {
-        "CTY25_confidence_nonoutlier": "1.0",  # no outlier penalty
-        "LC10_confidence_nonoutlier": "1.0",
-        "CTY25_anomaly_flag": 0.0,  # not flagged
-        "LC10_anomaly_flag": 0.0,
+        OUTLIER_COLUMNS[
+            "CT_outlier_score"
+        ]: 1.0,  # no outlier penalty (float, not string)
+        OUTLIER_COLUMNS[
+            "LC_outlier_score"
+        ]: 1.0,  # no outlier penalty (float, not string)
+        OUTLIER_COLUMNS["CT_outlier_flag"]: "normal",  # string category, not a number
+        OUTLIER_COLUMNS["LC_outlier_flag"]: "normal",  # string category, not a number
     }
 
     if overwrite or is_tempfile or not wide_parquet_output_path.exists():
@@ -1084,24 +1148,32 @@ def get_training_dfs_from_parquet(
             )
 
         # write a single Parquet file
+        # Use ROW_GROUP_SIZE ~20 000 so each group is small enough to load without OOM.
+        # DuckDB also sorts by ref_id here so rows of the same source file are contiguous.
         con.execute(
             f"""
-            COPY (SELECT * FROM {table_name})
+            COPY (SELECT * FROM {table_name} ORDER BY ref_id)
             TO '{wide_parquet_output_path}'
-            (FORMAT PARQUET, COMPRESSION SNAPPY)
+            (FORMAT PARQUET, COMPRESSION SNAPPY, ROW_GROUP_SIZE 20000)
         """
         )
 
-    # Load the merged Parquet -> use pyarrow for efficient chunked reading
+    # Load the merged Parquet -> accumulate Arrow tables first (much lower overhead
+    # than converting each to pandas individually), then do a single to_pandas() call.
     logger.info(f"Loading wide parquet file from {wide_parquet_output_path} ...")
     pf = pq.ParquetFile(wide_parquet_output_path)
-    parts = []
+    arrow_parts = []
     for i in range(pf.num_row_groups):
-        table = pf.read_row_group(i)  # arrow Table (usually lower overhead than pandas)
-        parts.append(table.to_pandas())  # convert one chunk at a time
-    df = pd.concat(parts, ignore_index=True)
+        arrow_parts.append(pf.read_row_group(i))  # stay in Arrow until all groups are loaded
+    df = pa.concat_tables(arrow_parts).to_pandas()  # single conversion: avoids N intermediate pandas frames
+    del arrow_parts
+    gc.collect()
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
+
+    if force_recompute_regions and "region" in df.columns:
+        logger.info("force_recompute_regions=True: dropping existing 'region' column to trigger full recomputation.")
+        df = df.drop(columns=["region"])
 
     normalized_regions = _normalize_region_filter(region_filter)
     if normalized_regions is not None:
@@ -1114,8 +1186,9 @@ def get_training_dfs_from_parquet(
         ).str.strip().eq("")
     else:
         region_missing_mask = pd.Series(True, index=df.index, dtype=bool)
-
-    should_enrich_regions = region_missing_mask.any() and (
+    # only if region_missing_mask has more than 10 missings
+    redo_regions = True if region_missing_mask.sum() > 10 else False
+    should_enrich_regions = redo_regions and (
         existing_wide_parquet or normalized_regions is not None
     )
 
@@ -1127,7 +1200,20 @@ def get_training_dfs_from_parquet(
             df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
         )
         if not is_tempfile:
-            df.to_parquet(wide_parquet_output_path, index=False)
+            tbl = pa.Table.from_pandas(df, preserve_index=False)
+            pq.write_table(
+                tbl,
+                wide_parquet_output_path,
+                compression="snappy",
+                row_group_size=20_000,
+            )
+            del tbl
+            # Ensure group-write permission so teammates can overwrite the file
+            try:
+                current_mode = os.stat(wide_parquet_output_path).st_mode
+                os.chmod(wide_parquet_output_path, current_mode | stat.S_IWGRP)
+            except OSError as e:
+                logger.warning(f"Could not set group-write permission on {wide_parquet_output_path}: {e}")
         logger.info(
             f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
         )
@@ -1162,8 +1248,10 @@ def get_training_dfs_from_parquet(
             if region.casefold() not in available_regions
         ]
         if missing_regions:
-            logger.warning(
-                f"Requested regions not present in the dataset: {missing_regions}"
+            available_sorted = sorted(r for r in available_regions if r)
+            raise ValueError(
+                f"Requested region(s) not found in the dataset: {missing_regions}. "
+                f"Available regions: {available_sorted}"
             )
         filtered = df.loc[mask].copy()
         if filtered.empty:

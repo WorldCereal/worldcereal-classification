@@ -38,7 +38,7 @@ from notebook_utils.classifier import (
     train_seasonal_torch_head,
 )
 from notebook_utils.croptypepicker import CropTypePicker, apply_croptypepicker_to_df
-from notebook_utils.dateslider import date_slider as season_slider
+from notebook_utils.dateslider import date_slider, season_slider
 from notebook_utils.extractions import (
     get_band_statistics,
     query_extractions,
@@ -104,7 +104,9 @@ class WorldCerealClassificationApp:
 
         # Tab 3 variables
         self.processing_period: Optional[TemporalContext] = None
-        self.tab3_aoi_gdf = None  # GeoDataFrame AOI loaded from file (for seasons display)
+        self.tab3_aoi_gdf = (
+            None  # GeoDataFrame AOI loaded from file (for seasons display)
+        )
         self.season_window: Optional[TemporalContext] = None
         self.season_id: Optional[str] = None
 
@@ -150,9 +152,7 @@ class WorldCerealClassificationApp:
         self.tab8_widgets: Dict[str, Any] = {}
         self.tab9_widgets: Dict[str, Any] = {}
 
-        display(
-            HTML(
-                """
+        display(HTML("""
                 <style>
                     .jp-OutputArea-output pre {
                         white-space: pre-wrap !important;
@@ -160,9 +160,7 @@ class WorldCerealClassificationApp:
                         overflow-wrap: break-word !important;
                     }
                 </style>
-                """
-            )
-        )
+                """))
 
         tab0 = self._build_tab0_workflow()
         tab1 = self._build_tab1_retrieve_reference_data()
@@ -191,8 +189,7 @@ class WorldCerealClassificationApp:
         self.tabs = widgets.Tab(children=[])
         self.tabs.layout = widgets.Layout(width="100%", max_width="100%")
 
-        self._tab_style = widgets.HTML(
-            value="""
+        self._tab_style = widgets.HTML(value="""
 <style>
 .p-TabBar-tabLabel {
     font-size: 14px;
@@ -202,8 +199,7 @@ class WorldCerealClassificationApp:
     max-width: none;
 }
 </style>
-"""
-        )
+""")
 
         self.welcome_screen = tab0
         self.tabs_container = widgets.VBox([self.welcome_screen])
@@ -456,7 +452,7 @@ class WorldCerealClassificationApp:
         self._update_tab5_state()
         self._update_tab6_state()
         self._update_tab7_state()
-        self._update_tab8_state()
+        self._update_tab8_state(reset_default=True)
         self._update_tab9_state()
 
     # =========================================================================
@@ -1039,9 +1035,15 @@ class WorldCerealClassificationApp:
         """
         stem = path.stem
         # Strip known prefixes
-        for prefix in ("extractions_aligned_", "extractions_", "trainingdf_", "embeddings_", "query_"):
+        for prefix in (
+            "extractions_aligned_",
+            "extractions_",
+            "trainingdf_",
+            "embeddings_",
+            "query_",
+        ):
             if stem.startswith(prefix):
-                stem = stem[len(prefix):]
+                stem = stem[len(prefix) :]
                 break
         parts = stem.split("_")
         # Detect YYYYMMDD-YYYYMMDD date range segment (season window, 17 chars)
@@ -1082,21 +1084,24 @@ class WorldCerealClassificationApp:
             except Exception as exc:
                 print(f"Failed to save AOI: {exc}")
 
-    def _auto_save_aoi(self, _=None) -> None:
-        """Automatically save the current AOI to ./bbox after the user submits it."""
-        aoi_map = self.tab1_widgets.get("aoi_map")
+    def _auto_save_aoi_map(self, aoi_map) -> None:
+        """Save the given aoi_map widget's GDF to ./bbox, showing a confirmation."""
         if aoi_map is None:
             return
         try:
             bbox_dir = Path("./bbox")
             out_path = aoi_map.save_gdf(bbox_dir)
-            # Update the map output widget to confirm the save
             with aoi_map.output:
                 from IPython.display import HTML as _HTML
                 from IPython.display import display as _display
+
                 _display(_HTML(f"<i>AOI saved to {out_path}.</i>"))
         except Exception:
-            pass  # Silent – AOI may not be ready yet (e.g. submit failed)
+            pass  # Silent – AOI may not be ready yet
+
+    def _auto_save_aoi(self, _=None) -> None:
+        """Automatically save the Tab 1 AOI to ./bbox after the user submits it."""
+        self._auto_save_aoi_map(self.tab1_widgets.get("aoi_map"))
 
     def _try_load_aoi_for_seasons(self, aoi_name: str):
         """Try to load an AOI GeoDataFrame from ./bbox/{aoi_name}.gpkg.
@@ -1121,7 +1126,9 @@ class WorldCerealClassificationApp:
             if gdf.crs and gdf.crs.to_epsg() != 4326:
                 gdf = gdf.to_crs(epsg=4326)
             bounds = gdf.total_bounds  # (minx, miny, maxx, maxy)
-            bounds_gdf = gpd.GeoDataFrame(geometry=[shapely_box(*bounds)], crs="EPSG:4326")
+            bounds_gdf = gpd.GeoDataFrame(
+                geometry=[shapely_box(*bounds)], crs="EPSG:4326"
+            )
             crs = bounds_gdf.estimate_utm_crs()
             epsg = int(crs.to_epsg())
             bbox_utm = bounds_gdf.to_crs(crs).total_bounds
@@ -1146,7 +1153,11 @@ class WorldCerealClassificationApp:
                 save_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part()
-                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                save_path = (
+                    save_dir / f"extractions_{aoi_part}_{timestamp}.parquet"
+                    if aoi_part
+                    else save_dir / f"extractions_{timestamp}.parquet"
+                )
                 self._geometry_to_wkt(self.tab1_df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
                 self._cleanup_tab1_temp()
@@ -1177,7 +1188,9 @@ class WorldCerealClassificationApp:
                         else f"query_{timestamp}.parquet"
                     )
                     temp_path = temp_dir / fname
-                    self._geometry_to_wkt(self.tab1_df).to_parquet(temp_path, index=False)
+                    self._geometry_to_wkt(self.tab1_df).to_parquet(
+                        temp_path, index=False
+                    )
                     print(f"Query results saved to temporary file: {temp_path}")
                     print(
                         "Temporary folder: ./training_extractions_temp/\n"
@@ -1293,9 +1306,7 @@ class WorldCerealClassificationApp:
             icon="forward",
             layout=widgets.Layout(width="200px"),
         )
-        load_title = widgets.HTML(
-            value="<h3>Option to load extractions from file</h3>"
-        )
+        load_title = widgets.HTML(value="<h3>Option to load extractions from file</h3>")
         load_info = self._info_callout(
             "If you have previously saved extractions to disk (in the <code>./training_extractions/</code> folder), "
             "you can reload them here to skip Tab 1 entirely.<br><br>"
@@ -1505,7 +1516,11 @@ class WorldCerealClassificationApp:
                 save_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 aoi_part = self._get_aoi_filename_part() or self._get_aoi_name_tab1()
-                save_path = save_dir / f"extractions_{aoi_part}_{timestamp}.parquet" if aoi_part else save_dir / f"extractions_{timestamp}.parquet"
+                save_path = (
+                    save_dir / f"extractions_{aoi_part}_{timestamp}.parquet"
+                    if aoi_part
+                    else save_dir / f"extractions_{timestamp}.parquet"
+                )
                 self._geometry_to_wkt(df).to_parquet(save_path, index=False)
                 print(f"Extractions saved to: {save_path}")
             except Exception as exc:
@@ -1641,12 +1656,8 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="100%", overflow="auto")
         )
         season_slider_obj = None
-        start_d = datetime(2019, 7, 1)
-        end_d = datetime(2021, 6, 30)
         with season_slider_output:
-            season_slider_obj = season_slider(
-                year_selector=False, show_year=False, start_date=start_d, end_date=end_d
-            )
+            season_slider_obj = season_slider()
 
         season_id_input = widgets.Text(
             value="",
@@ -1657,7 +1668,7 @@ class WorldCerealClassificationApp:
         )
 
         align_message = widgets.HTML(
-            value="<i>Drops irrelevant samples and aligns your data to the selected season.</i>"
+            value="<i>Drops irrelevant samples with an observation date outside the selected season.</i>"
         )
         align_info = self._info_callout(
             "You have the option to select whether or not to apply strict seasonal alignment:<br>"
@@ -2639,16 +2650,22 @@ class WorldCerealClassificationApp:
             "Using a geospatial foundation model (Presto), we derive training features for each of your training samples.<br>"
             "Presto was pre-trained on millions of unlabeled samples around the world and finetuned on a global dataset of labelled land cover and crop type observations from the WorldCereal reference database.<br>"
             "The resulting <b>128 embeddings</b> (`presto_ft_0` -> `presto_ft_127`) nicely condense the Sentinel-1, Sentinel-2, meteo timeseries and ancillary data for your season of interest into a limited number of meaningful features which we will use for downstream model training.<br><br>"
-            "We provide some options aimed at increasing robustness of your final crop model.<br>"
+            "We provide some options aimed at increasing robustness of your final crop model.<br><br>"
             "This is controlled by the following arguments:<br>"
+            "    - <b>augment</b> parameter: when `True`, applies temporal jitter augmentation to training samples, randomly shifting the season window slightly to increase temporal diversity and model robustness.<br>"
+            "           NOTE: This option is not available if you chose to strictly align your samples to the season window in Tab 3.<br><br>"
             "    - <b>mask_on_training</b> parameter: when `True`, applies sensor masking augmentations (e.g. simulating S1/S2 dropouts, additional clouds, ancillary feature removals) only to the training split to improve robustness to real-world data gaps.<br>"
-            "           The validation/test split is kept untouched for fair evaluation.<br>"
-            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time.<br>"
-            "<br>"
-            "<b>Dataset splitting options</b>:<br>"
-            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used.<br>"
-            "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
-            "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
+            "           The validation/test split is kept untouched for fair evaluation.<br><br>"
+            "    - <b>repeats</b> parameter: number of times each training sample is (re)drawn with its augmentations. Higher values (>1) create more variants (with jitter/masking) and enlarge the effective training set, potentially improving generalization at the cost of longer embedding inference time. <br>"
+            "           Only active when augment or mask_on_training is enabled.<br><br>"
+            "    - <b>min_season_coverage</b> parameter: minimum fraction of a season's composite slots that must be covered by available EO time series for a sample to be included. "
+            "The default of 0.5 means at least half the season must be covered by the sample's EO time series.<br>"
+            "When <b>augment</b> is enabled, samples are shifted temporally, which can reduce effective coverage — lowering this threshold allows more samples to be retained in that case.<br>"
+            "Conversely, raising it enforces stricter data quality at the cost of fewer training samples.<br>"
+        )
+        augment_checkbox = widgets.Checkbox(
+            value=True,
+            description="Augment",
         )
         mask_on_training_checkbox = widgets.Checkbox(
             value=True,
@@ -2658,10 +2675,29 @@ class WorldCerealClassificationApp:
             value=3,
             description="Repeats:",
             layout=widgets.Layout(width="200px"),
+            disabled=not (augment_checkbox.value or mask_on_training_checkbox.value),
         )
-        dataset_split_title = widgets.HTML("<h4>Dataset splitting</h4>")
+        min_season_coverage_input = widgets.FloatText(
+            value=0.5,
+            description="Min season coverage:",
+            style={"description_width": "160px"},
+            layout=widgets.Layout(width="280px"),
+        )
+        dataset_split_title = widgets.HTML("<h3>Dataset splitting</h3>")
+        dataset_split_info = self._info_callout(
+            "In tab 6, we will train a downstream classification head on the Presto embeddings to predict your crop types of interest.<br>"
+            "For that training to take place, we need to split your samples into train/validation/test sets.<br>"
+            "This splitting is done immediately during the computation of the Presto embeddings rather than later, for the following reason:<br>"
+            "   The augmentation and masking options above are intentionally applied <b>only to the training split</b>.<br>"
+            "Validation and test splits are left untouched to ensure fair evaluation.<br><br>"
+            "The resulting <code>split</code> column is carried forward to the next step and used as input during training.<br><br>"
+            "<b>Dataset splitting options</b>:<br>"
+            "    - Use spatial split: when enabled, the train/val/test split is done by spatial bins to reduce spatial leakage. When disabled, a random stratified split is used (default).<br>"
+            "    - Bin size (deg): size of the spatial bins (in degrees) used for spatial splitting. Larger bins reduce leakage more aggressively but can reduce sample diversity per split.<br>"
+            "    - Val size and Test size: fractions of the data (or bins) reserved for validation and testing. These must be in [0, 1) and together should leave enough samples for training.<br>"
+        )
         use_spatial_split_checkbox = widgets.Checkbox(
-            value=True,
+            value=False,
             description="Use spatial split",
         )
         bin_size_degrees_input = widgets.FloatText(
@@ -2675,7 +2711,7 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="180px"),
         )
         test_size_input = widgets.FloatText(
-            value=0.2,
+            value=0.15,
             description="Test size:",
             layout=widgets.Layout(width="180px"),
         )
@@ -2711,8 +2747,10 @@ class WorldCerealClassificationApp:
             "load_button": load_button,
             "load_output": load_output,
             "presto_message": presto_message,
+            "augment_checkbox": augment_checkbox,
             "mask_on_training_checkbox": mask_on_training_checkbox,
             "repeats_input": repeats_input,
+            "min_season_coverage_input": min_season_coverage_input,
             "use_spatial_split_checkbox": use_spatial_split_checkbox,
             "bin_size_degrees_input": bin_size_degrees_input,
             "val_size_input": val_size_input,
@@ -2721,8 +2759,30 @@ class WorldCerealClassificationApp:
             "embeddings_output": embeddings_output,
         }
 
+        def _update_repeats_disabled(_=None):
+            repeats_input.disabled = not (
+                augment_checkbox.value or mask_on_training_checkbox.value
+            )
+
+        def _sync_augment_from_strict(change):
+            strict = change["new"]
+            augment_checkbox.disabled = strict
+            if strict:
+                augment_checkbox.value = False
+            else:
+                augment_checkbox.value = True
+
+        strict_align_checkbox = self.tab3_widgets.get("strict_align_checkbox")
+        if strict_align_checkbox is not None:
+            if strict_align_checkbox.value:
+                augment_checkbox.disabled = True
+                augment_checkbox.value = False
+            strict_align_checkbox.observe(_sync_augment_from_strict, names="value")
+
         load_button.on_click(self._on_tab5_load_training_df)
         embeddings_button.on_click(self._on_tab5_compute_embeddings)
+        mask_on_training_checkbox.observe(_update_repeats_disabled, names="value")
+        augment_checkbox.observe(_update_repeats_disabled, names="value")
 
         return widgets.VBox(
             [
@@ -2734,9 +2794,10 @@ class WorldCerealClassificationApp:
                 widgets.HTML("<h3>Set embedding parameters</h3>"),
                 embeddings_message,
                 embeddings_info,
-                widgets.HBox([mask_on_training_checkbox]),
-                widgets.HBox([repeats_input]),
+                widgets.HBox([augment_checkbox, mask_on_training_checkbox]),
+                widgets.HBox([repeats_input, min_season_coverage_input]),
                 dataset_split_title,
+                dataset_split_info,
                 widgets.HBox([use_spatial_split_checkbox, bin_size_degrees_input]),
                 widgets.HBox([val_size_input, test_size_input]),
                 widgets.HBox([embeddings_button]),
@@ -2817,12 +2878,12 @@ class WorldCerealClassificationApp:
                 m = date_range_re.match(part)
                 if m and i >= 2:
                     season_id = parts[i - 1]
-                    season_start = pd.to_datetime(
-                        m.group(1), format="%Y%m%d"
-                    ).strftime("%Y-%m-%d")
-                    season_end = pd.to_datetime(
-                        m.group(2), format="%Y%m%d"
-                    ).strftime("%Y-%m-%d")
+                    season_start = pd.to_datetime(m.group(1), format="%Y%m%d").strftime(
+                        "%Y-%m-%d"
+                    )
+                    season_end = pd.to_datetime(m.group(2), format="%Y%m%d").strftime(
+                        "%Y-%m-%d"
+                    )
                     return season_id, TemporalContext(season_start, season_end)
             return None, None
         except (IndexError, ValueError):
@@ -2944,7 +3005,9 @@ class WorldCerealClassificationApp:
                 name_parts = [p for p in [aoi_part, season_part] if p]
                 name_parts.append(f"cl-{nclasses}")
                 name_parts.append(timestamp)
-                training_df_path = training_dir / ("trainingdf_" + "_".join(name_parts) + ".csv")
+                training_df_path = training_dir / (
+                    "trainingdf_" + "_".join(name_parts) + ".csv"
+                )
                 df.to_csv(training_df_path, index=False)
                 print(
                     f"{nclasses} training classes confirmed and saved to {training_df_path}.\n"
@@ -3124,8 +3187,10 @@ class WorldCerealClassificationApp:
     def _on_tab5_compute_embeddings(self, _=None):
         df = self._get_tab4_working_df()
         output = self.tab5_widgets["embeddings_output"]
+        augment_checkbox = self.tab5_widgets.get("augment_checkbox")
         mask_on_training_checkbox = self.tab5_widgets.get("mask_on_training_checkbox")
         repeats_input = self.tab5_widgets.get("repeats_input")
+        min_season_coverage_input = self.tab5_widgets.get("min_season_coverage_input")
         use_spatial_split_checkbox = self.tab5_widgets.get("use_spatial_split_checkbox")
         bin_size_degrees_input = self.tab5_widgets.get("bin_size_degrees_input")
         val_size_input = self.tab5_widgets.get("val_size_input")
@@ -3146,6 +3211,7 @@ class WorldCerealClassificationApp:
                     "Season window missing. Complete Tab 3 season alignment or load a valid training dataframe containing a season window in its name."
                 )
                 return
+            augment = False if augment_checkbox is None else augment_checkbox.value
             mask_on_training = (
                 True
                 if mask_on_training_checkbox is None
@@ -3153,7 +3219,7 @@ class WorldCerealClassificationApp:
             )
             repeats = repeats_input.value if repeats_input is not None else 3
             use_spatial_split = (
-                True
+                False
                 if use_spatial_split_checkbox is None
                 else use_spatial_split_checkbox.value
             )
@@ -3164,12 +3230,20 @@ class WorldCerealClassificationApp:
             if val_size < 0 or val_size >= 1:
                 print("Val size must be in the range [0, 1).")
                 return
-            test_size = 0.2 if test_size_input is None else test_size_input.value
+            test_size = 0.15 if test_size_input is None else test_size_input.value
             if test_size < 0 or test_size >= 1:
                 print("Test size must be in the range [0, 1).")
                 return
             if repeats <= 0:
                 print("Repeats must be >= 1.")
+                return
+            min_season_coverage = (
+                0.5
+                if min_season_coverage_input is None
+                else min_season_coverage_input.value
+            )
+            if not (0 <= min_season_coverage <= 1):
+                print("Min season coverage must be in the range [0, 1].")
                 return
             if self.presto_model_package is None:
                 custom_presto_url = None
@@ -3182,7 +3256,8 @@ class WorldCerealClassificationApp:
                     season_id=self.season_id,
                     mask_on_training=mask_on_training,
                     repeats=repeats,
-                    augment=False,
+                    augment=augment,
+                    min_season_coverage=min_season_coverage,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
                     custom_presto_url=custom_presto_url,
@@ -3204,7 +3279,9 @@ class WorldCerealClassificationApp:
                 name_parts = [p for p in [aoi_part, season_part] if p]
                 name_parts.append(f"cl-{nclasses}")
                 name_parts.append(timestamp)
-                embeddings_path = embeddings_dir / ("embeddings_" + "_".join(name_parts) + ".csv")
+                embeddings_path = embeddings_dir / (
+                    "embeddings_" + "_".join(name_parts) + ".csv"
+                )
                 self.tab5_df.to_csv(embeddings_path, index=False)
                 print(f"Embeddings computed: {len(self.tab5_df)} rows.")
                 print(f"Embeddings saved to: {embeddings_path}")
@@ -3725,6 +3802,7 @@ class WorldCerealClassificationApp:
         if status_message is not None:
             status_message.value = "<i>Torch head archive loaded. Ready to deploy.</i>"
         self._update_tab7_state()
+        self._update_tab8_state(prefill_season=True)
 
     def _on_deploy_click(self, button):
         """Handle deploy click."""
@@ -3781,7 +3859,7 @@ class WorldCerealClassificationApp:
             print(
                 "You can proceed to the next step to generate a map using your deployed model."
             )
-            self._update_tab8_state()
+            self._update_tab8_state(prefill_season=True)
             self._update_tab9_state()
 
     # =========================================================================
@@ -3815,12 +3893,12 @@ class WorldCerealClassificationApp:
             "Large AOIs are automatically split into tiles for processing.<br>"
             "You can manually alter the <b>tile size</b> if you want to experiment with smaller or larger tiles, but keep in mind that this will also impact processing time and the required computational resources.<br><br>"
             "You can <b>draw</b> a rectangle using the drawing tools on the left side of the map.<br>"
-            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button."
+            "After drawing, provide a short ID for your AOI in the box below the map and hit the Submit button.<br>"
             "The app will automatically store the coordinates of the last rectangle you drew on the map.<br><br>"
             "Alternatively, you can also <b>upload a vector file</b> (either zipped shapefile or GeoPackage) delineating your area of interest.<br>"
             "In case your vector file contains multiple polygons or points, the total bounds will be automatically computed and serve as your AOI.<br>"
             "Files containing only a single point are not allowed.<br><br>"
-            "After you have selected your AOI you can <b>save</b> it to the local `./bbox` folder using the Save AOI button below.<br>"
+            "After you have selected your AOI, it will be <b>automatically saved</b> to the local `./bbox` folder when you submit it.<br>"
         )
         tile_resolution_input = widgets.IntText(
             value=20,
@@ -3828,21 +3906,6 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="220px"),
         )
         aoi_map = ui_map(display_ui=False)
-
-        aoi_save_button = widgets.Button(
-            description="Save AOI to file",
-            button_style="info",
-            icon="save",
-            layout=widgets.Layout(width="220px"),
-        )
-        aoi_save_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="60px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
 
         season_message = widgets.HTML(
             value="<i>Select your growing season and year.</i>"
@@ -3870,8 +3933,12 @@ class WorldCerealClassificationApp:
             )
         )
         season_info = self._info_callout(
-            "Use the slider to define your growing season of interest(max 12 months).<br>"
-            "The tool automatically also derives a 12-month processing period that ends on your selected end month."
+            "Use the slider to define your growing season of interest (min. 3 months, max. 12 months).<br>"
+            "When applying a custom model, we automatically propose the exact same season for which your model was trained,"
+            " but you are free to adjust both the year and season.<br>"
+            "<br>"
+            "The tool automatically also derives a 12-month processing period that ends on your selected end month.<br>"
+            "This processing period will be used to generate your cropland mask, if desired."
         )
         season_hint = widgets.HTML(value="<i>No model loaded yet.</i>")
 
@@ -3880,9 +3947,9 @@ class WorldCerealClassificationApp:
         )
         season_slider_obj = None
         with season_slider_output:
-            season_slider_obj = season_slider()
+            season_slider_obj = date_slider()
         season_id_input = widgets.Text(
-            value=self.season_id,
+            value=self.season_id or "",
             description="Season ID:",
             placeholder="e.g., ShortRains",
             layout=widgets.Layout(width="60%", margin="0 0 0 12px"),
@@ -3926,7 +3993,7 @@ class WorldCerealClassificationApp:
 
         product_type_dropdown = widgets.Dropdown(
             options=[("Cropland", "cropland"), ("Croptype", "croptype")],
-            value="cropland",
+            value="croptype",
             description="Product type:",
             layout=widgets.Layout(width="240px"),
         )
@@ -3999,11 +4066,58 @@ class WorldCerealClassificationApp:
         postprocess_header = widgets.HTML("<h4>Postprocessing</h4>")
         export_header = widgets.HTML("<h4>Export</h4>")
 
+        # ----------------------------------------------------------------
+        # Resume section — continue from an existing output directory
+        # ----------------------------------------------------------------
+        resume_title = widgets.HTML(
+            value="<h3>Option to resume map production from an existing output directory</h3>"
+        )
+        resume_info = self._info_callout(
+            "If you have previously started a map generation run (in a <code>./runs/</code> folder), "
+            "you can resume it here instead of restarting from scratch.<br><br>"
+            "Provide the full path to an existing output directory and click <b>Resume production</b>.<br>"
+            "The app will verify that the required <code>production_grid.geoparquet</code>, "
+            "<code>job_tracking.csv</code> and <code>run_settings.json</code> files are present, "
+            "restore all original processing settings, and restart job submission for any unfinished tiles."
+        )
+        resume_input = widgets.Text(
+            value="",
+            description="Output dir:",
+            placeholder="./runs/croptype_mymodel_myruns_20250101-20251231",
+            layout=widgets.Layout(width="100%", margin="0 0 0 20px"),
+        )
+        resume_button = widgets.Button(
+            description="Resume production",
+            button_style="warning",
+            icon="play",
+            layout=widgets.Layout(width="200px", height="40px"),
+        )
+        restart_failed_checkbox = widgets.Checkbox(
+            value=False,
+            description="Restart failed jobs",
+            layout=widgets.Layout(width="220px"),
+        )
+        resume_output = widgets.Output(
+            layout=widgets.Layout(
+                width="100%",
+                min_height="80px",
+                border="1px solid #ccc",
+                padding="10px",
+            )
+        )
+        resume_section = widgets.VBox(
+            [
+                resume_title,
+                resume_info,
+                resume_input,
+                widgets.HBox([resume_button, restart_failed_checkbox]),
+                resume_output,
+            ]
+        )
+
         self.tab8_widgets = {
             "status_message": status_message,
             "aoi_map": aoi_map,
-            "aoi_save_button": aoi_save_button,
-            "aoi_save_output": aoi_save_output,
             "season_slider": season_slider_obj,
             "season_slider_output": season_slider_output,
             "season_hint": season_hint,
@@ -4030,6 +4144,10 @@ class WorldCerealClassificationApp:
             "tile_resolution_input": tile_resolution_input,
             "generate_button": generate_button,
             "output": output,
+            "resume_input": resume_input,
+            "resume_button": resume_button,
+            "restart_failed_checkbox": restart_failed_checkbox,
+            "resume_output": resume_output,
         }
 
         def _update_product_controls(_=None):
@@ -4080,13 +4198,14 @@ class WorldCerealClassificationApp:
         )
 
         generate_button.on_click(self._on_generate_map_click)
-        aoi_save_button.on_click(self._on_tab8_save_aoi_click)
+        aoi_map.submit_button.on_click(
+            lambda _: self._auto_save_aoi_map(self.tab8_widgets.get("aoi_map"))
+        )
         season_retrieve_button.on_click(self._on_tab8_retrieve_seasons)
+        resume_button.on_click(self._on_tab8_resume_click)
 
-        return widgets.VBox(
+        new_run_section = widgets.VBox(
             [
-                header,
-                status_message,
                 widgets.HTML("<h3>Note on upscaling</h3>"),
                 upscaling_short,
                 upscaling_info,
@@ -4097,8 +4216,6 @@ class WorldCerealClassificationApp:
                 aoi_map.map,
                 aoi_map.input,
                 aoi_map.output,
-                widgets.HBox([aoi_save_button]),
-                aoi_save_output,
                 widgets.HTML("<h3>2) Select season</h3>"),
                 season_retrieve_message,
                 season_hint,
@@ -4136,14 +4253,19 @@ class WorldCerealClassificationApp:
                 ),
                 widgets.HTML("<b>Map Generation Status:</b>"),
                 output,
+            ]
+        )
+        self.tab8_widgets["new_run_section"] = new_run_section
+
+        return widgets.VBox(
+            [
+                header,
+                status_message,
+                resume_section,
+                new_run_section,
                 self._build_tab_navigation(),
             ]
         )
-
-    def _on_tab8_save_aoi_click(self, _=None) -> None:
-        aoi_map = self.tab8_widgets.get("aoi_map")
-        output = self.tab8_widgets.get("aoi_save_output")
-        self._save_aoi_to_bbox(aoi_map, output)
 
     def _on_tab8_retrieve_seasons(self, _=None) -> None:
         """Retrieve and display WorldCereal seasons for the AOI in Tab 8."""
@@ -4162,6 +4284,149 @@ class WorldCerealClassificationApp:
                 retrieve_worldcereal_seasons(spatial_extent)
             except Exception as exc:
                 print(f"Failed to retrieve seasons: {exc}")
+
+    def _on_tab8_resume_click(self, _=None) -> None:
+        """Validate an existing output directory and resume map production from it."""
+        resume_input = self.tab8_widgets.get("resume_input")
+        resume_button = self.tab8_widgets.get("resume_button")
+        restart_failed_checkbox = self.tab8_widgets.get("restart_failed_checkbox")
+        resume_output = self.tab8_widgets.get("resume_output")
+        status_message = self.tab8_widgets.get("status_message")
+        if resume_input is None or resume_output is None:
+            return
+
+        path_value = resume_input.value.strip()
+        with resume_output:
+            resume_output.clear_output()
+            if not path_value:
+                print("Please provide an output directory path.")
+                return
+            path = Path(path_value)
+            if not path.exists():
+                print(f"Directory not found: {path}")
+                return
+            if not path.is_dir():
+                print("Path must be a directory.")
+                return
+
+            ok = True
+
+            # Check for model_metadata.json
+            if (path / "model_metadata.json").exists():
+                print("✓ model_metadata.json found")
+            else:
+                print(
+                    "✗ model_metadata.json not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for production grid
+            if (path / "production_grid.geoparquet").exists():
+                print("✓ production_grid.geoparquet found")
+            else:
+                print(
+                    "✗ production_grid.geoparquet not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for job tracking CSV
+            if (path / "job_tracking.csv").exists():
+                print("✓ job_tracking.csv found")
+            else:
+                print(
+                    "✗ job_tracking.csv not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            # Check for run settings
+            if (path / "run_settings.json").exists():
+                print("✓ run_settings.json found")
+            else:
+                print(
+                    "✗ run_settings.json not found — cannot resume map production from this directory."
+                )
+                ok = False
+
+            if not ok:
+                print(
+                    "\nCould not resume from this directory. "
+                    "Please check that all required files are present."
+                )
+                return
+
+            run_settings = self._load_run_settings(path)
+            if run_settings is None:
+                print("\nFailed to load run_settings.json. Cannot resume.")
+                return
+
+            self.tab8_results = path
+            self._load_model_metadata(path)
+            print(f"\nSuccessfully loaded output directory: {path}")
+            print(
+                "All original production settings restored. Starting map production..."
+            )
+
+        # Hide the form section and disable the button during production
+        new_run_section = self.tab8_widgets.get("new_run_section")
+        if new_run_section is not None:
+            new_run_section.layout.display = "none"
+        if resume_button is not None:
+            resume_button.disabled = True
+        if status_message is not None:
+            status_message.value = (
+                "<i>Resuming production... this may take a while.</i>"
+            )
+
+        # Build log/plot output widgets inside resume_output
+        log_out = widgets.Output()
+        plot_out = widgets.Output()
+        with resume_output:
+            display(log_out)
+            display(plot_out)
+
+        # aoi_gdf is required by the job manager constructor but is not used
+        # when an existing job_tracking.csv is present (resume path).
+        empty_aoi = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+        restart_failed = (
+            restart_failed_checkbox.value
+            if restart_failed_checkbox is not None
+            else False
+        )
+
+        # Merge run_settings with model info from model_metadata.json
+        # (already loaded into self.tab8_* by _load_model_metadata above)
+        full_production_kwargs = {
+            "aoi_gdf": empty_aoi,
+            "output_dir": path,
+            "temporal_extent": None,
+            "season_specifications": None,
+            "product_type": self.tab8_product_type or "cropland",
+            "seasonal_model_zip": self.tab8_seasonal_model_url,
+            "landcover_head_zip": self.tab8_landcover_head_url,
+            "croptype_head_zip": self.tab8_croptype_head_url,
+            "restart_failed": restart_failed,
+            **run_settings,
+        }
+
+        try:
+            _ = run_worldcereal_task_notebook(
+                task=WorldCerealTask.CLASSIFICATION,
+                production_kwargs=full_production_kwargs,
+                plot_out=plot_out,
+                log_out=log_out,
+                display_outputs=True,
+            )
+            if status_message is not None:
+                status_message.value = "<i>Production resumed and finished.</i>"
+        except Exception:  # noqa: BLE001
+            if status_message is not None:
+                status_message.value = "<i>Production failed. Check logs below.</i>"
+        finally:
+            if resume_button is not None:
+                resume_button.disabled = False
+
+        self._update_tab9_state()
 
     def _on_generate_map_click(self, button):
         """Handle map generation click."""
@@ -4396,6 +4661,29 @@ class WorldCerealClassificationApp:
             presto_model=presto_model_path,
         )
 
+        # Save all production settings so the run can be resumed with identical
+        # parameters without requiring the user to re-enter them.
+        # Model URLs and product_type are already persisted in model_metadata.json,
+        # so we only store the settings that aren't covered there.
+        # grid_size is intentionally excluded: it only affects the initial grid
+        # creation and is irrelevant on resume (the grid is loaded from disk).
+        self._save_run_settings(
+            output_dir=output_dir,
+            settings={
+                "enable_cropland_head": enable_cropland_head,
+                "enable_croptype_head": enable_croptype_head,
+                "enforce_cropland_gate": mask_cropland,
+                "export_class_probs": export_class_probs,
+                "enable_cropland_postprocess": cropland_pp_enabled,
+                "cropland_postprocess_method": cropland_pp_method,
+                "cropland_postprocess_kernel_size": cropland_pp_kernel,
+                "enable_croptype_postprocess": croptype_pp_enabled,
+                "croptype_postprocess_method": croptype_pp_method,
+                "croptype_postprocess_kernel_size": croptype_pp_kernel,
+                "simplify_logging": True,
+            },
+        )
+
         # Get processing spatial extent
         try:
             aoi_gdf = aoi_map.get_gdf()
@@ -4428,7 +4716,7 @@ class WorldCerealClassificationApp:
                     "landcover_head_zip": landcover_head_zip,
                     "enable_croptype_head": enable_croptype_head,
                     "croptype_head_zip": croptype_head_zip,
-                    "enforce_cropland_gate": mask_cropland,
+                    "mask_cropland": mask_cropland,
                     "export_class_probs": export_class_probs,
                     "enable_cropland_postprocess": cropland_pp_enabled,
                     "cropland_postprocess_method": cropland_pp_method,
@@ -4998,7 +5286,9 @@ class WorldCerealClassificationApp:
             authenticate_button.disabled = self.cdse_auth_in_progress
         return
 
-    def _update_tab8_state(self):
+    def _update_tab8_state(
+        self, reset_default: bool = False, prefill_season: bool = False
+    ):
         """Enable/disable Tab 8 (generate map) depending on model availability."""
         generate_button = self.tab8_widgets.get("generate_button")
         status_message = self.tab8_widgets.get("status_message")
@@ -5019,7 +5309,16 @@ class WorldCerealClassificationApp:
                 options.append(("Croptype", "croptype"))
             product_type_dropdown.options = options
             allowed_values = {value for _, value in options}
-            if product_type_dropdown.value not in allowed_values:
+            if reset_default:
+                # Set a mode-appropriate default value
+                if self.workflow_mode == "apply-default-model":
+                    mode_default = "cropland"
+                else:
+                    mode_default = (
+                        "croptype" if "croptype" in allowed_values else "cropland"
+                    )
+                product_type_dropdown.value = mode_default
+            elif product_type_dropdown.value not in allowed_values:
                 product_type_dropdown.value = "cropland"
 
         if season_hint is not None:
@@ -5053,6 +5352,39 @@ class WorldCerealClassificationApp:
             season_retrieve_button.layout.display = retrieve_display
         if season_retrieve_output is not None:
             season_retrieve_output.layout.display = retrieve_display
+
+        # Pre-fill season slider and Season ID from the trained model when requested.
+        if (
+            prefill_season
+            and self.workflow_mode != "apply-default-model"
+            and self.season_window is not None
+        ):
+            season_slider_output = self.tab8_widgets.get("season_slider_output")
+            if season_slider_output is not None:
+                # Preserve the trained-model start/end months but shift the year
+                # so the processing period always ends in 2025.
+                ws = pd.Timestamp(self.season_window.start_date)
+                we = pd.Timestamp(self.season_window.end_date)
+                end_year = 2025
+                start_year = 2025 if ws.month <= we.month else 2024
+                adj_end = (
+                    pd.Timestamp(end_year, we.month, 1)
+                    + pd.DateOffset(months=1)
+                    - pd.DateOffset(days=1)
+                )
+                adj_start = pd.Timestamp(start_year, ws.month, 1)
+                adjusted_window = TemporalContext(
+                    adj_start.strftime("%Y-%m-%d"),
+                    adj_end.strftime("%Y-%m-%d"),
+                )
+                season_slider_output.clear_output()
+                with season_slider_output:
+                    new_slider = date_slider(initial_window=adjusted_window)
+                self.tab8_widgets["season_slider"] = new_slider
+            season_id_input = self.tab8_widgets.get("season_id_input")
+            if season_id_input is not None and self.season_id:
+                season_id_input.value = self.season_id
+
         if generate_button and status_message:
             generate_button.disabled = False
             if self.workflow_mode == "apply-default-model":
@@ -5224,6 +5556,25 @@ class WorldCerealClassificationApp:
         }
         with open(output_dir / "model_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
+
+    def _save_run_settings(self, output_dir: Path, settings: dict) -> None:
+        """Persist all production kwargs (except aoi_gdf/output_dir/temporal/season)
+        to ``run_settings.json`` so a run can be resumed with identical settings."""
+        with open(output_dir / "run_settings.json", "w") as f:
+            json.dump(settings, f, indent=2)
+
+    def _load_run_settings(self, results_dir: Path) -> Optional[dict]:
+        """Load production settings saved by ``_save_run_settings``.
+        Returns the settings dict, or ``None`` if the file is missing or unreadable.
+        """
+        settings_path = results_dir / "run_settings.json"
+        if not settings_path.exists():
+            return None
+        try:
+            with open(settings_path) as f:
+                return json.load(f)
+        except Exception:
+            return None
 
     def _load_model_metadata(self, results_dir: Path) -> bool:
         """Restore model configuration from a previously saved results folder.
