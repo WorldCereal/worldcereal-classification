@@ -184,7 +184,7 @@ def get_label_points(
         """
         items: dict = {}
         seen_ids: set = set()
-        orbit_records: List[Tuple[Optional[str], object]] = []
+        orbit_records: List[Tuple[Optional[str], object, Optional[int]]] = []
         sample_orbit_epsg: dict = {}
         sample_orbit_size: dict = {}
         for query in queries:
@@ -199,7 +199,6 @@ def get_label_points(
                     items[sid] = geom
                 if capture_orbit:
                     orbit_state = item.properties.get("sat:orbit_state")
-                    orbit_records.append((orbit_state, geom))
                     item_epsg: Optional[int] = None
                     if "proj:epsg" in item.properties:
                         item_epsg = int(item.properties["proj:epsg"])
@@ -215,6 +214,7 @@ def get_label_points(
                             if asset_epsg is not None:
                                 item_epsg = int(asset_epsg)
                                 break
+                    orbit_records.append((orbit_state, geom, item_epsg))
                     if item_epsg is not None:
                         sample_orbit_epsg.setdefault(sid, {})[orbit_state] = item_epsg
                     # Best-effort file-size lookup for per-sample orbit
@@ -292,16 +292,30 @@ def get_label_points(
         prepare(patches_multi)
 
         # Extract unique h3_l3_cell values from the selected sample_ids.
-        # sample_id format: "<ref_id>_<h3_l3_cell><index>"
+        # sample_id format (most datasets): "<ref_id>_<h3_l3_cell><index>".
+        # Some datasets use a different per-sample id scheme (e.g. TZA
+        # COPERNICUS-GEOGLAM uses "<ref_id>_tz-988532-42") — in those cases
+        # the "first 15 chars after the prefix" trick yields garbage. We
+        # validate each candidate as a real H3 L3 cell (lowercase 15-char
+        # hex starting with "83"); non-matching ids are simply skipped,
+        # which makes the downstream pre-filter fall back to no h3 filter
+        # and rely on geometric intersection only.
+        import re
+        H3_L3_RE = re.compile(r"^83[0-9a-f]{13}$")
         ref_id_prefix = row["ref_id"] + "_"
         h3_cells = set()
         for sid in selected_sample_ids:
             rest = sid[len(ref_id_prefix):]
-            # h3 L3 cell ids are 15-char hex strings like "831e20fffffffff"
             if len(rest) >= 15:
-                h3_cells.add(rest[:15])
+                candidate = rest[:15]
+                if H3_L3_RE.match(candidate):
+                    h3_cells.add(candidate)
 
-        logger.info(f"Pre-filtering ground truth on {len(h3_cells)} H3 L3 cells")
+        logger.info(
+            f"Pre-filtering ground truth on {len(h3_cells)} H3 L3 cells"
+            + (" (none recognised — falling back to geometry-only intersect)"
+               if not h3_cells else "")
+        )
 
         read_columns = [c for c in RDM_DEFAULT_COLUMNS if c != "ref_id"]
         pf = pq.ParquetFile(ground_truth_file)
@@ -369,7 +383,10 @@ def get_label_points(
         if chunks:
             gdf = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True))
         else:
-            gdf = gpd.GeoDataFrame(columns=read_columns)
+            # Empty fallback still needs a CRS so the downstream
+            # `gdf_to_points` (which calls to_crs) doesn't choke. The chunk
+            # geometries above were built in EPSG:4326, so match that here.
+            gdf = gpd.GeoDataFrame(columns=read_columns, geometry=[], crs="EPSG:4326")
 
         gdf["ref_id"] = row["ref_id"]
 
@@ -467,7 +484,7 @@ def _has_s1_patches_for_cell_epsg(
 
 def _classify_samples_by_orbit(
     group_df: gpd.GeoDataFrame,
-    s1_patches: List[Tuple[Optional[str], object]],
+    s1_patches: List[Tuple[Optional[str], object, Optional[int]]],
     s1_sample_orbit_size: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> pd.Series:
     """Classify each sample by which S1 orbit(s) cover it.
@@ -486,8 +503,8 @@ def _classify_samples_by_orbit(
     if not s1_patches:
         return pd.Series([None] * len(group_df), index=group_df.index, dtype=object)
 
-    orbits = [o for o, _ in s1_patches]
-    tree = STRtree([g for _, g in s1_patches])
+    orbits = [rec[0] for rec in s1_patches]
+    tree = STRtree([rec[1] for rec in s1_patches])
     hits = tree.query(group_df.geometry.values, predicate="intersects")
 
     orbit_sets: List[set] = [set() for _ in range(len(group_df))]
@@ -528,7 +545,7 @@ def _classify_samples_by_orbit(
 
 def _resolve_orbit_split(
     sample_orbit: pd.Series,
-    s1_patches: List[Tuple[Optional[str], object]],
+    s1_patches: List[Tuple[Optional[str], object, Optional[int]]],
     group_df: gpd.GeoDataFrame,
     temporal_extent: TemporalContext,
 ) -> pd.Series:
@@ -573,8 +590,8 @@ def _resolve_orbit_split(
         if n_asc_only or n_desc_only:
             target = "ASCENDING" if n_asc_only >= n_desc_only else "DESCENDING"
         else:
-            asc_patches = sum(1 for o, _ in s1_patches if o == "ASCENDING")
-            desc_patches = sum(1 for o, _ in s1_patches if o == "DESCENDING")
+            asc_patches = sum(1 for rec in s1_patches if rec[0] == "ASCENDING")
+            desc_patches = sum(1 for rec in s1_patches if rec[0] == "DESCENDING")
             target = "ASCENDING" if asc_patches >= desc_patches else "DESCENDING"
 
     return sample_orbit.replace("BOTH", target).fillna(target)
@@ -842,6 +859,71 @@ def create_job_dataframe_patch_to_point_worldcereal(
                     f"{len(orbit_buckets)} job(s) ({bucket_summary})"
                 )
 
+            # Build a per-orbit STRtree of S1 patch geometries with their
+            # EPSG, used to look up the covering S1 EPSG for COLLATERAL
+            # samples (samples without their own STAC patch entry — they're
+            # collected via geographic intersection with a primary's S2
+            # footprint). The primary's S1 patch can live in a different
+            # UTM zone than its S2 patch, and collaterals must inherit that
+            # S1 EPSG or their job will load S1 from the wrong UTM zone and
+            # return all-nodata at their location.
+            orbit_to_geoms_epsgs: Dict[Optional[str], Tuple[list, list]] = {}
+            for rec_orbit, rec_geom, rec_epsg in s1_patches:
+                if rec_epsg is None:
+                    continue
+                g_list, e_list = orbit_to_geoms_epsgs.setdefault(
+                    rec_orbit, ([], [])
+                )
+                g_list.append(rec_geom)
+                e_list.append(rec_epsg)
+            orbit_to_tree: Dict[Optional[str], Tuple[STRtree, list]] = {
+                o: (STRtree(geoms), epsgs)
+                for o, (geoms, epsgs) in orbit_to_geoms_epsgs.items()
+            }
+
+            # Most-populous EPSG per orbit, used as a safe fallback when a
+            # bucket's S2 EPSG has zero S1 patches (e.g. a small UTM zone at
+            # a country's edge where S2 was extracted but S1 wasn't). Without
+            # this, the openEO load_stac would crash with "head of empty
+            # list" because the (orbit, EPSG) filter returns no items.
+            from collections import Counter as _C
+            fallback_s1_epsg_per_orbit: Dict[Optional[str], int] = {}
+            for o, (_, epsgs) in orbit_to_geoms_epsgs.items():
+                if epsgs:
+                    fallback_s1_epsg_per_orbit[o] = (
+                        _C(epsgs).most_common(1)[0][0]
+                    )
+
+            def _lookup_collateral_s1_epsg(point, orbit_state, default_epsg):
+                """Find the S1 EPSG of the patch (for the given orbit) that
+                covers `point`. Prefers `default_epsg` if available among
+                covering patches; otherwise picks the most common covering
+                EPSG. If no patch covers the point, returns `default_epsg`
+                IF that EPSG has at least one S1 patch for the orbit;
+                otherwise falls back to the most-populous EPSG for that
+                orbit so load_stac doesn't crash on an empty result.
+                """
+                if orbit_state is None or orbit_state not in orbit_to_tree:
+                    return default_epsg
+                tree, epsg_list = orbit_to_tree[orbit_state]
+                hits = tree.query(point, predicate="intersects")
+                if len(hits) > 0:
+                    covering = [epsg_list[int(i)] for i in hits]
+                    if default_epsg in covering:
+                        return default_epsg
+                    most_common = _C(covering).most_common()
+                    return min(
+                        e for e, c in most_common if c == most_common[0][1]
+                    )
+                # Sample doesn't intersect any S1 patch. Use the default only
+                # if it has patches for this orbit; otherwise re-route to the
+                # most-populous EPSG so the job at least loads successfully
+                # (S1 will simply be nodata at this sample's location).
+                valid_epsgs = set(epsg_list)
+                if default_epsg in valid_epsgs:
+                    return default_epsg
+                return fallback_s1_epsg_per_orbit.get(orbit_state, default_epsg)
+
             for orbit, sub_df in orbit_buckets:
                 # Split the orbit bucket by per-sample S1 EPSG so each job
                 # has a single S1 EPSG. This avoids merging S1 cubes across
@@ -851,12 +933,19 @@ def create_job_dataframe_patch_to_point_worldcereal(
                 # stay in the dominant-S1-EPSG job.
                 bucket_default_s1_epsg = int(row.epsg)
                 sample_s1_epsg_for_bucket: dict = {}
+                geom_lookup = dict(zip(sub_df["sample_id"], sub_df.geometry))
                 for sid in sub_df["sample_id"]:
                     om = s1_sample_orbit_epsg.get(sid, {})
                     e = om.get(orbit) if orbit is not None else None
-                    sample_s1_epsg_for_bucket[sid] = (
-                        e if e is not None else bucket_default_s1_epsg
-                    )
+                    if e is None:
+                        # Collateral sample: no own S1 patch in STAC. Use the
+                        # actual covering patch's EPSG (per orbit), not the
+                        # bucket's S2 EPSG default — otherwise cross-UTM-zone
+                        # collaterals lose their S1 data.
+                        e = _lookup_collateral_s1_epsg(
+                            geom_lookup[sid], orbit, bucket_default_s1_epsg
+                        )
+                    sample_s1_epsg_for_bucket[sid] = e
                 sub_df_with_s1 = sub_df.copy()
                 sub_df_with_s1["__s1_epsg"] = sub_df_with_s1["sample_id"].map(
                     sample_s1_epsg_for_bucket
@@ -1067,6 +1156,19 @@ def post_job_action_point_worldcereal(parquet_file):
             f"Removed {removed_samples} samples with all S1 and S2 bands as nodata."
         )
         gdf = gdf[gdf["sample_id"].isin(valid_sample_ids)]
+
+    # If the all-nodata filter drained every sample, write back an empty
+    # parquet (with the post-filter schema) so the downstream merge step's
+    # file-count check still passes. This happens for "leftover" jobs whose
+    # samples sit outside any S1 *and* S2 patch footprint (e.g. UTM-edge
+    # collaterals routed to a fallback S1 EPSG just to keep load_stac alive).
+    if len(gdf) == 0:
+        logger.warning(
+            f"{parquet_file.name}: all samples filtered out (no valid S1/S2 "
+            "data anywhere). Writing empty parquet."
+        )
+        gdf.to_parquet(parquet_file, index=False)
+        return
 
     # Do some checks and perform corrections
     assert (
