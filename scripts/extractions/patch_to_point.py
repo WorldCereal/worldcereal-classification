@@ -68,6 +68,12 @@ def merge_individual_parquet_files(
     # duplicate sample_ids across files
     for file in parquet_files:
         gdf = gpd.read_parquet(file)
+        # Skip empty parquets (e.g. jobs whose samples all ended up as
+        # all-nodata after filtering). Including them in pd.concat downgrades
+        # the timestamp dtype from datetime to object and breaks .dt below.
+        if len(gdf) == 0:
+            logger.info(f"Skipping empty parquet: {file.name}")
+            continue
         # Keep only rows with unseen sample_ids
         gdf_filtered = gdf[~gdf["sample_id"].isin(seen_ids)].copy()
 
@@ -174,7 +180,18 @@ def main(
 
     if job_db.exists():
         logger.info(f"Job tracking file found at {job_tracking_path}.")
-        if restart_failed:
+        # A header-only CSV is the leftover from a previous failed bootstrap
+        # (e.g. S2 STAC had no patches yet). Treat it as missing so we try
+        # to rebuild it from a now-populated STAC instead of silently
+        # skipping the dataset forever.
+        if len(job_db.read()) == 0:
+            logger.info(
+                f"Existing job tracking has 0 rows — discarding and rebuilding "
+                f"from STAC for {ref_id}."
+            )
+            job_tracking_path.unlink()
+            job_db = CsvJobDatabase(path=job_tracking_path)
+        elif restart_failed:
             logger.info("Resetting failed jobs.")
             job_df = job_db.read()
             job_df.loc[
@@ -190,7 +207,25 @@ def main(
             only_flagged_samples,
             max_samples_per_job,
         )
+        if job_df.empty:
+            logger.warning(
+                f"No jobs were created for {ref_id} (most often because the "
+                "S2 STAC has no patches for this ref_id yet). "
+                "Skipping this dataset — re-run once the S2 extraction has "
+                "indexed at least one patch."
+            )
+            return
         job_db.initialize_from_df(job_df)
+
+    # Always (re-)read the persisted job table so `job_df` is defined whether
+    # we created it just now or loaded an existing tracking CSV.
+    job_df = job_db.read()
+    if len(job_df) == 0:
+        logger.warning(
+            f"Job tracking at {job_tracking_path} has no rows even after "
+            "rebuild attempt. Skipping."
+        )
+        return
 
     manager = PatchToPointJobManager(root_dir=output_folder)
     manager.add_backend(
@@ -208,13 +243,20 @@ def main(
     # extra times. The job manager itself only re-submits rows in
     # 'not_started' state, so we flip 'error'/'postprocessing-error' rows
     # back to 'not_started' between passes.
+    #
+    # Note: we deliberately bypass `job_db.persist(...)` here. After
+    # run_jobs() the CsvJobDatabase holds an internal `_df` cache with strict
+    # Arrow-backed string dtypes, and `persist()` goes through a `_df.update`
+    # merge that crashes on dtype mismatches when our re-read dataframe is
+    # inferred slightly differently. Writing the CSV directly and resetting
+    # the cache forces a clean re-read on the next run_jobs() pass.
     for attempt in range(max_retries + 1):
         manager.run_jobs(start_job=start_job_fn, job_db=job_db)
 
         if attempt >= max_retries:
             break
 
-        latest_df = job_db.read()
+        latest_df = pd.read_csv(job_tracking_path)
         failed_mask = latest_df["status"].isin(["error", "postprocessing-error"])
         n_failed = int(failed_mask.sum())
         if n_failed == 0:
@@ -225,7 +267,10 @@ def main(
             "ended in error; resetting to 'not_started' for re-submission."
         )
         latest_df.loc[failed_mask, "status"] = "not_started"
-        job_db.persist(latest_df)
+        latest_df.to_csv(job_tracking_path, index=False)
+        # Invalidate the manager's cached dataframe so the next run_jobs()
+        # re-reads the CSV with its updated 'not_started' rows.
+        job_db._df = None
 
     # Merge all subparquets
     logger.info("Merging individual files ...")
