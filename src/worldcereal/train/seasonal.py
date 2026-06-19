@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from typing import Literal, Tuple
+from typing import List, Literal, Tuple
 
 import numpy as np
 import pandas as pd
@@ -91,6 +91,25 @@ def composite_window_end(
     """
 
     return advance_composite_slot(dt_in, timestep_freq) - np.timedelta64(1, "D")
+
+
+def enumerate_composite_slots(
+    start: np.datetime64, end: np.datetime64, timestep_freq: CompositeFreq
+) -> List[np.datetime64]:
+    """List the composite-window starts from ``start`` to ``end`` (inclusive).
+
+    Both bounds are expected to be composite-aligned (see
+    `align_to_composite_window`). Returns an empty list when ``end < start``.
+    """
+
+    if end < start:
+        return []
+    slots: List[np.datetime64] = [start]
+    current = start
+    while current < end:
+        current = advance_composite_slot(current, timestep_freq)
+        slots.append(current)
+    return slots
 
 
 def _as_day(value: DateLike) -> np.datetime64:
