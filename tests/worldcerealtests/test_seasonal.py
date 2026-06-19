@@ -21,6 +21,7 @@ from worldcereal.train.seasonal import (
     align_to_composite_window,
     composite_window_end,
     date_in_season,
+    enumerate_composite_slots,
     in_season_window,
     resolve_season_bounds,
     season_window_from_dates,
@@ -135,6 +136,29 @@ class TestCompositeWindowEnd:
             start = align_to_composite_window(_d(date), "dekad")
             end = composite_window_end(_d(date), "dekad")
             assert start <= _d(date) <= end
+
+
+class TestEnumerateCompositeSlots:
+    def test_month_inclusive_range(self):
+        slots = enumerate_composite_slots(_d("2023-02-01"), _d("2023-05-01"), "month")
+        assert slots == [_d(s) for s in ("2023-02-01", "2023-03-01", "2023-04-01", "2023-05-01")]
+
+    def test_dekad_range_walks_1_11_21(self):
+        slots = enumerate_composite_slots(_d("2023-08-01"), _d("2023-09-01"), "dekad")
+        assert slots == [
+            _d(s)
+            for s in ("2023-08-01", "2023-08-11", "2023-08-21", "2023-09-01")
+        ]
+
+    def test_single_slot_when_start_equals_end(self):
+        assert enumerate_composite_slots(_d("2023-08-01"), _d("2023-08-01"), "month") == [
+            _d("2023-08-01")
+        ]
+
+    def test_empty_when_end_before_start(self):
+        assert (
+            enumerate_composite_slots(_d("2023-08-01"), _d("2023-02-01"), "month") == []
+        )
 
 
 # ---------------------------------------------------------------------------
