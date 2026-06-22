@@ -120,7 +120,7 @@ def _as_day(value: DateLike) -> np.datetime64:
     return np.datetime64(pd.Timestamp(value), "D")
 
 
-def _coerce_date_for_year(year: int, month: int, day: int) -> np.datetime64:
+def coerce_date_for_year(year: int, month: int, day: int) -> np.datetime64:
     """Build a numpy datetime64, clamping the day to the month's max if needed."""
 
     last_day = calendar.monthrange(year, month)[1]
@@ -174,8 +174,8 @@ def resolve_season_bounds(
         after_end = (ref.month, ref.day) > (window.end_month, window.end_day)
         start_year = ref.year if after_end else ref.year - 1
 
-    start = _coerce_date_for_year(start_year, window.start_month, window.start_day)
-    end = _coerce_date_for_year(
+    start = coerce_date_for_year(start_year, window.start_month, window.start_day)
+    end = coerce_date_for_year(
         start_year + window.year_offset, window.end_month, window.end_day
     )
     return start, end

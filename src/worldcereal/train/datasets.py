@@ -47,7 +47,7 @@ from worldcereal.train import (
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.seasonal import (
     SeasonWindow,
-    _coerce_date_for_year,
+    coerce_date_for_year,
     align_to_composite_window,
     date_in_season,
     enumerate_composite_slots,
@@ -1561,9 +1561,9 @@ class WorldCerealDataset(Dataset):
 
         cycles: List[Tuple[np.datetime64, np.datetime64]] = []
         for year in sorted(base_years):
-            start_dt = _coerce_date_for_year(year, window.start_month, window.start_day)
+            start_dt = coerce_date_for_year(year, window.start_month, window.start_day)
             end_year = year + window.year_offset
-            end_dt = _coerce_date_for_year(end_year, window.end_month, window.end_day)
+            end_dt = coerce_date_for_year(end_year, window.end_month, window.end_day)
             start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
             end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
             if end_aligned < start_aligned:
