@@ -1,4 +1,3 @@
-import calendar
 import glob
 import importlib.resources
 import json
@@ -750,42 +749,6 @@ def get_best_valid_time(
     return np.nan
 
 
-def _season_window_membership(
-    timestamp: Optional[pd.Timestamp],
-    *,
-    start_month: int,
-    start_day: int,
-    end_month: int,
-    end_day: int,
-    year_offset: int,
-) -> bool:
-    if timestamp is None or pd.isna(timestamp):
-        return False
-
-    ts = pd.Timestamp(timestamp)
-
-    def _coerce(year: int, month: int, day: int) -> pd.Timestamp:
-        safe_day = min(day, calendar.monthrange(year, month)[1])
-        return pd.Timestamp(year=year, month=month, day=safe_day)
-
-    if year_offset not in (0, 1):
-        raise ValueError(
-            "season_window only supports spans up to 12 months (year_offset must be 0 or 1)."
-        )
-
-    if year_offset == 0:
-        start_year = ts.year
-    else:
-        ts_tuple = (ts.month, ts.day)
-        end_tuple = (end_month, end_day)
-        start_year = ts.year if ts_tuple > end_tuple else ts.year - 1
-
-    start_dt = _coerce(start_year, start_month, start_day)
-    end_dt = _coerce(start_year + year_offset, end_month, end_day)
-    # Inclusive on both boundaries: samples on start_date and end_date are kept
-    return start_dt <= ts <= end_dt
-
-
 def process_extractions_df(
     df_raw: Union[pd.DataFrame, gpd.GeoDataFrame],
     processing_period: TemporalContext = None,
@@ -832,6 +795,7 @@ def process_extractions_df(
     The function preserves the original 'valid_time' even when samples are aligned to a new temporal context.
     """
 
+    from worldcereal.train.seasonal import in_season_window, season_window_from_dates
     from worldcereal.utils.legend import ewoc_code_to_label
     from worldcereal.utils.timeseries import (
         DataFrameValidator,
@@ -966,13 +930,7 @@ def process_extractions_df(
 
     if season_window is not None:
         season_start, season_end = season_window.to_datetime()
-        if season_end < season_start:
-            raise ValueError(
-                "season_window end date must be greater than or equal to the start date."
-            )
-        year_offset = season_end.year - season_start.year
-        if year_offset < 0 or year_offset > 1:
-            raise ValueError("season_window may span at most 12 consecutive months.")
+        window = season_window_from_dates(season_start, season_end)
 
         valid_times = pd.to_datetime(df_processed["valid_time"], errors="coerce")
         missing_valid = valid_times.isna()
@@ -989,15 +947,11 @@ def process_extractions_df(
                 f"Dropping {int(missing_valid.sum())} samples without a valid_time while enforcing the manual season window:\n{counts_table}"
             )
 
+        # Composite-aware membership: compare the exact valid_time against the
+        # season's composite-window edges (month/dekad), matching the in_season
+        # flag computed later in the dataset so the two stages stay consistent.
         in_window = valid_times.apply(
-            lambda ts: _season_window_membership(
-                ts,
-                start_month=season_start.month,
-                start_day=season_start.day,
-                end_month=season_end.month,
-                end_day=season_end.day,
-                year_offset=year_offset,
-            )
+            lambda ts: pd.notna(ts) and in_season_window(ts, window, freq=freq)
         )
         in_window &= ~missing_valid
 
