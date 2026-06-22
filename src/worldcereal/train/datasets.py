@@ -47,8 +47,8 @@ from worldcereal.train import (
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.seasonal import (
     SeasonWindow,
-    coerce_date_for_year,
     align_to_composite_window,
+    coerce_date_for_year,
     date_in_season,
     enumerate_composite_slots,
     in_season_window,
@@ -277,8 +277,9 @@ def _filter_frame_by_manual_windows(
     keep_mask = pd.Series(False, index=dataframe.index, dtype=bool)
     for season_name, window in season_windows.items():
         keep_mask |= label_datetimes.apply(
-            lambda ts, w=window: pd.notna(ts)
-            and in_season_window(ts, w, freq=timestep_freq)
+            lambda ts, w=window: (
+                pd.notna(ts) and in_season_window(ts, w, freq=timestep_freq)
+            )
         )
 
     missing = label_datetimes.isna().sum()
@@ -1652,7 +1653,6 @@ class WorldCerealDataset(Dataset):
         )
         return mask.astype(bool, copy=False), in_flag
 
-
     def _season_context_for(
         self,
         season_id: str,
@@ -2291,9 +2291,7 @@ class DualHeadBatchSampler(Sampler):
                     for reg, cmults in mults_canonical.items()
                 }
                 applied = {k: v for k, v in applied.items() if v}
-                logger.info(
-                    f"Applied {pool_name} class weight multipliers: {applied}"
-                )
+                logger.info(f"Applied {pool_name} class weight multipliers: {applied}")
                 return class_arr * mult_arr
 
             lc_class_arr = _apply(
