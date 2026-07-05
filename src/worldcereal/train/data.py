@@ -71,7 +71,19 @@ def _attach_regions_from_boundaries(
     *,
     boundaries_path: Path,
     target_mask: Optional[pd.Series] = None,
+    region_column: str = "region",
 ) -> pd.DataFrame:
+    """Spatial-join each sample to its administrative region.
+
+    Parameters
+    ----------
+    region_column:
+        Name of the column to write region labels into (and to read existing
+        labels from).  Defaults to ``"region"``.  Set to e.g. ``"county"`` to
+        populate a different geographic column using the same boundaries file
+        — the source column in the boundaries GeoParquet is always
+        ``"region"``.
+    """
     if "lat" not in df.columns or "lon" not in df.columns:
         raise ValueError("Region enrichment requires 'lat' and 'lon' columns.")
 
@@ -89,8 +101,8 @@ def _attach_regions_from_boundaries(
     world_df = world_df[["region", "geometry"]].copy()
 
     # Mutate df in-place rather than copying the whole (potentially 7M-row) frame.
-    if "region" not in df.columns:
-        df["region"] = pd.NA
+    if region_column not in df.columns:
+        df[region_column] = pd.NA
 
     lat = pd.to_numeric(df["lat"], errors="coerce")
     lon = pd.to_numeric(df["lon"], errors="coerce")
@@ -151,12 +163,12 @@ def _attach_regions_from_boundaries(
         del gdf, world_df, world_4326
         region_series = joined["region"].reindex(coords.index)
         del joined, coords
-        df.loc[region_series.index, "region"] = region_series
+        df.loc[region_series.index, region_column] = region_series
 
-    missing = int(df["region"].isna().sum())
+    missing = int(df[region_column].isna().sum())
     if missing:
         logger.warning(
-            f"Region enrichment left {missing} samples without a region assignment."
+            f"Region enrichment left {missing} samples without a '{region_column}' assignment."
         )
 
     return df
@@ -925,6 +937,7 @@ def get_training_dfs_from_parquet(
     overwrite: bool = False,
     wide_parquet_output_path: Optional[Union[Path, str]] = None,
     force_recompute_regions: bool = False,
+    region_column: str = "region",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Prepare training, validation, and test DataFrames from parquet files for presto model fine-tuning.
@@ -1171,16 +1184,19 @@ def get_training_dfs_from_parquet(
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
 
-    if force_recompute_regions and "region" in df.columns:
-        logger.info("force_recompute_regions=True: dropping existing 'region' column to trigger full recomputation.")
-        df = df.drop(columns=["region"])
+    if force_recompute_regions and region_column in df.columns:
+        logger.info(
+            f"force_recompute_regions=True: dropping existing '{region_column}' column "
+            "to trigger full recomputation."
+        )
+        df = df.drop(columns=[region_column])
 
     normalized_regions = _normalize_region_filter(region_filter)
     if normalized_regions is not None:
         logger.info(f"Region filter requested: {normalized_regions}")
 
-    if "region" in df.columns:
-        region_series = df["region"]
+    if region_column in df.columns:
+        region_series = df[region_column]
         region_missing_mask = region_series.isna() | region_series.astype(
             str
         ).str.strip().eq("")
@@ -1194,10 +1210,13 @@ def get_training_dfs_from_parquet(
 
     if should_enrich_regions:
         logger.info(
-            "Enriching samples with region labels using administrative boundaries."
+            f"Enriching samples with '{region_column}' labels using administrative boundaries."
         )
         df = _attach_regions_from_boundaries(
-            df, boundaries_path=_BOUNDARIES_PATH, target_mask=region_missing_mask
+            df,
+            boundaries_path=_BOUNDARIES_PATH,
+            target_mask=region_missing_mask,
+            region_column=region_column,
         )
         if not is_tempfile:
             tbl = pa.Table.from_pandas(df, preserve_index=False)
@@ -1217,9 +1236,9 @@ def get_training_dfs_from_parquet(
         logger.info(
             f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
         )
-    elif normalized_regions is not None and "region" not in df.columns:
+    elif normalized_regions is not None and region_column not in df.columns:
         raise ValueError(
-            "Region filtering requested but no region labels were found or generated."
+            f"Region filtering requested but '{region_column}' column was not found or generated."
         )
 
     if ignore_samples_file is not None:
@@ -1234,12 +1253,12 @@ def get_training_dfs_from_parquet(
         )
 
     if normalized_regions is not None:
-        if "region" not in df.columns:
+        if region_column not in df.columns:
             raise ValueError(
-                "Region filtering requested but 'region' column is missing."
+                f"Region filtering requested but '{region_column}' column is missing."
             )
         region_keys = [region.casefold() for region in normalized_regions]
-        region_series = df["region"].fillna("").astype(str).str.casefold()
+        region_series = df[region_column].fillna("").astype(str).str.casefold()
         mask = region_series.isin(region_keys)
         available_regions = set(region_series.unique())
         missing_regions = [
@@ -1250,19 +1269,19 @@ def get_training_dfs_from_parquet(
         if missing_regions:
             available_sorted = sorted(r for r in available_regions if r)
             raise ValueError(
-                f"Requested region(s) not found in the dataset: {missing_regions}. "
-                f"Available regions: {available_sorted}"
+                f"Requested region(s) not found in '{region_column}' column: {missing_regions}. "
+                f"Available values: {available_sorted}"
             )
         filtered = df.loc[mask].copy()
         if filtered.empty:
-            available = sorted(df["region"].dropna().unique().tolist())
+            available = sorted(df[region_column].dropna().unique().tolist())
             raise ValueError(
                 "Region filtering removed all samples. "
                 f"Requested regions: {normalized_regions}. "
-                f"Available regions in this dataset: {available}"
+                f"Available '{region_column}' values in this dataset: {available}"
             )
         logger.info(
-            f"Filtered dataset to {len(filtered)} samples in regions: {normalized_regions}"
+            f"Filtered dataset to {len(filtered)} samples in '{region_column}': {normalized_regions}"
         )
         df = filtered
 

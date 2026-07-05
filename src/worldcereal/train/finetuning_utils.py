@@ -1224,6 +1224,7 @@ def prepare_training_datasets(
     eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
     season_windows: Optional[Mapping] = None,
+    region_column: str = "region",
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -1308,6 +1309,7 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -1325,6 +1327,7 @@ def prepare_training_datasets(
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -1342,6 +1345,7 @@ def prepare_training_datasets(
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
     )
     return train_ds, val_ds, test_ds
 

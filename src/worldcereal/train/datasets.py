@@ -1414,7 +1414,9 @@ class WorldCerealDataset(Dataset):
             if key == "region":
                 # Always emit "region" with a fallback so _collate_attrs sees a
                 # consistent key across all samples in a batch, even when some
-                # rows have a missing/NaN region value.
+                # rows have a missing/NaN region value. Read from the configured
+                # region_column (may differ from "region" if parameterised).
+                value = row.get(self._region_column)
                 attrs["region"] = (
                     str(value)
                     if (value is not None and not _is_missing_value(value))
@@ -1815,6 +1817,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_calendar_mode: SeasonCalendarMode = "auto",
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
+        region_column: str = "region",
         **kwargs,
     ):
         """Labelled version of WorldCerealDataset for supervised training.
@@ -1877,6 +1880,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         self.label_jitter = label_jitter
         self.label_window = label_window
         self.return_sample_id = return_sample_id
+        self._region_column = region_column
         self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
             season_windows
         )
@@ -2090,6 +2094,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
+        region_column: str = "region",
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2113,6 +2118,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             num_batches=num_batches,
             generator=generator,
             class_weight_multipliers=class_weight_multipliers,
+            region_column=region_column,
         )
 
 
@@ -2144,6 +2150,78 @@ def _normalize_class_weight_multipliers(
         "class_weight_multipliers must be either per-class (class→float) "
         "or per-region (region→{class→float}), not mixed."
     )
+
+
+def apply_class_weight_multipliers(
+    sampler_weights: np.ndarray,
+    labels: np.ndarray,
+    regions: Optional[np.ndarray],
+    mults_canonical: Dict[str, Dict[str, float]],
+    pool_name: str = "",
+) -> np.ndarray:
+    """Multiply ``sampler_weights`` by per-region/per-class multipliers.
+
+    Parameters
+    ----------
+    sampler_weights:
+        Per-sample float64 weight array of length N.
+    labels:
+        String label array of length N (e.g. ``landcover_label`` or
+        ``croptype_label`` values).
+    regions:
+        Optional string region array of length N.  ``None`` or a missing
+        value causes the wildcard ``"*"`` entry to be used.
+    mults_canonical:
+        Canonical multiplier dict as returned by
+        ``_normalize_class_weight_multipliers`` — keys are region names (or
+        ``"*"``), values are ``{class_name: float}`` dicts.
+    pool_name:
+        Optional label for log messages.
+
+    Returns
+    -------
+    np.ndarray
+        ``sampler_weights * mult_arr`` (a new array; input is not mutated).
+    """
+    if not mults_canonical:
+        return sampler_weights
+
+    wildcard = mults_canonical.get("*", {})
+    label_set = set(labels.tolist())
+
+    def _lookup(reg: Optional[str], lbl: str) -> float:
+        if reg is not None:
+            reg_dict = mults_canonical.get(reg)
+            if reg_dict is not None and lbl in reg_dict:
+                return reg_dict[lbl]
+        return wildcard.get(lbl, 1.0)
+
+    regs_iter = regions if regions is not None else [None] * len(labels)
+    mult_arr = np.array(
+        [_lookup(r, lbl) for r, lbl in zip(regs_iter, labels)],
+        dtype=np.float64,
+    )
+    if np.allclose(mult_arr, 1.0):
+        return sampler_weights
+
+    applied = {
+        reg: {c: w for c, w in cmults.items() if c in label_set}
+        for reg, cmults in mults_canonical.items()
+    }
+    applied = {k: v for k, v in applied.items() if v}
+    prefix = f"[{pool_name}] " if pool_name else ""
+    logger.info(f"{prefix}Applied class weight multipliers: {applied}")
+
+    # Warn about classes that don't appear in the label set.
+    for reg, cmults in mults_canonical.items():
+        for c in cmults:
+            if c not in label_set:
+                logger.warning(
+                    f"{prefix}class_weight_multipliers[{reg!r}][{c!r}] not found "
+                    "in label set; ignoring."
+                )
+
+    return sampler_weights * mult_arr
 
 
 class DualHeadBatchSampler(Sampler):
@@ -2216,6 +2294,7 @@ class DualHeadBatchSampler(Sampler):
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
+        region_column: str = "region",
     ) -> None:
         import math
 
@@ -2346,57 +2425,18 @@ class DualHeadBatchSampler(Sampler):
             mults_canonical = _normalize_class_weight_multipliers(
                 class_weight_multipliers
             )
-            lc_label_set = set(lc_labels.tolist())
-            ct_label_set = set(ct_labels.tolist())
-            has_region = "region" in dataframe.columns
+            has_region = region_column in dataframe.columns
             lc_regions = (
-                dataframe["region"].astype(str).to_numpy() if has_region else None
+                dataframe[region_column].astype(str).to_numpy() if has_region else None
             )
             ct_regions = lc_regions[ct_real_indices] if lc_regions is not None else None
-            wildcard = mults_canonical.get("*", {})
 
-            def _lookup(reg: Optional[str], lbl: str) -> float:
-                if reg is not None:
-                    reg_dict = mults_canonical.get(reg)
-                    if reg_dict is not None and lbl in reg_dict:
-                        return reg_dict[lbl]
-                return wildcard.get(lbl, 1.0)
-
-            def _apply(regions, labels, label_set, class_arr, pool_name):
-                regs_iter = regions if regions is not None else [None] * len(labels)
-                mult_arr = np.array(
-                    [_lookup(r, lbl) for r, lbl in zip(regs_iter, labels)],
-                    dtype=np.float64,
-                )
-                if np.allclose(mult_arr, 1.0):
-                    return class_arr
-                # Surface only the (region, class) entries that hit this pool.
-                applied = {
-                    reg: {c: w for c, w in cmults.items() if c in label_set}
-                    for reg, cmults in mults_canonical.items()
-                }
-                applied = {k: v for k, v in applied.items() if v}
-                logger.info(
-                    f"Applied {pool_name} class weight multipliers: {applied}"
-                )
-                return class_arr * mult_arr
-
-            lc_class_arr = _apply(
-                lc_regions, lc_labels, lc_label_set, lc_class_arr, "LC"
+            lc_class_arr = apply_class_weight_multipliers(
+                lc_class_arr, lc_labels, lc_regions, mults_canonical, pool_name="LC"
             )
-            ct_class_arr = _apply(
-                ct_regions, ct_labels, ct_label_set, ct_class_arr, "CT"
+            ct_class_arr = apply_class_weight_multipliers(
+                ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
             )
-
-            # Warn once about classes that don't appear in either pool.
-            all_labels = lc_label_set | ct_label_set
-            for reg, cmults in mults_canonical.items():
-                for c in cmults:
-                    if c not in all_labels:
-                        logger.warning(
-                            f"class_weight_multipliers[{reg!r}][{c!r}] not found "
-                            "in LC or CT labels; ignoring."
-                        )
 
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1
