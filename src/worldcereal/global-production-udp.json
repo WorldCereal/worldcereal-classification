@@ -1246,14 +1246,6 @@
       },
       "result": true
     },
-    "is_notnull_inputs": {
-      "process_id": "is_notnull",
-      "arguments": {
-        "x": {
-          "from_parameter": "filename_prefix_inputs"
-        }
-      }
-    },
     "saveresult_inputs": {
       "process_id": "save_result",
       "arguments": {
@@ -1278,18 +1270,6 @@
         "workspace": {
           "from_parameter": "workspace"
         }
-      }
-    },
-    "if_export_inputs": {
-      "process_id": "if",
-      "arguments": {
-        "value": {
-          "from_node": "is_notnull_inputs"
-        },
-        "accept": {
-          "from_node": "exportworkspace_inputs"
-        },
-        "reject": null
       }
     }
   },
