@@ -597,6 +597,72 @@ def _spatial_bins_from_latlon(
     return np.char.add(np.char.add(lat_str, "_"), lon_str)
 
 
+def _spatial_bins_from_h3(
+    latitudes: pd.Series, longitudes: pd.Series, resolution: int
+) -> np.ndarray:
+    """Quantize latitude/longitude pairs into Uber H3 hexagonal cell bins.
+
+    Each (lat, lon) is mapped to its H3 cell index (as a string) at the given
+    *resolution*. Unlike fixed-degree lat/lon bins -- whose ground area shrinks
+    dramatically toward the poles (a 5x5 degree cell near 60N covers roughly
+    half the area of one at the equator) -- H3 cells are approximately
+    equal-area hexagons. This gives more geographically consistent per-bin
+    class balancing, so co-located classes (e.g. wheat vs oats in Europe) are
+    balanced against each other within comparable-sized neighbourhoods rather
+    than within latitude-distorted rectangles.
+
+    Parameters
+    ----------
+    latitudes, longitudes : pd.Series
+        Sample coordinates in degrees.
+    resolution : int
+        H3 resolution (0 = coarsest ... 15 = finest). As a rough guide:
+        res 1 ~ 610,000 km2, res 2 ~ 86,000 km2, res 3 ~ 12,000 km2 per cell.
+
+    Returns
+    -------
+    np.ndarray
+        Array of H3 cell-index strings, one per sample.
+    """
+    if not isinstance(resolution, (int, np.integer)) or not (0 <= resolution <= 15):
+        raise ValueError(
+            f"h3 resolution must be an int in [0, 15], got {resolution!r}"
+        )
+
+    try:
+        import h3
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "bin_type='h3' requires the 'h3' package (>=4). Install it via "
+            "`pip install h3` or `conda install h3-py`."
+        ) from exc
+
+    lat_array = latitudes.to_numpy(dtype=np.float64, copy=True)
+    lon_array = longitudes.to_numpy(dtype=np.float64, copy=True)
+
+    if np.isnan(lat_array).any() or np.isnan(lon_array).any():
+        raise ValueError(
+            "Latitude/longitude contain missing values; cannot build spatial bins"
+        )
+
+    # Support both the h3 v4 API (latlng_to_cell) and the legacy v3 API
+    # (geo_to_h3) so the function works across environments.
+    if hasattr(h3, "latlng_to_cell"):
+        _to_cell = h3.latlng_to_cell  # h3 >= 4
+    elif hasattr(h3, "geo_to_h3"):
+        _to_cell = h3.geo_to_h3  # h3 < 4
+    else:  # pragma: no cover - unexpected h3 build
+        raise ImportError(
+            "Installed 'h3' package exposes neither latlng_to_cell nor geo_to_h3."
+        )
+
+    cells = [
+        _to_cell(float(lat), float(lon), resolution)
+        for lat, lon in zip(lat_array, lon_array)
+    ]
+    return np.asarray(cells, dtype=object).astype(str)
+
+
 def _get_per_bin_class_weights(
     labels: np.ndarray,
     bins: np.ndarray,
@@ -638,11 +704,15 @@ def _get_per_bin_class_weights(
             f"{min_samples_per_class_per_bin}"
         )
 
+    # Clip the GLOBAL fallback weights (used for sparse bins and rare in-bin
+    # classes) to clip_range. Without this, a globally-rare class could inject
+    # an extreme unclipped weight that inflates the array mean and distorts the
+    # final mean-normalisation for every other sample.
     global_w_dict = _stringify_weight_dict(
         get_class_weights(
             labels,
             method=method,
-            clip_range=None,
+            clip_range=clip_range,
             normalize=True,
             pool_name=pool_name,
         )
@@ -2095,6 +2165,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
         region_column: str = "region",
+        bin_type: Literal["degrees", "h3"] = "degrees",
+        h3_resolution: int = 2,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2119,6 +2191,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             generator=generator,
             class_weight_multipliers=class_weight_multipliers,
             region_column=region_column,
+            bin_type=bin_type,
+            h3_resolution=h3_resolution,
         )
 
 
@@ -2295,6 +2369,8 @@ class DualHeadBatchSampler(Sampler):
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
         region_column: str = "region",
+        bin_type: Literal["degrees", "h3"] = "degrees",
+        h3_resolution: int = 2,
     ) -> None:
         import math
 
@@ -2337,29 +2413,46 @@ class DualHeadBatchSampler(Sampler):
             )
         ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
 
-        # ---- Compute spatial bins if degree size is set ----
-        spatial_bins: Optional[np.ndarray] = None
-        if (
-            spatial_bin_size_degrees is not None
-            and "lat" in dataframe.columns
-            and "lon" in dataframe.columns
-        ):
-            spatial_bins = _spatial_bins_from_latlon(
-                dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
+        # ---- Compute spatial bins (degree grid or H3 cells) ----
+        # bin_type selects the binning scheme:
+        #   - "degrees": legacy lat/lon grid, cell size = spatial_bin_size_degrees
+        #   - "h3": Uber H3 (approximately equal-area) hexagons at h3_resolution
+        # Backward compatible: default bin_type="degrees" with an explicit
+        # spatial_bin_size_degrees reproduces the original behaviour exactly.
+        valid_bin_types = ("degrees", "h3")
+        if bin_type not in valid_bin_types:
+            raise ValueError(
+                f"bin_type must be one of {valid_bin_types}, got '{bin_type}'"
             )
+        spatial_bins: Optional[np.ndarray] = None
+        has_latlon = "lat" in dataframe.columns and "lon" in dataframe.columns
+        if has_latlon:
+            if bin_type == "h3":
+                spatial_bins = _spatial_bins_from_h3(
+                    dataframe["lat"], dataframe["lon"], h3_resolution
+                )
+            elif spatial_bin_size_degrees is not None:
+                spatial_bins = _spatial_bins_from_latlon(
+                    dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
+                )
 
         # ---- Class weights: source controlled by class_balancing_scope ----
         if class_balancing_scope == "per_bin":
             if spatial_bins is None:
                 raise ValueError(
-                    "class_balancing_scope='per_bin' requires "
-                    "spatial_bin_size_degrees to be set and lat/lon columns to "
-                    "be present in the dataframe."
+                    "class_balancing_scope='per_bin' requires lat/lon columns "
+                    "and either bin_type='h3' or spatial_bin_size_degrees to be "
+                    "set."
                 )
-            # spatial_bins is not None implies spatial_bin_size_degrees is not None;
-            # the assert is for mypy's type narrowing.
-            assert spatial_bin_size_degrees is not None
             if smoothing == "bilinear":
+                if bin_type != "degrees":
+                    raise ValueError(
+                        "smoothing='bilinear' is only supported with "
+                        "bin_type='degrees'; use smoothing='none' for H3 bins."
+                    )
+                # bilinear path is degree-grid specific; spatial_bin_size_degrees
+                # is guaranteed set when bin_type='degrees' and bins were built.
+                assert spatial_bin_size_degrees is not None
                 lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
                 lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
                 lc_class_arr = _get_smoothed_per_bin_class_weights(
@@ -2437,6 +2530,26 @@ class DualHeadBatchSampler(Sampler):
             ct_class_arr = apply_class_weight_multipliers(
                 ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
             )
+
+            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
+            # or per-class multiplier can never push a class beyond the configured
+            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
+            # already-high per-bin weight would exceed clip_range[1] and
+            # re-introduce exactly the over-sampling the clip is meant to bound
+            # (the root cause of e.g. oats over-commission into wheat).
+            if clip_range is not None:
+                lc_mean = lc_class_arr.mean()
+                if lc_mean > 0:
+                    lc_class_arr = lc_class_arr / lc_mean
+                lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
+                ct_mean = ct_class_arr.mean()
+                if ct_mean > 0:
+                    ct_class_arr = ct_class_arr / ct_mean
+                ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
+                logger.info(
+                    "DualHeadBatchSampler: re-normalised and re-clipped class "
+                    f"weights to {clip_range} after applying multipliers."
+                )
 
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1
