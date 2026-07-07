@@ -1064,6 +1064,7 @@ class SeasonalInferenceEngine:
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
         batch_size: int = 2048,
+        mask_b8a: bool = True,
         season_composite_frequency: Optional[Literal["month", "dekad"]] = "month",
         export_class_probabilities: bool = False,
         enable_croptype_head: bool = True,
@@ -1125,6 +1126,7 @@ class SeasonalInferenceEngine:
                 pass  # Thread tuning is optional.
 
         self.batch_size = batch_size
+        self._mask_b8a = mask_b8a
         self._season_composite_frequency = season_composite_frequency
         self._export_class_probabilities = export_class_probabilities
         self._croptype_enabled = enable_croptype_head
@@ -1293,6 +1295,15 @@ class SeasonalInferenceEngine:
             GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
         ]
         reordered = reordered.assign_coords(bands=renamed_bands)
+
+        # Mask B8A band if requested
+        if self._mask_b8a and "B8A" in reordered.bands.values:
+            logger.info(
+                "Masking B8A band values to NODATAVALUE for seasonal inference."
+            )
+            b8a_idx = list(reordered.bands.values).index("B8A")
+            reordered.values[b8a_idx, :, :, :] = NODATA_VALUE
+
         reordered = reordered.transpose("bands", "t", "x", "y")
         reordered = DataPreprocessor.add_slope_band(reordered, epsg)
         return reordered.fillna(NODATA_VALUE).astype(np.float32)
@@ -1816,6 +1827,7 @@ def run_seasonal_workflow(
     landcover_head_zip: str | Path | None = None,
     croptype_head_zip: str | Path | None = None,
     mask_cropland: bool = True,
+    mask_b8a: bool = True,
     cache_root: Optional[Path] = None,
     device: Union[str, TorchDevice] = "cpu",
     batch_size: int = 256,
@@ -1845,6 +1857,7 @@ def run_seasonal_workflow(
         cache_root=cache_root,
         device=device,
         batch_size=batch_size,
+        mask_b8a=mask_b8a,
         season_ids=season_ids,
         season_windows=season_windows,
         season_composite_frequency=season_composite_frequency,
@@ -2319,6 +2332,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
     season_windows = _parse_udf_season_windows(season_cfg.get("season_windows"))
     season_masks = _normalize_udf_season_masks(season_cfg.get("season_masks"))
     mask_cropland = _as_bool(season_cfg.get("mask_cropland"), True)
+    mask_b8a = _as_bool(model_cfg.get("mask_b8a"), True)
     composite_frequency_raw = season_cfg.get("composite_frequency", "month")
     if composite_frequency_raw not in (None, "month", "dekad"):
         raise ValueError("Season composite frequency must be 'month', 'dekad', or None")
@@ -2364,6 +2378,7 @@ def _finalize_workflow_config(workflow_cfg: Mapping[str, Any]) -> Dict[str, Any]
         "cache_root": cache_root,
         "device": device,
         "batch_size": batch_size_int,
+        "mask_b8a": mask_b8a,
         "cpu_num_threads": cpu_num_threads,
         "cpu_num_interop_threads": cpu_num_interop_threads,
         "memory_logging": memory_logging,
@@ -2493,6 +2508,9 @@ def _extract_udf_configuration(context: Mapping[str, Any]) -> Dict[str, Any]:
         workflow_cfg["season"]["mask_cropland"] = _as_bool(
             context.get("mask_cropland"), True
         )
+
+    if "mask_b8a" in context:
+        workflow_cfg["model"]["mask_b8a"] = _as_bool(context.get("mask_b8a"), True)
 
     if "export_class_probabilities" in context:
         workflow_cfg["season"]["export_class_probabilities"] = context.get(
