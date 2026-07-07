@@ -479,11 +479,11 @@ def get_class_weights(
         raise ValueError(f"Unknown method: {method}")
 
     if normalize:
-        logger.debug("Normalizing weights to mean = 1")
+        logger.info("Normalizing weights to mean = 1")
         weights = weights / weights.mean()
 
     if clip_range:
-        logger.debug(f"Clipping weights to range {clip_range}")
+        logger.info(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
     rounded = np.round(weights, 3)
@@ -1747,7 +1747,7 @@ class WorldCerealDataset(Dataset):
             # "season not available" rather than crashing.  Return an all-zeros
             # mask so the sample is simply not supervised for this season.
             sample_id = row.get("sample_id", "n/a")
-            logger.debug(
+            logger.error(
                 f"Season '{season_name}' unavailable for sample {sample_id}: {exc}. "
                 f"Returning empty mask."
             )
@@ -1850,7 +1850,7 @@ class WorldCerealDataset(Dataset):
             distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
             best_idx = int(distances.argmin())
             fallback_key = (lat_vals[best_idx], lon_vals[best_idx])
-            logger.debug(
+            logger.error(
                 f"Seasonality lookup missing ({lat_center}, {lon_center}); using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
             )
             lat_center, lon_center = float(fallback_key[0]), float(fallback_key[1])
