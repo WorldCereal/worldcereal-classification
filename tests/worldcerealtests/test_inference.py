@@ -593,3 +593,57 @@ def test_croptype_probabilities_use_nocrop_value_when_gated():
 
     assert np.any(nocrop_mask)
     assert np.all(wheat_probs[nocrop_mask] == inference.NOCROP_VALUE)
+
+
+def test_prepare_array_masks_b8a_band_when_enabled():
+    """Test that B8A band is masked to NODATA_VALUE when mask_b8a=True."""
+    # Create array with B8A band (no COP-DEM to avoid slope calculation)
+    bands = ["B2", "B8A", "S1-VH"]
+    data = np.arange(24, dtype=np.float32).reshape(len(bands), 2, 2, 2)
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 1], "x": [0, 1]},
+    )
+
+    # Create engine with mask_b8a=True
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = True
+
+    # Prepare array
+    result = engine._prepare_array(arr, epsg=32631)
+
+    # Check B8A band is masked to NODATA_VALUE
+    b8a_idx = list(result.bands.values).index("B8A")
+    assert np.all(result.values[b8a_idx] == inference.NODATA_VALUE)
+
+    # Check other bands are not masked
+    b2_idx = list(result.bands.values).index("B2")
+    assert not np.all(result.values[b2_idx] == inference.NODATA_VALUE)
+
+
+def test_prepare_array_preserves_b8a_band_when_disabled():
+    """Test that B8A band is preserved when mask_b8a=False."""
+    # Create array with B8A band with specific values (no COP-DEM)
+    bands = ["B2", "B8A", "S1-VH"]
+    data = np.ones((len(bands), 2, 2, 2), dtype=np.float32) * 100.0
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 1], "x": [0, 1]},
+    )
+
+    # Create engine with mask_b8a=False
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = False
+
+    # Prepare array
+    result = engine._prepare_array(arr, epsg=32631)
+
+    # Check B8A band is NOT masked (values preserved as ~100.0)
+    b8a_idx = list(result.bands.values).index("B8A")
+    assert np.all(result.values[b8a_idx] > 50.0)  # Values should be preserved
