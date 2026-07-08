@@ -1,4 +1,3 @@
-import calendar
 import re
 from collections import Counter
 from contextlib import nullcontext
@@ -46,7 +45,15 @@ from worldcereal.train import (
     SEASONALITY_LOOKUP_PATH,
 )
 from worldcereal.train import predictors as _predictor_utils
-from worldcereal.train.seasonal import align_to_composite_window
+from worldcereal.train.seasonal import (
+    SeasonWindow,
+    align_to_composite_window,
+    coerce_date_for_year,
+    date_in_season,
+    enumerate_composite_slots,
+    in_season_window,
+    season_window_from_dates,
+)
 
 # Re-export helper functions so legacy imports remain valid.
 generate_predictor = _predictor_utils.generate_predictor
@@ -66,15 +73,6 @@ def _seasonality_lookup_context():
     if SEASONALITY_LOOKUP_PATH.exists():
         return nullcontext(SEASONALITY_LOOKUP_PATH)
     return resources.path(SEASONALITY_LOOKUP_PACKAGE, SEASONALITY_LOOKUP_FILENAME)
-
-
-@dataclass(frozen=True)
-class SeasonWindow:
-    start_month: int
-    start_day: int
-    end_month: int
-    end_day: int
-    year_offset: int = 0
 
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
@@ -206,14 +204,6 @@ def _resolve_season_engine(
     raise ValueError(f"Unknown season_calendar_mode: {mode}")
 
 
-def _coerce_date_for_year(year: int, month: int, day: int) -> np.datetime64:
-    """Build a numpy datetime64, clamping the day to the month's max if needed."""
-
-    last_day = calendar.monthrange(year, month)[1]
-    safe_day = min(day, last_day)
-    return np.datetime64(f"{year:04d}-{month:02d}-{safe_day:02d}", "D")
-
-
 def _normalize_season_windows(
     season_windows: Optional[Mapping[str, Tuple[Any, Any]]],
 ) -> Dict[str, SeasonWindow]:
@@ -242,30 +232,10 @@ def _normalize_season_windows(
 
         start_np = start_dt.astype("datetime64[D]")
         end_np = end_dt.astype("datetime64[D]")
-        if end_np < start_np:
-            raise ValueError(
-                f"Season window for '{season}' has end date {end_dt} before start date {start_dt}."
-            )
-
-        start_ts = pd.Timestamp(start_np)
-        end_ts = pd.Timestamp(end_np)
-        year_offset = end_ts.year - start_ts.year
-        if year_offset < 0:
-            raise ValueError(
-                f"Season window for '{season}' has end date {end_dt} before start date {start_dt}."
-            )
-        if year_offset > 1:
-            raise ValueError(
-                f"Season window for '{season}' spans more than one year; only single-year crossings are supported."
-            )
-
-        normalized[season] = SeasonWindow(
-            start_month=start_ts.month,
-            start_day=start_ts.day,
-            end_month=end_ts.month,
-            end_day=end_ts.day,
-            year_offset=year_offset,
-        )
+        try:
+            normalized[season] = season_window_from_dates(start_np, end_np)
+        except ValueError as exc:
+            raise ValueError(f"Season window for '{season}': {exc}") from exc
 
     return normalized
 
@@ -286,42 +256,12 @@ def _label_datetime_series(frame: pd.DataFrame) -> pd.Series:
     return result
 
 
-def _timestamp_in_season_window(
-    timestamp: Optional[pd.Timestamp],
-    *,
-    window: SeasonWindow,
-) -> bool:
-    if timestamp is None or pd.isna(timestamp):
-        return False
-
-    ts = pd.Timestamp(timestamp)
-
-    if window.year_offset not in (0, 1):
-        raise ValueError("Season windows must span at most 12 months.")
-
-    if window.year_offset == 0:
-        start_year = ts.year
-    else:
-        ts_tuple = (ts.month, ts.day)
-        end_tuple = (window.end_month, window.end_day)
-        start_year = ts.year if ts_tuple > end_tuple else ts.year - 1
-
-    start_dt = pd.Timestamp(
-        _coerce_date_for_year(start_year, window.start_month, window.start_day)
-    )
-    end_dt = pd.Timestamp(
-        _coerce_date_for_year(
-            start_year + window.year_offset, window.end_month, window.end_day
-        )
-    )
-    return start_dt <= ts <= end_dt
-
-
 def _filter_frame_by_manual_windows(
     dataframe: pd.DataFrame,
     season_windows: Mapping[str, SeasonWindow],
     *,
     context: str,
+    timestep_freq: Literal["month", "dekad"],
 ) -> Tuple[pd.DataFrame, int]:
     if not season_windows:
         return dataframe, 0
@@ -337,7 +277,9 @@ def _filter_frame_by_manual_windows(
     keep_mask = pd.Series(False, index=dataframe.index, dtype=bool)
     for season_name, window in season_windows.items():
         keep_mask |= label_datetimes.apply(
-            lambda ts: _timestamp_in_season_window(ts, window=window)
+            lambda ts, w=window: (
+                pd.notna(ts) and in_season_window(ts, w, freq=timestep_freq)
+            )
         )
 
     missing = label_datetimes.isna().sum()
@@ -1692,14 +1634,16 @@ class WorldCerealDataset(Dataset):
 
         cycles: List[Tuple[np.datetime64, np.datetime64]] = []
         for year in sorted(base_years):
-            start_dt = _coerce_date_for_year(year, window.start_month, window.start_day)
+            start_dt = coerce_date_for_year(year, window.start_month, window.start_day)
             end_year = year + window.year_offset
-            end_dt = _coerce_date_for_year(end_year, window.end_month, window.end_day)
+            end_dt = coerce_date_for_year(end_year, window.end_month, window.end_day)
             start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
             end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
             if end_aligned < start_aligned:
                 continue
-            slots = self._enumerate_composite_slots(start_aligned, end_aligned)
+            slots = enumerate_composite_slots(
+                start_aligned, end_aligned, self.timestep_freq
+            )
             if not slots:
                 continue
             cycle_mask = (composite_dates >= start_aligned) & (
@@ -1708,15 +1652,16 @@ class WorldCerealDataset(Dataset):
             n_required = max(1, round(len(slots) * self.min_season_coverage))
             if int(cycle_mask.sum()) < n_required:
                 continue
-            cycles.append((start_aligned, end_aligned))
+            # Store the raw cycle bounds so the in_season check can compare the
+            # exact label against composite-aligned edges (date_in_season),
+            # consistent with the season-alignment pre-filter and the mask.
+            cycles.append((start_dt, end_dt))
             mask |= cycle_mask
 
-        in_flag = False
-        if label_datetime is not None:
-            for start_aligned, end_aligned in cycles:
-                if start_aligned <= label_datetime <= end_aligned:
-                    in_flag = True
-                    break
+        in_flag = label_datetime is not None and any(
+            date_in_season(label_datetime, start_dt, end_dt, freq=self.timestep_freq)
+            for start_dt, end_dt in cycles
+        )
 
         return mask.astype(bool, copy=False), in_flag
 
@@ -1760,7 +1705,9 @@ class WorldCerealDataset(Dataset):
 
         start_aligned = align_to_composite_window(start_dt, self.timestep_freq)
         end_aligned = align_to_composite_window(end_dt, self.timestep_freq)
-        slots = self._enumerate_composite_slots(start_aligned, end_aligned)
+        slots = enumerate_composite_slots(
+            start_aligned, end_aligned, self.timestep_freq
+        )
         partial_mask = (composite_dates >= start_aligned) & (
             composite_dates <= end_aligned
         )
@@ -1772,44 +1719,11 @@ class WorldCerealDataset(Dataset):
             else np.zeros_like(composite_dates, dtype=bool)
         )
         in_flag = (
-            bool(start_dt <= label_datetime <= end_dt)
+            date_in_season(label_datetime, start_dt, end_dt, freq=self.timestep_freq)
             if (label_datetime is not None and meets_threshold)
             else False
         )
         return mask.astype(bool, copy=False), in_flag
-
-    def _enumerate_composite_slots(
-        self, start: np.datetime64, end: np.datetime64
-    ) -> List[np.datetime64]:
-        if end < start:
-            return []
-        slots: List[np.datetime64] = []
-        current = start
-        while True:
-            slots.append(current)
-            if current >= end:
-                break
-            current = self._advance_composite_slot(current)
-        return slots
-
-    def _advance_composite_slot(self, current: np.datetime64) -> np.datetime64:
-        current = current.astype("datetime64[D]")
-        if self.timestep_freq == "month":
-            month_step = current.astype("datetime64[M]") + np.timedelta64(1, "M")
-            return month_step.astype("datetime64[D]")
-        if self.timestep_freq == "dekad":
-            month_start = current.astype("datetime64[M]")
-            # Offset from first day determines which dekad we are in.
-            offset_days = (current - month_start).astype(int)
-            if offset_days == 0:
-                return current + np.timedelta64(10, "D")
-            if offset_days == 10:
-                return current + np.timedelta64(10, "D")
-            if offset_days == 20:
-                next_month = month_start + np.timedelta64(1, "M")
-                return next_month.astype("datetime64[D]")
-            raise ValueError("Dekad slots must align to days 1, 11, or 21.")
-        raise ValueError(f"Unknown timestep frequency '{self.timestep_freq}'")
 
     def _season_context_for(
         self,
@@ -1975,6 +1889,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 self.dataframe,
                 self._season_windows,
                 context=self.__class__.__name__,
+                timestep_freq=self.timestep_freq,
             )
             if dropped:
                 logger.info(
@@ -2551,6 +2466,18 @@ class DualHeadBatchSampler(Sampler):
                     f"weights to {clip_range} after applying multipliers."
                 )
 
+            # Warn once about classes that don't appear in either pool.
+            lc_label_set = set(lc_labels.tolist())
+            ct_label_set = set(ct_labels.tolist())
+            all_labels = lc_label_set | ct_label_set
+            for reg, cmults in mults_canonical.items():
+                for c in cmults:
+                    if c not in all_labels:
+                        logger.warning(
+                            f"class_weight_multipliers[{reg!r}][{c!r}] not found "
+                            "in LC or CT labels; ignoring."
+                        )
+
         # ---- Spatial-density factor: independent, applied uniformly ----
         # Both class and spatial arrays are independently normalised to mean=1
         # and re-clipped to clip_range (see _get_normalized_weights) before
@@ -2687,6 +2614,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
                 self.dataframe,
                 self._season_windows,
                 context=self.__class__.__name__,
+                timestep_freq=self.timestep_freq,
             )
             if dropped:
                 logger.info(
