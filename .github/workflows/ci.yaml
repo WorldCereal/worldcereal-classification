@@ -33,4 +33,4 @@ jobs:
         OPENEO_AUTH_CLIENT_ID_CDSE: openeo-worldcereal-service-account
         OPENEO_AUTH_CLIENT_ID_VITO: openeo-worldcereal-service-account
         OPENEO_AUTH_CLIENT_SECRET_CDSE: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_CDSE }}
-        OPENEO_AUTH_CLIENT_SECRET_VITO: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_TERRASCOPE }}
+        OPENEO_AUTH_CLIENT_SECRET_VITO: ${{ secrets.OPENEO_AUTH_CLIENT_SECRET_CDSE }}
