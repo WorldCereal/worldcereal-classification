@@ -421,7 +421,7 @@ def get_class_weights(
         raise ValueError(f"Unknown method: {method}")
 
     if normalize:
-        logger.info("Normalizing weights to mean = 1")
+        logger.debug("Normalizing weights to mean = 1")
         weights = weights / weights.mean()
 
     if clip_range:
@@ -2205,7 +2205,7 @@ def apply_class_weight_multipliers(
     for reg, cmults in mults_canonical.items():
         for c in cmults:
             if c not in label_set:
-                logger.warning(
+                logger.debug(
                     f"{prefix}class_weight_multipliers[{reg!r}][{c!r}] not found "
                     "in label set; ignoring."
                 )
