@@ -3,13 +3,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-exclude = [
-  "/dist",
-  "/notebooks",
-  "/scripts",
-  "/bin",
-  "/tests",
-]
+exclude = ["/dist", "/notebooks", "/scripts", "/bin", "/tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/worldcereal"]
@@ -27,54 +21,51 @@ allow-direct-references = true
 [project]
 name = "worldcereal"
 authors = [
-  { name="Kristof Van Tricht" },
-  { name="Jeroen Degerickx" },
-  { name="Darius Couchard" },
-  { name="Christina Butsko" },
+  { name = "Kristof Van Tricht" },
+  { name = "Jeroen Degerickx" },
+  { name = "Darius Couchard" },
+  { name = "Christina Butsko" },
 ]
 description = "WorldCereal classification module"
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
 ]
 dependencies = [
-    "boto3>=1.35.0",
-    "cftime",
-    "einops",
-    "geojson",  
-    "geopandas",  
-    "h3~=4.1.0",  
-    "h5netcdf>=1.3.0",  
-    "h5py",
-    "httpx[http2]>=0.28.1",
-    "loguru>=0.7.2",
-    "netcdf4>=1.6.4",  
-    "numpy>=2.4.0",  
-    "openeo>=0.47.0",  
-    "prometheo @ git+https://github.com/WorldCereal/prometheo.git@v0.0.4",
-    "openeo-gfmap @ git+https://github.com/Open-EO/openeo-gfmap.git@maintenance/0.4.x",  
-    "pyarrow",  
-    "pydantic==2.8.0",  
-    "rioxarray>=0.13.0",  
-    "scipy",
-    "duckdb>=1.4.0",
-    "tabulate>=0.9.0",
-    "tqdm",
-    "xarray>=2022.3.0"
-  ]
+  "boto3>=1.35.0",
+  "cftime",
+  "einops",
+  "geojson",
+  "geopandas",
+  "h3~=4.1.0",
+  "h5netcdf>=1.3.0",
+  "h5py",
+  "httpx[http2]>=0.28.1",
+  "loguru>=0.7.2",
+  "netcdf4>=1.6.4",
+  "numpy>=2.4.0",
+  "openeo>=0.47.0",
+  "prometheo @ git+https://github.com/WorldCereal/prometheo.git@v0.0.5",
+  "openeo-gfmap @ git+https://github.com/Open-EO/openeo-gfmap.git@maintenance/0.4.x",
+  "pyarrow",
+  "pydantic==2.8.0",
+  "rioxarray>=0.13.0",
+  "scipy",
+  "duckdb>=1.4.0",
+  "tabulate>=0.9.0",
+  "tqdm",
+  "xarray>=2022.3.0",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/WorldCereal/worldcereal-classification"
 "Bug Tracker" = "https://github.com/WorldCereal/worldcereal-classification/issues"
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=7.4.0",
-  "pytest-depends",  
-]
+dev = ["pytest>=7.4.0", "pytest-depends"]
 train = [
   "catboost~=1.2.8",
   "matplotlib>=3.3.0",
@@ -82,13 +73,13 @@ train = [
   "torch>=2.3.0",
   "pystac==1.10.1",
   "pystac-client==0.8.3",
-  "seaborn"
+  "seaborn",
 ]
 finetune = [
   "office365-rest-python-client",
   "openpyxl",
   "tensorboard",
-  "cartopy", # for nicer diagnostic plots, but not strictly required for finetuning
+  "cartopy",                      # for nicer diagnostic plots, but not strictly required for finetuning
 ]
 
 notebooks = [
@@ -100,20 +91,14 @@ notebooks = [
   "localtileserver~=0.10.0",
   "mapclassify",
   "jupyter-server-proxy==4.4.0",
-  "plotly~=6.5.0"
+  "plotly~=6.5.0",
 ]
 
 [tool.pytest.ini_options]
-testpaths = [
-  "tests",
-]
-addopts = [
-  "--import-mode=prepend",
-]
+testpaths = ["tests"]
+addopts = ["--import-mode=prepend"]
 
 [tool.ruff]
 exclude = ["**/*.ipynb"]
 lint.extend-select = ["E", "F", "I"]
-lint.ignore = [
-  "E501"
-]
+lint.ignore = ["E501"]

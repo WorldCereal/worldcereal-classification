@@ -1685,7 +1685,8 @@ class WorldCerealDataset(Dataset):
 
         try:
             start_dt, end_dt = self._season_context_for(
-                season_name, row, target_year, lat, lon
+                season_name, row, target_year, lat, lon,
+                label_datetime=label_datetime,
             )
         except ValueError as exc:
             # Nodata DOY values for this season at this location — treat as
@@ -1732,6 +1733,7 @@ class WorldCerealDataset(Dataset):
         year: int,
         lat: float,
         lon: float,
+        label_datetime: Optional[np.datetime64] = None,
     ) -> Tuple[np.datetime64, np.datetime64]:
         """Fetch (start, end) dates for a season/grid cell from the lookup."""
 
@@ -1779,7 +1781,18 @@ class WorldCerealDataset(Dataset):
                 f"season '{season_id}' (sample_id={sample_id})."
             )
 
-        start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, year)
+        # For year-crossing seasons (SOS DOY > EOS DOY), season_doys_to_dates_refyear
+        # places the EOS in ref_year. When target_year is derived from label_datetime.year,
+        # this is only correct if the label falls early in the year (before/at EOS DOY).
+        # If the label falls later (after EOS DOY), the relevant season instance ends in
+        # year+1, so we must increment ref_year accordingly.
+        ref_year = year
+        if sos_doy > eos_doy and label_datetime is not None:
+            label_doy = pd.Timestamp(label_datetime).day_of_year
+            if label_doy > eos_doy:
+                ref_year = year + 1
+
+        start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, ref_year)
         return (
             np.datetime64(start_dt, "D"),
             np.datetime64(end_dt, "D"),

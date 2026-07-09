@@ -51,6 +51,7 @@ class EmbeddingsDataset(Dataset):
         feat_prefix: str = "presto_ft_",
         label_col: str = "downstream_class",
         weight_col: Optional[str] = None,
+        split_name: Optional[str] = None,
     ):
         self.df = df.reset_index(drop=True)
         self.label_col = label_col
@@ -59,8 +60,9 @@ class EmbeddingsDataset(Dataset):
         self.feat_cols = sorted(
             feat_cols_unsorted, key=lambda x: int(x.replace(feat_prefix, ""))
         )
+        split_label = f"{split_name} " if split_name else ""
         logger.info(
-            f"EmbeddingsDataset: {len(self.df)} samples, {len(self.feat_cols)} features"
+            f"EmbeddingsDataset ({split_label}): {len(self.df)} samples, {len(self.feat_cols)} features"
         )
         self.X = self.df[self.feat_cols].to_numpy(dtype=np.float32)
         self.y = self.df[label_col].to_numpy()
@@ -345,12 +347,14 @@ class TorchTrainer:
     def _get_balanced_sampler(
         self,
         df: pd.DataFrame,
+        split_name: Optional[str] = None,
         normalize: bool = True,
     ) -> "WeightedRandomSampler":
         # extract the sampling class (strings or ints)
         bc_vals = df[self.balancing_label].values
 
-        logger.info("Computing class weights for balanced sampling ...")
+        split_label = f"{split_name} " if split_name else ""
+        logger.info(f"Computing {split_label}class weights for balanced sampling ...")
         class_weights = get_class_weights(
             bc_vals,
             self.balancing_method,
@@ -433,16 +437,25 @@ class TorchTrainer:
         labels_all = np.concatenate(labels_all)
         return total_loss / total_samples, preds_all, labels_all
 
-    def _drop_invalid_samples(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _drop_invalid_samples(self, df: pd.DataFrame, split_name: Optional[str] = None) -> pd.DataFrame:
         if "finetune_class" not in df.columns:
             return df
         filtered = df[df["finetune_class"] != "remove"].reset_index(drop=True)
         if "in_season" in filtered.columns:
             if filtered["in_season"].any():
+                before_filtering = filtered.copy()
                 filtered = filtered[filtered["in_season"]].reset_index(drop=True)
+                dropped = before_filtering[~before_filtering["in_season"]]
+                if len(dropped) > 0 and "ref_id" in dropped.columns:
+                    dropped_per_ref = dropped.groupby("ref_id").size().to_dict()
+                    split_label = f"({split_name}) " if split_name else ""
+                    logger.warning(
+                        f"! {split_label}Dropped {len(dropped)} out-of-season samples: {dropped_per_ref}"
+                    )
             else:
+                split_label = f"({split_name}) " if split_name else ""
                 logger.warning(
-                    "No samples marked in-season; skipping in_season filtering."
+                    f"{split_label}No samples marked in-season; skipping in_season filtering."
                 )
         return filtered
 
@@ -545,12 +558,13 @@ class TorchTrainer:
         for df in dfs:
             df["label"] = df[self.target_column].map(cls_to_idx)
 
-    def _build_dataloader(self, df: pd.DataFrame, is_train: bool) -> DataLoader:
+    def _build_dataloader(self, df: pd.DataFrame, is_train: bool, split_name: Optional[str] = None) -> DataLoader:
         dataset = EmbeddingsDataset(
-            df, feat_prefix="presto_ft_", label_col="label", weight_col="_sample_weight"
+            df, feat_prefix="presto_ft_", label_col="label", weight_col="_sample_weight",
+            split_name=split_name
         )
         if is_train and self.use_balancing:
-            sampler = self._get_balanced_sampler(df, normalize=True)
+            sampler = self._get_balanced_sampler(df, split_name=split_name, normalize=True)
             return DataLoader(
                 dataset,
                 batch_size=self.batch_size,
@@ -679,9 +693,9 @@ class TorchTrainer:
                 self.training_df, self.split_column
             )
 
-        train_df = self._drop_invalid_samples(train_df)
-        val_df = self._drop_invalid_samples(val_df)
-        test_df = self._drop_invalid_samples(test_df)
+        train_df = self._drop_invalid_samples(train_df, split_name="train")
+        val_df = self._drop_invalid_samples(val_df, split_name="val")
+        test_df = self._drop_invalid_samples(test_df, split_name="test")
 
         # Optionally drop samples where all quality scores are zero
         if self.zero_quality_cols:
@@ -759,8 +773,8 @@ class TorchTrainer:
         self.update_config_after_prepare(self.in_dim, self.num_classes)
 
         # Train with validation monitoring
-        train_loader = self._build_dataloader(train_df, is_train=True)
-        val_loader = self._build_dataloader(val_df, is_train=False)
+        train_loader = self._build_dataloader(train_df, is_train=True, split_name="train")
+        val_loader = self._build_dataloader(val_df, is_train=False, split_name="val")
 
         logger.info(
             f"Training with validation monitoring for up to {self.epochs} epochs "
@@ -776,7 +790,7 @@ class TorchTrainer:
         )
         model = result["model"]
 
-        test_loader = self._build_dataloader(test_df, is_train=False)
+        test_loader = self._build_dataloader(test_df, is_train=False, split_name="test")
 
         self.update_config_after_training(
             best_val_loss=result["best_val_loss"] if result["best_val_loss"] else 0.0,
