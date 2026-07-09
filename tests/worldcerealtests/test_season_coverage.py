@@ -18,12 +18,14 @@ fraction of covered season slots is ≥ min_season_coverage.
 """
 
 from typing import Literal
+from unittest import mock
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import worldcereal.train.datasets as _datasets_module
 from worldcereal.train.datasets import (
     SeasonWindow,
     WorldCerealDataset,
@@ -523,3 +525,111 @@ class TestPrepareTrainingDatasetsCoverage:
             train_min_season_coverage=0.6,
         )
         assert train_ds.min_season_coverage == pytest.approx(0.6)
+
+
+# ---------------------------------------------------------------------------
+# 6. _season_context_for: ref_year correction for year-crossing seasons
+# ---------------------------------------------------------------------------
+
+
+class TestSeasonContextForYearCrossing:
+    """Regression test for the year-crossing ref_year bug.
+
+    For year-crossing seasons (SOS DOY > EOS DOY), _season_context_for must
+    use ref_year = label_year + 1 when the label falls after EOS DOY within its
+    own calendar year.  Otherwise the returned season window is a full year too
+    early and every sample from that dataset is classified as "none".
+
+    Reported case: 2018_CHL_HAN_POINT_110 samples with valid_time 2018-09-01
+    were classified as "none" because tc-s2 (SOS≈156, EOS≈25) was resolved to
+    Jun-2017–Jan-2018 instead of Jun-2018–Jan-2019.
+    """
+
+    # tc-s2 approximate DOYs for southern Chile (year-crossing: SOS > EOS)
+    _SOS_DOY = 156  # ≈ Jun 5
+    _EOS_DOY = 25  # ≈ Jan 25
+
+    def _make_lookup_df(self):
+        """Minimal seasonality lookup DataFrame for a single cell."""
+        lat, lon = -35.0, -71.0  # southern Chile
+        return pd.DataFrame(
+            {"s2_sos_doy": [self._SOS_DOY], "s2_eos_doy": [self._EOS_DOY]},
+            index=pd.MultiIndex.from_tuples([(lat, lon)], names=["lat", "lon"]),
+        )
+
+    def _make_ds(self) -> WorldCerealDataset:
+        return WorldCerealDataset(pd.DataFrame({"x": [0]}))
+
+    def _call_season_context(
+        self, label_datetime, year: int
+    ):
+        """Invoke _season_context_for with mocked lookup plumbing."""
+        ds = self._make_ds()
+        lat, lon = -35.0, -71.0
+        lookup_df = self._make_lookup_df()
+
+        with (
+            mock.patch(
+                f"{_datasets_module.__name__}._ensure_seasonality_lookup",
+                return_value=lookup_df,
+            ),
+            mock.patch(
+                f"{_datasets_module.__name__}._snap_latlon_to_calendar_grid",
+                return_value=(lat, lon),
+            ),
+        ):
+            return ds._season_context_for(
+                "tc-s2",
+                {},
+                year,
+                lat,
+                lon,
+                label_datetime=label_datetime,
+            )
+
+    def test_label_after_eos_doy_uses_next_year_as_ref(self):
+        """Label Sep 2018 (DOY 244 > EOS 25) → season ends Jan 2019, not Jan 2018."""
+        label_dt = np.datetime64("2018-09-01", "D")
+        start_dt, end_dt = self._call_season_context(label_dt, year=2018)
+
+        # EOS (DOY 25) must fall in 2019 since the label is after EOS DOY in 2018
+        assert np.datetime64(end_dt, "Y") == np.datetime64("2019", "Y"), (
+            f"Expected EOS year 2019, got {end_dt}"
+        )
+        # SOS must fall in 2018
+        assert np.datetime64(start_dt, "Y") == np.datetime64("2018", "Y"), (
+            f"Expected SOS year 2018, got {start_dt}"
+        )
+
+    def test_label_before_eos_doy_uses_same_year_as_ref(self):
+        """Label Jan 15 2018 (DOY 15 ≤ EOS 25) → season ends Jan 2018 (tail of crossing)."""
+        label_dt = np.datetime64("2018-01-15", "D")
+        start_dt, end_dt = self._call_season_context(label_dt, year=2018)
+
+        # EOS must fall in 2018 because the label is in the tail of the crossing season
+        assert np.datetime64(end_dt, "Y") == np.datetime64("2018", "Y"), (
+            f"Expected EOS year 2018, got {end_dt}"
+        )
+        # SOS must fall in 2017
+        assert np.datetime64(start_dt, "Y") == np.datetime64("2017", "Y"), (
+            f"Expected SOS year 2017, got {start_dt}"
+        )
+
+    def test_label_after_eos_is_contained_in_returned_season(self):
+        """After the fix, the label date must lie within the returned season window."""
+        label_dt = np.datetime64("2018-09-01", "D")
+        start_dt, end_dt = self._call_season_context(label_dt, year=2018)
+
+        assert start_dt <= label_dt <= end_dt, (
+            f"Label {label_dt} not in returned season [{start_dt}, {end_dt}]"
+        )
+
+    def test_no_label_datetime_falls_back_to_given_year(self):
+        """Without label_datetime, no year adjustment is made (original behaviour)."""
+        start_dt, end_dt = self._call_season_context(None, year=2018)
+
+        # Without a label date we cannot determine which instance to use,
+        # so ref_year stays at 2018 and EOS falls in Jan 2018.
+        assert np.datetime64(end_dt, "Y") == np.datetime64("2018", "Y"), (
+            f"Without label_datetime expected EOS year 2018, got {end_dt}"
+        )
