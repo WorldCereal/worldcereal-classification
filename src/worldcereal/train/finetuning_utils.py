@@ -2645,6 +2645,7 @@ def run_finetuning(
                 if ema_model is not None
                 else "raw model"
             )
+            logger.info("=" * 66)
             logger.info(
                 f"Epoch {epoch + 1}: saving best checkpoint from {_ckpt_label} "
                 f"(val_loss={current_val_loss:.4f})."

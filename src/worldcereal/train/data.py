@@ -1275,9 +1275,11 @@ def get_training_dfs_from_parquet(
 
     if ignore_samples_file is not None:
         ignore_samples_df = pd.read_csv(ignore_samples_file)
+        logger.info("=" * 66)
         logger.info(
             f"Discarding samples based on: {ignore_samples_file}. {len(ignore_samples_df)} samples will be removed from the dataset."
         )
+        logger.info("=" * 66)
         df = df[~df["sample_id"].isin(ignore_samples_df.sample_id.tolist())]
     else:
         logger.info(
