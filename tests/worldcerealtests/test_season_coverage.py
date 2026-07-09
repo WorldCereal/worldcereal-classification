@@ -18,13 +18,12 @@ fraction of covered season slots is ≥ min_season_coverage.
 """
 
 from typing import Literal
+from unittest import mock
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
-
-from unittest import mock
 
 import worldcereal.train.datasets as _datasets_module
 from worldcereal.train.datasets import (
