@@ -78,11 +78,13 @@ def _attach_regions_from_boundaries(
     Parameters
     ----------
     region_column:
-        Name of the column to write region labels into (and to read existing
-        labels from).  Defaults to ``"region"``.  Set to e.g. ``"county"`` to
-        populate a different geographic column using the same boundaries file
-        — the source column in the boundaries GeoParquet is always
-        ``"region"``.
+        Name of the column to write region labels into.  Defaults to
+        ``"region"`` (UN sub-region, e.g. "Eastern Africa").  When the
+        boundaries GeoParquet contains a column with the same name (e.g.
+        ``"name"`` for country names, ``"continent"``, ``"iso3"``), that
+        column is used as the source so the written values reflect the
+        requested granularity.  Any other value is treated as an alias for
+        ``"region"`` (UN sub-region written into a differently-named column).
     """
     if "lat" not in df.columns or "lon" not in df.columns:
         raise ValueError("Region enrichment requires 'lat' and 'lon' columns.")
@@ -98,7 +100,24 @@ def _attach_regions_from_boundaries(
             "Administrative boundaries file is missing the required 'region' column."
         )
 
-    world_df = world_df[["region", "geometry"]].copy()
+    # Determine which column in the boundaries file to use as the source.
+    # If region_column names a column that actually exists in the boundaries
+    # GeoParquet (e.g. "name" → country names, "continent", "iso3"), use it
+    # directly.  Otherwise fall back to "region" (UN sub-region).
+    source_col = region_column if region_column in world_df.columns else "region"
+    if source_col != region_column:
+        available = [c for c in world_df.columns if c != "geometry"]
+        logger.warning(
+            f"'{region_column}' is not a column in the boundaries file; "
+            f"falling back to source='{source_col}' (UN sub-region). "
+            f"Available boundary columns: {available}"
+        )
+    else:
+        logger.info(
+            f"Using '{source_col}' column from boundaries file → '{region_column}'."
+        )
+
+    world_df = world_df[[source_col, "geometry"]].copy()
 
     # Mutate df in-place rather than copying the whole (potentially 7M-row) frame.
     if region_column not in df.columns:
@@ -142,7 +161,7 @@ def _attach_regions_from_boundaries(
         joined = gpd.sjoin(gdf, world_4326, how="left", predicate="within")
         joined = joined[~joined.index.duplicated(keep="first")]
 
-        unmatched_mask = joined["region"].isna()
+        unmatched_mask = joined[source_col].isna()
         n_unmatched = int(unmatched_mask.sum())
 
         if n_unmatched > 0:
@@ -155,13 +174,13 @@ def _attach_regions_from_boundaries(
             world_3857 = world_df.to_crs("EPSG:3857")
             nearest = gpd.sjoin_nearest(gdf_miss, world_3857, how="left")
             nearest = nearest[~nearest.index.duplicated(keep="first")]
-            joined.loc[unmatched_idx, "region"] = nearest["region"].reindex(
+            joined.loc[unmatched_idx, source_col] = nearest[source_col].reindex(
                 unmatched_idx
             )
             del gdf_miss, world_3857, nearest
 
         del gdf, world_df, world_4326
-        region_series = joined["region"].reindex(coords.index)
+        region_series = joined[source_col].reindex(coords.index)
         del joined, coords
         df.loc[region_series.index, region_column] = region_series
 
