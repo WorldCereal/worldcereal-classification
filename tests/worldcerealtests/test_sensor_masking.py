@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from worldcereal.train.datasets import (
     NODATAVALUE,
@@ -102,6 +103,105 @@ def test_dem_dropout():
     ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
     sample = ds[0]
     assert np.all(sample.dem == NODATAVALUE), "DEM dropout failed"
+
+
+def _valid_timesteps(arr):
+    # arr shape [H, W, T, bands] -> boolean [T], True where any band has data
+    return (arr[0, 0] != NODATAVALUE).any(axis=-1)
+
+
+def test_joint_guard_restores_s2_when_s1_disabled():
+    # S1 intentionally fully dropped; a full-length S2 cloud block would wipe
+    # S2 too, so the guard must restore exactly one S2 timestep.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        s2_cloud_block_prob=1.0,
+        s2_cloud_block_min=num_timesteps,
+        s2_cloud_block_max=num_timesteps,
+        seed=0,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.s1 == NODATAVALUE), "S1 full dropout should stay intact"
+    assert _valid_timesteps(sample.s2).sum() == 1, (
+        "Guard should restore exactly one S2 timestep"
+    )
+
+
+def test_joint_guard_restores_s1_when_s2_disabled():
+    # S2 intentionally fully masked; per-timestep S1 dropout at 1.0 would wipe
+    # S1 too, so the guard must restore exactly one S1 timestep.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_timestep_dropout_prob=1.0,
+        s2_cloud_timestep_prob=1.0,
+        seed=0,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.s2 == NODATAVALUE), "S2 full dropout should stay intact"
+    assert _valid_timesteps(sample.s1).sum() == 1, (
+        "Guard should restore exactly one S1 timestep"
+    )
+
+
+def test_joint_guard_with_real_missing_s1():
+    # S1 entirely missing in the input data; masking must never wipe S2 fully.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    for t in range(num_timesteps):
+        df[f"SAR-VV-ts{t}-20m"] = NODATAVALUE
+        df[f"SAR-VH-ts{t}-20m"] = NODATAVALUE
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s2_cloud_block_prob=1.0,
+        s2_cloud_block_min=num_timesteps,
+        s2_cloud_block_max=num_timesteps,
+        seed=0,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.s1 == NODATAVALUE)
+    assert _valid_timesteps(sample.s2).sum() == 1, (
+        "Guard should restore exactly one S2 timestep for S1-missing samples"
+    )
+
+
+def test_joint_guard_never_wipes_both_statistically():
+    # Hammer the aggressive config: no draw may leave both S1 and S2 empty.
+    num_timesteps = 12
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=0.5,
+        s1_timestep_dropout_prob=0.9,
+        s2_cloud_timestep_prob=0.9,
+        s2_cloud_block_prob=0.5,
+        s2_cloud_block_min=1,
+        s2_cloud_block_max=12,
+        seed=123,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    for _ in range(500):
+        sample = ds[0]
+        s1_ok = _valid_timesteps(sample.s1).any()
+        s2_ok = _valid_timesteps(sample.s2).any()
+        assert s1_ok or s2_ok, "S1 and S2 both fully masked"
+
+
+def test_validate_rejects_double_disable():
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        s2_cloud_timestep_prob=1.0,
+    )
+    with pytest.raises(ValueError, match="cannot both be 1.0"):
+        cfg.validate(num_timesteps=12)
 
 
 def test_s2_cloud_timestep_full_dropout():

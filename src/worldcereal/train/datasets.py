@@ -898,6 +898,12 @@ class SensorMaskingConfig:
     Probabilities are applied independently per sample. Values are in [0,1].
     Set config to None or enabled=False to disable masking.
 
+    Invariant: masking never leaves a sample with S1 and S2 both fully
+    masked-or-missing. If the drawn masks (combined with gaps already present
+    in the data) would wipe both sensors, one synthetically masked timestep is
+    restored — preferring S2, and never a sensor whose full elimination is
+    intentional (s1_full_dropout_prob or s2_cloud_timestep_prob of 1.0).
+
     Attributes
     ----------
     enable: bool
@@ -940,6 +946,11 @@ class SensorMaskingConfig:
             )
         if self.s2_cloud_block_max > num_timesteps:
             raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
+        if self.s1_full_dropout_prob >= 1.0 and self.s2_cloud_timestep_prob >= 1.0:
+            raise ValueError(
+                "s1_full_dropout_prob and s2_cloud_timestep_prob cannot both be 1.0: "
+                "every sample would end up with S1 and S2 fully masked"
+            )
         for name in [
             "s1_full_dropout_prob",
             "s1_timestep_dropout_prob",
@@ -1050,10 +1061,32 @@ class WorldCerealDataset(Dataset):
                         self.masking_config
                     )
                 )
+                self._check_joint_s1_s2_availability()
             else:
                 logger.info(
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
+
+    def _check_joint_s1_s2_availability(self):
+        """Warn about samples the joint S1/S2 masking guard cannot repair.
+
+        A sample with no S1 and no S2 data anywhere in its timeseries will
+        always violate the never-both-fully-missing invariant, regardless of
+        how masking is drawn.
+        """
+        s1_cols = [c for c in self.dataframe.columns if c.startswith("SAR-")]
+        s2_cols = [c for c in self.dataframe.columns if c.startswith("OPTICAL-")]
+        if not s1_cols or not s2_cols:
+            return
+        s1_gone = (self.dataframe[s1_cols] == NODATAVALUE).all(axis=1)
+        s2_gone = (self.dataframe[s2_cols] == NODATAVALUE).all(axis=1)
+        num_bad = int((s1_gone & s2_gone).sum())
+        if num_bad:
+            logger.warning(
+                f"{num_bad} sample(s) have no S1 and no S2 data at all; "
+                "the joint S1/S2 masking guard cannot restore data for these. "
+                "Consider removing them from the dataset."
+            )
 
     def __len__(self):
         return self.dataframe.shape[0]
@@ -1250,54 +1283,56 @@ class WorldCerealDataset(Dataset):
         2. Per-timestep S1 dropout.
         3. S2 contiguous cloud block.
         4. Per-timestep S2 cloud dropout.
-        5. Per-timestep meteo dropout.
-        6. DEM dropout.
+        5. Joint S1/S2 guard: if S1 and S2 would both end up fully
+           masked-or-missing, one synthetically masked timestep is restored.
+        6. Per-timestep meteo dropout.
+        7. DEM dropout.
+
+        The S1 and S2 dropouts are drawn as boolean masks first so the joint
+        guard can repair them before any values are overwritten.
         """
         # Guard: if masking_config is None (should not happen when enable checked)
         if self.masking_config is None:
             return s1, s2, meteo, dem
         cfg: SensorMaskingConfig = self.masking_config  # type narrowing for mypy
         T = self.num_timesteps
-        # 1. Full S1 dropout
-        if np.random.rand() < cfg.s1_full_dropout_prob:
-            s1[:] = NODATAVALUE
-            # logger.debug("Applied full S1 dropout")
-        else:
-            # 2. Per-timestep S1 dropout
-            if cfg.s1_timestep_dropout_prob > 0:
-                s1_mask = np.random.rand(T) < cfg.s1_timestep_dropout_prob
-                if s1_mask.any():
-                    s1[..., s1_mask, :] = NODATAVALUE
-                    # logger.debug(
-                    #     f"Applied S1 timestep dropout on {s1_mask.sum()} of {T} timesteps"
-                    # )
 
-        # 3. S2 contiguous cloud block
+        # Timesteps already missing in the input data (all bands NODATAVALUE)
+        s1_missing = np.all(s1[0, 0] == NODATAVALUE, axis=-1)
+        s2_missing = np.all(s2[0, 0] == NODATAVALUE, axis=-1)
+
+        # 1. Full S1 dropout / 2. per-timestep S1 dropout
+        s1_drop = np.zeros(T, dtype=bool)
+        if np.random.rand() < cfg.s1_full_dropout_prob:
+            s1_drop[:] = True
+        elif cfg.s1_timestep_dropout_prob > 0:
+            s1_drop = np.random.rand(T) < cfg.s1_timestep_dropout_prob
+
+        # 3. S2 contiguous cloud block / 4. per-timestep S2 cloud dropout
+        s2_drop = np.zeros(T, dtype=bool)
         if cfg.s2_cloud_block_prob > 0 and np.random.rand() < cfg.s2_cloud_block_prob:
             block_len = np.random.randint(
                 cfg.s2_cloud_block_min, cfg.s2_cloud_block_max + 1
             )
             if block_len >= T:
-                start = 0
-                end = T
+                s2_drop[:] = True
             else:
                 start = np.random.randint(0, T - block_len + 1)
-                end = start + block_len
-            s2[..., start:end, :] = NODATAVALUE
-            # logger.debug(
-            #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
-            # )
-
-        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps).
+                s2_drop[start : start + block_len] = True
         if cfg.s2_cloud_timestep_prob > 0:
-            s2_mask = np.random.rand(T) < cfg.s2_cloud_timestep_prob
-            # Probe B4 to determine which timesteps are newly masked (cloudy) vs already masked
-            b4_idx = S2_BANDS.index("B4")
-            newly_masked = s2_mask & (s2[0, 0, :, b4_idx] != NODATAVALUE)
-            if newly_masked.any():
-                s2[..., newly_masked, :] = NODATAVALUE
+            s2_drop |= np.random.rand(T) < cfg.s2_cloud_timestep_prob
 
-        # 5. Meteo per-timestep dropout
+        # 5. Joint S1/S2 guard
+        s1_drop, s2_drop = self._rescue_joint_s1_s2_wipe(
+            s1_drop, s2_drop, s1_missing, s2_missing
+        )
+
+        if s1_drop.any():
+            s1[..., s1_drop, :] = NODATAVALUE
+        if s2_drop.any():
+            s2[..., s2_drop, :] = NODATAVALUE
+
+        # 6. Meteo per-timestep dropout
         if cfg.meteo_timestep_dropout_prob > 0:
             meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
             if meteo_mask.any():
@@ -1306,12 +1341,56 @@ class WorldCerealDataset(Dataset):
                 #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
                 # )
 
-        # 6. DEM dropout
+        # 7. DEM dropout
         if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
             dem[:] = NODATAVALUE
             # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
+
+    def _rescue_joint_s1_s2_wipe(
+        self,
+        s1_drop: np.ndarray,
+        s2_drop: np.ndarray,
+        s1_missing: np.ndarray,
+        s2_missing: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Ensure S1 and S2 never end up both fully masked-or-missing.
+
+        If the drawn dropout masks, combined with gaps already present in the
+        data, would leave neither sensor with a single valid timestep, one
+        synthetically dropped timestep is restored. S2 is restored in
+        preference to S1 because the dominant violating path is the explicit
+        full-S1-dropout draw, whose semantics should stay intact. A sensor
+        whose full elimination is intentional (dropout probability of 1.0,
+        e.g. disable_s1/disable_s2 experiments) is never restored.
+        """
+        cfg: SensorMaskingConfig = self.masking_config  # type: ignore[assignment]
+        if not (s1_drop | s1_missing).all() or not (s2_drop | s2_missing).all():
+            return s1_drop, s2_drop
+
+        candidates = [
+            (
+                s2_drop,
+                np.flatnonzero(s2_drop & ~s2_missing),
+                cfg.s2_cloud_timestep_prob >= 1.0,
+            ),
+            (
+                s1_drop,
+                np.flatnonzero(s1_drop & ~s1_missing),
+                cfg.s1_full_dropout_prob >= 1.0,
+            ),
+        ]
+        for drop, restorable, intentional in candidates:
+            if restorable.size and not intentional:
+                drop[np.random.choice(restorable)] = False
+                return s1_drop, s2_drop
+
+        logger.warning(
+            "Sample has S1 and S2 fully masked-or-missing and no restorable "
+            "timesteps; the joint S1/S2 guard cannot be enforced for this sample."
+        )
+        return s1_drop, s2_drop
 
     def _build_sample_attrs(
         self,
@@ -1613,7 +1692,11 @@ class WorldCerealDataset(Dataset):
 
         try:
             start_dt, end_dt = self._season_context_for(
-                season_name, row, target_year, lat, lon,
+                season_name,
+                row,
+                target_year,
+                lat,
+                lon,
                 label_datetime=label_datetime,
             )
         except ValueError as exc:
