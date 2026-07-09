@@ -1231,12 +1231,25 @@ def get_training_dfs_from_parquet(
         logger.info(
             f"Enriching samples with '{region_column}' labels using administrative boundaries."
         )
-        df = _attach_regions_from_boundaries(
-            df,
-            boundaries_path=_BOUNDARIES_PATH,
-            target_mask=region_missing_mask,
-            region_column=region_column,
-        )
+        try:
+            df = _attach_regions_from_boundaries(
+                df,
+                boundaries_path=_BOUNDARIES_PATH,
+                target_mask=region_missing_mask,
+                region_column=region_column,
+            )
+        except FileNotFoundError as exc:
+            logger.warning(
+                f"Administrative boundaries file not found ({exc}); "
+                f"skipping region enrichment. The '{region_column}' column will "
+                "be absent from the training data — per-region logging and "
+                "any --finetune_regions filter will not work."
+            )
+            if normalized_regions is not None:
+                raise RuntimeError(
+                    f"Cannot apply --finetune_regions filter: administrative "
+                    f"boundaries file is unavailable ({exc})."
+                ) from exc
         if not is_tempfile:
             tbl = pa.Table.from_pandas(df, preserve_index=False)
             pq.write_table(
