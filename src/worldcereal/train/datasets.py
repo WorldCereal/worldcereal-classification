@@ -898,6 +898,12 @@ class SensorMaskingConfig:
     Probabilities are applied independently per sample. Values are in [0,1].
     Set config to None or enabled=False to disable masking.
 
+    Invariant: masking never leaves a sample with S1 and S2 both fully
+    masked-or-missing. If the drawn masks (combined with gaps already present
+    in the data) would wipe both sensors, one synthetically masked timestep is
+    restored — preferring S2, and never a sensor whose full elimination is
+    intentional (s1_full_dropout_prob or s2_cloud_timestep_prob of 1.0).
+
     Attributes
     ----------
     enable: bool
@@ -940,6 +946,11 @@ class SensorMaskingConfig:
             )
         if self.s2_cloud_block_max > num_timesteps:
             raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
+        if self.s1_full_dropout_prob >= 1.0 and self.s2_cloud_timestep_prob >= 1.0:
+            raise ValueError(
+                "s1_full_dropout_prob and s2_cloud_timestep_prob cannot both be 1.0: "
+                "every sample would end up with S1 and S2 fully masked"
+            )
         for name in [
             "s1_full_dropout_prob",
             "s1_timestep_dropout_prob",
@@ -972,6 +983,10 @@ class WorldCerealDataset(Dataset):
         "DEM-alt-20m": "elevation",
         "DEM-slo-20m": "slope",
     }
+    # Column templates probed by the joint S1/S2 availability checks.
+    S1_S2_COLUMN_TEMPLATES = [
+        k for k in BAND_MAPPING if k.startswith(("SAR-", "OPTICAL-"))
+    ]
 
     def __init__(
         self,
@@ -983,6 +998,7 @@ class WorldCerealDataset(Dataset):
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
         min_season_coverage: float = 1.0,
+        remove_samples_without_s1_s2: bool = False,
     ):
         """WorldCereal base dataset. This dataset is typically used for
         self-supervised learning.
@@ -1012,6 +1028,16 @@ class WorldCerealDataset(Dataset):
             training split with augmentation enabled, pass a lower value (e.g.
             0.5) so that seasons only partially shifted out of the window by
             random augmentation still contribute supervision signal.
+        remove_samples_without_s1_s2 : bool, optional
+            If True, guarantee every emitted sample has S1 or S2 data:
+            (1) at construction, rows with no S1/S2 data in any admissible
+            timestep window (one containing `valid_position`) are dropped, and
+            (2) at sampling time, a selected window without S1/S2 data is
+            re-positioned onto an admissible window that has some. Samples
+            violating this produce zero encoder tokens (e.g. OlmoEarth raises
+            `num_encoded_tokens is 0`) and break the never-both-fully-missing
+            invariant of the sensor masking guard. By default False, in which
+            case a warning is logged when such rows are present.
         """
         self.dataframe = dataframe.copy()
         numeric_cols = self.dataframe.select_dtypes(include="number").columns
@@ -1039,12 +1065,16 @@ class WorldCerealDataset(Dataset):
                 f"Using min_season_coverage={self.min_season_coverage} with augment={self.augment}"
             )
 
+        self.remove_samples_without_s1_s2 = remove_samples_without_s1_s2
+
+        masking_enabled = False
         if self.masking_config:
             if self.masking_config.seed is not None:
                 # set a per-dataset RNG seed (numpy global for simplicity)
                 np.random.seed(self.masking_config.seed)
             self.masking_config.validate(self.num_timesteps)
-            if self.masking_config.enable:
+            masking_enabled = self.masking_config.enable
+            if masking_enabled:
                 logger.info(
                     "Sensor masking enabled for this dataset with config: {}".format(
                         self.masking_config
@@ -1054,6 +1084,83 @@ class WorldCerealDataset(Dataset):
                 logger.info(
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
+
+        if self.remove_samples_without_s1_s2 or masking_enabled:
+            self._check_joint_s1_s2_availability()
+
+    def _check_joint_s1_s2_availability(self):
+        """Find samples the joint S1/S2 masking guard cannot repair.
+
+        A sample with no S1 and no S2 data anywhere in its timeseries will
+        always violate the never-both-fully-missing invariant, regardless of
+        how masking is drawn. Depending on `remove_samples_without_s1_s2`,
+        such samples are either dropped from the dataset or reported with a
+        warning.
+
+        The check is window-aware: a row is flagged when no admissible window
+        (one containing `valid_position` and fitting within the available
+        timesteps) holds any S1/S2 data. A row can have data in its full
+        timeseries yet still be unusable if none of it is reachable from
+        `valid_position`. Since admissible windows slide by one timestep,
+        their union is the contiguous range ``[first_min, first_max + T)``,
+        so checking that range for data is exact.
+        """
+        if (
+            "available_timesteps" not in self.dataframe.columns
+            or "valid_position" not in self.dataframe.columns
+        ):
+            return
+
+        # Per-(row, timestep) S1/S2 data presence
+        max_ts = 0
+        while any(
+            template.format(max_ts) in self.dataframe.columns
+            for template in self.S1_S2_COLUMN_TEMPLATES
+        ):
+            max_ts += 1
+        if max_ts == 0:
+            return
+        presence = np.zeros((len(self.dataframe), max_ts), dtype=bool)
+        for t in range(max_ts):
+            cols = [
+                template.format(t)
+                for template in self.S1_S2_COLUMN_TEMPLATES
+                if template.format(t) in self.dataframe.columns
+            ]
+            presence[:, t] = (self.dataframe[cols].to_numpy() != NODATAVALUE).any(
+                axis=1
+            )
+
+        T = self.num_timesteps
+        avail = self.dataframe["available_timesteps"].astype(int).to_numpy()
+        vp = self.dataframe["valid_position"].astype(int).to_numpy()
+        first_min = np.maximum(0, vp - T + 1)
+        first_max = np.minimum(vp, avail - T)
+        bad = np.array(
+            [
+                not presence[
+                    i, first_min[i] : max(first_max[i], first_min[i]) + T
+                ].any()
+                for i in range(len(self.dataframe))
+            ]
+        )
+        num_bad = int(bad.sum())
+        if not num_bad:
+            return
+        if self.remove_samples_without_s1_s2:
+            self.dataframe = self.dataframe.loc[~bad].reset_index(drop=True)
+            logger.warning(
+                f"Removed {num_bad}/{len(bad)} sample(s) with no S1 and no S2 "
+                "data in any admissible timestep window "
+                "(remove_samples_without_s1_s2=True)."
+            )
+        else:
+            logger.warning(
+                f"{num_bad}/{len(self)} sample(s) have no S1 and no S2 data in any "
+                "admissible timestep window; the joint S1/S2 masking guard cannot "
+                "restore data for these. Consider removing them with "
+                "remove_samples_without_s1_s2=True."
+            )
 
     def __len__(self):
         return self.dataframe.shape[0]
@@ -1095,7 +1202,58 @@ class WorldCerealDataset(Dataset):
             f"Valid position {valid_position} not in timestep positions {timestep_positions}"
         )
 
+        # A window without any S1/S2 data produces a sample the model cannot
+        # encode (zero valid tokens), even when the row has data elsewhere in
+        # its timeseries. Re-position the window onto data when possible.
+        if self.remove_samples_without_s1_s2 and not self._window_has_s1_s2(
+            row_d, timestep_positions
+        ):
+            fallback = self._find_window_with_s1_s2(
+                row_d, available_timesteps, valid_position, timestep_positions
+            )
+            if fallback is not None:
+                timestep_positions = fallback
+
         return timestep_positions, valid_position
+
+    def _window_has_s1_s2(self, row_d: Dict, timestep_positions: List[int]) -> bool:
+        """Whether any S1 or S2 band has data at any of the given timesteps."""
+        for t in timestep_positions:
+            for template in self.S1_S2_COLUMN_TEMPLATES:
+                value = row_d.get(template.format(t))
+                if value is not None and value != NODATAVALUE:
+                    return True
+        return False
+
+    def _find_window_with_s1_s2(
+        self,
+        row_d: Dict,
+        available_timesteps: int,
+        valid_position: int,
+        current_positions: List[int],
+    ) -> Optional[List[int]]:
+        """Find an alternative window containing S1/S2 data.
+
+        Scans every admissible window (one that still contains
+        `valid_position` and fits within the available timesteps) and returns
+        one with S1/S2 data: a random one when augmenting, otherwise the one
+        closest to the originally selected window. Returns None if no
+        admissible window has data — such rows are removed at construction
+        when `remove_samples_without_s1_s2` is enabled.
+        """
+        T = self.num_timesteps
+        first_min = max(0, valid_position - T + 1)
+        first_max = min(valid_position, available_timesteps - T)
+        candidates = [
+            positions
+            for first in range(first_min, first_max + 1)
+            if self._window_has_s1_s2(row_d, positions := list(range(first, first + T)))
+        ]
+        if not candidates:
+            return None
+        if self.augment:
+            return candidates[np.random.randint(len(candidates))]
+        return min(candidates, key=lambda pos: abs(pos[0] - current_positions[0]))
 
     def _get_center_point(
         self, available_timesteps, valid_position, augment, min_edge_buffer
@@ -1250,54 +1408,56 @@ class WorldCerealDataset(Dataset):
         2. Per-timestep S1 dropout.
         3. S2 contiguous cloud block.
         4. Per-timestep S2 cloud dropout.
-        5. Per-timestep meteo dropout.
-        6. DEM dropout.
+        5. Joint S1/S2 guard: if S1 and S2 would both end up fully
+           masked-or-missing, one synthetically masked timestep is restored.
+        6. Per-timestep meteo dropout.
+        7. DEM dropout.
+
+        The S1 and S2 dropouts are drawn as boolean masks first so the joint
+        guard can repair them before any values are overwritten.
         """
         # Guard: if masking_config is None (should not happen when enable checked)
         if self.masking_config is None:
             return s1, s2, meteo, dem
         cfg: SensorMaskingConfig = self.masking_config  # type narrowing for mypy
         T = self.num_timesteps
-        # 1. Full S1 dropout
-        if np.random.rand() < cfg.s1_full_dropout_prob:
-            s1[:] = NODATAVALUE
-            # logger.debug("Applied full S1 dropout")
-        else:
-            # 2. Per-timestep S1 dropout
-            if cfg.s1_timestep_dropout_prob > 0:
-                s1_mask = np.random.rand(T) < cfg.s1_timestep_dropout_prob
-                if s1_mask.any():
-                    s1[..., s1_mask, :] = NODATAVALUE
-                    # logger.debug(
-                    #     f"Applied S1 timestep dropout on {s1_mask.sum()} of {T} timesteps"
-                    # )
 
-        # 3. S2 contiguous cloud block
+        # Timesteps already missing in the input data (all bands NODATAVALUE)
+        s1_missing = np.all(s1[0, 0] == NODATAVALUE, axis=-1)
+        s2_missing = np.all(s2[0, 0] == NODATAVALUE, axis=-1)
+
+        # 1. Full S1 dropout / 2. per-timestep S1 dropout
+        s1_drop = np.zeros(T, dtype=bool)
+        if np.random.rand() < cfg.s1_full_dropout_prob:
+            s1_drop[:] = True
+        elif cfg.s1_timestep_dropout_prob > 0:
+            s1_drop = np.random.rand(T) < cfg.s1_timestep_dropout_prob
+
+        # 3. S2 contiguous cloud block / 4. per-timestep S2 cloud dropout
+        s2_drop = np.zeros(T, dtype=bool)
         if cfg.s2_cloud_block_prob > 0 and np.random.rand() < cfg.s2_cloud_block_prob:
             block_len = np.random.randint(
                 cfg.s2_cloud_block_min, cfg.s2_cloud_block_max + 1
             )
             if block_len >= T:
-                start = 0
-                end = T
+                s2_drop[:] = True
             else:
                 start = np.random.randint(0, T - block_len + 1)
-                end = start + block_len
-            s2[..., start:end, :] = NODATAVALUE
-            # logger.debug(
-            #     f"Applied S2 cloud block dropout from timestep {start} to {end - 1} (len={block_len})"
-            # )
-
-        # 4. Per-timestep S2 cloud dropout (skip already-masked timesteps).
+                s2_drop[start : start + block_len] = True
         if cfg.s2_cloud_timestep_prob > 0:
-            s2_mask = np.random.rand(T) < cfg.s2_cloud_timestep_prob
-            # Probe B4 to determine which timesteps are newly masked (cloudy) vs already masked
-            b4_idx = S2_BANDS.index("B4")
-            newly_masked = s2_mask & (s2[0, 0, :, b4_idx] != NODATAVALUE)
-            if newly_masked.any():
-                s2[..., newly_masked, :] = NODATAVALUE
+            s2_drop |= np.random.rand(T) < cfg.s2_cloud_timestep_prob
 
-        # 5. Meteo per-timestep dropout
+        # 5. Joint S1/S2 guard
+        s1_drop, s2_drop = self._rescue_joint_s1_s2_wipe(
+            s1_drop, s2_drop, s1_missing, s2_missing
+        )
+
+        if s1_drop.any():
+            s1[..., s1_drop, :] = NODATAVALUE
+        if s2_drop.any():
+            s2[..., s2_drop, :] = NODATAVALUE
+
+        # 6. Meteo per-timestep dropout
         if cfg.meteo_timestep_dropout_prob > 0:
             meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
             if meteo_mask.any():
@@ -1306,12 +1466,56 @@ class WorldCerealDataset(Dataset):
                 #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
                 # )
 
-        # 6. DEM dropout
+        # 7. DEM dropout
         if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
             dem[:] = NODATAVALUE
             # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
+
+    def _rescue_joint_s1_s2_wipe(
+        self,
+        s1_drop: np.ndarray,
+        s2_drop: np.ndarray,
+        s1_missing: np.ndarray,
+        s2_missing: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Ensure S1 and S2 never end up both fully masked-or-missing.
+
+        If the drawn dropout masks, combined with gaps already present in the
+        data, would leave neither sensor with a single valid timestep, one
+        synthetically dropped timestep is restored. S2 is restored in
+        preference to S1 because the dominant violating path is the explicit
+        full-S1-dropout draw, whose semantics should stay intact. A sensor
+        whose full elimination is intentional (dropout probability of 1.0,
+        e.g. disable_s1/disable_s2 experiments) is never restored.
+        """
+        cfg: SensorMaskingConfig = self.masking_config  # type: ignore[assignment]
+        if not (s1_drop | s1_missing).all() or not (s2_drop | s2_missing).all():
+            return s1_drop, s2_drop
+
+        candidates = [
+            (
+                s2_drop,
+                np.flatnonzero(s2_drop & ~s2_missing),
+                cfg.s2_cloud_timestep_prob >= 1.0,
+            ),
+            (
+                s1_drop,
+                np.flatnonzero(s1_drop & ~s1_missing),
+                cfg.s1_full_dropout_prob >= 1.0,
+            ),
+        ]
+        for drop, restorable, intentional in candidates:
+            if restorable.size and not intentional:
+                drop[np.random.choice(restorable)] = False
+                return s1_drop, s2_drop
+
+        logger.warning(
+            "Sample has S1 and S2 fully masked-or-missing and no restorable "
+            "timesteps; the joint S1/S2 guard cannot be enforced for this sample."
+        )
+        return s1_drop, s2_drop
 
     def _build_sample_attrs(
         self,
@@ -1613,7 +1817,11 @@ class WorldCerealDataset(Dataset):
 
         try:
             start_dt, end_dt = self._season_context_for(
-                season_name, row, target_year, lat, lon,
+                season_name,
+                row,
+                target_year,
+                lat,
+                lon,
                 label_datetime=label_datetime,
             )
         except ValueError as exc:
@@ -2427,6 +2635,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
         season_calendar_mode: SeasonCalendarMode = "auto",
         min_season_coverage: float = 1.0,
+        remove_samples_without_s1_s2: bool = False,
     ):
         """WorldCereal training dataset. This dataset is typically used for
         computing embeddings for downstream training."""
@@ -2439,6 +2648,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             augment=augment,
             masking_config=masking_config,
             min_season_coverage=min_season_coverage,
+            remove_samples_without_s1_s2=remove_samples_without_s1_s2,
         )
 
         self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
