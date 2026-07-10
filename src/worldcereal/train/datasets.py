@@ -425,7 +425,7 @@ def get_class_weights(
         weights = weights / weights.mean()
 
     if clip_range:
-        logger.debug(f"Clipping weights to range {clip_range}")
+        logger.info(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
     rounded = np.round(weights, 3)
@@ -539,6 +539,72 @@ def _spatial_bins_from_latlon(
     return np.char.add(np.char.add(lat_str, "_"), lon_str)
 
 
+def _spatial_bins_from_h3(
+    latitudes: pd.Series, longitudes: pd.Series, resolution: int
+) -> np.ndarray:
+    """Quantize latitude/longitude pairs into Uber H3 hexagonal cell bins.
+
+    Each (lat, lon) is mapped to its H3 cell index (as a string) at the given
+    *resolution*. Unlike fixed-degree lat/lon bins -- whose ground area shrinks
+    dramatically toward the poles (a 5x5 degree cell near 60N covers roughly
+    half the area of one at the equator) -- H3 cells are approximately
+    equal-area hexagons. This gives more geographically consistent per-bin
+    class balancing, so co-located classes (e.g. wheat vs oats in Europe) are
+    balanced against each other within comparable-sized neighbourhoods rather
+    than within latitude-distorted rectangles.
+
+    Parameters
+    ----------
+    latitudes, longitudes : pd.Series
+        Sample coordinates in degrees.
+    resolution : int
+        H3 resolution (0 = coarsest ... 15 = finest). As a rough guide:
+        res 1 ~ 610,000 km2, res 2 ~ 86,000 km2, res 3 ~ 12,000 km2 per cell.
+
+    Returns
+    -------
+    np.ndarray
+        Array of H3 cell-index strings, one per sample.
+    """
+    if not isinstance(resolution, (int, np.integer)) or not (0 <= resolution <= 15):
+        raise ValueError(
+            f"h3 resolution must be an int in [0, 15], got {resolution!r}"
+        )
+
+    try:
+        import h3
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "bin_type='h3' requires the 'h3' package (>=4). Install it via "
+            "`pip install h3` or `conda install h3-py`."
+        ) from exc
+
+    lat_array = latitudes.to_numpy(dtype=np.float64, copy=True)
+    lon_array = longitudes.to_numpy(dtype=np.float64, copy=True)
+
+    if np.isnan(lat_array).any() or np.isnan(lon_array).any():
+        raise ValueError(
+            "Latitude/longitude contain missing values; cannot build spatial bins"
+        )
+
+    # Support both the h3 v4 API (latlng_to_cell) and the legacy v3 API
+    # (geo_to_h3) so the function works across environments.
+    if hasattr(h3, "latlng_to_cell"):
+        _to_cell = h3.latlng_to_cell  # h3 >= 4
+    elif hasattr(h3, "geo_to_h3"):
+        _to_cell = h3.geo_to_h3  # h3 < 4
+    else:  # pragma: no cover - unexpected h3 build
+        raise ImportError(
+            "Installed 'h3' package exposes neither latlng_to_cell nor geo_to_h3."
+        )
+
+    cells = [
+        _to_cell(float(lat), float(lon), resolution)
+        for lat, lon in zip(lat_array, lon_array)
+    ]
+    return np.asarray(cells, dtype=object).astype(str)
+
+
 def _get_per_bin_class_weights(
     labels: np.ndarray,
     bins: np.ndarray,
@@ -580,11 +646,15 @@ def _get_per_bin_class_weights(
             f"{min_samples_per_class_per_bin}"
         )
 
+    # Clip the GLOBAL fallback weights (used for sparse bins and rare in-bin
+    # classes) to clip_range. Without this, a globally-rare class could inject
+    # an extreme unclipped weight that inflates the array mean and distorts the
+    # final mean-normalisation for every other sample.
     global_w_dict = _stringify_weight_dict(
         get_class_weights(
             labels,
             method=method,
-            clip_range=None,
+            clip_range=clip_range,
             normalize=True,
             pool_name=pool_name,
         )
@@ -1560,7 +1630,9 @@ class WorldCerealDataset(Dataset):
             if key == "region":
                 # Always emit "region" with a fallback so _collate_attrs sees a
                 # consistent key across all samples in a batch, even when some
-                # rows have a missing/NaN region value.
+                # rows have a missing/NaN region value. Read from the configured
+                # region_column (may differ from "region" if parameterised).
+                value = row.get(self._region_column)
                 attrs["region"] = (
                     str(value)
                     if (value is not None and not _is_missing_value(value))
@@ -1829,7 +1901,7 @@ class WorldCerealDataset(Dataset):
             # "season not available" rather than crashing.  Return an all-zeros
             # mask so the sample is simply not supervised for this season.
             sample_id = row.get("sample_id", "n/a")
-            logger.debug(
+            logger.error(
                 f"Season '{season_name}' unavailable for sample {sample_id}: {exc}. "
                 f"Returning empty mask."
             )
@@ -1902,7 +1974,7 @@ class WorldCerealDataset(Dataset):
             distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
             best_idx = int(distances.argmin())
             fallback_key = (lat_vals[best_idx], lon_vals[best_idx])
-            logger.debug(
+            logger.error(
                 f"Seasonality lookup missing ({lat_center}, {lon_center}); using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
             )
             lat_center, lon_center = float(fallback_key[0]), float(fallback_key[1])
@@ -1950,6 +2022,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_calendar_mode: SeasonCalendarMode = "auto",
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
+        region_column: str = "region",
         **kwargs,
     ):
         """Labelled version of WorldCerealDataset for supervised training.
@@ -2012,6 +2085,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         self.label_jitter = label_jitter
         self.label_window = label_window
         self.return_sample_id = return_sample_id
+        self._region_column = region_column
         self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(
             season_windows
         )
@@ -2226,6 +2300,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
+        region_column: str = "region",
+        bin_type: Literal["degrees", "h3"] = "degrees",
+        h3_resolution: int = 2,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -2249,6 +2326,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             num_batches=num_batches,
             generator=generator,
             class_weight_multipliers=class_weight_multipliers,
+            region_column=region_column,
+            bin_type=bin_type,
+            h3_resolution=h3_resolution,
         )
 
 
@@ -2280,6 +2360,78 @@ def _normalize_class_weight_multipliers(
         "class_weight_multipliers must be either per-class (class→float) "
         "or per-region (region→{class→float}), not mixed."
     )
+
+
+def apply_class_weight_multipliers(
+    sampler_weights: np.ndarray,
+    labels: np.ndarray,
+    regions: Optional[np.ndarray],
+    mults_canonical: Dict[str, Dict[str, float]],
+    pool_name: str = "",
+) -> np.ndarray:
+    """Multiply ``sampler_weights`` by per-region/per-class multipliers.
+
+    Parameters
+    ----------
+    sampler_weights:
+        Per-sample float64 weight array of length N.
+    labels:
+        String label array of length N (e.g. ``landcover_label`` or
+        ``croptype_label`` values).
+    regions:
+        Optional string region array of length N.  ``None`` or a missing
+        value causes the wildcard ``"*"`` entry to be used.
+    mults_canonical:
+        Canonical multiplier dict as returned by
+        ``_normalize_class_weight_multipliers`` — keys are region names (or
+        ``"*"``), values are ``{class_name: float}`` dicts.
+    pool_name:
+        Optional label for log messages.
+
+    Returns
+    -------
+    np.ndarray
+        ``sampler_weights * mult_arr`` (a new array; input is not mutated).
+    """
+    if not mults_canonical:
+        return sampler_weights
+
+    wildcard = mults_canonical.get("*", {})
+    label_set = set(labels.tolist())
+
+    def _lookup(reg: Optional[str], lbl: str) -> float:
+        if reg is not None:
+            reg_dict = mults_canonical.get(reg)
+            if reg_dict is not None and lbl in reg_dict:
+                return reg_dict[lbl]
+        return wildcard.get(lbl, 1.0)
+
+    regs_iter = regions if regions is not None else [None] * len(labels)
+    mult_arr = np.array(
+        [_lookup(r, lbl) for r, lbl in zip(regs_iter, labels)],
+        dtype=np.float64,
+    )
+    if np.allclose(mult_arr, 1.0):
+        return sampler_weights
+
+    applied = {
+        reg: {c: w for c, w in cmults.items() if c in label_set}
+        for reg, cmults in mults_canonical.items()
+    }
+    applied = {k: v for k, v in applied.items() if v}
+    prefix = f"[{pool_name}] " if pool_name else ""
+    logger.info(f"{prefix}Applied class weight multipliers: {applied}")
+
+    # Warn about classes that don't appear in the label set.
+    for reg, cmults in mults_canonical.items():
+        for c in cmults:
+            if c not in label_set:
+                logger.debug(
+                    f"{prefix}class_weight_multipliers[{reg!r}][{c!r}] not found "
+                    "in label set; ignoring."
+                )
+
+    return sampler_weights * mult_arr
 
 
 class DualHeadBatchSampler(Sampler):
@@ -2352,6 +2504,9 @@ class DualHeadBatchSampler(Sampler):
         num_batches: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
         class_weight_multipliers: Optional[Mapping[str, Any]] = None,
+        region_column: str = "region",
+        bin_type: Literal["degrees", "h3"] = "degrees",
+        h3_resolution: int = 2,
     ) -> None:
         import math
 
@@ -2394,29 +2549,46 @@ class DualHeadBatchSampler(Sampler):
             )
         ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
 
-        # ---- Compute spatial bins if degree size is set ----
-        spatial_bins: Optional[np.ndarray] = None
-        if (
-            spatial_bin_size_degrees is not None
-            and "lat" in dataframe.columns
-            and "lon" in dataframe.columns
-        ):
-            spatial_bins = _spatial_bins_from_latlon(
-                dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
+        # ---- Compute spatial bins (degree grid or H3 cells) ----
+        # bin_type selects the binning scheme:
+        #   - "degrees": legacy lat/lon grid, cell size = spatial_bin_size_degrees
+        #   - "h3": Uber H3 (approximately equal-area) hexagons at h3_resolution
+        # Backward compatible: default bin_type="degrees" with an explicit
+        # spatial_bin_size_degrees reproduces the original behaviour exactly.
+        valid_bin_types = ("degrees", "h3")
+        if bin_type not in valid_bin_types:
+            raise ValueError(
+                f"bin_type must be one of {valid_bin_types}, got '{bin_type}'"
             )
+        spatial_bins: Optional[np.ndarray] = None
+        has_latlon = "lat" in dataframe.columns and "lon" in dataframe.columns
+        if has_latlon:
+            if bin_type == "h3":
+                spatial_bins = _spatial_bins_from_h3(
+                    dataframe["lat"], dataframe["lon"], h3_resolution
+                )
+            elif spatial_bin_size_degrees is not None:
+                spatial_bins = _spatial_bins_from_latlon(
+                    dataframe["lat"], dataframe["lon"], spatial_bin_size_degrees
+                )
 
         # ---- Class weights: source controlled by class_balancing_scope ----
         if class_balancing_scope == "per_bin":
             if spatial_bins is None:
                 raise ValueError(
-                    "class_balancing_scope='per_bin' requires "
-                    "spatial_bin_size_degrees to be set and lat/lon columns to "
-                    "be present in the dataframe."
+                    "class_balancing_scope='per_bin' requires lat/lon columns "
+                    "and either bin_type='h3' or spatial_bin_size_degrees to be "
+                    "set."
                 )
-            # spatial_bins is not None implies spatial_bin_size_degrees is not None;
-            # the assert is for mypy's type narrowing.
-            assert spatial_bin_size_degrees is not None
             if smoothing == "bilinear":
+                if bin_type != "degrees":
+                    raise ValueError(
+                        "smoothing='bilinear' is only supported with "
+                        "bin_type='degrees'; use smoothing='none' for H3 bins."
+                    )
+                # bilinear path is degree-grid specific; spatial_bin_size_degrees
+                # is guaranteed set when bin_type='degrees' and bins were built.
+                assert spatial_bin_size_degrees is not None
                 lat_arr = dataframe["lat"].to_numpy(dtype=np.float64)
                 lon_arr = dataframe["lon"].to_numpy(dtype=np.float64)
                 lc_class_arr = _get_smoothed_per_bin_class_weights(
@@ -2482,47 +2654,42 @@ class DualHeadBatchSampler(Sampler):
             mults_canonical = _normalize_class_weight_multipliers(
                 class_weight_multipliers
             )
-            lc_label_set = set(lc_labels.tolist())
-            ct_label_set = set(ct_labels.tolist())
-            has_region = "region" in dataframe.columns
+            has_region = region_column in dataframe.columns
             lc_regions = (
-                dataframe["region"].astype(str).to_numpy() if has_region else None
+                dataframe[region_column].astype(str).to_numpy() if has_region else None
             )
             ct_regions = lc_regions[ct_real_indices] if lc_regions is not None else None
-            wildcard = mults_canonical.get("*", {})
 
-            def _lookup(reg: Optional[str], lbl: str) -> float:
-                if reg is not None:
-                    reg_dict = mults_canonical.get(reg)
-                    if reg_dict is not None and lbl in reg_dict:
-                        return reg_dict[lbl]
-                return wildcard.get(lbl, 1.0)
+            lc_class_arr = apply_class_weight_multipliers(
+                lc_class_arr, lc_labels, lc_regions, mults_canonical, pool_name="LC"
+            )
+            ct_class_arr = apply_class_weight_multipliers(
+                ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
+            )
 
-            def _apply(regions, labels, label_set, class_arr, pool_name):
-                regs_iter = regions if regions is not None else [None] * len(labels)
-                mult_arr = np.array(
-                    [_lookup(r, lbl) for r, lbl in zip(regs_iter, labels)],
-                    dtype=np.float64,
+            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
+            # or per-class multiplier can never push a class beyond the configured
+            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
+            # already-high per-bin weight would exceed clip_range[1] and
+            # re-introduce exactly the over-sampling the clip is meant to bound
+            # (the root cause of e.g. oats over-commission into wheat).
+            if clip_range is not None:
+                lc_mean = lc_class_arr.mean()
+                if lc_mean > 0:
+                    lc_class_arr = lc_class_arr / lc_mean
+                lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
+                ct_mean = ct_class_arr.mean()
+                if ct_mean > 0:
+                    ct_class_arr = ct_class_arr / ct_mean
+                ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
+                logger.info(
+                    "DualHeadBatchSampler: re-normalised and re-clipped class "
+                    f"weights to {clip_range} after applying multipliers."
                 )
-                if np.allclose(mult_arr, 1.0):
-                    return class_arr
-                # Surface only the (region, class) entries that hit this pool.
-                applied = {
-                    reg: {c: w for c, w in cmults.items() if c in label_set}
-                    for reg, cmults in mults_canonical.items()
-                }
-                applied = {k: v for k, v in applied.items() if v}
-                logger.info(f"Applied {pool_name} class weight multipliers: {applied}")
-                return class_arr * mult_arr
-
-            lc_class_arr = _apply(
-                lc_regions, lc_labels, lc_label_set, lc_class_arr, "LC"
-            )
-            ct_class_arr = _apply(
-                ct_regions, ct_labels, ct_label_set, ct_class_arr, "CT"
-            )
 
             # Warn once about classes that don't appear in either pool.
+            lc_label_set = set(lc_labels.tolist())
+            ct_label_set = set(ct_labels.tolist())
             all_labels = lc_label_set | ct_label_set
             for reg, cmults in mults_canonical.items():
                 for c in cmults:
@@ -2636,6 +2803,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         season_calendar_mode: SeasonCalendarMode = "auto",
         min_season_coverage: float = 1.0,
         remove_samples_without_s1_s2: bool = False,
+        region_column: str = "region",
     ):
         """WorldCereal training dataset. This dataset is typically used for
         computing embeddings for downstream training."""
@@ -2679,6 +2847,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
         repeats = _check_augmentation_settings(augment, masking_config, repeats)
+
+        self._region_column = region_column
 
         base_indices = list(range(len(self.dataframe)))
         self.indices = base_indices * repeats

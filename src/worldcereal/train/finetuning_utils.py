@@ -1224,6 +1224,8 @@ def prepare_training_datasets(
     eval_min_season_coverage: float = 1.0,
     season_ids: Optional[Sequence[str]] = None,
     season_windows: Optional[Mapping] = None,
+    region_column: str = "region",
+    remove_samples_without_s1_s2: bool = False,
 ) -> Tuple[
     WorldCerealLabelledDataset, WorldCerealLabelledDataset, WorldCerealLabelledDataset
 ]:
@@ -1286,6 +1288,8 @@ def prepare_training_datasets(
         Explicit season windows mapping season name to a ``(start, end)``
         datetime-like tuple.  Mutually exclusive with ``season_ids``—pass one
         or the other but never both.
+    remove_samples_without_s1_s2 : bool, default=False
+        Whether to remove samples that do not have both S1 and S2 data.
 
     Returns
     -------
@@ -1308,6 +1312,7 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        remove_samples_without_s1_s2=remove_samples_without_s1_s2,
     )
     val_ds = WorldCerealLabelledDataset(
         val_df,
@@ -1325,6 +1330,8 @@ def prepare_training_datasets(
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
+        remove_samples_without_s1_s2=remove_samples_without_s1_s2,
     )
     test_ds = WorldCerealLabelledDataset(
         test_df,
@@ -1342,6 +1349,8 @@ def prepare_training_datasets(
         min_season_coverage=eval_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
+        remove_samples_without_s1_s2=remove_samples_without_s1_s2,
     )
     return train_ds, val_ds, test_ds
 
@@ -2282,7 +2291,24 @@ def run_finetuning(
         for batch in tqdm(train_dl, desc="Training", leave=False):
             predictors, attrs = _unpack_predictor_batch(batch)
             optimizer.zero_grad()
-            preds = _forward_with_optional_attrs(model, predictors, attrs)
+            try:
+                preds = _forward_with_optional_attrs(model, predictors, attrs)
+            except ValueError as e:
+                logger.error(f"Error during forward pass: {e}")
+                # Save failing batch for debugging
+                import pickle
+
+                debug_path = "/home/vtrichtk/git/worldcereal-finetune/scripts/training/finetuning/failing_batch_debug.pkl"
+                with open(debug_path, "wb") as f:
+                    pickle.dump(
+                        {
+                            "predictors": predictors,
+                            "attrs": attrs,
+                        },
+                        f,
+                    )
+                logger.info(f"Failing batch saved to {debug_path}")
+                raise
             loss, _, _ = _compute_loss(loss_fn, preds, predictors, attrs)
 
             epoch_train_loss += loss.item()
@@ -2641,6 +2667,7 @@ def run_finetuning(
                 if ema_model is not None
                 else "raw model"
             )
+            logger.info("=" * 66)
             logger.info(
                 f"Epoch {epoch + 1}: saving best checkpoint from {_ckpt_label} "
                 f"(val_loss={current_val_loss:.4f})."
