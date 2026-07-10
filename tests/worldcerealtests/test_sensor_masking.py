@@ -194,8 +194,8 @@ def test_joint_guard_never_wipes_both_statistically():
         assert s1_ok or s2_ok, "S1 and S2 both fully masked"
 
 
-def _wipe_s1_s2(df, row_idx, num_timesteps):
-    for t in range(num_timesteps):
+def _wipe_s1_s2(df, row_idx, timesteps):
+    for t in timesteps:
         for col in [
             f"SAR-VV-ts{t}-20m",
             f"SAR-VH-ts{t}-20m",
@@ -216,8 +216,8 @@ def _wipe_s1_s2(df, row_idx, num_timesteps):
 def test_remove_samples_without_s1_s2():
     num_timesteps = 8
     df = _make_dummy_df(num_timesteps, nrows=4)
-    _wipe_s1_s2(df, 1, num_timesteps)
-    _wipe_s1_s2(df, 3, num_timesteps)
+    _wipe_s1_s2(df, 1, range(num_timesteps))
+    _wipe_s1_s2(df, 3, range(num_timesteps))
 
     ds = WorldCerealDataset(
         df, num_timesteps=num_timesteps, remove_samples_without_s1_s2=True
@@ -232,10 +232,44 @@ def test_remove_samples_without_s1_s2():
 def test_remove_samples_without_s1_s2_default_keeps_rows():
     num_timesteps = 8
     df = _make_dummy_df(num_timesteps, nrows=3)
-    _wipe_s1_s2(df, 1, num_timesteps)
+    _wipe_s1_s2(df, 1, range(num_timesteps))
 
     ds = WorldCerealDataset(df, num_timesteps=num_timesteps)
     assert len(ds) == 3, "Without the flag no samples should be removed"
+
+
+def test_window_repositioned_when_selected_window_empty():
+    # Row has 18 timesteps but S1/S2 data only at ts 16-17; the default window
+    # around valid_position=9 ([3, 15)) is empty. With the flag, the window
+    # must shift to an admissible one containing data (still covering ts 9).
+    df = _make_dummy_df(18, nrows=1)
+    df["end_date"] = "2023-06-30"  # 18 monthly timesteps from start_date
+    _wipe_s1_s2(df, 0, range(16))
+
+    ds = WorldCerealDataset(df, num_timesteps=12, remove_samples_without_s1_s2=True)
+    assert len(ds) == 1, "Row has reachable data and must not be removed"
+    row = ds.dataframe.iloc[0].to_dict()
+    positions, valid_position = ds.get_timestep_positions(row)
+    assert valid_position in positions
+    assert 16 in positions, f"Window {positions} should be shifted onto the data"
+    sample = ds[0]
+    assert (sample.s2 != NODATAVALUE).any(), "Sample should contain S2 data"
+
+    # Without the flag the default (empty) window is kept unchanged.
+    ds_default = WorldCerealDataset(df, num_timesteps=12)
+    positions_default, _ = ds_default.get_timestep_positions(row)
+    assert positions_default == list(range(3, 15))
+
+
+def test_row_removed_when_no_admissible_window_has_data():
+    # Row 1 has data only at ts 16-17, but valid_position=2 keeps every
+    # admissible window within [0, 14) — the data is unreachable.
+    df = _make_dummy_df(18, nrows=2)
+    _wipe_s1_s2(df, 1, range(16))
+    df.loc[1, "valid_position"] = 2
+
+    ds = WorldCerealDataset(df, num_timesteps=12, remove_samples_without_s1_s2=True)
+    assert len(ds) == 1, "Row with unreachable S1/S2 data should be removed"
 
 
 def test_validate_rejects_double_disable():
