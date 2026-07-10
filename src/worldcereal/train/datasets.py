@@ -2803,6 +2803,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         season_calendar_mode: SeasonCalendarMode = "auto",
         min_season_coverage: float = 1.0,
         remove_samples_without_s1_s2: bool = False,
+        region_column: str = "region",
     ):
         """WorldCereal training dataset. This dataset is typically used for
         computing embeddings for downstream training."""
@@ -2846,6 +2847,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
         repeats = _check_augmentation_settings(augment, masking_config, repeats)
+
+        self._region_column = region_column
 
         base_indices = list(range(len(self.dataframe)))
         self.indices = base_indices * repeats
