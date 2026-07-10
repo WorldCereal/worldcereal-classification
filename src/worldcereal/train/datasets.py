@@ -994,6 +994,7 @@ class WorldCerealDataset(Dataset):
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
         min_season_coverage: float = 1.0,
+        remove_samples_without_s1_s2: bool = False,
     ):
         """WorldCereal base dataset. This dataset is typically used for
         self-supervised learning.
@@ -1023,6 +1024,13 @@ class WorldCerealDataset(Dataset):
             training split with augmentation enabled, pass a lower value (e.g.
             0.5) so that seasons only partially shifted out of the window by
             random augmentation still contribute supervision signal.
+        remove_samples_without_s1_s2 : bool, optional
+            If True, samples with no S1 and no S2 data anywhere in their
+            timeseries are dropped from the dataset at construction time.
+            Such samples violate the never-both-fully-missing invariant of the
+            sensor masking guard no matter how masking is drawn (and carry no
+            optical/radar signal to learn from). By default False, in which
+            case a warning is logged when such samples are present.
         """
         self.dataframe = dataframe.copy()
         numeric_cols = self.dataframe.select_dtypes(include="number").columns
@@ -1050,29 +1058,37 @@ class WorldCerealDataset(Dataset):
                 f"Using min_season_coverage={self.min_season_coverage} with augment={self.augment}"
             )
 
+        self.remove_samples_without_s1_s2 = remove_samples_without_s1_s2
+
+        masking_enabled = False
         if self.masking_config:
             if self.masking_config.seed is not None:
                 # set a per-dataset RNG seed (numpy global for simplicity)
                 np.random.seed(self.masking_config.seed)
             self.masking_config.validate(self.num_timesteps)
-            if self.masking_config.enable:
+            masking_enabled = self.masking_config.enable
+            if masking_enabled:
                 logger.info(
                     "Sensor masking enabled for this dataset with config: {}".format(
                         self.masking_config
                     )
                 )
-                self._check_joint_s1_s2_availability()
             else:
                 logger.info(
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
 
+        if self.remove_samples_without_s1_s2 or masking_enabled:
+            self._check_joint_s1_s2_availability()
+
     def _check_joint_s1_s2_availability(self):
-        """Warn about samples the joint S1/S2 masking guard cannot repair.
+        """Find samples the joint S1/S2 masking guard cannot repair.
 
         A sample with no S1 and no S2 data anywhere in its timeseries will
         always violate the never-both-fully-missing invariant, regardless of
-        how masking is drawn.
+        how masking is drawn. Depending on `remove_samples_without_s1_s2`,
+        such samples are either dropped from the dataset or reported with a
+        warning.
         """
         s1_cols = [c for c in self.dataframe.columns if c.startswith("SAR-")]
         s2_cols = [c for c in self.dataframe.columns if c.startswith("OPTICAL-")]
@@ -1080,12 +1096,21 @@ class WorldCerealDataset(Dataset):
             return
         s1_gone = (self.dataframe[s1_cols] == NODATAVALUE).all(axis=1)
         s2_gone = (self.dataframe[s2_cols] == NODATAVALUE).all(axis=1)
-        num_bad = int((s1_gone & s2_gone).sum())
-        if num_bad:
+        bad = s1_gone & s2_gone
+        num_bad = int(bad.sum())
+        if not num_bad:
+            return
+        if self.remove_samples_without_s1_s2:
+            self.dataframe = self.dataframe.loc[~bad].reset_index(drop=True)
+            logger.warning(
+                f"Removed {num_bad}/{len(bad)} sample(s) with no S1 and no S2 "
+                "data at all (remove_samples_without_s1_s2=True)."
+            )
+        else:
             logger.warning(
                 f"{num_bad}/{len(self)} sample(s) have no S1 and no S2 data at all; "
                 "the joint S1/S2 masking guard cannot restore data for these. "
-                "Consider removing them from the dataset."
+                "Consider removing them with remove_samples_without_s1_s2=True."
             )
 
     def __len__(self):
@@ -2510,6 +2535,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
         season_calendar_mode: SeasonCalendarMode = "auto",
         min_season_coverage: float = 1.0,
+        remove_samples_without_s1_s2: bool = False,
     ):
         """WorldCereal training dataset. This dataset is typically used for
         computing embeddings for downstream training."""
@@ -2522,6 +2548,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             augment=augment,
             masking_config=masking_config,
             min_season_coverage=min_season_coverage,
+            remove_samples_without_s1_s2=remove_samples_without_s1_s2,
         )
 
         self._season_windows: Dict[str, SeasonWindow] = _normalize_season_windows(

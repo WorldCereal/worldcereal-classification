@@ -194,6 +194,50 @@ def test_joint_guard_never_wipes_both_statistically():
         assert s1_ok or s2_ok, "S1 and S2 both fully masked"
 
 
+def _wipe_s1_s2(df, row_idx, num_timesteps):
+    for t in range(num_timesteps):
+        for col in [
+            f"SAR-VV-ts{t}-20m",
+            f"SAR-VH-ts{t}-20m",
+            f"OPTICAL-B02-ts{t}-10m",
+            f"OPTICAL-B03-ts{t}-10m",
+            f"OPTICAL-B04-ts{t}-10m",
+            f"OPTICAL-B05-ts{t}-20m",
+            f"OPTICAL-B06-ts{t}-20m",
+            f"OPTICAL-B07-ts{t}-20m",
+            f"OPTICAL-B08-ts{t}-10m",
+            f"OPTICAL-B8A-ts{t}-20m",
+            f"OPTICAL-B11-ts{t}-20m",
+            f"OPTICAL-B12-ts{t}-20m",
+        ]:
+            df.loc[row_idx, col] = NODATAVALUE
+
+
+def test_remove_samples_without_s1_s2():
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=4)
+    _wipe_s1_s2(df, 1, num_timesteps)
+    _wipe_s1_s2(df, 3, num_timesteps)
+
+    ds = WorldCerealDataset(
+        df, num_timesteps=num_timesteps, remove_samples_without_s1_s2=True
+    )
+    assert len(ds) == 2, "Both S1+S2-empty samples should be removed"
+    # remaining samples must all have some S1 or S2 data
+    for i in range(len(ds)):
+        sample = ds[i]
+        assert (sample.s1 != NODATAVALUE).any() or (sample.s2 != NODATAVALUE).any()
+
+
+def test_remove_samples_without_s1_s2_default_keeps_rows():
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=3)
+    _wipe_s1_s2(df, 1, num_timesteps)
+
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps)
+    assert len(ds) == 3, "Without the flag no samples should be removed"
+
+
 def test_validate_rejects_double_disable():
     cfg = SensorMaskingConfig(
         enable=True,
