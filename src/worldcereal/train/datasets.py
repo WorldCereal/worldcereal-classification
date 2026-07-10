@@ -1083,7 +1083,7 @@ class WorldCerealDataset(Dataset):
         num_bad = int((s1_gone & s2_gone).sum())
         if num_bad:
             logger.warning(
-                f"{num_bad} sample(s) have no S1 and no S2 data at all; "
+                f"{num_bad}/{len(self)} sample(s) have no S1 and no S2 data at all; "
                 "the joint S1/S2 masking guard cannot restore data for these. "
                 "Consider removing them from the dataset."
             )
