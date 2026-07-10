@@ -48,7 +48,7 @@ dependencies = [
   "netcdf4>=1.6.4",
   "numpy>=2.4.0",
   "openeo>=0.47.0",
-  "prometheo @ git+https://github.com/WorldCereal/prometheo.git@v0.0.5",
+  "prometheo @ git+https://github.com/WorldCereal/prometheo.git@v0.0.7",
   "openeo-gfmap @ git+https://github.com/Open-EO/openeo-gfmap.git@maintenance/0.4.x",
   "pyarrow",
   "pydantic==2.8.0",
