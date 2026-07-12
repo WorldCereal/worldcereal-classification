@@ -2866,12 +2866,16 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         # Map incoming idx to the original dataframe index
         real_idx = self.indices[idx]
 
-        # Get the sample
-        sample = super().__getitem__(real_idx)
-        row_series = self.dataframe.iloc[real_idx, :]
-        row = pd.Series.to_dict(row_series)
+        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+
+        # Draw the timestep window exactly ONCE. Calling
+        # super().__getitem__() and then get_timestep_positions() again would
+        # draw two *independent* random windows when augment=True, so
+        # valid_position (and anything derived from it) would describe a
+        # different window than the inputs actually extracted.
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
+        sample = Predictors(**self.get_inputs(row, timestep_positions))
 
         attrs = self._build_sample_attrs(
             row=row,
