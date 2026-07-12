@@ -376,26 +376,34 @@ class DataPreprocessor:
     """Apply harmonization/rescaling expected by the predictor builder."""
 
     @staticmethod
-    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+    def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+        """Validate S1 bands; keep compressed uint16 DN values untouched.
+
+        The DN -> dB decompression (``20*log10(DN) - 83``) is done exactly
+        once, inside the predictor builder (``_predictor_from_xarray`` /
+        ``run_model_inference``) — the same place the training path converts
+        the extraction parquets (see ``FeaturesParameters.rescale_s1``:
+        "Should be left to False, as this is done in the Presto UDF itself").
+        The previous implementation converted to dB here as well, which
+        double-converted every pixel whose dB value is positive (DN > ~14125,
+        e.g. bright urban/water scatterers): the builder's ``values > 0``
+        guard only skips *negative* dB values, so positive-dB pixels went
+        through ``20*log10(dB) - 83`` a second time and reached the model as
+        ~-60..-83 dB garbage.
+        """
         present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
         if not present:
             return arr
-        if not np.issubdtype(arr.dtype, np.floating):
-            # Allow negative dB values to be written back safely
-            arr = arr.astype("float32")
-        s1 = arr.sel(bands=present).astype(np.float32)
-        data = s1.values
-        nodata_mask = data == NODATA_VALUE
-        valid_mask = ~nodata_mask
-        scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
+        data = arr.sel(bands=present).values
+        valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(data[valid_mask])
-            power = 20.0 * np.log10(data[valid_mask]) - 83.0
-            power = np.power(10, power / 10.0)
-            power[~np.isfinite(power)] = np.nan
-            scaled[valid_mask] = 10.0 * np.log10(power)
-        arr.loc[{"bands": present}] = scaled
+            DataPreprocessor._validate_s1_data(
+                data[valid_mask].astype(np.float32)
+            )
         return arr
+
+    # Backwards-compatible alias: external callers may still use the old name.
+    rescale_s1_backscatter = validate_s1_backscatter
 
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
@@ -427,13 +435,15 @@ class DataPreprocessor:
 
 
 def _prepare_array(
-    arr: xr.DataArray, epsg: int, rescale_s1: bool = True
+    arr: xr.DataArray, epsg: int, rescale_s1: bool = False
 ) -> xr.DataArray:
     if "bands" not in arr.dims:
         raise ValueError("Input DataArray must expose a 'bands' dimension")
     reordered = arr.transpose("bands", "t", "y", "x")
     if rescale_s1:
-        reordered = DataPreprocessor.rescale_s1_backscatter(reordered)
+        # Validation-only: values stay compressed uint16 DN; the predictor
+        # builder performs the single DN -> dB conversion.
+        reordered = DataPreprocessor.validate_s1_backscatter(reordered)
     renamed_bands = [
         GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
     ]
@@ -491,7 +501,9 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     epsg = parameters.pop(EPSG_HARMONIZED_NAME)
     logger.info(f"EPSG code determined for feature extraction: {epsg}")
 
-    rescale_s1 = parameters.get("rescale_s1", True)
+    # Default False matches FeaturesParameters.rescale_s1: the predictor
+    # builder does the single DN -> dB conversion.
+    rescale_s1 = parameters.get("rescale_s1", False)
     prepped = _prepare_array(arr, epsg, rescale_s1)
 
     arr = extract_presto_embeddings(inarr=prepped, parameters=parameters, epsg=epsg)

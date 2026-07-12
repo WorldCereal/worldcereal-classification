@@ -659,22 +659,27 @@ class DataPreprocessor:
 
     @staticmethod
     def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Rescale Sentinel-1 backscatter from uint16 to dB values."""
+        """Validate S1 bands; keep compressed uint16 DN values untouched.
+
+        The predictor builder (prometheo's ``run_model_inference``) performs
+        the single DN -> dB decompression (``20*log10(DN) - 83``), exactly
+        like the training path does on the extraction parquets. Converting to
+        dB here as well (a) double-converted every pixel whose dB value is
+        positive (DN > ~14125, e.g. bright urban/water scatterers), because
+        the builder's ``values > 0`` guard only skips *negative* dB values,
+        and (b) converted NODATA (65535) values into 13.3 dB, turning missing
+        S1 observations into plausible-looking "valid" data.
+        """
         s1_bands_present = [b for b in S1_BANDS if b in arr.bands.values]
         if not s1_bands_present:
             return arr
 
-        s1_data = arr.sel(bands=s1_bands_present).astype(np.float32)
-        DataPreprocessor._validate_s1_data(s1_data.values)
-
-        # Convert to power values then to dB
-        power_values = 20.0 * np.log10(s1_data.values) - 83.0
-        power_values = np.power(10, power_values / 10.0)
-        power_values[~np.isfinite(power_values)] = np.nan
-
-        db_values = 10.0 * np.log10(power_values)
-        arr.loc[dict(bands=s1_bands_present)] = db_values
-
+        s1_data = arr.sel(bands=s1_bands_present).values
+        valid_mask = s1_data != NODATA_VALUE
+        if np.any(valid_mask):
+            DataPreprocessor._validate_s1_data(
+                s1_data[valid_mask].astype(np.float32)
+            )
         return arr
 
     @staticmethod
@@ -975,9 +980,11 @@ def run_single_workflow(
     """Run a single classification workflow with optional masking."""
 
     # Preprocess data
-    if parameters["feature_parameters"].get("rescale_s1", True):
-        logger.info("Rescale s1 ...")
-        input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
+    # Default False matches FeaturesParameters.rescale_s1: the predictor
+    # builder does the single DN -> dB conversion.
+    if parameters["feature_parameters"].get("rescale_s1", False):
+        logger.info("Validate s1 ...")
+        input_array = DataPreprocessor.validate_s1_backscatter(input_array)
 
     # Extract features
     logger.info("Extract Presto embeddings ...")

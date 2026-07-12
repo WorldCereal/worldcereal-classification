@@ -375,26 +375,35 @@ class DataPreprocessor:
     """Apply harmonization/rescaling expected by the predictor builder."""
 
     @staticmethod
-    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+    def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+        """Validate S1 bands; keep compressed uint16 DN values untouched.
+
+        The DN -> dB decompression (``20*log10(DN) - 83``) is done exactly
+        once, inside the predictor builder (``_predictor_from_xarray``) — the
+        same place the training path converts the extraction parquets (see
+        also ``FeaturesParameters.rescale_s1`` in ``worldcereal.parameters``:
+        "Should be left to False, as this is done in the Presto UDF itself").
+        The previous implementation converted to dB here as well, which
+        double-converted every pixel whose dB value is positive (DN > ~14125,
+        e.g. bright urban/water scatterers): the builder's ``values > 0``
+        guard only skips *negative* dB values, so positive-dB pixels went
+        through ``20*log10(dB) - 83`` a second time and reached the model as
+        ~-60..-83 dB garbage.
+        """
         band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
         present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
         if not present_idx:
             return arr
-        if not np.issubdtype(arr.dtype, np.floating):
-            # Allow negative dB values to be written back safely
-            arr = arr.astype("float32")
-        data = arr.isel(bands=present_idx).values.astype(np.float32)
-        nodata_mask = data == NODATA_VALUE
-        valid_mask = ~nodata_mask
-        scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
+        data = arr.isel(bands=present_idx).values
+        valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(data[valid_mask])
-            power = 20.0 * np.log10(data[valid_mask]) - 83.0
-            power = np.power(10, power / 10.0)
-            power[~np.isfinite(power)] = np.nan
-            scaled[valid_mask] = 10.0 * np.log10(power)
-        arr.values[present_idx, ...] = scaled
+            DataPreprocessor._validate_s1_data(
+                data[valid_mask].astype(np.float32)
+            )
         return arr
+
+    # Backwards-compatible alias: external callers may still use the old name.
+    rescale_s1_backscatter = validate_s1_backscatter
 
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
@@ -1290,7 +1299,7 @@ class SeasonalInferenceEngine:
         if "bands" not in arr.dims:
             raise ValueError("Input DataArray must expose a 'bands' dimension")
         reordered = arr.transpose("bands", "t", "y", "x")
-        reordered = DataPreprocessor.rescale_s1_backscatter(reordered)
+        reordered = DataPreprocessor.validate_s1_backscatter(reordered)
         renamed_bands = [
             GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
         ]
