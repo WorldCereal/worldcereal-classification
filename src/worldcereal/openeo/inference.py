@@ -943,13 +943,23 @@ def _build_masks_from_windows(
 ) -> np.ndarray:
     ts_arr = np.asarray(timestamps).astype("datetime64[D]")
     num_timesteps = ts_arr.shape[0]
-    coverage_start = ts_arr.min()
-    coverage_end = ts_arr.max()
     align_fn = None
     if composite_frequency in {"month", "dekad"}:
         from worldcereal.train.seasonal import align_to_composite_window
 
         align_fn = align_to_composite_window
+        # Snap cube timestamps to their composite-window start before
+        # comparing against the (equally aligned) season edges. Training
+        # builds month/dekad-start dates, but cubes may label composites
+        # mid-window (e.g. the 15th); without snapping, such a timestamp in
+        # the season's final slot fails `ts <= end_aligned` and the last
+        # month/dekad of every season is silently dropped from the mask.
+        ts_arr = np.array(
+            [align_fn(ts, composite_frequency) for ts in ts_arr],
+            dtype="datetime64[D]",
+        )
+    coverage_start = ts_arr.min()
+    coverage_end = ts_arr.max()
     base = np.zeros((len(season_ids), num_timesteps), dtype=bool)
     for idx, season_id in enumerate(season_ids):
         season_windows = windows.get(season_id)
