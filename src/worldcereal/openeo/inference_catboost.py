@@ -658,7 +658,7 @@ class DataPreprocessor:
     """Handles data preprocessing operations."""
 
     @staticmethod
-    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+    def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
         """Validate S1 bands; keep compressed uint16 DN values untouched.
 
         The predictor builder (prometheo's ``run_model_inference``) performs
@@ -681,6 +681,9 @@ class DataPreprocessor:
                 s1_data[valid_mask].astype(np.float32)
             )
         return arr
+
+    # Backwards-compatible alias: external callers may still use the old name.
+    rescale_s1_backscatter = validate_s1_backscatter
 
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
