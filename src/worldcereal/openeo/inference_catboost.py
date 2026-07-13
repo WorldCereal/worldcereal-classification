@@ -660,15 +660,6 @@ class DataPreprocessor:
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
         """Validate S1 bands; keep compressed uint16 DN values untouched.
-
-        The predictor builder (prometheo's ``run_model_inference``) performs
-        the single DN -> dB decompression (``20*log10(DN) - 83``), exactly
-        like the training path does on the extraction parquets. Converting to
-        dB here as well (a) double-converted every pixel whose dB value is
-        positive (DN > ~14125, e.g. bright urban/water scatterers), because
-        the builder's ``values > 0`` guard only skips *negative* dB values,
-        and (b) converted NODATA (65535) values into 13.3 dB, turning missing
-        S1 observations into plausible-looking "valid" data.
         """
         s1_bands_present = [b for b in S1_BANDS if b in arr.bands.values]
         if not s1_bands_present:

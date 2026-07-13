@@ -378,18 +378,6 @@ class DataPreprocessor:
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
         """Validate S1 bands; keep compressed uint16 DN values untouched.
-
-        The DN -> dB decompression (``20*log10(DN) - 83``) is done exactly
-        once, inside the predictor builder (``_predictor_from_xarray`` /
-        ``run_model_inference``) — the same place the training path converts
-        the extraction parquets (see ``FeaturesParameters.rescale_s1``:
-        "Should be left to False, as this is done in the Presto UDF itself").
-        The previous implementation converted to dB here as well, which
-        double-converted every pixel whose dB value is positive (DN > ~14125,
-        e.g. bright urban/water scatterers): the builder's ``values > 0``
-        guard only skips *negative* dB values, so positive-dB pixels went
-        through ``20*log10(dB) - 83`` a second time and reached the model as
-        ~-60..-83 dB garbage.
         """
         present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
         if not present:
@@ -436,7 +424,7 @@ def _prepare_array(arr: xr.DataArray, epsg: int) -> xr.DataArray:
         raise ValueError("Input DataArray must expose a 'bands' dimension")
     reordered = arr.transpose("bands", "t", "y", "x")
     # Values stay compressed uint16 DN; the predictor builder performs the
-    # single DN -> dB conversion. This only validates, it never rescales.
+    # single DN -> dB conversion. This only validates, does not rescale.
     reordered = DataPreprocessor.validate_s1_backscatter(reordered)
     renamed_bands = [
         GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values

@@ -377,18 +377,6 @@ class DataPreprocessor:
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
         """Validate S1 bands; keep compressed uint16 DN values untouched.
-
-        The DN -> dB decompression (``20*log10(DN) - 83``) is done exactly
-        once, inside the predictor builder (``_predictor_from_xarray``) — the
-        same place the training path converts the extraction parquets (see
-        also ``FeaturesParameters.rescale_s1`` in ``worldcereal.parameters``:
-        "Should be left to False, as this is done in the Presto UDF itself").
-        The previous implementation converted to dB here as well, which
-        double-converted every pixel whose dB value is positive (DN > ~14125,
-        e.g. bright urban/water scatterers): the builder's ``values > 0``
-        guard only skips *negative* dB values, so positive-dB pixels went
-        through ``20*log10(dB) - 83`` a second time and reached the model as
-        ~-60..-83 dB garbage.
         """
         band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
         present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
