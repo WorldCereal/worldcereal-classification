@@ -2512,10 +2512,18 @@ def run_finetuning(
         del seasonal_landcover_records, seasonal_croptype_records
         del val_pred_chunks
 
+        # max(): with layer-wise LR decay (param_groups_lrd) get_last_lr()
+        # returns one value per param group in ascending order, so the max.
+        lr_before_step = max(scheduler.get_last_lr())
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
             scheduler.step(current_val_loss)
         else:
             scheduler.step()
+        lr_after_step = max(scheduler.get_last_lr())
+        if lr_after_step != lr_before_step:
+            logger.info(
+                f"Epoch {epoch + 1}: learning rate changed {lr_before_step:.2e} -> {lr_after_step:.2e}"
+            )
 
         combined_metrics = dict(metrics_dict)
         combined_metrics.update(seasonal_metrics_flat)
@@ -2538,7 +2546,7 @@ def run_finetuning(
             }
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
             tb_writer.add_scalar(
-                "learning_rate", scheduler.get_last_lr()[0], global_step
+                "learning_rate", lr_after_step, global_step
             )
             tb_writer.add_scalar(
                 "patience/epochs_since_improvement",
@@ -2733,6 +2741,7 @@ def run_finetuning(
             f"Epoch {epoch + 1}/{hyperparams.max_epochs} | "
             f"Train Loss: {train_loss[-1]:.4f} | "
             f"Val Loss: {_val_loss_str} | "
+            f"LR: {lr_after_step:.2e} | "
             f"Best: {_best_str}{_f1_str}"
         )
 
@@ -2743,7 +2752,7 @@ def run_finetuning(
         )
 
         pbar.set_description(description)
-        pbar.set_postfix(lr=scheduler.get_last_lr()[0])
+        pbar.set_postfix(lr=lr_after_step)
         logger.info(
             f"PROGRESS after Epoch {epoch + 1}/{hyperparams.max_epochs}: {description}"
         )  # Only log to file if console filters on "PROGRESS"
