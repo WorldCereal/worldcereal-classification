@@ -604,8 +604,12 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
 class SeasonalModelBundle:
     """Convenience wrapper that owns the seasonal model and metadata.
 
-    Custom head overrides are validated to ensure every head uses a compatible
-    Presto backbone checkpoint so embeddings stay aligned across tasks.
+    The backbone family (Presto or OlmoEarth) is detected from the artifact's
+    packaged ``run_config.json`` (``model.model_id``), falling back to
+    checkpoint-key sniffing, and the matching prometheo wrapper is
+    constructed before the finetuned weights are loaded. Custom head
+    overrides are validated to ensure every head uses a compatible backbone
+    checkpoint so embeddings stay aligned across tasks.
     """
 
     def __init__(
@@ -668,17 +672,97 @@ class SeasonalModelBundle:
 
         self._update_cropland_gate()
 
+    def _load_run_config(self) -> Dict[str, Any]:
+        """Return the artifact's packaged ``run_config.json`` (or ``{}``).
+
+        Finetuned model packages include the training run configuration; it
+        carries the backbone identity (``model.model_id`` /
+        ``args.model_id`` for OlmoEarth runs) and data-handling flags such as
+        ``mask_b8a`` that must be mirrored at inference.
+        """
+        import json
+
+        candidate = Path(self.base_artifact.extract_dir) / "run_config.json"
+        if candidate.is_file():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Could not parse run_config.json in artifact: {exc}")
+        return {}
+
+    @staticmethod
+    def _detect_backbone(state_dict, run_config: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        """Identify the backbone family of a checkpoint.
+
+        Returns ``(kind, model_id)`` where kind is ``"presto"`` or
+        ``"olmoearth"``. Detection prefers the packaged run_config
+        (``model.model_id``); when absent, the checkpoint keys are sniffed —
+        OlmoEarth encoders carry ``composite_encodings`` / per-modality
+        ``patch_embeddings`` keys that Presto never has.
+        """
+        model_cfg = run_config.get("model") or {}
+        args_cfg = run_config.get("args") or {}
+        model_id = model_cfg.get("model_id") or args_cfg.get("model_id")
+        if model_id and "OLMOEARTH" in str(model_id).upper():
+            return "olmoearth", str(model_id)
+        looks_olmoearth = any(
+            ".composite_encodings." in key or ".patch_embeddings.per_modality_embeddings." in key
+            for key in state_dict
+        )
+        if looks_olmoearth:
+            return "olmoearth", str(model_id) if model_id else None
+        return "presto", None
+
+    def _build_backbone(self, state_dict):
+        """Construct the (untrained) backbone matching the checkpoint."""
+        run_config = self._load_run_config()
+        kind, model_id = self._detect_backbone(state_dict, run_config)
+        if kind == "olmoearth":
+            if model_id is None:
+                raise ValueError(
+                    "Checkpoint contains OlmoEarth encoder keys but the artifact's "
+                    "run_config.json does not declare a model_id (e.g. "
+                    "'OLMOEARTH_V1_2_NANO'); cannot construct the backbone. "
+                    "Repackage the model with its run_config.json included."
+                )
+            from prometheo.models import OlmoEarth
+
+            args_cfg = run_config.get("args") or {}
+            dataset_cfg = run_config.get("dataset") or {}
+            # Mirror the training-time B8A workaround: with mask_b8a the B8A
+            # band is NODATA'd and refilled from B08 inside the wrapper so the
+            # v1.1/v1.2 single-bandset S2 tokenization is not dropped.
+            replace_b1_b9_b8a = bool(dataset_cfg.get("mask_b8a", args_cfg.get("mask_b8a", True)))
+            logger.info(
+                f"Building OlmoEarth backbone '{model_id}' "
+                f"(replace_b1_b9_b8a={replace_b1_b9_b8a}); weights come from the "
+                "finetuned checkpoint."
+            )
+            return OlmoEarth(
+                model_id=model_id,
+                load_weights=False,
+                patch_size=1,
+                replace_b1_b9_b8a=replace_b1_b9_b8a,
+            )
+        from prometheo.models import Presto
+
+        return Presto()
+
     def _build_model(self) -> "WorldCerealSeasonalModel":
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
-        from prometheo.models import Presto
 
         from worldcereal.train.seasonal_head import (
             SeasonalFinetuningHead,
             WorldCerealSeasonalModel,
         )
 
-        backbone = Presto()
+        # Load the checkpoint first: the backbone family (Presto vs
+        # OlmoEarth) is derived from the packaged run_config / checkpoint keys.
+        state_dict = torch.load(
+            self.base_artifact.checkpoint_path, map_location=self.device
+        )
+        backbone = self._build_backbone(state_dict)
         head = SeasonalFinetuningHead(
             embedding_dim=backbone.encoder.embedding_size,
             landcover_num_outputs=(
@@ -694,10 +778,7 @@ class SeasonalModelBundle:
         )
         model = WorldCerealSeasonalModel(backbone=backbone, head=head)
 
-        # Load checkpoint, filtering disabled heads
-        state_dict = torch.load(
-            self.base_artifact.checkpoint_path, map_location=self.device
-        )
+        # Filter disabled heads out of the (already loaded) checkpoint
         if not self._croptype_head_enabled:
             state_dict = {
                 k: v
