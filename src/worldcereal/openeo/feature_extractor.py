@@ -402,9 +402,6 @@ class DataPreprocessor:
             )
         return arr
 
-    # Backwards-compatible alias: external callers may still use the old name.
-    rescale_s1_backscatter = validate_s1_backscatter
-
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
         if data.min() < 1 or data.max() > NODATA_VALUE:
@@ -434,16 +431,13 @@ class DataPreprocessor:
         return xr.concat([arr.astype("float32"), slope_da], dim="bands")
 
 
-def _prepare_array(
-    arr: xr.DataArray, epsg: int, rescale_s1: bool = False
-) -> xr.DataArray:
+def _prepare_array(arr: xr.DataArray, epsg: int) -> xr.DataArray:
     if "bands" not in arr.dims:
         raise ValueError("Input DataArray must expose a 'bands' dimension")
     reordered = arr.transpose("bands", "t", "y", "x")
-    if rescale_s1:
-        # Validation-only: values stay compressed uint16 DN; the predictor
-        # builder performs the single DN -> dB conversion.
-        reordered = DataPreprocessor.validate_s1_backscatter(reordered)
+    # Values stay compressed uint16 DN; the predictor builder performs the
+    # single DN -> dB conversion. This only validates, it never rescales.
+    reordered = DataPreprocessor.validate_s1_backscatter(reordered)
     renamed_bands = [
         GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
     ]
@@ -501,10 +495,7 @@ def apply_udf_data(udf_data: UdfData) -> UdfData:
     epsg = parameters.pop(EPSG_HARMONIZED_NAME)
     logger.info(f"EPSG code determined for feature extraction: {epsg}")
 
-    # Default False matches FeaturesParameters.rescale_s1: the predictor
-    # builder does the single DN -> dB conversion.
-    rescale_s1 = parameters.get("rescale_s1", False)
-    prepped = _prepare_array(arr, epsg, rescale_s1)
+    prepped = _prepare_array(arr, epsg)
 
     arr = extract_presto_embeddings(inarr=prepped, parameters=parameters, epsg=epsg)
 

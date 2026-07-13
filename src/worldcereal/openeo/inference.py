@@ -402,9 +402,6 @@ class DataPreprocessor:
             )
         return arr
 
-    # Backwards-compatible alias: external callers may still use the old name.
-    rescale_s1_backscatter = validate_s1_backscatter
-
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
         if data.min() < 1 or data.max() > NODATA_VALUE:

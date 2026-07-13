@@ -682,16 +682,12 @@ class DataPreprocessor:
             )
         return arr
 
-    # Backwards-compatible alias: external callers may still use the old name.
-    rescale_s1_backscatter = validate_s1_backscatter
-
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
         """Validate S1 data meets preprocessing requirements."""
         if data.min() < 1 or data.max() > NODATA_VALUE:
             raise ValueError(
-                "S1 data should be uint16 format with values 1-65535. "
-                "Set 'rescale_s1' to False to disable scaling."
+                "S1 data should be uint16 format with values 1-65535."
             )
 
 
@@ -982,12 +978,11 @@ def run_single_workflow(
 ) -> xr.DataArray:
     """Run a single classification workflow with optional masking."""
 
-    # Preprocess data
-    # Default False matches FeaturesParameters.rescale_s1: the predictor
-    # builder does the single DN -> dB conversion.
-    if parameters["feature_parameters"].get("rescale_s1", False):
-        logger.info("Validate s1 ...")
-        input_array = DataPreprocessor.validate_s1_backscatter(input_array)
+    # Preprocess data. Values stay compressed uint16 DN; the predictor
+    # builder performs the single DN -> dB conversion. This only validates,
+    # it never rescales, regardless of FeaturesParameters.rescale_s1.
+    logger.info("Validate s1 ...")
+    input_array = DataPreprocessor.validate_s1_backscatter(input_array)
 
     # Extract features
     logger.info("Extract Presto embeddings ...")
