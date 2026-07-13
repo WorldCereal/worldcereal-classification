@@ -658,23 +658,19 @@ class DataPreprocessor:
     """Handles data preprocessing operations."""
 
     @staticmethod
-    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Rescale Sentinel-1 backscatter from uint16 to dB values."""
+    def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+        """Validate S1 bands; keep compressed uint16 DN values untouched.
+        """
         s1_bands_present = [b for b in S1_BANDS if b in arr.bands.values]
         if not s1_bands_present:
             return arr
 
-        s1_data = arr.sel(bands=s1_bands_present).astype(np.float32)
-        DataPreprocessor._validate_s1_data(s1_data.values)
-
-        # Convert to power values then to dB
-        power_values = 20.0 * np.log10(s1_data.values) - 83.0
-        power_values = np.power(10, power_values / 10.0)
-        power_values[~np.isfinite(power_values)] = np.nan
-
-        db_values = 10.0 * np.log10(power_values)
-        arr.loc[dict(bands=s1_bands_present)] = db_values
-
+        s1_data = arr.sel(bands=s1_bands_present).values
+        valid_mask = s1_data != NODATA_VALUE
+        if np.any(valid_mask):
+            DataPreprocessor._validate_s1_data(
+                s1_data[valid_mask].astype(np.float32)
+            )
         return arr
 
     @staticmethod
@@ -682,8 +678,7 @@ class DataPreprocessor:
         """Validate S1 data meets preprocessing requirements."""
         if data.min() < 1 or data.max() > NODATA_VALUE:
             raise ValueError(
-                "S1 data should be uint16 format with values 1-65535. "
-                "Set 'rescale_s1' to False to disable scaling."
+                "S1 data should be uint16 format with values 1-65535."
             )
 
 
@@ -974,10 +969,11 @@ def run_single_workflow(
 ) -> xr.DataArray:
     """Run a single classification workflow with optional masking."""
 
-    # Preprocess data
-    if parameters["feature_parameters"].get("rescale_s1", True):
-        logger.info("Rescale s1 ...")
-        input_array = DataPreprocessor.rescale_s1_backscatter(input_array)
+    # Preprocess data. Values stay compressed uint16 DN; the predictor
+    # builder performs the single DN -> dB conversion. This only validates,
+    # it never rescales, regardless of FeaturesParameters.rescale_s1.
+    logger.info("Validate s1 ...")
+    input_array = DataPreprocessor.validate_s1_backscatter(input_array)
 
     # Extract features
     logger.info("Extract Presto embeddings ...")

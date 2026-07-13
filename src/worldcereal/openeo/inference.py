@@ -375,25 +375,19 @@ class DataPreprocessor:
     """Apply harmonization/rescaling expected by the predictor builder."""
 
     @staticmethod
-    def rescale_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+    def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
+        """Validate S1 bands; keep compressed uint16 DN values untouched.
+        """
         band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
         present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
         if not present_idx:
             return arr
-        if not np.issubdtype(arr.dtype, np.floating):
-            # Allow negative dB values to be written back safely
-            arr = arr.astype("float32")
-        data = arr.isel(bands=present_idx).values.astype(np.float32)
-        nodata_mask = data == NODATA_VALUE
-        valid_mask = ~nodata_mask
-        scaled = np.full_like(data, NODATA_VALUE, dtype=np.float32)
+        data = arr.isel(bands=present_idx).values
+        valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(data[valid_mask])
-            power = 20.0 * np.log10(data[valid_mask]) - 83.0
-            power = np.power(10, power / 10.0)
-            power[~np.isfinite(power)] = np.nan
-            scaled[valid_mask] = 10.0 * np.log10(power)
-        arr.values[present_idx, ...] = scaled
+            DataPreprocessor._validate_s1_data(
+                data[valid_mask].astype(np.float32)
+            )
         return arr
 
     @staticmethod
@@ -934,13 +928,23 @@ def _build_masks_from_windows(
 ) -> np.ndarray:
     ts_arr = np.asarray(timestamps).astype("datetime64[D]")
     num_timesteps = ts_arr.shape[0]
-    coverage_start = ts_arr.min()
-    coverage_end = ts_arr.max()
     align_fn = None
     if composite_frequency in {"month", "dekad"}:
         from worldcereal.train.seasonal import align_to_composite_window
 
         align_fn = align_to_composite_window
+        # Snap cube timestamps to their composite-window start before
+        # comparing against the (equally aligned) season edges. Training
+        # builds month/dekad-start dates, but cubes may label composites
+        # mid-window (e.g. the 15th); without snapping, such a timestamp in
+        # the season's final slot fails `ts <= end_aligned` and the last
+        # month/dekad of every season is silently dropped from the mask.
+        ts_arr = np.array(
+            [align_fn(ts, composite_frequency) for ts in ts_arr],
+            dtype="datetime64[D]",
+        )
+    coverage_start = ts_arr.min()
+    coverage_end = ts_arr.max()
     base = np.zeros((len(season_ids), num_timesteps), dtype=bool)
     for idx, season_id in enumerate(season_ids):
         season_windows = windows.get(season_id)
@@ -1290,7 +1294,7 @@ class SeasonalInferenceEngine:
         if "bands" not in arr.dims:
             raise ValueError("Input DataArray must expose a 'bands' dimension")
         reordered = arr.transpose("bands", "t", "y", "x")
-        reordered = DataPreprocessor.rescale_s1_backscatter(reordered)
+        reordered = DataPreprocessor.validate_s1_backscatter(reordered)
         renamed_bands = [
             GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
         ]

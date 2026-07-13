@@ -4,6 +4,7 @@ This script tests both cropland and croptype mapping workflows by calling
 the UDF functions directly without running batch jobs on OpenEO.
 """
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
@@ -21,6 +22,48 @@ from worldcereal.openeo.inference import (
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.utils.models import load_model_artifact
+
+_WKT_AUTHORITY_EPSG_RE = re.compile(r'AUTHORITY\["EPSG","(\d+)"\]', re.IGNORECASE)
+
+
+def _epsg_from_dataset(ds: xr.Dataset) -> int:
+    """Extract an EPSG code from a NetCDF dataset's ``crs`` variable.
+
+    ``CRS.from_wkt(...).to_epsg()`` silently returns ``None`` when pyproj
+    cannot reach its PROJ database (a frequent issue in offline / conda
+    environments where ``PROJ_DATA`` is unset). When that happens we fall
+    back to parsing the last ``AUTHORITY["EPSG", "<n>"]`` block from the
+    WKT string — that authority entry is the outermost CRS's EPSG code by
+    convention and is reliable enough for the UTM zones / WGS84 variants
+    that WorldCereal patches use.
+    """
+    if "crs" not in ds:
+        raise ValueError("Dataset is missing a 'crs' variable.")
+    attrs = ds.crs.attrs
+    wkt = attrs.get("spatial_ref") or attrs.get("crs_wkt")
+    if not wkt:
+        raise ValueError(
+            "'crs' variable has neither 'spatial_ref' nor 'crs_wkt' attribute."
+        )
+    try:
+        epsg = CRS.from_wkt(wkt).to_epsg()
+    except Exception:  # noqa: BLE001 - pyproj wraps several error types
+        epsg = None
+    if epsg is None:
+        matches = _WKT_AUTHORITY_EPSG_RE.findall(wkt)
+        if matches:
+            epsg = int(matches[-1])
+            logger.debug(
+                f"Resolved EPSG={epsg} from WKT AUTHORITY token "
+                "(pyproj.to_epsg() returned None — PROJ database "
+                "likely unavailable)."
+            )
+    if epsg is None:
+        raise ValueError(
+            "Could not resolve an EPSG code from the dataset's CRS WKT. "
+            f"WKT excerpt: {wkt[:200]!r}"
+        )
+    return int(epsg)
 
 
 def _parse_season_arg(season):
@@ -355,8 +398,14 @@ def run_seasonal_inference(
     epsg: Optional[int] = None,
     fillna_value: int = NODATAVALUE,
     as_dataset: bool = True,
+    mask_b8a: bool = True,
 ) -> Union[xr.Dataset, xr.DataArray]:
-    """Run seasonal cropland/croptype inference locally with a single entrypoint."""
+    """Run seasonal cropland/croptype inference locally with a single entrypoint.
+
+    ``mask_b8a`` must mirror the model's training-time ``--mask_b8a`` setting
+    (True by default in both places) so the B8A token distribution at
+    inference matches what the finetuned heads saw.
+    """
 
     if isinstance(ds_or_path, (str, Path)):
         ds = xr.open_dataset(ds_or_path)
@@ -414,11 +463,7 @@ def run_seasonal_inference(
         )
 
     if epsg is None:
-        if "crs" not in ds:
-            raise ValueError(
-                "EPSG not provided and dataset is missing a 'crs' variable."
-            )
-        epsg = CRS.from_wkt(ds.crs.attrs["spatial_ref"]).to_epsg()
+        epsg = _epsg_from_dataset(ds)
 
     arr = ds.drop_vars("crs", errors="ignore").astype("uint16").to_array(dim="bands")
 
@@ -430,6 +475,7 @@ def run_seasonal_inference(
         device=device,
         batch_size=batch_size,
         season_ids=season_ids,
+        mask_b8a=mask_b8a,
         export_class_probabilities=export_class_probabilities,
         enable_cropland_head=enable_cropland_head,
         enable_croptype_head=enable_croptype_head,
@@ -444,6 +490,9 @@ def run_seasonal_inference(
         season_ids=season_ids,
         mask_cropland=mask_cropland,
     )
+
+    if device == "cuda" and hasattr(result, "cpu"):
+        result = result.cpu()
 
     if as_dataset and isinstance(result, xr.DataArray):
         result = xr.Dataset(

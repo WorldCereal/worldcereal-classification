@@ -1312,6 +1312,7 @@ def prepare_training_datasets(
         min_season_coverage=train_min_season_coverage,
         season_ids=season_ids,
         season_windows=season_windows,
+        region_column=region_column,
         remove_samples_without_s1_s2=remove_samples_without_s1_s2,
     )
     val_ds = WorldCerealLabelledDataset(
@@ -2295,19 +2296,23 @@ def run_finetuning(
                 preds = _forward_with_optional_attrs(model, predictors, attrs)
             except ValueError as e:
                 logger.error(f"Error during forward pass: {e}")
-                # Save failing batch for debugging
-                import pickle
+                # Save failing batch for debugging; never let the dump itself
+                # mask the original error (e.g. unwritable path).
+                try:
+                    import pickle
 
-                debug_path = "/home/vtrichtk/git/worldcereal-finetune/scripts/training/finetuning/failing_batch_debug.pkl"
-                with open(debug_path, "wb") as f:
-                    pickle.dump(
-                        {
-                            "predictors": predictors,
-                            "attrs": attrs,
-                        },
-                        f,
-                    )
-                logger.info(f"Failing batch saved to {debug_path}")
+                    debug_path = Path(output_dir) / "failing_batch_debug.pkl"
+                    with open(debug_path, "wb") as f:
+                        pickle.dump(
+                            {
+                                "predictors": predictors,
+                                "attrs": attrs,
+                            },
+                            f,
+                        )
+                    logger.info(f"Failing batch saved to {debug_path}")
+                except Exception as dump_exc:  # noqa: BLE001
+                    logger.warning(f"Could not save failing batch: {dump_exc}")
                 raise
             loss, _, _ = _compute_loss(loss_fn, preds, predictors, attrs)
 
@@ -2661,7 +2666,12 @@ def run_finetuning(
         # Checkpoint is saved only when loss improves (primary metric).
         if loss_improved:
             _ckpt_model = ema_model if ema_model is not None else model
-            best_model_dict = _ckpt_model.state_dict()
+            # state_dict() returns references to the live parameter tensors,
+            # which optimizer.step() / the EMA update keep mutating in place.
+            # Deepcopy so this snapshot actually freezes the best weights;
+            # otherwise the final load_state_dict() restores the *last* epoch,
+            # not the best one, and final metrics diverge from the saved .pt.
+            best_model_dict = deepcopy(_ckpt_model.state_dict())
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
