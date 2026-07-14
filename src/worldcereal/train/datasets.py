@@ -567,9 +567,7 @@ def _spatial_bins_from_h3(
         Array of H3 cell-index strings, one per sample.
     """
     if not isinstance(resolution, (int, np.integer)) or not (0 <= resolution <= 15):
-        raise ValueError(
-            f"h3 resolution must be an int in [0, 15], got {resolution!r}"
-        )
+        raise ValueError(f"h3 resolution must be an int in [0, 15], got {resolution!r}")
 
     try:
         import h3
@@ -707,9 +705,11 @@ def _get_per_bin_class_weights(
         )
         per_sample = np.array(
             [
-                bin_w_dict[str(lbl)]
-                if lbl in well_represented
-                else global_w_dict[str(lbl)]
+                (
+                    bin_w_dict[str(lbl)]
+                    if lbl in well_represented
+                    else global_w_dict[str(lbl)]
+                )
                 for lbl in bin_labels
             ],
             dtype=np.float64,
@@ -2119,7 +2119,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             self.dataframe = filtered_df
 
     def __getitem__(self, idx):
-        # During dual-task training the DualHeadBatchSampler tells each sample
+        # During task-configurable training, SeasonalTaskBatchSampler tells each sample
         # which head it should supervise (landcover or croptype) by shifting its
         # index: indices in [N..2N) are landcover, [2N..3N) are croptype.
         # We decode the real row index and the intended task here, so the
@@ -2283,7 +2283,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
         return label
 
-    def get_dual_head_batch_sampler(
+    def get_task_batch_sampler(
         self,
         *,
         batch_size: int,
@@ -2303,14 +2303,16 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
-    ) -> "DualHeadBatchSampler":
-        """Build a :class:`DualHeadBatchSampler` for dual-head training.
+        tasks: Sequence[str] = ("landcover", "croptype"),
+        task_ratios: Optional[Mapping[str, float]] = None,
+    ) -> "SeasonalTaskBatchSampler":
+        """Build a task-configurable seasonal batch sampler.
 
-        Each batch will contain exactly ``batch_size // 2`` LC-assigned and
-        ``batch_size // 2`` CT-assigned samples drawn from class-balanced pools.
-        See :class:`DualHeadBatchSampler` for full documentation.
+        ``tasks`` selects the active task pools to draw into each batch while
+        preserving the same class, spatial, per-bin, multiplier, and generator
+        balancing logic.
         """
-        return DualHeadBatchSampler(
+        return SeasonalTaskBatchSampler(
             dataframe=self.dataframe,
             batch_size=batch_size,
             landcover_column=landcover_column,
@@ -2329,6 +2331,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             region_column=region_column,
             bin_type=bin_type,
             h3_resolution=h3_resolution,
+            tasks=tasks,
+            task_ratios=task_ratios,
         )
 
 
@@ -2434,12 +2438,16 @@ def apply_class_weight_multipliers(
     return sampler_weights * mult_arr
 
 
-class DualHeadBatchSampler(Sampler):
-    """Batch sampler for dual-head (landcover + croptype) finetuning.
+class SeasonalTaskBatchSampler(Sampler):
+    """Batch sampler for seasonal landcover/croptype finetuning.
 
-    Each batch is composed of exactly ``batch_size // 2`` **LC-assigned** samples
-    and ``batch_size // 2`` **CT-assigned** samples.  Task assignment is encoded
-    into the virtual index returned to the DataLoader so that
+    By default each batch is composed of exactly ``batch_size // 2``
+    **LC-assigned** samples and ``batch_size - batch_size // 2`` **CT-assigned**
+    samples for default two-task training. Callers may
+    instead pass ``tasks=("landcover",)`` or ``tasks=("croptype",)`` for
+    single-task batches, or ``task_ratios`` for explicit task proportions.
+
+    Task assignment is encoded into the virtual index returned to the DataLoader so that
     :meth:`WorldCerealLabelledDataset.__getitem__` can override ``label_task``
     without mutating the dataframe or touching shared worker state:
 
@@ -2507,6 +2515,8 @@ class DualHeadBatchSampler(Sampler):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
+        tasks: Optional[Sequence[str]] = None,
+        task_ratios: Optional[Mapping[str, float]] = None,
     ) -> None:
         import math
 
@@ -2534,6 +2544,11 @@ class DualHeadBatchSampler(Sampler):
         self._num_batches = (
             num_batches if num_batches is not None else math.ceil(N / batch_size)
         )
+        self._tasks = self._normalize_tasks(tasks)
+        self._task_ratios = self._normalize_task_ratios(self._tasks, task_ratios)
+        self._task_batch_counts = self._compute_task_batch_counts(
+            batch_size, self._tasks, self._task_ratios
+        )
 
         lc_labels = dataframe[landcover_column].astype(str).to_numpy()
 
@@ -2542,10 +2557,11 @@ class DualHeadBatchSampler(Sampler):
             dataframe[croptype_column].astype(str) != "ignore"
         )
         ct_real_indices = np.where(ct_valid.to_numpy())[0]
-        if len(ct_real_indices) == 0:
+        has_ct_pool = len(ct_real_indices) > 0
+        if not has_ct_pool and "croptype" in self._tasks:
             raise ValueError(
                 f"No samples with a valid '{croptype_column}' found; "
-                "DualHeadBatchSampler requires at least one CT-eligible sample."
+                "SeasonalTaskBatchSampler requires at least one CT-eligible sample."
             )
         ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
 
@@ -2553,8 +2569,6 @@ class DualHeadBatchSampler(Sampler):
         # bin_type selects the binning scheme:
         #   - "degrees": legacy lat/lon grid, cell size = spatial_bin_size_degrees
         #   - "h3": Uber H3 (approximately equal-area) hexagons at h3_resolution
-        # Backward compatible: default bin_type="degrees" with an explicit
-        # spatial_bin_size_degrees reproduces the original behaviour exactly.
         valid_bin_types = ("degrees", "h3")
         if bin_type not in valid_bin_types:
             raise ValueError(
@@ -2602,16 +2616,20 @@ class DualHeadBatchSampler(Sampler):
                     min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
-                ct_class_arr = _get_smoothed_per_bin_class_weights(
-                    ct_labels,
-                    lat_arr[ct_real_indices],
-                    lon_arr[ct_real_indices],
-                    spatial_bin_size_degrees,
-                    method=class_weight_method,
-                    clip_range=clip_range,
-                    min_samples_per_bin=min_samples_per_bin,
-                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
-                    pool_name="CT",
+                ct_class_arr = (
+                    _get_smoothed_per_bin_class_weights(
+                        ct_labels,
+                        lat_arr[ct_real_indices],
+                        lon_arr[ct_real_indices],
+                        spatial_bin_size_degrees,
+                        method=class_weight_method,
+                        clip_range=clip_range,
+                        min_samples_per_bin=min_samples_per_bin,
+                        min_samples_per_class_per_bin=min_samples_per_class_per_bin,
+                        pool_name="CT",
+                    )
+                    if has_ct_pool
+                    else np.array([], dtype=np.float64)
                 )
             else:
                 lc_class_arr = _get_per_bin_class_weights(
@@ -2623,14 +2641,18 @@ class DualHeadBatchSampler(Sampler):
                     min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
-                ct_class_arr = _get_per_bin_class_weights(
-                    ct_labels,
-                    spatial_bins[ct_real_indices],
-                    method=class_weight_method,
-                    clip_range=clip_range,
-                    min_samples_per_bin=min_samples_per_bin,
-                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
-                    pool_name="CT",
+                ct_class_arr = (
+                    _get_per_bin_class_weights(
+                        ct_labels,
+                        spatial_bins[ct_real_indices],
+                        method=class_weight_method,
+                        clip_range=clip_range,
+                        min_samples_per_bin=min_samples_per_bin,
+                        min_samples_per_class_per_bin=min_samples_per_class_per_bin,
+                        pool_name="CT",
+                    )
+                    if has_ct_pool
+                    else np.array([], dtype=np.float64)
                 )
         else:
             lc_class_arr = _get_normalized_weights(
@@ -2639,11 +2661,15 @@ class DualHeadBatchSampler(Sampler):
                 clip_range=clip_range,
                 pool_name="LC",
             )
-            ct_class_arr = _get_normalized_weights(
-                ct_labels,
-                method=class_weight_method,
-                clip_range=clip_range,
-                pool_name="CT",
+            ct_class_arr = (
+                _get_normalized_weights(
+                    ct_labels,
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    pool_name="CT",
+                )
+                if has_ct_pool
+                else np.array([], dtype=np.float64)
             )
 
         # ---- Optional class weight multipliers (per-class or per-region) ----
@@ -2663,9 +2689,10 @@ class DualHeadBatchSampler(Sampler):
             lc_class_arr = apply_class_weight_multipliers(
                 lc_class_arr, lc_labels, lc_regions, mults_canonical, pool_name="LC"
             )
-            ct_class_arr = apply_class_weight_multipliers(
-                ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
-            )
+            if has_ct_pool:
+                ct_class_arr = apply_class_weight_multipliers(
+                    ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
+                )
 
             # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
             # or per-class multiplier can never push a class beyond the configured
@@ -2678,12 +2705,13 @@ class DualHeadBatchSampler(Sampler):
                 if lc_mean > 0:
                     lc_class_arr = lc_class_arr / lc_mean
                 lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
-                ct_mean = ct_class_arr.mean()
-                if ct_mean > 0:
-                    ct_class_arr = ct_class_arr / ct_mean
-                ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
+                if has_ct_pool:
+                    ct_mean = ct_class_arr.mean()
+                    if ct_mean > 0:
+                        ct_class_arr = ct_class_arr / ct_mean
+                    ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
                 logger.info(
-                    "DualHeadBatchSampler: re-normalised and re-clipped class "
+                    "SeasonalTaskBatchSampler: re-normalised and re-clipped class "
                     f"weights to {clip_range} after applying multipliers."
                 )
 
@@ -2716,7 +2744,8 @@ class DualHeadBatchSampler(Sampler):
                 min_samples_per_bin=min_samples_per_bin,
             )
             lc_class_arr = lc_class_arr * sp_arr  # full N-sample array
-            ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset
+            if has_ct_pool:
+                ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset
 
         density_msg = (
             f"× spatial-density factor (method={spatial_weight_method})"
@@ -2729,14 +2758,14 @@ class DualHeadBatchSampler(Sampler):
             else:
                 smoothing_msg = ""
             logger.info(
-                "DualHeadBatchSampler: per-bin class balancing "
+                "SeasonalTaskBatchSampler: per-bin class balancing "
                 f"(method={class_weight_method}, "
                 f"min_samples_per_bin={min_samples_per_bin}{smoothing_msg}) "
                 f"{density_msg}."
             )
         else:
             logger.info(
-                "DualHeadBatchSampler: global class balancing "
+                "SeasonalTaskBatchSampler: global class balancing "
                 f"(method={class_weight_method}) "
                 f"{density_msg}."
             )
@@ -2746,7 +2775,8 @@ class DualHeadBatchSampler(Sampler):
             lc_class_arr / lc_class_arr.sum(), dtype=torch.float64
         )
         self._ct_probs = torch.as_tensor(
-            ct_class_arr / ct_class_arr.sum(), dtype=torch.float64
+            ct_class_arr / ct_class_arr.sum() if has_ct_pool else ct_class_arr,
+            dtype=torch.float64,
         )
 
         # Virtual-index tensors: LC → [N, 2N), CT → [2N, 3N)
@@ -2755,31 +2785,121 @@ class DualHeadBatchSampler(Sampler):
 
         lc_class_counts: Dict[str, int] = Counter(lc_labels.tolist())
         ct_class_counts: Dict[str, int] = Counter(ct_labels.tolist())
-        lc_half = batch_size // 2
-        ct_half = batch_size - lc_half
+        lc_count = self._task_batch_counts.get("landcover", 0)
+        ct_count = self._task_batch_counts.get("croptype", 0)
         logger.info(
-            f"DualHeadBatchSampler: N={N}, LC pool={N}, CT pool={len(ct_real_indices)}, "
-            f"batch_size={batch_size} (LC half={lc_half}, CT half={ct_half}), "
-            f"num_batches={self._num_batches}"
+            f"SeasonalTaskBatchSampler: N={N}, LC pool={N}, CT pool={len(ct_real_indices)}, "
+            f"batch_size={batch_size} (LC={lc_count}, CT={ct_count}), "
+            f"num_batches={self._num_batches}, tasks={self._tasks}, "
+            f"task_ratios={self._task_ratios}"
         )
-        logger.info(f"DualHeadBatchSampler LC class distribution: {lc_class_counts}")
-        logger.info(f"DualHeadBatchSampler CT class distribution: {ct_class_counts}")
+        logger.info(
+            f"SeasonalTaskBatchSampler LC class distribution: {lc_class_counts}"
+        )
+        logger.info(
+            f"SeasonalTaskBatchSampler CT class distribution: {ct_class_counts}"
+        )
+
+    @staticmethod
+    def _normalize_tasks(tasks: Optional[Sequence[str]]) -> Tuple[str, ...]:
+        if tasks is None:
+            return ("landcover", "croptype")
+        aliases = {"lc": "landcover", "ct": "croptype"}
+        normalized = tuple(aliases.get(str(task), str(task)) for task in tasks)
+        valid = {"landcover", "croptype"}
+        invalid = [task for task in normalized if task not in valid]
+        if invalid:
+            raise ValueError(f"tasks must contain only {sorted(valid)}, got {invalid}")
+        if not normalized:
+            raise ValueError("tasks must contain at least one active task.")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(f"tasks must not contain duplicates, got {normalized}")
+        return normalized
+
+    @staticmethod
+    def _normalize_task_ratios(
+        tasks: Tuple[str, ...], task_ratios: Optional[Mapping[str, float]]
+    ) -> Dict[str, float]:
+        if task_ratios is None:
+            ratio = 1.0 / len(tasks)
+            return {task: ratio for task in tasks}
+        aliases = {"lc": "landcover", "ct": "croptype"}
+        normalized = {
+            aliases.get(str(task), str(task)): float(ratio)
+            for task, ratio in task_ratios.items()
+        }
+        task_set = set(tasks)
+        if set(normalized) != task_set:
+            raise ValueError(
+                "task_ratios keys must exactly match active tasks; "
+                f"got keys={sorted(normalized)} tasks={sorted(task_set)}"
+            )
+        if any(ratio < 0 for ratio in normalized.values()):
+            raise ValueError(f"task_ratios must be non-negative, got {normalized}")
+        total = sum(normalized.values())
+        if total <= 0:
+            raise ValueError(
+                f"task_ratios must sum to a positive value, got {normalized}"
+            )
+        return {task: ratio / total for task, ratio in normalized.items()}
+
+    @staticmethod
+    def _compute_task_batch_counts(
+        batch_size: int, tasks: Tuple[str, ...], task_ratios: Mapping[str, float]
+    ) -> Dict[str, int]:
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if tasks == ("landcover", "croptype") and task_ratios == {
+            "landcover": 0.5,
+            "croptype": 0.5,
+        }:
+            return {
+                "landcover": batch_size // 2,
+                "croptype": batch_size - batch_size // 2,
+            }
+
+        raw_counts = {task: batch_size * task_ratios[task] for task in tasks}
+        counts = {task: int(np.floor(count)) for task, count in raw_counts.items()}
+        remaining = batch_size - sum(counts.values())
+        order = sorted(
+            tasks, key=lambda task: raw_counts[task] - counts[task], reverse=True
+        )
+        for task in order[:remaining]:
+            counts[task] += 1
+        return counts
 
     def __iter__(self):
-        lc_half = self._batch_size // 2
-        ct_half = self._batch_size - lc_half
-        total_lc = lc_half * self._num_batches
-        total_ct = ct_half * self._num_batches
-        all_lc_drawn = torch.multinomial(
-            self._lc_probs, total_lc, replacement=True, generator=self._generator
+        lc_count = self._task_batch_counts.get("landcover", 0)
+        ct_count = self._task_batch_counts.get("croptype", 0)
+        all_lc_drawn = (
+            torch.multinomial(
+                self._lc_probs,
+                lc_count * self._num_batches,
+                replacement=True,
+                generator=self._generator,
+            )
+            if lc_count
+            else None
         )
-        all_ct_drawn = torch.multinomial(
-            self._ct_probs, total_ct, replacement=True, generator=self._generator
+        all_ct_drawn = (
+            torch.multinomial(
+                self._ct_probs,
+                ct_count * self._num_batches,
+                replacement=True,
+                generator=self._generator,
+            )
+            if ct_count
+            else None
         )
         for i in range(self._num_batches):
-            lc_drawn = all_lc_drawn[i * lc_half : (i + 1) * lc_half]
-            ct_drawn = all_ct_drawn[i * ct_half : (i + 1) * ct_half]
-            batch = torch.cat([self._lc_virtual[lc_drawn], self._ct_virtual[ct_drawn]])
+            parts = []
+            if lc_count and all_lc_drawn is not None:
+                lc_drawn = all_lc_drawn[i * lc_count : (i + 1) * lc_count]
+                parts.append(self._lc_virtual[lc_drawn])
+            if ct_count and all_ct_drawn is not None:
+                ct_drawn = all_ct_drawn[i * ct_count : (i + 1) * ct_count]
+                parts.append(self._ct_virtual[ct_drawn])
+            batch = torch.cat(parts)
             perm = torch.randperm(self._batch_size, generator=self._generator)
             yield batch[perm].tolist()
 

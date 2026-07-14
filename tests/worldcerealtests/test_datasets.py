@@ -229,13 +229,13 @@ class TestWorldCerealDataset(unittest.TestCase):
         self.assertTrue(np.any(inputs["meteo"] != NODATAVALUE))
         self.assertTrue(np.any(inputs["dem"] != NODATAVALUE))
 
-    def test_dual_head_batch_sampler_structure(self):
-        """Ensure DualHeadBatchSampler produces valid batches with LC/CT split."""
+    def test_task_batch_sampler_structure(self):
+        """Ensure SeasonalTaskBatchSampler produces valid batches with LC/CT split."""
 
         batch_size = 4
         spatial_bin_size = 0.2
 
-        sampler = self.binary_ds.get_dual_head_batch_sampler(
+        sampler = self.binary_ds.get_task_batch_sampler(
             batch_size=batch_size,
             landcover_column="landcover_label",
             croptype_column="croptype_label",
@@ -267,14 +267,66 @@ class TestWorldCerealDataset(unittest.TestCase):
                     f"LC=[{lc_lo}, {lc_hi}) CT=[{ct_lo}, {ct_hi})",
                 )
 
-    def test_dual_head_batch_sampler_len(self):
+    def test_task_batch_sampler_len(self):
         """Ensure __len__ returns the configured number of batches."""
-        sampler = self.binary_ds.get_dual_head_batch_sampler(
-            batch_size=4, num_batches=7
-        )
+        sampler = self.binary_ds.get_task_batch_sampler(batch_size=4, num_batches=7)
         self.assertEqual(len(sampler), 7)
 
-    def test_dual_head_batch_sampler_per_bin_scope(self):
+    def test_task_batch_sampler_landcover_only(self):
+        """Ensure task sampler can produce landcover-only batches."""
+        batch_size = 5
+        sampler = self.binary_ds.get_task_batch_sampler(
+            tasks=("landcover",),
+            batch_size=batch_size,
+            num_batches=3,
+        )
+
+        N = len(self.binary_ds)
+        batches = list(sampler)
+        self.assertEqual(len(batches), 3)
+        self.assertTrue(hasattr(sampler, "_lc_probs"))
+        self.assertTrue(hasattr(sampler, "_ct_probs"))
+        for batch in batches:
+            self.assertEqual(len(batch), batch_size)
+            self.assertTrue(all(N <= idx < 2 * N for idx in batch))
+
+    def test_task_batch_sampler_croptype_only(self):
+        """Ensure task sampler can produce croptype-only batches."""
+        batch_size = 5
+        sampler = self.binary_ds.get_task_batch_sampler(
+            tasks=("croptype",),
+            batch_size=batch_size,
+            num_batches=3,
+        )
+
+        N = len(self.binary_ds)
+        batches = list(sampler)
+        self.assertEqual(len(batches), 3)
+        self.assertTrue(hasattr(sampler, "_lc_probs"))
+        self.assertTrue(hasattr(sampler, "_ct_probs"))
+        for batch in batches:
+            self.assertEqual(len(batch), batch_size)
+            self.assertTrue(all(2 * N <= idx < 3 * N for idx in batch))
+
+    def test_task_batch_sampler_explicit_ratios(self):
+        """Ensure explicit task ratios control per-batch task counts."""
+        batch_size = 10
+        sampler = self.binary_ds.get_task_batch_sampler(
+            tasks=("landcover", "croptype"),
+            task_ratios={"landcover": 0.7, "croptype": 0.3},
+            batch_size=batch_size,
+            num_batches=3,
+        )
+
+        N = len(self.binary_ds)
+        for batch in sampler:
+            self.assertEqual(len(batch), batch_size)
+            lc_count = sum(1 for idx in batch if N <= idx < 2 * N)
+            ct_count = sum(1 for idx in batch if 2 * N <= idx < 3 * N)
+            self.assertEqual(lc_count, 7)
+            self.assertEqual(ct_count, 3)
+
+    def test_task_batch_sampler_per_bin_scope(self):
         """`class_balancing_scope='per_bin'` produces valid batches and
         different LC sampling probabilities than the default global scope
         (with the same density factor applied to both)."""
@@ -282,7 +334,7 @@ class TestWorldCerealDataset(unittest.TestCase):
         batch_size = 4
         spatial_bin_size = 0.2
 
-        global_sampler = self.binary_ds.get_dual_head_batch_sampler(
+        global_sampler = self.binary_ds.get_task_batch_sampler(
             batch_size=batch_size,
             class_weight_method="balanced",
             spatial_bin_size_degrees=spatial_bin_size,
@@ -291,7 +343,7 @@ class TestWorldCerealDataset(unittest.TestCase):
             min_samples_per_bin=1,
             num_batches=5,
         )
-        per_bin_sampler = self.binary_ds.get_dual_head_batch_sampler(
+        per_bin_sampler = self.binary_ds.get_task_batch_sampler(
             batch_size=batch_size,
             class_weight_method="balanced",
             spatial_bin_size_degrees=spatial_bin_size,
@@ -321,17 +373,17 @@ class TestWorldCerealDataset(unittest.TestCase):
             for idx in batch:
                 self.assertTrue(N <= idx < 3 * N)
 
-    def test_dual_head_batch_sampler_per_bin_requires_spatial(self):
+    def test_task_batch_sampler_per_bin_requires_spatial(self):
         """Per-bin scope without spatial_bin_size_degrees should error."""
         with self.assertRaises(ValueError):
-            self.binary_ds.get_dual_head_batch_sampler(
+            self.binary_ds.get_task_batch_sampler(
                 batch_size=4,
                 class_balancing_scope="per_bin",
                 spatial_bin_size_degrees=None,
                 num_batches=1,
             )
 
-    def test_dual_head_batch_sampler_density_axis_independent(self):
+    def test_task_batch_sampler_density_axis_independent(self):
         """`spatial_weight_method` is orthogonal to `class_balancing_scope`:
         toggling between 'none' and 'log' (with all else fixed) changes the
         sampling distribution under both global and per_bin scopes."""
@@ -348,12 +400,12 @@ class TestWorldCerealDataset(unittest.TestCase):
         )
 
         # Same scope, different density method → different probs.
-        per_bin_no_density = self.binary_ds.get_dual_head_batch_sampler(
+        per_bin_no_density = self.binary_ds.get_task_batch_sampler(
             **common_kwargs,
             class_balancing_scope="per_bin",
             spatial_weight_method="none",
         )
-        per_bin_log_density = self.binary_ds.get_dual_head_batch_sampler(
+        per_bin_log_density = self.binary_ds.get_task_batch_sampler(
             **common_kwargs,
             class_balancing_scope="per_bin",
             spatial_weight_method="log",
@@ -367,12 +419,12 @@ class TestWorldCerealDataset(unittest.TestCase):
         )
 
         # Same axis under global scope.
-        global_no_density = self.binary_ds.get_dual_head_batch_sampler(
+        global_no_density = self.binary_ds.get_task_batch_sampler(
             **common_kwargs,
             class_balancing_scope="global",
             spatial_weight_method="none",
         )
-        global_log_density = self.binary_ds.get_dual_head_batch_sampler(
+        global_log_density = self.binary_ds.get_task_batch_sampler(
             **common_kwargs,
             class_balancing_scope="global",
             spatial_weight_method="log",
@@ -385,10 +437,10 @@ class TestWorldCerealDataset(unittest.TestCase):
             "spatial_weight_method should change the distribution under global scope",
         )
 
-    def test_dual_head_batch_sampler_invalid_scope(self):
+    def test_task_batch_sampler_invalid_scope(self):
         """Unknown class_balancing_scope should error."""
         with self.assertRaises(ValueError):
-            self.binary_ds.get_dual_head_batch_sampler(
+            self.binary_ds.get_task_batch_sampler(
                 batch_size=4,
                 class_balancing_scope="invalid_mode",  # type: ignore[arg-type]
                 spatial_bin_size_degrees=0.2,
@@ -1773,10 +1825,7 @@ class TestPerBinClassWeights(unittest.TestCase):
         for the same class label."""
         # Bin 0: 'a' is rare (1/10) → high weight
         # Bin 1: 'a' is dominant (9/10) → low weight
-        labels = np.array(
-            ["a"] + ["b"] * 9  # bin 0
-            + ["a"] * 9 + ["b"]  # bin 1
-        )
+        labels = np.array(["a"] + ["b"] * 9 + ["a"] * 9 + ["b"])  # bin 0  # bin 1
         bins = np.array(["B0"] * 10 + ["B1"] * 10)
         weights = _get_per_bin_class_weights(
             labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1
@@ -1874,6 +1923,7 @@ class TestSpatialDensityWeights(unittest.TestCase):
         )
         # Re-import to compute the un-protected baseline directly.
         from worldcereal.train.datasets import _get_normalized_weights
+
         without_protection = _get_normalized_weights(bins, "log", (0.1, 10.0))
         np.testing.assert_allclose(with_protection, without_protection)
 
@@ -1885,6 +1935,7 @@ class TestSpatialDensityWeights(unittest.TestCase):
             bins, method="log", clip_range=(0.1, 10.0), min_samples_per_bin=1
         )
         from worldcereal.train.datasets import _get_normalized_weights
+
         without_protection = _get_normalized_weights(bins, "log", (0.1, 10.0))
         np.testing.assert_allclose(with_protection, without_protection)
 
@@ -1922,16 +1973,27 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         lats = np.append(lats, probe_lat)
         lons = np.append(lons, probe_lon)
         bilinear = _get_smoothed_per_bin_class_weights(
-            labels, lats, lons, bin_size=5.0,
-            method="balanced", clip_range=None, min_samples_per_bin=1,
+            labels,
+            lats,
+            lons,
+            bin_size=5.0,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=1,
         )
         # Hard binning, same data
-        bins = np.array([
-            f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
-            for la, lo in zip(lats, lons)
-        ])
+        bins = np.array(
+            [
+                f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
+                for la, lo in zip(lats, lons)
+            ]
+        )
         hard = _get_per_bin_class_weights(
-            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1,
+            labels,
+            bins,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=1,
         )
         # Bin-centre probe: bilinear and hard should match within renormalisation
         # tolerance. The two arrays are mean-normalised independently, and
@@ -1951,13 +2013,15 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         # Bin B: 1 'x' + 9 'y' → class 'x' is locally rare, high weight
         # Bin C, D: empty (we'll have empty corners → fall back to global)
         labels = np.array(
-            (["x"] * 9 + ["y"]) +     # bin A around lat=2.5
-            (["x"] + ["y"] * 9)       # bin B around lat=7.5
+            (["x"] * 9 + ["y"])  # bin A around lat=2.5
+            + (["x"] + ["y"] * 9)  # bin B around lat=7.5
         )
-        lats = np.concatenate([
-            np.full(10, 2.5),  # all in bin A (lat 0-5)
-            np.full(10, 7.5),  # all in bin B (lat 5-10)
-        ])
+        lats = np.concatenate(
+            [
+                np.full(10, 2.5),  # all in bin A (lat 0-5)
+                np.full(10, 7.5),  # all in bin B (lat 5-10)
+            ]
+        )
         lons = np.full(20, 2.5)  # all in lon bin 0-5
         # Probe sample exactly on the edge between bin A and bin B (lat=5.0)
         # Class 'x'. Should get average of bin A weight and bin B weight for 'x'.
@@ -1965,16 +2029,27 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         lats = np.append(lats, 5.0)  # exactly at boundary; fu = 0.5 in u-space
         lons = np.append(lons, 2.5)
         bilinear = _get_smoothed_per_bin_class_weights(
-            labels, lats, lons, bin_size=5.0,
-            method="balanced", clip_range=None, min_samples_per_bin=1,
+            labels,
+            lats,
+            lons,
+            bin_size=5.0,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=1,
         )
         # Hard binning
-        bins = np.array([
-            f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
-            for la, lo in zip(lats, lons)
-        ])
+        bins = np.array(
+            [
+                f"{int(np.floor((la + 90) / 5))}_{int(np.floor((lo + 180) / 5))}"
+                for la, lo in zip(lats, lons)
+            ]
+        )
         hard = _get_per_bin_class_weights(
-            labels, bins, method="balanced", clip_range=None, min_samples_per_bin=1,
+            labels,
+            bins,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=1,
         )
         # Bin A 'x' weight (hard): from samples 0..8 (labels 'x' in bin A)
         bin_a_x = hard[0]
@@ -1985,15 +2060,24 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         # their distributions differ slightly, so use a reasonable tolerance.
         probe_bilinear = bilinear[-1]
         # In hard: bin_a_x < bin_b_x (x is rare in B → high weight there).
-        self.assertGreater(probe_bilinear, bin_a_x * 0.5)  # meaningfully above bin A's weight
-        self.assertLess(probe_bilinear, bin_b_x * 1.0)     # meaningfully below bin B's weight
+        self.assertGreater(
+            probe_bilinear, bin_a_x * 0.5
+        )  # meaningfully above bin A's weight
+        self.assertLess(
+            probe_bilinear, bin_b_x * 1.0
+        )  # meaningfully below bin B's weight
 
     def test_global_mean_one(self):
         """Final per-sample array has mean = 1 by construction."""
         labels, lats, lons = self._two_bin_grid()
         weights = _get_smoothed_per_bin_class_weights(
-            labels, lats, lons, bin_size=5.0,
-            method="balanced", clip_range=None, min_samples_per_bin=1,
+            labels,
+            lats,
+            lons,
+            bin_size=5.0,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=1,
         )
         self.assertAlmostEqual(float(weights.mean()), 1.0, places=6)
 
@@ -2001,8 +2085,13 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         """Clip range bounds the output."""
         labels, lats, lons = self._two_bin_grid()
         weights = _get_smoothed_per_bin_class_weights(
-            labels, lats, lons, bin_size=5.0,
-            method="balanced", clip_range=(0.5, 1.5), min_samples_per_bin=1,
+            labels,
+            lats,
+            lons,
+            bin_size=5.0,
+            method="balanced",
+            clip_range=(0.5, 1.5),
+            min_samples_per_bin=1,
         )
         self.assertGreaterEqual(float(weights.min()), 0.5 - 1e-9)
         self.assertLessEqual(float(weights.max()), 1.5 + 1e-9)
@@ -2015,8 +2104,13 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
         lats = np.concatenate([np.full(100, 2.5), [7.5]])  # sparse bin at lat∈[5,10)
         lons = np.full(101, 2.5)
         weights = _get_smoothed_per_bin_class_weights(
-            labels, lats, lons, bin_size=5.0,
-            method="balanced", clip_range=None, min_samples_per_bin=10,
+            labels,
+            lats,
+            lons,
+            bin_size=5.0,
+            method="balanced",
+            clip_range=None,
+            min_samples_per_bin=10,
         )
         # All values should be finite, no errors raised.
         self.assertTrue(np.all(np.isfinite(weights)))
@@ -2027,12 +2121,14 @@ class TestSmoothedPerBinClassWeights(unittest.TestCase):
                 np.array(["a", "b"]),
                 np.array([0.0, 0.0, 0.0]),  # wrong length
                 np.array([0.0, 0.0]),
-                bin_size=5.0, method="balanced", clip_range=None,
+                bin_size=5.0,
+                method="balanced",
+                clip_range=None,
             )
 
 
 class TestClassWeightMultipliersRouting(unittest.TestCase):
-    """Tests for class_weight_multipliers routing in DualHeadBatchSampler."""
+    """Tests for class_weight_multipliers routing in SeasonalTaskBatchSampler."""
 
     def setUp(self):
         import pandas as pd
@@ -2050,9 +2146,9 @@ class TestClassWeightMultipliersRouting(unittest.TestCase):
         self.df = pd.DataFrame(data)
 
     def _make_sampler(self, multipliers):
-        from worldcereal.train.datasets import DualHeadBatchSampler
+        from worldcereal.train.datasets import SeasonalTaskBatchSampler
 
-        return DualHeadBatchSampler(
+        return SeasonalTaskBatchSampler(
             dataframe=self.df,
             batch_size=4,
             class_weight_method="balanced",
@@ -2072,31 +2168,25 @@ class TestClassWeightMultipliersRouting(unittest.TestCase):
         ct_probs_boost = sampler_boost._ct_probs.numpy()
 
         shared_lc_idx = [
-            i
-            for i, v in enumerate(self.df["landcover_label"])
-            if v == "shared_class"
+            i for i, v in enumerate(self.df["landcover_label"]) if v == "shared_class"
         ]
         shared_ct_idx = [
             i
             for i, v in enumerate(
-                self.df.loc[self.df["croptype_label"].notna(), "croptype_label"].reset_index(
-                    drop=True
-                )
+                self.df.loc[
+                    self.df["croptype_label"].notna(), "croptype_label"
+                ].reset_index(drop=True)
             )
             if v == "shared_class"
         ]
 
         # Both pools should have higher probability after the boost
         self.assertTrue(
-            all(
-                lc_probs_boost[i] > lc_probs_base[i] for i in shared_lc_idx
-            ),
+            all(lc_probs_boost[i] > lc_probs_base[i] for i in shared_lc_idx),
             "shared_class boost did NOT increase LC pool probabilities",
         )
         self.assertTrue(
-            all(
-                ct_probs_boost[i] > ct_probs_base[i] for i in shared_ct_idx
-            ),
+            all(ct_probs_boost[i] > ct_probs_base[i] for i in shared_ct_idx),
             "shared_class boost did NOT increase CT pool probabilities — elif bug",
         )
 
@@ -2184,9 +2274,7 @@ class TestCheckpointMetricMonitoring(unittest.TestCase):
         """val_loss always passes through regardless of seasonal support."""
         for seasonal in (True, False):
             effective = (
-                "val_loss"
-                if "val_loss" == "val_loss" or seasonal
-                else "val_loss"
+                "val_loss" if "val_loss" == "val_loss" or seasonal else "val_loss"
             )
             self.assertEqual(effective, "val_loss")
 
