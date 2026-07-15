@@ -1036,7 +1036,7 @@ class SeasonalMultiTaskLoss(nn.Module):
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
         # Landcover pathway – only activate for samples explicitly routed to the LC
-        # head (tasks[idx] == landcover_task_name).  When the DualHeadBatchSampler is
+        # head (tasks[idx] == landcover_task_name).  When the SeasonalTaskBatchSampler is
         # used, CT-assigned samples carry label_task="croptype" so they are excluded
         # here, preventing cropland-class contamination of the LC supervision signal.
         landcover_indices = [
