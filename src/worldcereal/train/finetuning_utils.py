@@ -560,7 +560,6 @@ def _log_regional_metrics(
     records: List[dict],
     task_name: str,
     class_names: Optional[List[str]] = None,
-    *,
 ) -> None:
     """Log per-region macro F1 summary derived from prediction records.
 
