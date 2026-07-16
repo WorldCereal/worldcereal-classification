@@ -494,6 +494,47 @@ def _records_to_scalar_metrics(records: List[dict]) -> dict[str, float]:
         return {}
 
 
+def _records_to_regional_mean_f1(
+    records: List[dict],
+    min_support: int = 50,
+) -> Optional[float]:
+    """Unweighted mean of per-region macro F1 derived from prediction records.
+
+    Groups records by their ``region`` field and averages the per-region macro
+    F1 so every region counts equally.
+    Records without region information (missing, NaN or "unknown") are
+    ignored, as are regions with fewer than ``min_support`` records.
+    """
+    if not records:
+        return None
+
+    from sklearn.metrics import f1_score
+
+    records_by_region: dict[str, List[dict]] = defaultdict(list)
+    for rec in records:
+        region = rec.get("region")
+        if region is None or _is_missing_value(region) or str(region) == "unknown":
+            continue
+        records_by_region[str(region)].append(rec)
+
+    regional_f1s: List[float] = []
+    for region, region_records in records_by_region.items():
+        if len(region_records) < min_support:
+            continue
+        y_true = [rec["target_class"] for rec in region_records]
+        y_pred = [rec["pred_class"] for rec in region_records]
+        try:
+            regional_f1s.append(
+                f1_score(y_true, y_pred, average="macro", zero_division=0)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed computing macro F1 for region '{region}': {exc}")
+
+    if len(regional_f1s) < 2:
+        return None
+    return float(np.mean(regional_f1s))
+
+
 def _log_regional_metrics(
     records: List[dict],
     task_name: str,
@@ -1036,7 +1077,7 @@ class SeasonalMultiTaskLoss(nn.Module):
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
         # Landcover pathway – only activate for samples explicitly routed to the LC
-        # head (tasks[idx] == landcover_task_name).  When the SeasonalTaskBatchSampler is
+        # head (tasks[idx] == landcover_task_name).  When the DualHeadBatchSampler is
         # used, CT-assigned samples carry label_task="croptype" so they are excluded
         # here, preventing cropland-class contamination of the LC supervision signal.
         landcover_indices = [
@@ -2099,7 +2140,10 @@ def run_finetuning(
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
     model_ema_alpha: float = 0.0,
-    checkpoint_metric: Literal["val_loss", "lc_f1", "ct_f1", "mean_f1"] = "mean_f1",
+    checkpoint_metric: Literal[
+        "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
+    ] = "mean_f1",
+    regional_f1_min_support: int = 50,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -2122,6 +2166,7 @@ def run_finetuning(
     best_ct_f1: Optional[float] = None
     best_lc_f1: Optional[float] = None
     best_mean_f1: Optional[float] = None
+    best_regional_mean_f1: Optional[float] = None
     best_model_dict = None
     epochs_since_improvement = 0
     ema_model: Optional[torch.nn.Module] = (
@@ -2469,6 +2514,18 @@ def run_finetuning(
                 for key, value in ct_metrics.items():
                     seasonal_metrics_flat[f"croptype/{key}"] = value
 
+            # Unweighted mean of per-region macro F1. 
+            lc_regional_f1 = _records_to_regional_mean_f1(
+                seasonal_landcover_records, min_support=regional_f1_min_support
+            )
+            if lc_regional_f1 is not None:
+                seasonal_metrics_flat["landcover/regional_f1_macro"] = lc_regional_f1
+            ct_regional_f1 = _records_to_regional_mean_f1(
+                seasonal_croptype_records, min_support=regional_f1_min_support
+            )
+            if ct_regional_f1 is not None:
+                seasonal_metrics_flat["croptype/regional_f1_macro"] = ct_regional_f1
+
             if seasonal_gate_rejections:
                 total_attempts = seasonal_gate_rejections + len(
                     seasonal_croptype_records
@@ -2631,12 +2688,34 @@ def run_finetuning(
         # to 0.0 so the mean is not pulled negative when one head has no data.
         cur_mean_f1 = (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
 
+        # Regional mean F1: per task, fall back to the global macro F1 when the
+        # regional breakdown is unavailable.
+        cur_lc_regional_f1 = seasonal_metrics_flat.get("landcover/regional_f1_macro")
+        cur_ct_regional_f1 = seasonal_metrics_flat.get("croptype/regional_f1_macro")
+        cur_regional_mean_f1 = (
+            (
+                cur_lc_regional_f1
+                if cur_lc_regional_f1 is not None
+                else max(0.0, cur_lc_f1)
+            )
+            + (
+                cur_ct_regional_f1
+                if cur_ct_regional_f1 is not None
+                else max(0.0, cur_ct_f1)
+            )
+        ) / 2.0
+
         if _effective_metric == "lc_f1":
             loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
         elif _effective_metric == "ct_f1":
             loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
         elif _effective_metric == "mean_f1":
             loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
+        elif _effective_metric == "regional_mean_f1":
+            loss_improved = (
+                best_regional_mean_f1 is None
+                or cur_regional_mean_f1 > best_regional_mean_f1
+            )
         else:
             loss_improved = best_loss is None or current_val_loss < best_loss
 
@@ -2645,6 +2724,7 @@ def run_finetuning(
             best_lc_f1 = cur_lc_f1
             best_ct_f1 = cur_ct_f1
             best_mean_f1 = cur_mean_f1
+            best_regional_mean_f1 = cur_regional_mean_f1
             epochs_since_improvement = 0
             if _effective_metric == "lc_f1":
                 logger.info(
@@ -2660,6 +2740,22 @@ def run_finetuning(
                 logger.info(
                     f"Epoch {epoch + 1}: val mean F1 improved to {cur_mean_f1:.4f} "
                     f"(lc={cur_lc_f1:.4f}, ct={cur_ct_f1:.4f}, val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "regional_mean_f1":
+                _lc_reg_str = (
+                    f"{cur_lc_regional_f1:.4f}"
+                    if cur_lc_regional_f1 is not None
+                    else f"global {max(0.0, cur_lc_f1):.4f}"
+                )
+                _ct_reg_str = (
+                    f"{cur_ct_regional_f1:.4f}"
+                    if cur_ct_regional_f1 is not None
+                    else f"global {max(0.0, cur_ct_f1):.4f}"
+                )
+                logger.info(
+                    f"Epoch {epoch + 1}: val regional mean F1 improved to "
+                    f"{cur_regional_mean_f1:.4f} (lc={_lc_reg_str}, ct={_ct_reg_str}, "
+                    f"val_loss={current_val_loss:.4f})"
                 )
             else:
                 logger.info(
@@ -2734,6 +2830,12 @@ def run_finetuning(
         elif _effective_metric == "mean_f1":
             _best_str = (
                 f"{best_mean_f1:.3f} (mean_f1)" if best_mean_f1 is not None else "n/a"
+            )
+        elif _effective_metric == "regional_mean_f1":
+            _best_str = (
+                f"{best_regional_mean_f1:.3f} (regional_mean_f1)"
+                if best_regional_mean_f1 is not None
+                else "n/a"
             )
         else:
             _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"
