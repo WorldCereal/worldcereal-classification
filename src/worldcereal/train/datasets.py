@@ -1181,7 +1181,9 @@ class WorldCerealDataset(Dataset):
         ):
             return
 
-        # Per-(row, timestep) S1/S2 data presence
+        # Stream the per-(row, timestep) S1/S2 data presence in row chunks.
+        # Keeping a dense ``len(dataframe) x max_ts`` matrix around is too
+        # expensive for large training frames and can OOM before training starts.
         max_ts = 0
         while any(
             template.format(max_ts) in self.dataframe.columns
@@ -1190,30 +1192,45 @@ class WorldCerealDataset(Dataset):
             max_ts += 1
         if max_ts == 0:
             return
-        presence = np.zeros((len(self.dataframe), max_ts), dtype=bool)
-        for t in range(max_ts):
-            cols = [
-                template.format(t)
+        timestep_cols = [
+            [
+                col
                 for template in self.S1_S2_COLUMN_TEMPLATES
-                if template.format(t) in self.dataframe.columns
+                if (col := template.format(t)) in self.dataframe.columns
             ]
-            presence[:, t] = (self.dataframe[cols].to_numpy() != NODATAVALUE).any(
-                axis=1
-            )
+            for t in range(max_ts)
+        ]
 
         T = self.num_timesteps
         avail = self.dataframe["available_timesteps"].astype(int).to_numpy()
         vp = self.dataframe["valid_position"].astype(int).to_numpy()
         first_min = np.maximum(0, vp - T + 1)
         first_max = np.minimum(vp, avail - T)
-        bad = np.array(
-            [
-                not presence[
-                    i, first_min[i] : max(first_max[i], first_min[i]) + T
-                ].any()
-                for i in range(len(self.dataframe))
-            ]
-        )
+        last_exclusive = np.maximum(first_max, first_min) + T
+        bad = np.ones(len(self.dataframe), dtype=bool)
+        chunk_size = 50_000
+
+        for start in range(0, len(self.dataframe), chunk_size):
+            stop = min(start + chunk_size, len(self.dataframe))
+            chunk_bad = np.ones(stop - start, dtype=bool)
+            chunk_first = first_min[start:stop]
+            chunk_last = last_exclusive[start:stop]
+            chunk_df = self.dataframe.iloc[start:stop]
+            for t in range(max_ts):
+                cols = timestep_cols[t]
+                if not cols:
+                    continue
+                relevant = (chunk_first <= t) & (t < chunk_last)
+                if not relevant.any():
+                    continue
+                has_data = (chunk_df[cols].to_numpy(copy=False) != NODATAVALUE).any(
+                    axis=1
+                )
+                chunk_bad &= ~(relevant & has_data)
+                if not chunk_bad.any():
+                    break
+            bad[start:stop] = chunk_bad
+
         num_bad = int(bad.sum())
         if not num_bad:
             return
@@ -2118,11 +2135,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 )
             self.dataframe = filtered_df
 
-        # Cache row dictionaries once so batched DataLoader access can avoid
-        # per-sample pandas ``iloc`` while still reusing the exact same semantic
-        # helpers as ``__getitem__`` for windows, inputs, labels, and attrs.
-        self._row_cache: List[Dict[str, Any]] = self.dataframe.to_dict(orient="records")
-
     def _decode_task_index(self, idx: int) -> Tuple[int, Optional[str]]:
         """Decode sampler virtual indices into dataframe rows and task overrides."""
         # During task-configurable training, SeasonalTaskBatchSampler tells each sample
@@ -2176,7 +2188,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
     def __getitem__(self, idx):
         real_idx, task_override = self._decode_task_index(int(idx))
-        return self._sample_from_row(self._row_cache[real_idx], task_override)
+        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+        return self._sample_from_row(row, task_override)
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -2295,19 +2308,21 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
     # Batched fetching without mirrored semantics
     # ------------------------------------------------------------------
     # PyTorch calls ``__getitems__`` with the full list of batch indices when a
-    # dataset defines it. We use that hook only to amortize dataframe row access:
-    # rows come from ``self._row_cache`` and each sample is then built through
-    # ``_sample_from_row``, the same helper used by ``__getitem__``. This keeps
-    # the fast batch path close to the canonical per-sample logic and prevents
-    # separate vectorized implementations of masking, label placement, timestamp
-    # handling, season metadata, or attr collation from drifting.
+    # dataset defines it. We use that hook only to amortize dataframe row access
+    # for the current batch: rows are converted to dictionaries in one pandas
+    # slice and each sample is then built through ``_sample_from_row``, the same
+    # helper used by ``__getitem__``. This keeps the fast batch path close to the
+    # canonical per-sample logic without retaining a full Python row cache or
+    # duplicating masking, label placement, timestamp handling, season metadata,
+    # or attr collation.
 
     def __getitems__(self, indices):
+        decoded = [self._decode_task_index(int(idx)) for idx in indices]
+        real_indices = [real_idx for real_idx, _ in decoded]
+        rows = self.dataframe.iloc[real_indices].to_dict(orient="records")
         return [
-            self._sample_from_row(self._row_cache[real_idx], task_override)
-            for real_idx, task_override in (
-                self._decode_task_index(int(idx)) for idx in indices
-            )
+            self._sample_from_row(row, task_override)
+            for row, (_, task_override) in zip(rows, decoded)
         ]
 
     def get_task_batch_sampler(
