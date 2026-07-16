@@ -2694,27 +2694,6 @@ class SeasonalTaskBatchSampler(Sampler):
                     ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
                 )
 
-            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
-            # or per-class multiplier can never push a class beyond the configured
-            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
-            # already-high per-bin weight would exceed clip_range[1] and
-            # re-introduce exactly the over-sampling the clip is meant to bound
-            # (the root cause of e.g. oats over-commission into wheat).
-            if clip_range is not None:
-                lc_mean = lc_class_arr.mean()
-                if lc_mean > 0:
-                    lc_class_arr = lc_class_arr / lc_mean
-                lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
-                if has_ct_pool:
-                    ct_mean = ct_class_arr.mean()
-                    if ct_mean > 0:
-                        ct_class_arr = ct_class_arr / ct_mean
-                    ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
-                logger.info(
-                    "SeasonalTaskBatchSampler: re-normalised and re-clipped class "
-                    f"weights to {clip_range} after applying multipliers."
-                )
-
             # Warn once about classes that don't appear in either pool.
             lc_label_set = set(lc_labels.tolist())
             ct_label_set = set(ct_labels.tolist())
