@@ -2135,6 +2135,14 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 )
             self.dataframe = filtered_df
 
+        # Keep low-copy column arrays for fast row materialization in
+        # ``__getitem__``/``__getitems__``. This avoids slow pandas row/slice
+        # conversion without duplicating the whole dataframe as Python dicts.
+        self._column_cache: Dict[str, np.ndarray] = {
+            col: self.dataframe[col].to_numpy(copy=False)
+            for col in self.dataframe.columns
+        }
+
     def _decode_task_index(self, idx: int) -> Tuple[int, Optional[str]]:
         """Decode sampler virtual indices into dataframe rows and task overrides."""
         # During task-configurable training, SeasonalTaskBatchSampler tells each sample
@@ -2149,6 +2157,10 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         if idx >= n:
             return idx - n, "landcover"
         return idx, None
+
+    def _row_from_cache(self, real_idx: int) -> Dict[str, Any]:
+        """Materialize one row from cached dataframe columns without pandas iloc."""
+        return {col: values[real_idx] for col, values in self._column_cache.items()}
 
     def _sample_from_row(
         self, row: Dict[str, Any], task_override: Optional[str] = None
@@ -2188,8 +2200,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
     def __getitem__(self, idx):
         real_idx, task_override = self._decode_task_index(int(idx))
-        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
-        return self._sample_from_row(row, task_override)
+        return self._sample_from_row(self._row_from_cache(real_idx), task_override)
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -2308,22 +2319,22 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
     # Batched fetching without mirrored semantics
     # ------------------------------------------------------------------
     # PyTorch calls ``__getitems__`` with the full list of batch indices when a
-    # dataset defines it. We use that hook only to amortize dataframe row access
-    # for the current batch: rows are converted to dictionaries in one pandas
-    # slice and each sample is then built through ``_sample_from_row``, the same
-    # helper used by ``__getitem__``. This keeps the fast batch path close to the
+    # dataset defines it. We use that hook only to avoid pandas row/slice access
+    # for the current batch: rows are materialized from low-copy cached columns
+    # and each sample is then built through ``_sample_from_row``, the same helper
+    # used by ``__getitem__``. This keeps the fast batch path close to the
     # canonical per-sample logic without retaining a full Python row cache or
     # duplicating masking, label placement, timestamp handling, season metadata,
     # or attr collation.
 
     def __getitems__(self, indices):
-        decoded = [self._decode_task_index(int(idx)) for idx in indices]
-        real_indices = [real_idx for real_idx, _ in decoded]
-        rows = self.dataframe.iloc[real_indices].to_dict(orient="records")
-        return [
-            self._sample_from_row(row, task_override)
-            for row, (_, task_override) in zip(rows, decoded)
-        ]
+        samples = []
+        for idx in indices:
+            real_idx, task_override = self._decode_task_index(int(idx))
+            samples.append(
+                self._sample_from_row(self._row_from_cache(real_idx), task_override)
+            )
+        return samples
 
     def get_task_batch_sampler(
         self,
