@@ -535,10 +535,32 @@ def _records_to_regional_mean_f1(
     return float(np.mean(regional_f1s))
 
 
+_CROP_FPR_POSITIVE_CLASS = "temporary_crops"
+
+
+def _crop_false_positive_ratio(
+    y_true: Sequence[str],
+    y_pred: Sequence[str],
+    crop_class: str = _CROP_FPR_POSITIVE_CLASS,
+) -> Optional[float]:
+    """Share of true non-crop samples predicted as ``crop_class`` (FPR).
+
+    Measures landcover commission into the crop class: among samples whose
+    true label is not ``crop_class``, the fraction predicted as ``crop_class``
+    (FP / (FP + TN)).
+    """
+    negatives = [(t, p) for t, p in zip(y_true, y_pred) if str(t) != crop_class]
+    if not negatives:
+        return None
+    false_positives = sum(1 for _, p in negatives if str(p) == crop_class)
+    return false_positives / len(negatives)
+
+
 def _log_regional_metrics(
     records: List[dict],
     task_name: str,
     class_names: Optional[List[str]] = None,
+    *,
 ) -> None:
     """Log per-region macro F1 summary derived from prediction records.
 
@@ -580,15 +602,17 @@ def _log_regional_metrics(
             y_true, y_pred, labels=labels, output_dict=True, zero_division=0
         )
         macro = report.get("macro avg", {})
-        row_list.append(
-            {
-                "region": region,
-                "n_samples": len(region_df),
-                "macro_f1": macro.get("f1-score", float("nan")),
-                "macro_prec": macro.get("precision", float("nan")),
-                "macro_recall": macro.get("recall", float("nan")),
-            }
-        )
+        row = {
+            "region": region,
+            "n_samples": len(region_df),
+            "macro_f1": macro.get("f1-score", float("nan")),
+            "macro_prec": macro.get("precision", float("nan")),
+            "macro_recall": macro.get("recall", float("nan")),
+        }
+
+        fpr = _crop_false_positive_ratio(y_true, y_pred)
+        row["crop_fpr"] = fpr if fpr is not None else float("nan")
+        row_list.append(row)
     if not row_list:
         return
     summary_df = pd.DataFrame(row_list).sort_values("macro_f1", ascending=False)
@@ -1574,7 +1598,9 @@ def evaluate_finetuned_model(
             seasonal_croptype_records, seasonal_croptype_classes
         )
         _log_regional_metrics(
-            seasonal_landcover_records, "landcover", seasonal_landcover_classes
+            seasonal_landcover_records,
+            "landcover",
+            seasonal_landcover_classes,
         )
         _log_regional_metrics(
             seasonal_croptype_records, "croptype", seasonal_croptype_classes
@@ -2514,7 +2540,7 @@ def run_finetuning(
                 for key, value in ct_metrics.items():
                     seasonal_metrics_flat[f"croptype/{key}"] = value
 
-            # Unweighted mean of per-region macro F1. 
+            # Unweighted mean of per-region macro F1.
             lc_regional_f1 = _records_to_regional_mean_f1(
                 seasonal_landcover_records, min_support=regional_f1_min_support
             )
@@ -2525,6 +2551,15 @@ def run_finetuning(
             )
             if ct_regional_f1 is not None:
                 seasonal_metrics_flat["croptype/regional_f1_macro"] = ct_regional_f1
+
+            # Commission monitor: share of true non-crop validation samples
+            # predicted as temporary_crops. Monitoring only.
+            lc_crop_fpr = _crop_false_positive_ratio(
+                [rec["target_class"] for rec in seasonal_landcover_records],
+                [rec["pred_class"] for rec in seasonal_landcover_records],
+            )
+            if lc_crop_fpr is not None:
+                seasonal_metrics_flat["landcover/crop_fpr"] = lc_crop_fpr
 
             if seasonal_gate_rejections:
                 total_attempts = seasonal_gate_rejections + len(
