@@ -3044,7 +3044,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
-        renormalize_after_multipliers: bool = True,
     ) -> "DualHeadBatchSampler":
         """Build a :class:`DualHeadBatchSampler` for dual-head training.
 
@@ -3071,7 +3070,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             region_column=region_column,
             bin_type=bin_type,
             h3_resolution=h3_resolution,
-            renormalize_after_multipliers=renormalize_after_multipliers,
         )
 
 
@@ -3250,7 +3248,6 @@ class DualHeadBatchSampler(Sampler):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
-        renormalize_after_multipliers: bool = True,
     ) -> None:
         import math
 
@@ -3410,31 +3407,6 @@ class DualHeadBatchSampler(Sampler):
             ct_class_arr = apply_class_weight_multipliers(
                 ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
             )
-
-            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
-            # or per-class multiplier can never push a class beyond the configured
-            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
-            # already-high per-bin weight would exceed clip_range[1] and
-            # re-introduce exactly the over-sampling the clip is meant to bound
-            # (the root cause of e.g. oats over-commission into wheat).
-            # Set renormalize_after_multipliers=False to skip re-normalisation
-            # and apply the clip directly to the raw post-multiplier weights.
-            if clip_range is not None:
-                if renormalize_after_multipliers:
-                    pass
-                #     lc_mean = lc_class_arr.mean()
-                #     if lc_mean > 0:
-                #         lc_class_arr = lc_class_arr / lc_mean
-                #     ct_mean = ct_class_arr.mean()
-                #     if ct_mean > 0:
-                #         ct_class_arr = ct_class_arr / ct_mean
-                # lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
-                # ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
-                # logger.info(
-                #     "DualHeadBatchSampler: "
-                #     + ("re-normalised and " if renormalize_after_multipliers else "")
-                #     + f"re-clipped class weights to {clip_range} after applying multipliers."
-                # )
 
             # Warn once about classes that don't appear in either pool.
             lc_label_set = set(lc_labels.tolist())
