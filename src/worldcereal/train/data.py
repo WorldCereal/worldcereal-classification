@@ -211,6 +211,15 @@ def _ensure_label_columns_inplace(df: pd.DataFrame) -> None:
 
 
 def collate_fn(batch: Sequence[Tuple[Predictors, dict]]):
+    # Fast path: WorldCerealLabelledDataset.__getitems__ returns an already
+    # collated (Predictors, attrs) tuple for the whole batch — pass it through.
+    if (
+        isinstance(batch, tuple)
+        and len(batch) == 2
+        and isinstance(batch[0], Predictors)
+    ):
+        return batch
+
     predictor_dicts = [item.as_dict(ignore_nones=True) for item, _ in batch]
     collated_dict = default_collate(predictor_dicts)
     predictors = Predictors(**collated_dict)
