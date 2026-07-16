@@ -1,6 +1,6 @@
 """Plot per-bin per-class weight grids matching what the sampler uses.
 
-Visualizes the per-sample weights produced by ``DualHeadBatchSampler``
+Visualizes the per-sample weights produced by ``SeasonalTaskBatchSampler``
 (its ``_lc_probs`` / ``_ct_probs`` attributes) as a per-(bin, class)
 heatmap on a geographic map. Because those weights already encode every
 dispatch decision the sampler made — class-balancing scope, spatial
@@ -258,8 +258,8 @@ def dump_per_bin_class_grids(
     *output_dir*.
 
     *per_sample_weights* must come from the constructed sampler — typically
-    ``DualHeadBatchSampler._lc_probs`` for ``pool="lc"`` or
-    ``DualHeadBatchSampler._ct_probs`` for ``pool="ct"``. They already
+    ``SeasonalTaskBatchSampler._lc_probs`` for ``pool="lc"`` or
+    ``SeasonalTaskBatchSampler._ct_probs`` for ``pool="ct"``. They already
     encode every dispatch decision (scope, density, smoothing, fallbacks,
     clipping), so the plot reflects exactly what the model trains on.
 
@@ -269,7 +269,7 @@ def dump_per_bin_class_grids(
 
     For ``pool="ct"``, samples without a valid (non-null, non-"ignore")
     croptype label are dropped before binning, mirroring the CT pool used
-    by `DualHeadBatchSampler`.
+    by `SeasonalTaskBatchSampler`.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
