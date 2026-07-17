@@ -1,8 +1,6 @@
 import re
 from collections import Counter
-from contextlib import nullcontext
 from dataclasses import dataclass
-from importlib import resources
 from math import floor
 from typing import (
     Any,
@@ -15,6 +13,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 import numpy as np
@@ -31,19 +30,15 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (
-    GLOBAL_SEASON_IDS,
-    MIN_EDGE_BUFFER,
-    OUTLIER_COLUMNS,
+from worldcereal.data.cropcalendars import (
     SEASONALITY_COLUMN_MAP,
     SEASONALITY_LAT_RANGE,
     SEASONALITY_LON_RANGE,
     SEASONALITY_LOOKUP_COLUMNS,
-    SEASONALITY_LOOKUP_FILENAME,
-    SEASONALITY_LOOKUP_PACKAGE,
-    SEASONALITY_LOOKUP_PATH,
+    load_seasonality_lookup,
 )
+from worldcereal.seasons import season_doys_to_dates_refyear
+from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.train.seasonal import (
@@ -66,14 +61,6 @@ SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
 
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
-
-
-def _seasonality_lookup_context():
-    """Return a context manager pointing to the seasonality lookup parquet."""
-
-    if SEASONALITY_LOOKUP_PATH.exists():
-        return nullcontext(SEASONALITY_LOOKUP_PATH)
-    return resources.path(SEASONALITY_LOOKUP_PACKAGE, SEASONALITY_LOOKUP_FILENAME)
 
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
@@ -318,13 +305,10 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         return _SEASONALITY_LOOKUP_TABLE
 
     try:
-        with _seasonality_lookup_context() as lookup_path:
-            table = pd.read_parquet(lookup_path)
+        table = load_seasonality_lookup()
     except (FileNotFoundError, ModuleNotFoundError) as exc:
         raise FileNotFoundError(
-            "Seasonality lookup parquet not found at "
-            f"{SEASONALITY_LOOKUP_PATH} or within package "
-            f"'{SEASONALITY_LOOKUP_PACKAGE}'."
+            "Seasonality lookup parquet not found in worldcereal.data.cropcalendars."
         ) from exc
     required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
     missing = required.difference(table.columns)
@@ -332,7 +316,6 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         raise ValueError(
             f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
         )
-
     table = table.astype({"lat": np.float64, "lon": np.float64})
     table = table.set_index(["lat", "lon"])
     if not table.index.is_unique:
@@ -2234,9 +2217,10 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         inputs = self.get_inputs(row, timestep_positions)
 
         if self.emit_label_tensor:
+            assert self.task_type in ("binary", "multiclass")
             label = self.get_label(
                 row,
-                task_type=self.task_type,
+                task_type=cast(Literal["binary", "multiclass"], self.task_type),
                 classes_list=self.classes_list,
                 valid_position=relative_valid,
             )
@@ -2822,7 +2806,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 if self.augment:
                     first[i] = cands[int(rng.integers(len(cands)))]
                 else:
-                    first[i] = min(cands, key=lambda f, cur=first[i]: abs(f - cur))
+                    _cur = int(first[i])
+                    first[i] = min(cands, key=lambda f: abs(f - _cur))
 
         tidx = first[:, None] + np.arange(T)[None, :]
         rows_col = rows[:, None]
