@@ -1,6 +1,7 @@
 import datetime
 import importlib.resources as pkg_resources
 import math
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,304 @@ class NoSeasonError(Exception):
 
 class SeasonMaxDiffError(Exception):
     pass
+
+
+_SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
+
+
+def _ensure_seasonality_lookup_table() -> pd.DataFrame:
+    """Load and cache the seasonality lookup table indexed by lat/lon centers."""
+
+    global _SEASONALITY_LOOKUP_TABLE
+    if _SEASONALITY_LOOKUP_TABLE is not None:
+        return _SEASONALITY_LOOKUP_TABLE
+
+    table = cropcalendars.load_seasonality_lookup()
+    required = {"lat", "lon", *cropcalendars.SEASONALITY_LOOKUP_COLUMNS}
+    missing = required.difference(table.columns)
+    if missing:
+        raise ValueError(
+            f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
+        )
+
+    table = table.astype({"lat": np.float64, "lon": np.float64})
+    table = table.set_index(["lat", "lon"])
+    if not table.index.is_unique:
+        raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
+
+    _SEASONALITY_LOOKUP_TABLE = table[
+        list(cropcalendars.SEASONALITY_LOOKUP_COLUMNS)
+    ].sort_index()
+    return _SEASONALITY_LOOKUP_TABLE
+
+
+def _snap_coordinate_to_lookup_grid(
+    value: float, bounds: Tuple[float, float]
+) -> float:
+    """Snap a coordinate to the 0.5 deg grid center used by the lookup."""
+
+    min_value, max_value = bounds
+    clamped = max(min(float(value), max_value), min_value)
+    return (math.floor(clamped * 2.0) / 2.0) + 0.25
+
+
+def _resolve_cropcalendar_columns(
+    season_id: str, parameter: Literal["doy", "dekad"]
+) -> Tuple[str, str]:
+    """Resolve season identifier and parameter to SOS/EOS parquet columns."""
+
+    if parameter not in {"doy", "dekad"}:
+        raise ValueError(
+            f"parameter must be one of ('doy', 'dekad'), got '{parameter}'"
+        )
+
+    try:
+        sos_doy_col, eos_doy_col = cropcalendars.SEASONALITY_COLUMN_MAP[season_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"Season '{season_id}' is not available in the seasonality lookup. "
+            f"Known seasons: {sorted(cropcalendars.SEASONALITY_COLUMN_MAP)}"
+        ) from exc
+
+    return (
+        sos_doy_col.replace("_doy", f"_{parameter}"),
+        eos_doy_col.replace("_doy", f"_{parameter}"),
+    )
+
+
+def _extent_to_wgs84_bounds(extent: BoundingBoxExtent) -> Tuple[float, float, float, float]:
+    """Return extent bounds in EPSG:4326 as (west, south, east, north)."""
+
+    west, south, east, north = (
+        float(extent.west),
+        float(extent.south),
+        float(extent.east),
+        float(extent.north),
+    )
+    epsg = int(getattr(extent, "epsg", 4326))
+    if epsg == 4326:
+        return west, south, east, north
+
+    try:
+        from pyproj import Transformer
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ValueError(
+            "Extent EPSG is not 4326 and pyproj is not available to reproject "
+            f"(epsg={epsg})."
+        ) from exc
+
+    transformer = Transformer.from_crs(epsg, 4326, always_xy=True)
+    corners = [
+        transformer.transform(west, south),
+        transformer.transform(west, north),
+        transformer.transform(east, south),
+        transformer.transform(east, north),
+    ]
+    lons = [lon for lon, _ in corners]
+    lats = [lat for _, lat in corners]
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def _fetch_cropcalendar_point(
+    season_id: str,
+    lat: float,
+    lon: float,
+    parameter: Literal["doy", "dekad"] = "doy",
+    *,
+    fallback_to_nearest: bool = True,
+) -> Tuple[int, int]:
+    """Fetch (SOS, EOS) values for one point from the global parquet lookup.
+
+    The input point is snapped to the lookup's 0.5 deg grid centers before querying.
+    If the snapped cell is missing and ``fallback_to_nearest`` is enabled, the
+    nearest available lookup cell is used.
+
+    Parameters
+    ----------
+    season_id : str
+        Season identifier (e.g. ``tc-s1``, ``tc-s2``, ``tc-annual``).
+    lat, lon : float
+        Input point coordinates.
+    parameter : {"doy", "dekad"}, default "doy"
+        Which crop-calendar representation to fetch.
+    fallback_to_nearest : bool, default True
+        Whether to use the nearest available lookup cell when the snapped cell
+        is not present in the table.
+    """
+
+    sos_col, eos_col = _resolve_cropcalendar_columns(season_id, parameter)
+
+    table = _ensure_seasonality_lookup_table()
+    if sos_col not in table.columns or eos_col not in table.columns:
+        raise ValueError(
+            f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
+            "but they are not present in the seasonality lookup parquet."
+        )
+
+    lat_center = _snap_coordinate_to_lookup_grid(
+        lat, cropcalendars.SEASONALITY_LAT_RANGE
+    )
+    lon_center = _snap_coordinate_to_lookup_grid(
+        lon, cropcalendars.SEASONALITY_LON_RANGE
+    )
+
+    try:
+        row = table.loc[(lat_center, lon_center)]
+    except KeyError as exc:
+        if not fallback_to_nearest:
+            raise ValueError(
+                "No seasonality record found for snapped lat/lon "
+                f"({lat_center}, {lon_center})."
+            ) from exc
+
+        lat_vals = table.index.get_level_values("lat").to_numpy()
+        lon_vals = table.index.get_level_values("lon").to_numpy()
+        if lat_vals.size == 0:
+            raise ValueError(
+                "No seasonality record found for snapped lat/lon "
+                f"({lat_center}, {lon_center})."
+            ) from exc
+
+        distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
+        best_idx = int(distances.argmin())
+        fallback_key = (float(lat_vals[best_idx]), float(lon_vals[best_idx]))
+        logger.error(
+            f"Seasonality lookup missing ({lat_center}, {lon_center}); "
+            f"using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
+        )
+        row = table.iloc[best_idx]
+
+    sos_value = int(row[sos_col])
+    eos_value = int(row[eos_col])
+    if sos_value <= 0 or eos_value <= 0:
+        raise ValueError(
+            "Seasonality lookup returned nodata values for "
+            f"season '{season_id}' and parameter '{parameter}'."
+        )
+
+    return sos_value, eos_value
+
+
+def fetch_cropcalendar_dekad_extent(
+    season_id: str,
+    extent: BoundingBoxExtent,
+    *,
+    fallback_to_nearest: bool = True,
+) -> Tuple[int, int]:
+    """Fetch median (SOS, EOS) dekad values for an extent from parquet points.
+
+    The function selects lookup points whose lat/lon fall within the extent
+    (reprojected to EPSG:4326 when needed), filters nodata values, and returns
+    median SOS/EOS dekads. If no valid points are found in the extent and
+    ``fallback_to_nearest`` is enabled, it falls back to the extent centroid.
+    """
+
+    west, south, east, north = _extent_to_wgs84_bounds(extent)
+    table = _ensure_seasonality_lookup_table()
+
+    sos_col, eos_col = _resolve_cropcalendar_columns(season_id, "dekad")
+    if sos_col not in table.columns or eos_col not in table.columns:
+        raise ValueError(
+            f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
+            "but they are not present in the seasonality lookup parquet."
+        )
+
+    lat_vals = table.index.get_level_values("lat").to_numpy()
+    lon_vals = table.index.get_level_values("lon").to_numpy()
+    mask_lat = (lat_vals >= south) & (lat_vals <= north)
+    # Support extents crossing the antimeridian (west > east).
+    if west <= east:
+        mask_lon = (lon_vals >= west) & (lon_vals <= east)
+    else:
+        mask_lon = (lon_vals >= west) | (lon_vals <= east)
+    mask = mask_lat & mask_lon
+
+    rows = table.iloc[np.flatnonzero(mask)]
+    if not rows.empty:
+        sos_arr = rows[sos_col].to_numpy(dtype=np.int64)
+        eos_arr = rows[eos_col].to_numpy(dtype=np.int64)
+        valid = (sos_arr > 0) & (sos_arr <= 108) & (eos_arr > 0) & (eos_arr <= 108)
+        sos_arr = sos_arr[valid]
+        eos_arr = eos_arr[valid]
+        if sos_arr.size and eos_arr.size:
+            sos_med = int(np.rint(np.median(sos_arr)))
+            eos_med = int(np.rint(np.median(eos_arr)))
+            return sos_med, eos_med
+
+    if not fallback_to_nearest:
+        raise ValueError(
+            "No valid crop-calendar dekad values found inside extent for "
+            f"season '{season_id}'."
+        )
+
+    # Fallback: sample the extent centroid using nearest-cell point lookup.
+    if west <= east:
+        centroid_lon = (west + east) / 2.0
+    else:
+        # Dateline-crossing extent: midpoint on wrapped interval.
+        span = ((east + 360.0) - west) % 360.0
+        centroid_lon = ((west + span / 2.0 + 180.0) % 360.0) - 180.0
+    centroid_lat = (south + north) / 2.0
+    return fetch_cropcalendar_dekad_point(
+        season_id=season_id,
+        lat=centroid_lat,
+        lon=centroid_lon,
+        fallback_to_nearest=True,
+    )
+
+
+def fetch_cropcalendar_doy_point(
+    season_id: str,
+    lat: float,
+    lon: float,
+    *,
+    fallback_to_nearest: bool = True,
+) -> Tuple[int, int]:
+    """Fetch (SOS, EOS) DOY values for one point from the global parquet lookup."""
+
+    sos_value, eos_value = _fetch_cropcalendar_point(
+        season_id=season_id,
+        lat=lat,
+        lon=lon,
+        parameter="doy",
+        fallback_to_nearest=fallback_to_nearest,
+    )
+
+    if (sos_value > 366 or eos_value > 366):
+        raise ValueError(
+            "Seasonality lookup returned invalid DOY values for "
+            f"season '{season_id}': SOS={sos_value}, EOS={eos_value}. "
+            "Valid DOY range is 1-366."
+        )
+    
+    return sos_value, eos_value
+
+
+def fetch_cropcalendar_dekad_point(
+    season_id: str,
+    lat: float,
+    lon: float,
+    *,
+    fallback_to_nearest: bool = True,
+) -> Tuple[int, int]:
+    """Fetch (SOS, EOS) dekad values for one point from the global parquet lookup."""
+
+    sos_value, eos_value = _fetch_cropcalendar_point(
+        season_id=season_id,
+        lat=lat,
+        lon=lon,
+        parameter="dekad",
+        fallback_to_nearest=fallback_to_nearest,
+    )
+
+    if sos_value > 108 or eos_value > 108:
+        raise ValueError(
+            "Seasonality lookup returned invalid dekad values for "
+            f"season '{season_id}': SOS={sos_value}, EOS={eos_value}. "
+            "Valid dekad range is 1-108."
+        )
+
+    return sos_value, eos_value
 
 
 def doy_to_angle(day_of_year, total_days=365):

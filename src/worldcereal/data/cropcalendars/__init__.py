@@ -23,6 +23,14 @@ SEASONALITY_LOOKUP_COLUMNS: Tuple[str, ...] = (
     "s1_eos_doy",
     "s2_sos_doy",
     "s2_eos_doy",
+    "annual_sos_doy",
+    "annual_eos_doy",
+    "s1_sos_dekad",
+    "s1_eos_dekad",
+    "s2_sos_dekad",
+    "s2_eos_dekad",
+    "annual_sos_dekad",
+    "annual_eos_dekad"
 )
 SEASONALITY_COLUMN_MAP: Dict[str, Tuple[str, str]] = {
     "tc-s1": ("s1_sos_doy", "s1_eos_doy"),
