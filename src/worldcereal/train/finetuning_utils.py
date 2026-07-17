@@ -535,24 +535,30 @@ def _records_to_regional_mean_f1(
     return float(np.mean(regional_f1s))
 
 
-_CROP_FPR_POSITIVE_CLASS = "temporary_crops"
-
-
 def _crop_false_positive_ratio(
     y_true: Sequence[str],
     y_pred: Sequence[str],
-    crop_class: str = _CROP_FPR_POSITIVE_CLASS,
+    cropland_class_names: Sequence[str] = ("temporary_crops",),
 ) -> Optional[float]:
-    """Share of true non-crop samples predicted as ``crop_class`` (FPR).
+    """Share of true non-crop samples predicted as cropland: FP / (FP + TN).
 
-    Measures landcover commission into the crop class: among samples whose
-    true label is not ``crop_class``, the fraction predicted as ``crop_class``
-    (FP / (FP + TN)).
+    Cropland is the *set* ``cropland_class_names``, as defined by the user. 
+    Returns ``None`` when the ratio would be meaningless: no cropland
+    class occurs in ``y_true`` (mismatched vocabulary), or there are no negatives.
     """
-    negatives = [(t, p) for t, p in zip(y_true, y_pred) if str(t) != crop_class]
+    positives = {str(c) for c in cropland_class_names}
+    truths = [str(t) for t in y_true]
+    if not any(t in positives for t in truths):
+        logger.warning(
+            f"crop_fpr skipped: none of the cropland classes {sorted(positives)} "
+            "occur in the true labels."
+        )
+        return None
+
+    negatives = [(t, p) for t, p in zip(truths, y_pred) if t not in positives]
     if not negatives:
         return None
-    false_positives = sum(1 for _, p in negatives if str(p) == crop_class)
+    false_positives = sum(1 for _, p in negatives if str(p) in positives)
     return false_positives / len(negatives)
 
 
@@ -560,6 +566,7 @@ def _log_regional_metrics(
     records: List[dict],
     task_name: str,
     class_names: Optional[List[str]] = None,
+    cropland_class_names: Optional[Sequence[str]] = None,
 ) -> None:
     """Log per-region macro F1 summary derived from prediction records.
 
@@ -567,6 +574,9 @@ def _log_regional_metrics(
     macro-averaged precision, recall and F1 per region so that training
     logs reveal which regions are doing better or worse each epoch.
     Silently returns when no region information is present.
+
+    ``cropland_class_names`` adds a per-region ``crop_fpr`` commission column
+    (see :func:`_crop_false_positive_ratio`).
     """
     if not records:
         return
@@ -609,8 +619,9 @@ def _log_regional_metrics(
             "macro_recall": macro.get("recall", float("nan")),
         }
 
-        fpr = _crop_false_positive_ratio(y_true, y_pred)
-        row["crop_fpr"] = fpr if fpr is not None else float("nan")
+        if cropland_class_names:
+            fpr = _crop_false_positive_ratio(y_true, y_pred, cropland_class_names)
+            row["crop_fpr"] = fpr if fpr is not None else float("nan")
         row_list.append(row)
     if not row_list:
         return
@@ -1600,6 +1611,7 @@ def evaluate_finetuned_model(
             seasonal_landcover_records,
             "landcover",
             seasonal_landcover_classes,
+            cropland_class_names=cropland_class_names,
         )
         _log_regional_metrics(
             seasonal_croptype_records, "croptype", seasonal_croptype_classes
@@ -2552,13 +2564,17 @@ def run_finetuning(
                 seasonal_metrics_flat["croptype/regional_f1_macro"] = ct_regional_f1
 
             # Commission monitor: share of true non-crop validation samples
-            # predicted as temporary_crops. Monitoring only.
-            lc_crop_fpr = _crop_false_positive_ratio(
-                [rec["target_class"] for rec in seasonal_landcover_records],
-                [rec["pred_class"] for rec in seasonal_landcover_records],
-            )
-            if lc_crop_fpr is not None:
-                seasonal_metrics_flat["landcover/crop_fpr"] = lc_crop_fpr
+            # predicted as cropland (as the model itself defines cropland).
+            # Monitoring only.
+            lc_cropland_classes = getattr(seasonal_loss, "cropland_class_names", None)
+            if lc_cropland_classes:
+                lc_crop_fpr = _crop_false_positive_ratio(
+                    [rec["target_class"] for rec in seasonal_landcover_records],
+                    [rec["pred_class"] for rec in seasonal_landcover_records],
+                    lc_cropland_classes,
+                )
+                if lc_crop_fpr is not None:
+                    seasonal_metrics_flat["landcover/crop_fpr"] = lc_crop_fpr
 
             if seasonal_gate_rejections:
                 total_attempts = seasonal_gate_rejections + len(
