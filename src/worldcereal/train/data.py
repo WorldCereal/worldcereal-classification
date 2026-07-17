@@ -27,6 +27,7 @@ from worldcereal.train.datasets import (
     SensorMaskingConfig,
     WorldCerealTrainingDataset,
 )
+from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.utils.refdata import (
     DATA_DIR,
     get_class_mappings,
@@ -34,16 +35,6 @@ from worldcereal.utils.refdata import (
     split_df,
 )
 from worldcereal.utils.timeseries import process_parquet
-
-_ATTR_KEYS_ALLOW_PARTIAL_NONE = {
-    "landcover_label",
-    "croptype_label",
-    "label_task",
-    "LC10_confidence_nonoutlier",
-    "CTY24_confidence_nonoutlier",
-    "LC10_anomaly_flag",
-    "CTY24_anomaly_flag",
-}
 
 _BOUNDARIES_PATH = (
     DATA_DIR
@@ -261,7 +252,7 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
             continue
 
         if any(v is None for v in values):
-            if key in _ATTR_KEYS_ALLOW_PARTIAL_NONE:
+            if key in ATTR_KEYS_ALLOW_PARTIAL_NONE:
                 # Keep per-sample values so downstream helpers can handle missing labels.
                 collated[key] = values
                 continue

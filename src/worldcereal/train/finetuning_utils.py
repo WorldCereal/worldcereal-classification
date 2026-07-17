@@ -949,23 +949,20 @@ class SeasonalMultiTaskLoss(nn.Module):
     def last_croptype_supervision(self) -> Mapping[str, float]:
         return self._last_croptype_supervision
 
-    def _task_weights_for(
+    def _task_weights_tensor(
         self,
         attrs: dict,
-        sample_indices: Sequence[int],
-        *,
         task_name: str,
         batch_size: int,
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         attr_key = self._task_sample_weight_attrs.get(task_name)
-        if attr_key is None or not sample_indices:
+        if attr_key is None:
             return None
 
         attr_values = _ensure_list(attrs.get(attr_key), batch_size, fill=None)
         weights: List[float] = []
-        for idx in sample_indices:
-            value = attr_values[idx]
+        for value in attr_values:
             if value is None or _is_missing_value(value):
                 numeric = self._sample_weight_default
             else:
@@ -999,53 +996,6 @@ class SeasonalMultiTaskLoss(nn.Module):
         return torch.sum(per_sample_losses * sample_weights) / torch.clamp(
             total, min=1e-6
         )
-
-    def _task_weights_np(
-        self, attrs: dict, task_name: str, batch_size: int
-    ) -> Optional[np.ndarray]:
-        """Vectorized counterpart of `_task_weights_for` over the whole batch.
-
-        Returns a float64 array of per-sample weights (missing/unparseable
-        values replaced by the default, then clipped), or None when no weight
-        attribute is configured for the task.
-        """
-        attr_key = self._task_sample_weight_attrs.get(task_name)
-        if attr_key is None:
-            return None
-
-        value = attrs.get(attr_key)
-        default = self._sample_weight_default
-        if value is None:
-            weights = np.full(batch_size, default, dtype=np.float64)
-        elif torch.is_tensor(value):
-            weights = (
-                value.detach().cpu().numpy().astype(np.float64).reshape(-1)
-            )
-        elif isinstance(value, np.ndarray):
-            weights = value.astype(np.float64).reshape(-1)
-        else:
-            converted = np.empty(len(value), dtype=np.float64)
-            for i, v in enumerate(value):
-                if v is None or _is_missing_value(v):
-                    converted[i] = default
-                else:
-                    try:
-                        converted[i] = float(v)
-                    except (TypeError, ValueError):
-                        converted[i] = default
-            weights = converted
-        if weights.shape[0] != batch_size:
-            raise ValueError(
-                f"Attribute list has length {weights.shape[0]}, expected {batch_size}"
-            )
-        bad = ~np.isfinite(weights) | (weights == NODATAVALUE)
-        if bad.any():
-            weights = np.where(bad, default, weights)
-        if self._sample_weight_clip is not None:
-            weights = np.clip(
-                weights, self._sample_weight_clip[0], self._sample_weight_clip[1]
-            )
-        return np.maximum(weights, 1e-6)
 
     @staticmethod
     def _labels_to_indices(
@@ -1107,7 +1057,7 @@ class SeasonalMultiTaskLoss(nn.Module):
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
         # Landcover pathway – only activate for samples explicitly routed to the LC
-        # head.  When the DualHeadBatchSampler is used, CT-assigned samples carry
+        # head.  When the SeasonalTaskBatchSampler is used, CT-assigned samples carry
         # label_task="croptype" so they are excluded here, preventing
         # cropland-class contamination of the LC supervision signal.
         lc_selected = np.flatnonzero(task_is_lc & (lc_target_idx >= 0))
@@ -1123,16 +1073,10 @@ class SeasonalMultiTaskLoss(nn.Module):
             )
             per_sample_losses = F.cross_entropy(logits, targets, reduction="none")
 
-            lc_weights_np = self._task_weights_np(
-                attrs, self.landcover_task_name, batch_size
+            lc_weights = self._task_weights_tensor(
+                attrs, self.landcover_task_name, batch_size, device
             )
-            lc_sample_weights = (
-                torch.as_tensor(
-                    lc_weights_np[lc_selected].astype(np.float32), device=device
-                )
-                if lc_weights_np is not None
-                else None
-            )
+            lc_sample_weights = lc_weights[lc_index] if lc_weights is not None else None
             branch_loss = self._reduce_loss(per_sample_losses, lc_sample_weights)
             loss = loss + self.landcover_weight * branch_loss
 
@@ -1171,9 +1115,12 @@ class SeasonalMultiTaskLoss(nn.Module):
                 sub = candidates[supervise]
                 pair_local, pair_season = np.nonzero(sub)
                 pair_sample = ct_routed[supervise][pair_local]
+                pair_sample_tensor = torch.as_tensor(
+                    pair_sample, device=device, dtype=torch.long
+                )
 
                 logits = output.season_logits[
-                    torch.as_tensor(pair_sample, device=device, dtype=torch.long),
+                    pair_sample_tensor,
                     torch.as_tensor(pair_season, device=device, dtype=torch.long),
                 ]
                 targets = torch.as_tensor(
@@ -1181,15 +1128,11 @@ class SeasonalMultiTaskLoss(nn.Module):
                 )
                 per_sample_losses = F.cross_entropy(logits, targets, reduction="none")
 
-                ct_weights_np = self._task_weights_np(
-                    attrs, self.croptype_task_name, batch_size
+                ct_weights = self._task_weights_tensor(
+                    attrs, self.croptype_task_name, batch_size, device
                 )
                 ct_sample_weights = (
-                    torch.as_tensor(
-                        ct_weights_np[pair_sample].astype(np.float32), device=device
-                    )
-                    if ct_weights_np is not None
-                    else None
+                    ct_weights[pair_sample_tensor] if ct_weights is not None else None
                 )
                 branch_loss = self._reduce_loss(per_sample_losses, ct_sample_weights)
                 loss = loss + self.croptype_weight * branch_loss
@@ -1883,9 +1826,7 @@ def _select_representative_season(
     candidates = _candidate_season_matrix(
         output, attrs, np.asarray(sample_indices, dtype=np.int64)
     )
-    selections: List[List[int]] = [
-        np.flatnonzero(row).tolist() for row in candidates
-    ]
+    selections: List[List[int]] = [np.flatnonzero(row).tolist() for row in candidates]
 
     if allow_multiple:
         return selections
@@ -2572,9 +2513,7 @@ def run_finetuning(
                 "val": current_val_loss,
             }
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
-            tb_writer.add_scalar(
-                "learning_rate", lr_after_step, global_step
-            )
+            tb_writer.add_scalar("learning_rate", lr_after_step, global_step)
             tb_writer.add_scalar(
                 "patience/epochs_since_improvement",
                 epochs_since_improvement,

@@ -1,8 +1,6 @@
 import re
 from collections import Counter
-from contextlib import nullcontext
 from dataclasses import dataclass
-from importlib import resources
 from math import floor
 from typing import (
     Any,
@@ -15,6 +13,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 import numpy as np
@@ -31,20 +30,17 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (
-    GLOBAL_SEASON_IDS,
-    MIN_EDGE_BUFFER,
-    OUTLIER_COLUMNS,
+from worldcereal.data.cropcalendars import (
     SEASONALITY_COLUMN_MAP,
     SEASONALITY_LAT_RANGE,
     SEASONALITY_LON_RANGE,
     SEASONALITY_LOOKUP_COLUMNS,
-    SEASONALITY_LOOKUP_FILENAME,
-    SEASONALITY_LOOKUP_PACKAGE,
-    SEASONALITY_LOOKUP_PATH,
+    load_seasonality_lookup,
 )
+from worldcereal.seasons import season_doys_to_dates_refyear
+from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
+from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.train.seasonal import (
     SeasonWindow,
     align_to_composite_window,
@@ -65,14 +61,6 @@ SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
 
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
-
-
-def _seasonality_lookup_context():
-    """Return a context manager pointing to the seasonality lookup parquet."""
-
-    if SEASONALITY_LOOKUP_PATH.exists():
-        return nullcontext(SEASONALITY_LOOKUP_PATH)
-    return resources.path(SEASONALITY_LOOKUP_PACKAGE, SEASONALITY_LOOKUP_FILENAME)
 
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
@@ -317,13 +305,10 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         return _SEASONALITY_LOOKUP_TABLE
 
     try:
-        with _seasonality_lookup_context() as lookup_path:
-            table = pd.read_parquet(lookup_path)
+        table = load_seasonality_lookup()
     except (FileNotFoundError, ModuleNotFoundError) as exc:
         raise FileNotFoundError(
-            "Seasonality lookup parquet not found at "
-            f"{SEASONALITY_LOOKUP_PATH} or within package "
-            f"'{SEASONALITY_LOOKUP_PACKAGE}'."
+            "Seasonality lookup parquet not found in worldcereal.data.cropcalendars."
         ) from exc
     required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
     missing = required.difference(table.columns)
@@ -331,7 +316,6 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         raise ValueError(
             f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
         )
-
     table = table.astype({"lat": np.float64, "lon": np.float64})
     table = table.set_index(["lat", "lon"])
     if not table.index.is_unique:
@@ -567,9 +551,7 @@ def _spatial_bins_from_h3(
         Array of H3 cell-index strings, one per sample.
     """
     if not isinstance(resolution, (int, np.integer)) or not (0 <= resolution <= 15):
-        raise ValueError(
-            f"h3 resolution must be an int in [0, 15], got {resolution!r}"
-        )
+        raise ValueError(f"h3 resolution must be an int in [0, 15], got {resolution!r}")
 
     try:
         import h3
@@ -707,9 +689,11 @@ def _get_per_bin_class_weights(
         )
         per_sample = np.array(
             [
-                bin_w_dict[str(lbl)]
-                if lbl in well_represented
-                else global_w_dict[str(lbl)]
+                (
+                    bin_w_dict[str(lbl)]
+                    if lbl in well_represented
+                    else global_w_dict[str(lbl)]
+                )
                 for lbl in bin_labels
             ],
             dtype=np.float64,
@@ -1181,7 +1165,9 @@ class WorldCerealDataset(Dataset):
         ):
             return
 
-        # Per-(row, timestep) S1/S2 data presence
+        # Stream the per-(row, timestep) S1/S2 data presence in row chunks.
+        # Keeping a dense ``len(dataframe) x max_ts`` matrix around is too
+        # expensive for large training frames and can OOM before training starts.
         max_ts = 0
         while any(
             template.format(max_ts) in self.dataframe.columns
@@ -1190,30 +1176,45 @@ class WorldCerealDataset(Dataset):
             max_ts += 1
         if max_ts == 0:
             return
-        presence = np.zeros((len(self.dataframe), max_ts), dtype=bool)
-        for t in range(max_ts):
-            cols = [
-                template.format(t)
+        timestep_cols = [
+            [
+                col
                 for template in self.S1_S2_COLUMN_TEMPLATES
-                if template.format(t) in self.dataframe.columns
+                if (col := template.format(t)) in self.dataframe.columns
             ]
-            presence[:, t] = (self.dataframe[cols].to_numpy() != NODATAVALUE).any(
-                axis=1
-            )
+            for t in range(max_ts)
+        ]
 
         T = self.num_timesteps
         avail = self.dataframe["available_timesteps"].astype(int).to_numpy()
         vp = self.dataframe["valid_position"].astype(int).to_numpy()
         first_min = np.maximum(0, vp - T + 1)
         first_max = np.minimum(vp, avail - T)
-        bad = np.array(
-            [
-                not presence[
-                    i, first_min[i] : max(first_max[i], first_min[i]) + T
-                ].any()
-                for i in range(len(self.dataframe))
-            ]
-        )
+        last_exclusive = np.maximum(first_max, first_min) + T
+        bad = np.ones(len(self.dataframe), dtype=bool)
+        chunk_size = 50_000
+
+        for start in range(0, len(self.dataframe), chunk_size):
+            stop = min(start + chunk_size, len(self.dataframe))
+            chunk_bad = np.ones(stop - start, dtype=bool)
+            chunk_first = first_min[start:stop]
+            chunk_last = last_exclusive[start:stop]
+            chunk_df = self.dataframe.iloc[start:stop]
+            for t in range(max_ts):
+                cols = timestep_cols[t]
+                if not cols:
+                    continue
+                relevant = (chunk_first <= t) & (t < chunk_last)
+                if not relevant.any():
+                    continue
+                has_data = (chunk_df[cols].to_numpy(copy=False) != NODATAVALUE).any(
+                    axis=1
+                )
+                chunk_bad &= ~(relevant & has_data)
+                if not chunk_bad.any():
+                    break
+            bad[start:stop] = chunk_bad
+
         num_bad = int(bad.sum())
         if not num_bad:
             return
@@ -1240,6 +1241,63 @@ class WorldCerealDataset(Dataset):
         timestep_positions, _ = self.get_timestep_positions(row)
         return Predictors(**self.get_inputs(row, timestep_positions))
 
+    def _select_timestep_starts(
+        self,
+        available_timesteps: Union[int, np.ndarray, Sequence[int]],
+        valid_position: Union[int, np.ndarray, Sequence[int]],
+        min_edge_buffer: int = MIN_EDGE_BUFFER,
+        rng: Optional[np.random.Generator] = None,
+    ) -> np.ndarray:
+        """Select first timestep indices for one or more samples.
+
+        This is the shared implementation behind scalar ``get_timestep_positions``
+        and vectorized ``_fast_fetch_batch`` so augmentation/window-placement
+        semantics cannot drift between the two paths.
+        """
+        avail = np.atleast_1d(np.asarray(available_timesteps, dtype=np.int64))
+        vp = np.atleast_1d(np.asarray(valid_position, dtype=np.int64))
+        half = self.num_timesteps // 2
+
+        if not self.augment or np.all(avail == self.num_timesteps):
+            center = np.clip(vp, half, avail - half)
+        elif self.is_ssl:
+            low = np.full_like(avail, half)
+            high = avail - half
+            if rng is None:
+                center = np.array(
+                    [np.random.randint(lo, hi) for lo, hi in zip(low, high)],
+                    dtype=np.int64,
+                )
+            else:
+                center = rng.integers(low, high)
+        else:
+            buffer = max(1, min_edge_buffer)
+            min_center = np.maximum(half, vp + buffer - half)
+            max_center = np.minimum(avail - half, vp - buffer + half)
+            needs_rand = avail != self.num_timesteps
+            if (needs_rand & (min_center > max_center)).any():
+                raise ValueError(
+                    "low >= high while drawing augmented center point; "
+                    "run _filter_temporally_invalid_rows on the dataframe."
+                )
+            safe_min = np.where(needs_rand, min_center, 0)
+            safe_max = np.where(needs_rand, max_center, 0)
+            if rng is None:
+                rand_center = np.array(
+                    [
+                        np.random.randint(lo, hi + 1)
+                        for lo, hi in zip(safe_min, safe_max)
+                    ],
+                    dtype=np.int64,
+                )
+            else:
+                rand_center = rng.integers(safe_min, safe_max + 1)
+            det_center = np.clip(vp, half, avail - half)
+            center = np.where(needs_rand, rand_center, det_center)
+
+        last = np.minimum(avail, center + half)
+        return np.maximum(0, last - self.num_timesteps).astype(np.int64)
+
     def get_timestep_positions(
         self,
         row_d: Dict,
@@ -1248,15 +1306,16 @@ class WorldCerealDataset(Dataset):
         available_timesteps = int(row_d["available_timesteps"])
         valid_position = int(row_d["valid_position"])
 
-        # Get the center point to use for extracting a sequence of timesteps
-        center_point = self._get_center_point(
-            available_timesteps, valid_position, self.augment, min_edge_buffer
+        first_timestep = int(
+            self._select_timestep_starts(
+                available_timesteps,
+                valid_position,
+                min_edge_buffer=min_edge_buffer,
+            )[0]
         )
-
-        # Determine the timestep positions to extract
-        last_timestep = min(available_timesteps, center_point + self.num_timesteps // 2)
-        first_timestep = max(0, last_timestep - self.num_timesteps)
-        timestep_positions = list(range(first_timestep, last_timestep))
+        timestep_positions = list(
+            range(first_timestep, first_timestep + self.num_timesteps)
+        )
 
         # Sanity check to make sure we will extract the correct number of timesteps
         if len(timestep_positions) != self.num_timesteps:
@@ -1324,53 +1383,6 @@ class WorldCerealDataset(Dataset):
         if self.augment:
             return candidates[np.random.randint(len(candidates))]
         return min(candidates, key=lambda pos: abs(pos[0] - current_positions[0]))
-
-    def _get_center_point(
-        self, available_timesteps, valid_position, augment, min_edge_buffer
-    ):
-        """Helper method to decide on the center point based on which to
-        extract the timesteps."""
-
-        if not augment or available_timesteps == self.num_timesteps:
-            #  check if the valid position is too close to the start_date and force shifting it
-            if valid_position < self.num_timesteps // 2:
-                center_point = self.num_timesteps // 2
-            #  or too close to the end_date
-            elif valid_position > (available_timesteps - self.num_timesteps // 2):
-                center_point = available_timesteps - self.num_timesteps // 2
-            else:
-                # Center the timesteps around the valid position
-                center_point = valid_position
-        else:
-            if self.is_ssl:
-                # Take a random center point enabling horizontal jittering
-                center_point = int(
-                    np.random.choice(
-                        range(
-                            self.num_timesteps // 2,
-                            (available_timesteps - self.num_timesteps // 2),
-                        ),
-                        1,
-                    )[0]
-                )
-            else:
-                # Randomly shift the center point but make sure the resulting range
-                # well includes the valid position
-
-                min_center_point = max(
-                    self.num_timesteps // 2,
-                    valid_position + max(1, min_edge_buffer) - self.num_timesteps // 2,
-                )
-                max_center_point = min(
-                    available_timesteps - self.num_timesteps // 2,
-                    valid_position - max(1, min_edge_buffer) + self.num_timesteps // 2,
-                )
-
-                center_point = np.random.randint(
-                    min_center_point, max_center_point + 1
-                )  # max_center_point included
-
-        return center_point
 
     def _get_timestamps(self, row: Dict, timestep_positions: List[int]) -> np.ndarray:
         """
@@ -2118,9 +2130,10 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 )
             self.dataframe = filtered_df
 
-        # Vectorized batch-fetch cache: precomputes numpy views of everything
-        # __getitem__ derives per sample so whole batches can be assembled with
-        # array ops instead of ~3 ms of pandas/python work per sample.
+        # Vectorized batch-fetch cache: precomputes numpy views of the expensive
+        # dataframe-derived pieces so whole training batches can be assembled
+        # without per-sample pandas access. Unsupported configurations fall back
+        # to the canonical per-sample path below.
         self._batch_cache: Optional[Dict[str, Any]] = None
         self._batch_rng: Optional[np.random.Generator] = None
         self._batch_rng_key: Optional[Tuple[int, int]] = None
@@ -2133,33 +2146,34 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             )
             self._batch_cache = None
 
-    def __getitem__(self, idx):
-        # During dual-task training the DualHeadBatchSampler tells each sample
+    def _decode_task_index(self, idx: int) -> Tuple[int, Optional[str]]:
+        """Decode sampler virtual indices into dataframe rows and task overrides."""
+        # During task-configurable training, SeasonalTaskBatchSampler tells each sample
         # which head it should supervise (landcover or croptype) by shifting its
         # index: indices in [N..2N) are landcover, [2N..3N) are croptype.
         # We decode the real row index and the intended task here, so the
         # dataframe itself never needs to be mutated (important for multi-worker
-        # data loading).  Plain [0..N) indices are used during validation/test.
+        # data loading). Plain [0..N) indices are used during validation/test.
         n = len(self.dataframe)
         if idx >= 2 * n:
-            real_idx = idx - 2 * n
-            task_override: Optional[str] = "croptype"
-        elif idx >= n:
-            real_idx = idx - n
-            task_override = "landcover"
-        else:
-            real_idx = idx
-            task_override = None
+            return idx - 2 * n, "croptype"
+        if idx >= n:
+            return idx - n, "landcover"
+        return idx, None
 
-        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+    def _sample_from_row(
+        self, row: Dict[str, Any], task_override: Optional[str] = None
+    ) -> Tuple[Predictors, Dict[str, Any]]:
+        """Build one labelled sample using the canonical per-sample helpers."""
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
 
         if self.emit_label_tensor:
+            assert self.task_type in ("binary", "multiclass")
             label = self.get_label(
                 row,
-                task_type=self.task_type,
+                task_type=cast(Literal["binary", "multiclass"], self.task_type),
                 classes_list=self.classes_list,
                 valid_position=relative_valid,
             )
@@ -2182,8 +2196,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         if task_override is not None:
             attrs["label_task"] = task_override
 
-        predictors = Predictors(**inputs, label=label)
-        return predictors, attrs
+        return Predictors(**inputs, label=label), attrs
+
+    def __getitem__(self, idx):
+        real_idx, task_override = self._decode_task_index(int(idx))
+        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+        return self._sample_from_row(row, task_override)
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -2299,29 +2317,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         return label
 
     # ------------------------------------------------------------------
-    # Vectorized batched fetching
-    # ------------------------------------------------------------------
-    # PyTorch's DataLoader calls `__getitems__` with the full list of batch
-    # indices whenever a dataset defines it. The methods below reproduce the
-    # exact per-sample semantics of `__getitem__` + `collate_fn` with numpy
-    # array operations over the whole batch, which is orders of magnitude
-    # faster than per-row pandas access. When the cache cannot be built
-    # (unsupported configuration), `__getitems__` falls back to the original
-    # per-sample path and the collate function handles the list as before.
-
-    # Attr keys that may legitimately collate to a partial-None python list
-    # (kept in sync with `worldcereal.train.data._ATTR_KEYS_ALLOW_PARTIAL_NONE`;
-    # duplicated here because data.py must stay importable without datasets.py).
-    _ATTR_KEYS_ALLOW_PARTIAL_NONE = {
-        "landcover_label",
-        "croptype_label",
-        "label_task",
-        "LC10_confidence_nonoutlier",
-        "CTY24_confidence_nonoutlier",
-        "LC10_anomaly_flag",
-        "CTY24_anomaly_flag",
-    }
-
     @staticmethod
     def _factorize_attr_column(col: pd.Series) -> Tuple[np.ndarray, List[Any]]:
         """Factorize an object column into codes plus a unique-value list.
@@ -2582,12 +2577,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         table = _ensure_seasonality_lookup()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
-        lat_c = (
-            np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0
-        ) + 0.25
-        lon_c = (
-            np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0
-        ) + 0.25
+        lat_c = (np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0) + 0.25
+        lon_c = (np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0) + 0.25
 
         key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
         joined = table.reindex(key_index)
@@ -2599,9 +2590,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             lat_vals = table.index.get_level_values("lat").to_numpy()
             lon_vals = table.index.get_level_values("lon").to_numpy()
             missing_pos = np.flatnonzero(missing_rows.to_numpy())
-            missing_cells = {
-                (float(lat_c[i]), float(lon_c[i])) for i in missing_pos
-            }
+            missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
             cell_to_row = {}
             for cell_lat, cell_lon in missing_cells:
                 distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
@@ -2640,22 +2629,20 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 return None
             sos = joined[sos_col].to_numpy(dtype=np.float64)
             eos = joined[eos_col].to_numpy(dtype=np.float64)
-            invalid = (
-                ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
-            )
+            invalid = ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
             sos_i = np.where(invalid, 1, sos).astype(np.int64)
             eos_i = np.where(invalid, 1, eos).astype(np.int64)
 
             # For year-crossing seasons, shift ref year when the label falls
             # after EOS (mirrors _season_context_for).
-            ref_year = label_year + (
-                (sos_i > eos_i) & (label_doy > eos_i)
-            ).astype(np.int64)
+            ref_year = label_year + ((sos_i > eos_i) & (label_doy > eos_i)).astype(
+                np.int64
+            )
 
             # season_doys_to_dates_refyear, vectorized:
             #   end = Jan 1 of ref_year + eos days; start = end - duration
-            ref_year_start = (ref_year - 1970).astype("datetime64[Y]").astype(
-                "datetime64[D]"
+            ref_year_start = (
+                (ref_year - 1970).astype("datetime64[Y]").astype("datetime64[D]")
             )
             end_date = ref_year_start + eos_i.astype("timedelta64[D]")
             duration = np.where(sos_i < eos_i, eos_i - sos_i, eos_i + 365 - sos_i)
@@ -2670,9 +2657,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             season_invalid[:, s_idx] = invalid
             # date_in_season with freq='month': label month within [start, end]
             season_in_raw[:, s_idx] = (
-                (label_month_num >= start_m)
-                & (label_month_num <= end_m)
-                & ~invalid
+                (label_month_num >= start_m) & (label_month_num <= end_m) & ~invalid
             )
 
         ref_ids = (
@@ -2699,11 +2684,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         and masking draws across workers and epochs.
         """
         info = torch.utils.data.get_worker_info()
-        key = (
-            (info.id, int(info.seed))
-            if info is not None
-            else (-1, -1)
-        )
+        key = (info.id, int(info.seed)) if info is not None else (-1, -1)
         if self._batch_rng is None or self._batch_rng_key != key:
             if info is not None:
                 seed = int(info.seed) % (2**32)
@@ -2734,27 +2715,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         avail = c["avail"][rows]
         vp = c["vp"][rows]
 
-        # ---- timestep window (mirrors _get_center_point) -------------------
-        half = T // 2
-        det_center = np.clip(vp, half, avail - half)
-        if self.augment and not self.is_ssl:
-            buf = max(1, MIN_EDGE_BUFFER)
-            min_c = np.maximum(half, vp + buf - half)
-            max_c = np.minimum(avail - half, vp - buf + half)
-            needs_rand = avail != T
-            if (needs_rand & (min_c > max_c)).any():
-                raise ValueError(
-                    "low >= high while drawing augmented center point; "
-                    "run _filter_temporally_invalid_rows on the dataframe."
-                )
-            safe_min = np.where(needs_rand, min_c, 0)
-            safe_max = np.where(needs_rand, max_c, 0)
-            rand_center = rng.integers(safe_min, safe_max + 1)
-            center = np.where(needs_rand, rand_center, det_center)
-        else:
-            center = det_center
-        last = np.minimum(avail, center + half)
-        first = np.maximum(0, last - T)
+        # ---- timestep window ------------------------------------------------
+        first = self._select_timestep_starts(avail, vp, rng=rng)
 
         if ((vp < first) | (vp >= first + T)).any():
             bad = int(np.flatnonzero((vp < first) | (vp >= first + T))[0])
@@ -2783,7 +2745,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 if self.augment:
                     first[i] = cands[int(rng.integers(len(cands)))]
                 else:
-                    first[i] = min(cands, key=lambda f, cur=first[i]: abs(f - cur))
+                    _cur = int(first[i])
+                    first[i] = min(cands, key=lambda f: abs(f - _cur))
 
         tidx = first[:, None] + np.arange(T)[None, :]
         rows_col = rows[:, None]
@@ -2792,9 +2755,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         s1_win = c["s1"][rows_col, tidx]  # (B, T, 2)
         meteo_win = c["meteo"][rows_col, tidx]  # (B, T, 2)
 
-        s2_full = np.full(
-            (B, 1, 1, T, len(S2_BANDS)), NODATAVALUE, dtype=np.float32
-        )
+        s2_full = np.full((B, 1, 1, T, len(S2_BANDS)), NODATAVALUE, dtype=np.float32)
         s2_full[:, 0, 0][:, :, c["s2_dst_idx"]] = s2_win
         s1_full = s1_win.reshape(B, 1, 1, T, len(S1_BANDS)).copy()
         meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
@@ -2932,7 +2893,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 if miss is not None and miss.any():
                     if miss.all():
                         attrs[key] = None
-                    elif key in self._ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                    elif key in ATTR_KEYS_ALLOW_PARTIAL_NONE:
                         attrs[key] = [
                             None if m else v
                             for v, m in zip(vals.tolist(), miss.tolist())
@@ -2951,7 +2912,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 if all(v is None for v in values_list):
                     attrs[key] = None
                 elif any(v is None for v in values_list):
-                    if key in self._ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                    if key in ATTR_KEYS_ALLOW_PARTIAL_NONE:
                         attrs[key] = values_list
                     else:
                         missing_indices = [
@@ -2970,9 +2931,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
         lt_codes = c["label_task_codes"]
         if lt_codes is not None:
-            label_task = [
-                c["label_task_uniques"][k] for k in lt_codes[rows].tolist()
-            ]
+            label_task = [c["label_task_uniques"][k] for k in lt_codes[rows].tolist()]
         else:
             label_task = [None] * B
         has_override = override_ct.any() or override_lc.any()
@@ -3024,7 +2983,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         )
         return predictors, attrs
 
-    def get_dual_head_batch_sampler(
+    def get_task_batch_sampler(
         self,
         *,
         batch_size: int,
@@ -3044,14 +3003,16 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
-    ) -> "DualHeadBatchSampler":
-        """Build a :class:`DualHeadBatchSampler` for dual-head training.
+        tasks: Sequence[str] = ("landcover", "croptype"),
+        task_ratios: Optional[Mapping[str, float]] = None,
+    ) -> "SeasonalTaskBatchSampler":
+        """Build a task-configurable seasonal batch sampler.
 
-        Each batch will contain exactly ``batch_size // 2`` LC-assigned and
-        ``batch_size // 2`` CT-assigned samples drawn from class-balanced pools.
-        See :class:`DualHeadBatchSampler` for full documentation.
+        ``tasks`` selects the active task pools to draw into each batch while
+        preserving the same class, spatial, per-bin, multiplier, and generator
+        balancing logic.
         """
-        return DualHeadBatchSampler(
+        return SeasonalTaskBatchSampler(
             dataframe=self.dataframe,
             batch_size=batch_size,
             landcover_column=landcover_column,
@@ -3070,6 +3031,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             region_column=region_column,
             bin_type=bin_type,
             h3_resolution=h3_resolution,
+            tasks=tasks,
+            task_ratios=task_ratios,
         )
 
 
@@ -3175,12 +3138,16 @@ def apply_class_weight_multipliers(
     return sampler_weights * mult_arr
 
 
-class DualHeadBatchSampler(Sampler):
-    """Batch sampler for dual-head (landcover + croptype) finetuning.
+class SeasonalTaskBatchSampler(Sampler):
+    """Batch sampler for seasonal landcover/croptype finetuning.
 
-    Each batch is composed of exactly ``batch_size // 2`` **LC-assigned** samples
-    and ``batch_size // 2`` **CT-assigned** samples.  Task assignment is encoded
-    into the virtual index returned to the DataLoader so that
+    By default each batch is composed of exactly ``batch_size // 2``
+    **LC-assigned** samples and ``batch_size - batch_size // 2`` **CT-assigned**
+    samples for default two-task training. Callers may
+    instead pass ``tasks=("landcover",)`` or ``tasks=("croptype",)`` for
+    single-task batches, or ``task_ratios`` for explicit task proportions.
+
+    Task assignment is encoded into the virtual index returned to the DataLoader so that
     :meth:`WorldCerealLabelledDataset.__getitem__` can override ``label_task``
     without mutating the dataframe or touching shared worker state:
 
@@ -3248,6 +3215,8 @@ class DualHeadBatchSampler(Sampler):
         region_column: str = "region",
         bin_type: Literal["degrees", "h3"] = "degrees",
         h3_resolution: int = 2,
+        tasks: Optional[Sequence[str]] = None,
+        task_ratios: Optional[Mapping[str, float]] = None,
     ) -> None:
         import math
 
@@ -3275,6 +3244,11 @@ class DualHeadBatchSampler(Sampler):
         self._num_batches = (
             num_batches if num_batches is not None else math.ceil(N / batch_size)
         )
+        self._tasks = self._normalize_tasks(tasks)
+        self._task_ratios = self._normalize_task_ratios(self._tasks, task_ratios)
+        self._task_batch_counts = self._compute_task_batch_counts(
+            batch_size, self._tasks, self._task_ratios
+        )
 
         lc_labels = dataframe[landcover_column].astype(str).to_numpy()
 
@@ -3283,10 +3257,11 @@ class DualHeadBatchSampler(Sampler):
             dataframe[croptype_column].astype(str) != "ignore"
         )
         ct_real_indices = np.where(ct_valid.to_numpy())[0]
-        if len(ct_real_indices) == 0:
+        has_ct_pool = len(ct_real_indices) > 0
+        if not has_ct_pool and "croptype" in self._tasks:
             raise ValueError(
                 f"No samples with a valid '{croptype_column}' found; "
-                "DualHeadBatchSampler requires at least one CT-eligible sample."
+                "SeasonalTaskBatchSampler requires at least one CT-eligible sample."
             )
         ct_labels = dataframe.loc[ct_valid, croptype_column].astype(str).to_numpy()
 
@@ -3294,8 +3269,6 @@ class DualHeadBatchSampler(Sampler):
         # bin_type selects the binning scheme:
         #   - "degrees": legacy lat/lon grid, cell size = spatial_bin_size_degrees
         #   - "h3": Uber H3 (approximately equal-area) hexagons at h3_resolution
-        # Backward compatible: default bin_type="degrees" with an explicit
-        # spatial_bin_size_degrees reproduces the original behaviour exactly.
         valid_bin_types = ("degrees", "h3")
         if bin_type not in valid_bin_types:
             raise ValueError(
@@ -3343,16 +3316,20 @@ class DualHeadBatchSampler(Sampler):
                     min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
-                ct_class_arr = _get_smoothed_per_bin_class_weights(
-                    ct_labels,
-                    lat_arr[ct_real_indices],
-                    lon_arr[ct_real_indices],
-                    spatial_bin_size_degrees,
-                    method=class_weight_method,
-                    clip_range=clip_range,
-                    min_samples_per_bin=min_samples_per_bin,
-                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
-                    pool_name="CT",
+                ct_class_arr = (
+                    _get_smoothed_per_bin_class_weights(
+                        ct_labels,
+                        lat_arr[ct_real_indices],
+                        lon_arr[ct_real_indices],
+                        spatial_bin_size_degrees,
+                        method=class_weight_method,
+                        clip_range=clip_range,
+                        min_samples_per_bin=min_samples_per_bin,
+                        min_samples_per_class_per_bin=min_samples_per_class_per_bin,
+                        pool_name="CT",
+                    )
+                    if has_ct_pool
+                    else np.array([], dtype=np.float64)
                 )
             else:
                 lc_class_arr = _get_per_bin_class_weights(
@@ -3364,14 +3341,18 @@ class DualHeadBatchSampler(Sampler):
                     min_samples_per_class_per_bin=min_samples_per_class_per_bin,
                     pool_name="LC",
                 )
-                ct_class_arr = _get_per_bin_class_weights(
-                    ct_labels,
-                    spatial_bins[ct_real_indices],
-                    method=class_weight_method,
-                    clip_range=clip_range,
-                    min_samples_per_bin=min_samples_per_bin,
-                    min_samples_per_class_per_bin=min_samples_per_class_per_bin,
-                    pool_name="CT",
+                ct_class_arr = (
+                    _get_per_bin_class_weights(
+                        ct_labels,
+                        spatial_bins[ct_real_indices],
+                        method=class_weight_method,
+                        clip_range=clip_range,
+                        min_samples_per_bin=min_samples_per_bin,
+                        min_samples_per_class_per_bin=min_samples_per_class_per_bin,
+                        pool_name="CT",
+                    )
+                    if has_ct_pool
+                    else np.array([], dtype=np.float64)
                 )
         else:
             lc_class_arr = _get_normalized_weights(
@@ -3380,11 +3361,15 @@ class DualHeadBatchSampler(Sampler):
                 clip_range=clip_range,
                 pool_name="LC",
             )
-            ct_class_arr = _get_normalized_weights(
-                ct_labels,
-                method=class_weight_method,
-                clip_range=clip_range,
-                pool_name="CT",
+            ct_class_arr = (
+                _get_normalized_weights(
+                    ct_labels,
+                    method=class_weight_method,
+                    clip_range=clip_range,
+                    pool_name="CT",
+                )
+                if has_ct_pool
+                else np.array([], dtype=np.float64)
             )
 
         # ---- Optional class weight multipliers (per-class or per-region) ----
@@ -3404,9 +3389,31 @@ class DualHeadBatchSampler(Sampler):
             lc_class_arr = apply_class_weight_multipliers(
                 lc_class_arr, lc_labels, lc_regions, mults_canonical, pool_name="LC"
             )
-            ct_class_arr = apply_class_weight_multipliers(
-                ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
-            )
+            if has_ct_pool:
+                ct_class_arr = apply_class_weight_multipliers(
+                    ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
+                )
+
+            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
+            # or per-class multiplier can never push a class beyond the configured
+            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
+            # already-high per-bin weight would exceed clip_range[1] and
+            # re-introduce exactly the over-sampling the clip is meant to bound
+            # (the root cause of e.g. oats over-commission into wheat).
+            if clip_range is not None:
+                lc_mean = lc_class_arr.mean()
+                if lc_mean > 0:
+                    lc_class_arr = lc_class_arr / lc_mean
+                lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
+                if has_ct_pool:
+                    ct_mean = ct_class_arr.mean()
+                    if ct_mean > 0:
+                        ct_class_arr = ct_class_arr / ct_mean
+                    ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
+                logger.info(
+                    "SeasonalTaskBatchSampler: re-normalised and re-clipped class "
+                    f"weights to {clip_range} after applying multipliers."
+                )
 
             # Warn once about classes that don't appear in either pool.
             lc_label_set = set(lc_labels.tolist())
@@ -3437,7 +3444,8 @@ class DualHeadBatchSampler(Sampler):
                 min_samples_per_bin=min_samples_per_bin,
             )
             lc_class_arr = lc_class_arr * sp_arr  # full N-sample array
-            ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset
+            if has_ct_pool:
+                ct_class_arr = ct_class_arr * sp_arr[ct_real_indices]  # CT subset
 
         density_msg = (
             f"× spatial-density factor (method={spatial_weight_method})"
@@ -3450,14 +3458,14 @@ class DualHeadBatchSampler(Sampler):
             else:
                 smoothing_msg = ""
             logger.info(
-                "DualHeadBatchSampler: per-bin class balancing "
+                "SeasonalTaskBatchSampler: per-bin class balancing "
                 f"(method={class_weight_method}, "
                 f"min_samples_per_bin={min_samples_per_bin}{smoothing_msg}) "
                 f"{density_msg}."
             )
         else:
             logger.info(
-                "DualHeadBatchSampler: global class balancing "
+                "SeasonalTaskBatchSampler: global class balancing "
                 f"(method={class_weight_method}) "
                 f"{density_msg}."
             )
@@ -3467,7 +3475,8 @@ class DualHeadBatchSampler(Sampler):
             lc_class_arr / lc_class_arr.sum(), dtype=torch.float64
         )
         self._ct_probs = torch.as_tensor(
-            ct_class_arr / ct_class_arr.sum(), dtype=torch.float64
+            ct_class_arr / ct_class_arr.sum() if has_ct_pool else ct_class_arr,
+            dtype=torch.float64,
         )
 
         # Virtual-index tensors: LC → [N, 2N), CT → [2N, 3N)
@@ -3476,31 +3485,121 @@ class DualHeadBatchSampler(Sampler):
 
         lc_class_counts: Dict[str, int] = Counter(lc_labels.tolist())
         ct_class_counts: Dict[str, int] = Counter(ct_labels.tolist())
-        lc_half = batch_size // 2
-        ct_half = batch_size - lc_half
+        lc_count = self._task_batch_counts.get("landcover", 0)
+        ct_count = self._task_batch_counts.get("croptype", 0)
         logger.info(
-            f"DualHeadBatchSampler: N={N}, LC pool={N}, CT pool={len(ct_real_indices)}, "
-            f"batch_size={batch_size} (LC half={lc_half}, CT half={ct_half}), "
-            f"num_batches={self._num_batches}"
+            f"SeasonalTaskBatchSampler: N={N}, LC pool={N}, CT pool={len(ct_real_indices)}, "
+            f"batch_size={batch_size} (LC={lc_count}, CT={ct_count}), "
+            f"num_batches={self._num_batches}, tasks={self._tasks}, "
+            f"task_ratios={self._task_ratios}"
         )
-        logger.info(f"DualHeadBatchSampler LC class distribution: {lc_class_counts}")
-        logger.info(f"DualHeadBatchSampler CT class distribution: {ct_class_counts}")
+        logger.info(
+            f"SeasonalTaskBatchSampler LC class distribution: {lc_class_counts}"
+        )
+        logger.info(
+            f"SeasonalTaskBatchSampler CT class distribution: {ct_class_counts}"
+        )
+
+    @staticmethod
+    def _normalize_tasks(tasks: Optional[Sequence[str]]) -> Tuple[str, ...]:
+        if tasks is None:
+            return ("landcover", "croptype")
+        aliases = {"lc": "landcover", "ct": "croptype"}
+        normalized = tuple(aliases.get(str(task), str(task)) for task in tasks)
+        valid = {"landcover", "croptype"}
+        invalid = [task for task in normalized if task not in valid]
+        if invalid:
+            raise ValueError(f"tasks must contain only {sorted(valid)}, got {invalid}")
+        if not normalized:
+            raise ValueError("tasks must contain at least one active task.")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(f"tasks must not contain duplicates, got {normalized}")
+        return normalized
+
+    @staticmethod
+    def _normalize_task_ratios(
+        tasks: Tuple[str, ...], task_ratios: Optional[Mapping[str, float]]
+    ) -> Dict[str, float]:
+        if task_ratios is None:
+            ratio = 1.0 / len(tasks)
+            return {task: ratio for task in tasks}
+        aliases = {"lc": "landcover", "ct": "croptype"}
+        normalized = {
+            aliases.get(str(task), str(task)): float(ratio)
+            for task, ratio in task_ratios.items()
+        }
+        task_set = set(tasks)
+        if set(normalized) != task_set:
+            raise ValueError(
+                "task_ratios keys must exactly match active tasks; "
+                f"got keys={sorted(normalized)} tasks={sorted(task_set)}"
+            )
+        if any(ratio < 0 for ratio in normalized.values()):
+            raise ValueError(f"task_ratios must be non-negative, got {normalized}")
+        total = sum(normalized.values())
+        if total <= 0:
+            raise ValueError(
+                f"task_ratios must sum to a positive value, got {normalized}"
+            )
+        return {task: ratio / total for task, ratio in normalized.items()}
+
+    @staticmethod
+    def _compute_task_batch_counts(
+        batch_size: int, tasks: Tuple[str, ...], task_ratios: Mapping[str, float]
+    ) -> Dict[str, int]:
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if tasks == ("landcover", "croptype") and task_ratios == {
+            "landcover": 0.5,
+            "croptype": 0.5,
+        }:
+            return {
+                "landcover": batch_size // 2,
+                "croptype": batch_size - batch_size // 2,
+            }
+
+        raw_counts = {task: batch_size * task_ratios[task] for task in tasks}
+        counts = {task: int(np.floor(count)) for task, count in raw_counts.items()}
+        remaining = batch_size - sum(counts.values())
+        order = sorted(
+            tasks, key=lambda task: raw_counts[task] - counts[task], reverse=True
+        )
+        for task in order[:remaining]:
+            counts[task] += 1
+        return counts
 
     def __iter__(self):
-        lc_half = self._batch_size // 2
-        ct_half = self._batch_size - lc_half
-        total_lc = lc_half * self._num_batches
-        total_ct = ct_half * self._num_batches
-        all_lc_drawn = torch.multinomial(
-            self._lc_probs, total_lc, replacement=True, generator=self._generator
+        lc_count = self._task_batch_counts.get("landcover", 0)
+        ct_count = self._task_batch_counts.get("croptype", 0)
+        all_lc_drawn = (
+            torch.multinomial(
+                self._lc_probs,
+                lc_count * self._num_batches,
+                replacement=True,
+                generator=self._generator,
+            )
+            if lc_count
+            else None
         )
-        all_ct_drawn = torch.multinomial(
-            self._ct_probs, total_ct, replacement=True, generator=self._generator
+        all_ct_drawn = (
+            torch.multinomial(
+                self._ct_probs,
+                ct_count * self._num_batches,
+                replacement=True,
+                generator=self._generator,
+            )
+            if ct_count
+            else None
         )
         for i in range(self._num_batches):
-            lc_drawn = all_lc_drawn[i * lc_half : (i + 1) * lc_half]
-            ct_drawn = all_ct_drawn[i * ct_half : (i + 1) * ct_half]
-            batch = torch.cat([self._lc_virtual[lc_drawn], self._ct_virtual[ct_drawn]])
+            parts = []
+            if lc_count and all_lc_drawn is not None:
+                lc_drawn = all_lc_drawn[i * lc_count : (i + 1) * lc_count]
+                parts.append(self._lc_virtual[lc_drawn])
+            if ct_count and all_ct_drawn is not None:
+                ct_drawn = all_ct_drawn[i * ct_count : (i + 1) * ct_count]
+                parts.append(self._ct_virtual[ct_drawn])
+            batch = torch.cat(parts)
             perm = torch.randperm(self._batch_size, generator=self._generator)
             yield batch[perm].tolist()
 
