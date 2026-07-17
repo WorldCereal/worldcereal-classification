@@ -1384,53 +1384,6 @@ class WorldCerealDataset(Dataset):
             return candidates[np.random.randint(len(candidates))]
         return min(candidates, key=lambda pos: abs(pos[0] - current_positions[0]))
 
-    def _get_center_point(
-        self, available_timesteps, valid_position, augment, min_edge_buffer
-    ):
-        """Helper method to decide on the center point based on which to
-        extract the timesteps."""
-
-        if not augment or available_timesteps == self.num_timesteps:
-            #  check if the valid position is too close to the start_date and force shifting it
-            if valid_position < self.num_timesteps // 2:
-                center_point = self.num_timesteps // 2
-            #  or too close to the end_date
-            elif valid_position > (available_timesteps - self.num_timesteps // 2):
-                center_point = available_timesteps - self.num_timesteps // 2
-            else:
-                # Center the timesteps around the valid position
-                center_point = valid_position
-        else:
-            if self.is_ssl:
-                # Take a random center point enabling horizontal jittering
-                center_point = int(
-                    np.random.choice(
-                        range(
-                            self.num_timesteps // 2,
-                            (available_timesteps - self.num_timesteps // 2),
-                        ),
-                        1,
-                    )[0]
-                )
-            else:
-                # Randomly shift the center point but make sure the resulting range
-                # well includes the valid position
-
-                min_center_point = max(
-                    self.num_timesteps // 2,
-                    valid_position + max(1, min_edge_buffer) - self.num_timesteps // 2,
-                )
-                max_center_point = min(
-                    available_timesteps - self.num_timesteps // 2,
-                    valid_position - max(1, min_edge_buffer) + self.num_timesteps // 2,
-                )
-
-                center_point = np.random.randint(
-                    min_center_point, max_center_point + 1
-                )  # max_center_point included
-
-        return center_point
-
     def _get_timestamps(self, row: Dict, timestep_positions: List[int]) -> np.ndarray:
         """
         Generate an array of dates based on the specified compositing window.
