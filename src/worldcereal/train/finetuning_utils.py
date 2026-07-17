@@ -1132,8 +1132,7 @@ class SeasonalMultiTaskLoss(nn.Module):
                     attrs, self.croptype_task_name, batch_size, device
                 )
                 ct_sample_weights = (
-                    ct_weights[pair_sample_tensor] if ct_weights is not None
-                    else None
+                    ct_weights[pair_sample_tensor] if ct_weights is not None else None
                 )
                 branch_loss = self._reduce_loss(per_sample_losses, ct_sample_weights)
                 loss = loss + self.croptype_weight * branch_loss
@@ -1827,9 +1826,7 @@ def _select_representative_season(
     candidates = _candidate_season_matrix(
         output, attrs, np.asarray(sample_indices, dtype=np.int64)
     )
-    selections: List[List[int]] = [
-        np.flatnonzero(row).tolist() for row in candidates
-    ]
+    selections: List[List[int]] = [np.flatnonzero(row).tolist() for row in candidates]
 
     if allow_multiple:
         return selections
@@ -2516,9 +2513,7 @@ def run_finetuning(
                 "val": current_val_loss,
             }
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
-            tb_writer.add_scalar(
-                "learning_rate", lr_after_step, global_step
-            )
+            tb_writer.add_scalar("learning_rate", lr_after_step, global_step)
             tb_writer.add_scalar(
                 "patience/epochs_since_improvement",
                 epochs_since_improvement,

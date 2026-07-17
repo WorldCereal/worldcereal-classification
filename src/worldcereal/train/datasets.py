@@ -2624,12 +2624,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         table = _ensure_seasonality_lookup()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
-        lat_c = (
-            np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0
-        ) + 0.25
-        lon_c = (
-            np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0
-        ) + 0.25
+        lat_c = (np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0) + 0.25
+        lon_c = (np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0) + 0.25
 
         key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
         joined = table.reindex(key_index)
@@ -2641,9 +2637,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             lat_vals = table.index.get_level_values("lat").to_numpy()
             lon_vals = table.index.get_level_values("lon").to_numpy()
             missing_pos = np.flatnonzero(missing_rows.to_numpy())
-            missing_cells = {
-                (float(lat_c[i]), float(lon_c[i])) for i in missing_pos
-            }
+            missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
             cell_to_row = {}
             for cell_lat, cell_lon in missing_cells:
                 distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
@@ -2682,22 +2676,20 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 return None
             sos = joined[sos_col].to_numpy(dtype=np.float64)
             eos = joined[eos_col].to_numpy(dtype=np.float64)
-            invalid = (
-                ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
-            )
+            invalid = ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
             sos_i = np.where(invalid, 1, sos).astype(np.int64)
             eos_i = np.where(invalid, 1, eos).astype(np.int64)
 
             # For year-crossing seasons, shift ref year when the label falls
             # after EOS (mirrors _season_context_for).
-            ref_year = label_year + (
-                (sos_i > eos_i) & (label_doy > eos_i)
-            ).astype(np.int64)
+            ref_year = label_year + ((sos_i > eos_i) & (label_doy > eos_i)).astype(
+                np.int64
+            )
 
             # season_doys_to_dates_refyear, vectorized:
             #   end = Jan 1 of ref_year + eos days; start = end - duration
-            ref_year_start = (ref_year - 1970).astype("datetime64[Y]").astype(
-                "datetime64[D]"
+            ref_year_start = (
+                (ref_year - 1970).astype("datetime64[Y]").astype("datetime64[D]")
             )
             end_date = ref_year_start + eos_i.astype("timedelta64[D]")
             duration = np.where(sos_i < eos_i, eos_i - sos_i, eos_i + 365 - sos_i)
@@ -2712,9 +2704,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             season_invalid[:, s_idx] = invalid
             # date_in_season with freq='month': label month within [start, end]
             season_in_raw[:, s_idx] = (
-                (label_month_num >= start_m)
-                & (label_month_num <= end_m)
-                & ~invalid
+                (label_month_num >= start_m) & (label_month_num <= end_m) & ~invalid
             )
 
         ref_ids = (
@@ -2741,11 +2731,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         and masking draws across workers and epochs.
         """
         info = torch.utils.data.get_worker_info()
-        key = (
-            (info.id, int(info.seed))
-            if info is not None
-            else (-1, -1)
-        )
+        key = (info.id, int(info.seed)) if info is not None else (-1, -1)
         if self._batch_rng is None or self._batch_rng_key != key:
             if info is not None:
                 seed = int(info.seed) % (2**32)
@@ -2816,9 +2802,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         s1_win = c["s1"][rows_col, tidx]  # (B, T, 2)
         meteo_win = c["meteo"][rows_col, tidx]  # (B, T, 2)
 
-        s2_full = np.full(
-            (B, 1, 1, T, len(S2_BANDS)), NODATAVALUE, dtype=np.float32
-        )
+        s2_full = np.full((B, 1, 1, T, len(S2_BANDS)), NODATAVALUE, dtype=np.float32)
         s2_full[:, 0, 0][:, :, c["s2_dst_idx"]] = s2_win
         s1_full = s1_win.reshape(B, 1, 1, T, len(S1_BANDS)).copy()
         meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
@@ -2994,9 +2978,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
 
         lt_codes = c["label_task_codes"]
         if lt_codes is not None:
-            label_task = [
-                c["label_task_uniques"][k] for k in lt_codes[rows].tolist()
-            ]
+            label_task = [c["label_task_uniques"][k] for k in lt_codes[rows].tolist()]
         else:
             label_task = [None] * B
         has_override = override_ct.any() or override_lc.any()
@@ -3047,7 +3029,6 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             label=label_tensor,
         )
         return predictors, attrs
-
 
     def get_task_batch_sampler(
         self,
