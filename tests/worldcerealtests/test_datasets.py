@@ -2279,5 +2279,657 @@ class TestCheckpointMetricMonitoring(unittest.TestCase):
             self.assertEqual(effective, "val_loss")
 
 
+class TestFastSlowPathEquivalence(unittest.TestCase):
+    """Verify the vectorized fast path (__getitems__) produces identical results
+    to the canonical per-sample slow path (__getitem__) for every supported
+    configuration.
+
+    The fast path precomputes numpy arrays in ``_build_fast_batch_cache`` and
+    assembles whole batches in ``_fast_fetch_batch`` without per-row pandas
+    access.  The slow path goes through ``_sample_from_row`` → ``get_inputs``
+    → ``get_label`` for each index individually.  Both must yield byte-for-byte
+    equal sensor arrays, labels, timestamps and valid_position attributes when
+    augmentation and masking are disabled (deterministic case), and must
+    satisfy all structural invariants when stochastic options are enabled.
+    """
+
+    NUM_SAMPLES = 10
+    NUM_AVAIL = 20  # > NUM_TS to allow augmentation window sliding
+    NUM_TS = 12
+    VALID_POS = 10  # valid_position for every row
+
+    @classmethod
+    def setUpClass(cls):
+        """Build a test DataFrame with all required columns."""
+        n = cls.NUM_SAMPLES
+        avail = cls.NUM_AVAIL
+
+        data: dict = {
+            "lat": np.linspace(44.0, 50.0, n).tolist(),
+            "lon": np.linspace(4.0, 10.0, n).tolist(),
+            # start_date must align to month-boundary; avail months must cover NUM_AVAIL
+            "start_date": ["2021-01-01"] * n,
+            "end_date": ["2022-08-01"] * n,  # 20 months from 2021-01
+            "valid_time": ["2021-11-15"] * n,  # falls at month index ~10
+            "available_timesteps": [avail] * n,
+            "valid_position": [cls.VALID_POS] * n,
+            "ref_id": [f"myref_{i:03d}" for i in range(n)],
+            "sample_id": [f"sample_{i:03d}" for i in range(n)],
+            "region": ["TestRegion"] * n,
+        }
+
+        # Sensor bands — every timestep has a unique float value per (sample, ts)
+        # so that index errors immediately show up as value mismatches.
+        for ts in range(avail):
+            for tmpl in [
+                "OPTICAL-B02-ts{}-10m",
+                "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m",
+                "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m",
+                "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m",
+                "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m",
+                "OPTICAL-B12-ts{}-20m",
+            ]:
+                data[tmpl.format(ts)] = [float(300 + ts * 37 + i * 7) for i in range(n)]
+            for tmpl in ["SAR-VH-ts{}-20m", "SAR-VV-ts{}-20m"]:
+                data[tmpl.format(ts)] = [
+                    float(0.04 + ts * 0.003 + i * 0.0007) for i in range(n)
+                ]
+            for tmpl in [
+                "METEO-precipitation_flux-ts{}-100m",
+                "METEO-temperature_mean-ts{}-100m",
+            ]:
+                data[tmpl.format(ts)] = [
+                    float(1000 + ts * 13 + i * 3) for i in range(n)
+                ]
+
+        data["DEM-alt-20m"] = [float(80 + i * 11) for i in range(n)]
+        data["DEM-slo-20m"] = [float(2 + i * 0.5) for i in range(n)]
+
+        classes = (["cropland", "not_cropland"] * (n // 2 + 1))[:n]
+        data["finetune_class"] = classes
+        data["landcover_label"] = classes
+        data["croptype_label"] = classes
+
+        cls.df = pd.DataFrame(data)
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def _make_ds(self, **kwargs):
+        """Create a WorldCerealLabelledDataset with sensible defaults."""
+        defaults = dict(
+            task_type="binary",
+            num_outputs=1,
+            num_timesteps=self.NUM_TS,
+            timestep_freq="month",
+            season_calendar_mode="off",
+        )
+        defaults.update(kwargs)
+        return WorldCerealLabelledDataset(self.df.copy(), **defaults)
+
+    @staticmethod
+    def _np(x):
+        """Convert tensor or ndarray to numpy."""
+        if hasattr(x, "numpy"):
+            return x.detach().numpy()
+        return np.asarray(x)
+
+    # ------------------------------------------------------------------
+    # 1. Exact equality — no augmentation, no masking
+    # ------------------------------------------------------------------
+
+    def test_exact_equality_sensor_data_no_augment(self):
+        """Fast and slow paths must produce byte-for-byte equal sensor arrays."""
+        ds = self._make_ds(augment=False)
+        self.assertIsNotNone(
+            ds._batch_cache, "Fast batch cache must be built for this configuration"
+        )
+
+        indices = list(range(self.NUM_SAMPLES))
+        fast_preds, _ = ds.__getitems__(indices)
+
+        for i, idx in enumerate(indices):
+            slow_preds, _ = ds.__getitem__(idx)
+            for field in ("s1", "s2", "meteo", "dem", "latlon"):
+                fast_val = self._np(getattr(fast_preds, field)[i])
+                slow_val = self._np(getattr(slow_preds, field))
+                np.testing.assert_array_equal(
+                    fast_val,
+                    slow_val,
+                    err_msg=f"field={field!r} mismatch at sample index {i}",
+                )
+
+    def test_exact_equality_timestamps_no_augment(self):
+        """Fast and slow path timestamps must match exactly."""
+        ds = self._make_ds(augment=False)
+        indices = list(range(self.NUM_SAMPLES))
+        fast_preds, _ = ds.__getitems__(indices)
+
+        for i, idx in enumerate(indices):
+            slow_preds, _ = ds.__getitem__(idx)
+            fast_ts = self._np(fast_preds.timestamps[i])  # (T, 3)
+            slow_ts = self._np(slow_preds.timestamps)  # (T, 3)
+            np.testing.assert_array_equal(
+                fast_ts,
+                slow_ts,
+                err_msg=f"timestamps mismatch at sample index {i}",
+            )
+
+    def test_exact_equality_labels_no_augment(self):
+        """Fast and slow path binary labels must match exactly."""
+        ds = self._make_ds(augment=False)
+        indices = list(range(self.NUM_SAMPLES))
+        fast_preds, _ = ds.__getitems__(indices)
+
+        for i, idx in enumerate(indices):
+            slow_preds, _ = ds.__getitem__(idx)
+            fast_lbl = self._np(fast_preds.label[i])
+            slow_lbl = self._np(slow_preds.label)
+            np.testing.assert_array_equal(
+                fast_lbl,
+                slow_lbl,
+                err_msg=f"label mismatch at sample index {i}",
+            )
+
+    def test_exact_equality_valid_position_no_augment(self):
+        """valid_position attribute must agree between fast and slow paths."""
+        ds = self._make_ds(augment=False)
+        indices = list(range(self.NUM_SAMPLES))
+        _, fast_attrs = ds.__getitems__(indices)
+
+        for i, idx in enumerate(indices):
+            _, slow_attrs = ds.__getitem__(idx)
+            fast_vp = int(self._np(fast_attrs["valid_position"])[i])
+            slow_vp = int(slow_attrs["valid_position"])
+            self.assertEqual(
+                fast_vp,
+                slow_vp,
+                msg=f"valid_position mismatch at sample index {i}",
+            )
+
+    # ------------------------------------------------------------------
+    # 2. LC/CT virtual-index decoding
+    # ------------------------------------------------------------------
+
+    def test_lc_ct_index_decoding_sensor_data(self):
+        """LC/CT virtual indices must map to the correct underlying rows in both paths."""
+        ds = self._make_ds(augment=False)
+        N = self.NUM_SAMPLES
+
+        # LC-assigned indices: [N, 2N) → real rows [0, N)
+        lc_indices = list(range(N, 2 * N))
+        fast_preds_lc, fast_attrs_lc = ds.__getitems__(lc_indices)
+        for i, virtual_idx in enumerate(lc_indices):
+            slow_preds, _ = ds.__getitem__(virtual_idx)
+            fast_s2 = self._np(fast_preds_lc.s2[i])
+            slow_s2 = self._np(slow_preds.s2)
+            np.testing.assert_array_equal(
+                fast_s2,
+                slow_s2,
+                err_msg=f"s2 mismatch for LC virtual idx {virtual_idx}",
+            )
+        # task override should be "landcover" for all
+        if "label_task" in fast_attrs_lc:
+            self.assertTrue(
+                all(t == "landcover" for t in fast_attrs_lc["label_task"]),
+                "LC virtual indices should all carry label_task='landcover'",
+            )
+
+        # CT-assigned indices: [2N, 3N) → real rows [0, N)
+        ct_indices = list(range(2 * N, 3 * N))
+        fast_preds_ct, fast_attrs_ct = ds.__getitems__(ct_indices)
+        for i, virtual_idx in enumerate(ct_indices):
+            slow_preds, _ = ds.__getitem__(virtual_idx)
+            fast_s2 = self._np(fast_preds_ct.s2[i])
+            slow_s2 = self._np(slow_preds.s2)
+            np.testing.assert_array_equal(
+                fast_s2,
+                slow_s2,
+                err_msg=f"s2 mismatch for CT virtual idx {virtual_idx}",
+            )
+        if "label_task" in fast_attrs_ct:
+            self.assertTrue(
+                all(t == "croptype" for t in fast_attrs_ct["label_task"]),
+                "CT virtual indices should all carry label_task='croptype'",
+            )
+
+    # ------------------------------------------------------------------
+    # 3. Augmentation — structural invariants
+    # ------------------------------------------------------------------
+
+    def test_augmented_output_shapes(self):
+        """With augment=True both paths must still produce correctly-shaped outputs."""
+        ds = self._make_ds(augment=True)
+        self.assertIsNotNone(
+            ds._batch_cache, "Fast cache must be active with augment=True"
+        )
+
+        T = self.NUM_TS
+        B = self.NUM_SAMPLES
+        indices = list(range(B))
+
+        fast_preds, fast_attrs = ds.__getitems__(indices)
+        self.assertEqual(tuple(fast_preds.s1.shape), (B, 1, 1, T, len(S1_BANDS)))
+        self.assertEqual(tuple(fast_preds.s2.shape), (B, 1, 1, T, len(S2_BANDS)))
+        self.assertEqual(tuple(fast_preds.meteo.shape), (B, 1, 1, T, len(METEO_BANDS)))
+        self.assertEqual(tuple(fast_preds.dem.shape), (B, 1, 1, len(DEM_BANDS)))
+        self.assertEqual(tuple(fast_preds.latlon.shape), (B, 1, 1, 2))
+        self.assertEqual(tuple(fast_preds.timestamps.shape), (B, T, 3))
+        self.assertEqual(tuple(fast_preds.label.shape), (B, 1, 1, 1, 1))
+
+        vp = self._np(fast_attrs["valid_position"])
+        self.assertEqual(vp.shape, (B,))
+        self.assertTrue(np.all(vp >= 0), "valid_position must be >= 0")
+        self.assertTrue(np.all(vp < T), "valid_position must be < num_timesteps")
+
+        for idx in indices:
+            slow_preds, slow_attrs = ds.__getitem__(idx)
+            self.assertEqual(slow_preds.s1.shape, (1, 1, T, len(S1_BANDS)))
+            self.assertEqual(slow_preds.s2.shape, (1, 1, T, len(S2_BANDS)))
+            slow_vp = int(slow_attrs["valid_position"])
+            self.assertGreaterEqual(slow_vp, 0)
+            self.assertLess(slow_vp, T)
+
+    def test_augmented_valid_position_always_in_window(self):
+        """valid_position must fall inside [0, num_timesteps) across many draws."""
+        ds = self._make_ds(augment=True)
+        T = self.NUM_TS
+        indices = list(range(self.NUM_SAMPLES))
+
+        for _ in range(10):
+            fast_preds, fast_attrs = ds.__getitems__(indices)
+            vp = self._np(fast_attrs["valid_position"])
+            self.assertTrue(
+                np.all((vp >= 0) & (vp < T)),
+                f"valid_position out of range [0, {T}): {vp}",
+            )
+
+    # ------------------------------------------------------------------
+    # 4. time_explicit label placement
+    # ------------------------------------------------------------------
+
+    def test_time_explicit_label_position_exact_match(self):
+        """time_explicit=True: label placed at relative valid_position matches between paths."""
+        ds = self._make_ds(augment=False, time_explicit=True)
+        self.assertIsNotNone(ds._batch_cache)
+
+        T = self.NUM_TS
+        indices = list(range(self.NUM_SAMPLES))
+        fast_preds, fast_attrs = ds.__getitems__(indices)
+
+        for i, idx in enumerate(indices):
+            slow_preds, _ = ds.__getitem__(idx)
+            fast_lbl = self._np(fast_preds.label[i, 0, 0, :, 0])  # (T,)
+            slow_lbl = self._np(slow_preds.label[0, 0, :, 0])  # (T,)
+            np.testing.assert_array_equal(
+                fast_lbl,
+                slow_lbl,
+                err_msg=f"time_explicit label mismatch at sample index {i}",
+            )
+
+            # Exactly one timestep should carry a real label; the rest are NODATAVALUE
+            vp = int(self._np(fast_attrs["valid_position"])[i])
+            self.assertNotEqual(
+                int(fast_lbl[vp]),
+                NODATAVALUE,
+                msg=f"Label at valid_position={vp} must not be NODATAVALUE",
+            )
+            nodata_count = int(np.sum(fast_lbl == NODATAVALUE))
+            self.assertEqual(
+                nodata_count,
+                T - 1,
+                msg=f"Expected exactly {T - 1} NODATAVALUE label entries, got {nodata_count}",
+            )
+
+    # ------------------------------------------------------------------
+    # 5. Sensor masking invariants
+    # ------------------------------------------------------------------
+
+    def test_masking_applied_in_fast_path(self):
+        """With SensorMaskingConfig enabled the fast path must apply masking."""
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        cfg = SensorMaskingConfig(enable=True, s2_cloud_timestep_prob=0.8, seed=7)
+        ds = self._make_ds(augment=False, masking_config=cfg)
+        self.assertIsNotNone(ds._batch_cache)
+
+        fast_preds, _ = ds.__getitems__(list(range(self.NUM_SAMPLES)))
+        s2 = self._np(fast_preds.s2)  # (B, 1, 1, T, bands)
+        has_nodata = (s2 == NODATAVALUE).any()
+        self.assertTrue(has_nodata, "Expected NODATAVALUE in S2 after masking")
+
+    def test_masking_s1_s2_never_both_fully_masked(self):
+        """Joint S1+S2 guard must prevent all-NODATAVALUE in both sensors simultaneously."""
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_timestep_dropout_prob=0.4,
+            s2_cloud_timestep_prob=0.4,
+            seed=0,
+        )
+        ds = self._make_ds(augment=False, masking_config=cfg)
+        self.assertIsNotNone(ds._batch_cache)
+
+        indices = list(range(self.NUM_SAMPLES))
+        for trial in range(8):
+            np.random.seed(trial)
+            fast_preds, _ = ds.__getitems__(indices)
+            s1 = self._np(fast_preds.s1[:, 0, 0])  # (B, T, 2)
+            s2 = self._np(fast_preds.s2[:, 0, 0])  # (B, T, 13)
+            s1_fully_masked = np.all(s1 == NODATAVALUE, axis=(1, 2))  # (B,)
+            s2_fully_masked = np.all(s2 == NODATAVALUE, axis=(1, 2))  # (B,)
+            both = s1_fully_masked & s2_fully_masked
+            self.assertFalse(
+                both.any(),
+                f"Trial {trial}: found {both.sum()} sample(s) with both S1 and S2 fully masked",
+            )
+
+    def test_masking_slow_path_never_both_fully_masked(self):
+        """Slow path sensor masking guard must also hold the S1+S2 invariant."""
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_timestep_dropout_prob=0.4,
+            s2_cloud_timestep_prob=0.4,
+            seed=1,
+        )
+        ds = self._make_ds(augment=False, masking_config=cfg)
+
+        for trial in range(8):
+            np.random.seed(trial)
+            for idx in range(self.NUM_SAMPLES):
+                slow_preds, _ = ds.__getitem__(idx)
+                s1 = self._np(slow_preds.s1[0, 0])  # (T, 2)
+                s2 = self._np(slow_preds.s2[0, 0])  # (T, 13)
+                s1_fully = np.all(s1 == NODATAVALUE)
+                s2_fully = np.all(s2 == NODATAVALUE)
+                self.assertFalse(
+                    s1_fully and s2_fully,
+                    f"Trial {trial} idx {idx}: both S1 and S2 fully masked in slow path",
+                )
+
+    # ------------------------------------------------------------------
+    # 6. Fast-path disabled gracefully for unsupported configs
+    # ------------------------------------------------------------------
+
+    def test_fast_cache_disabled_for_dekad_freq(self):
+        """Fast path must gracefully disable itself for dekad frequency."""
+        ds = self._make_ds(augment=False, timestep_freq="dekad")
+        # Cache should be None because dekad is not supported
+        self.assertIsNone(
+            ds._batch_cache,
+            "Fast batch cache should be disabled for timestep_freq='dekad'",
+        )
+        # Slow path must still work
+        slow_preds, _ = ds.__getitem__(0)
+        self.assertIsNotNone(slow_preds.s1)
+
+
+class TestSelectTimestepStarts(unittest.TestCase):
+    """Tests for ``_select_timestep_starts``.
+
+    This method supersedes the removed ``_get_center_point`` helper.  It is the
+    single source of truth for timestep window placement shared by both the
+    per-sample slow path (``get_timestep_positions``) and the vectorized fast
+    path (``_fast_fetch_batch``).  Turbo's fast path inlined an incomplete copy
+    that silently skipped SSL augmentation; this test suite guards against any
+    regression to that behaviour.
+    """
+
+    NUM_TS = 12
+    AVAIL = 24  # plenty of slack for augmentation
+    HALF = NUM_TS // 2
+
+    def _make_base_ds(self, **kw):
+        data = {
+            "lat": [0.0],
+            "lon": [0.0],
+            "start_date": ["2021-01-01"],
+            "end_date": ["2023-01-01"],
+            "valid_time": ["2021-12-01"],
+            "available_timesteps": [self.AVAIL],
+            "valid_position": [12],
+            "finetune_class": ["cropland"],
+            "landcover_label": ["cropland"],
+            "croptype_label": ["cropland"],
+        }
+        for ts in range(self.AVAIL):
+            for tmpl in [
+                "OPTICAL-B02-ts{}-10m",
+                "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m",
+                "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m",
+                "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m",
+                "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m",
+                "OPTICAL-B12-ts{}-20m",
+                "SAR-VH-ts{}-20m",
+                "SAR-VV-ts{}-20m",
+                "METEO-precipitation_flux-ts{}-100m",
+                "METEO-temperature_mean-ts{}-100m",
+            ]:
+                data[tmpl.format(ts)] = [1.0]
+        data["DEM-alt-20m"] = [100.0]
+        data["DEM-slo-20m"] = [5.0]
+        df = pd.DataFrame(data)
+        task_type = kw.pop("task_type", "binary")
+        augment = kw.pop("augment", False)
+        # WorldCerealLabelledDataset only accepts binary/multiclass; use base
+        # WorldCerealDataset for SSL so _select_timestep_starts is accessible.
+        if task_type == "ssl":
+            return WorldCerealDataset(
+                df,
+                num_timesteps=self.NUM_TS,
+                timestep_freq="month",
+                task_type="ssl",
+                augment=augment,
+                **kw,
+            )
+        return WorldCerealLabelledDataset(
+            df,
+            task_type=task_type,
+            num_outputs=1,
+            num_timesteps=self.NUM_TS,
+            timestep_freq="month",
+            season_calendar_mode="off",
+            augment=augment,
+            **kw,
+        )
+
+    # ------------------------------------------------------------------
+    # Deterministic (no augmentation)
+    # ------------------------------------------------------------------
+
+    def test_no_augment_centers_on_valid_position(self):
+        """Without augmentation the window must be centered on valid_position."""
+        ds = self._make_base_ds(augment=False)
+        vp = 12
+        avail = self.AVAIL
+        T = self.NUM_TS
+        half = T // 2
+
+        first = int(ds._select_timestep_starts(avail, vp)[0])
+        self.assertIn(vp, range(first, first + T))
+        # center = clip(vp, half, avail-half) = clip(12, 6, 18) = 12
+        expected_center = max(half, min(vp, avail - half))
+        expected_first = max(0, min(avail, expected_center + half) - T)
+        self.assertEqual(first, expected_first)
+
+    def test_no_augment_clamps_near_start(self):
+        """valid_position close to start must be clamped, not go negative."""
+        ds = self._make_base_ds(augment=False)
+        T = self.NUM_TS
+        vp = 1  # well before half
+        first = int(ds._select_timestep_starts(self.AVAIL, vp)[0])
+        self.assertGreaterEqual(first, 0)
+        self.assertIn(vp, range(first, first + T))
+
+    def test_no_augment_clamps_near_end(self):
+        """valid_position close to end must be clamped so window stays in bounds."""
+        ds = self._make_base_ds(augment=False)
+        T = self.NUM_TS
+        avail = self.AVAIL
+        vp = avail - 1  # last valid position
+        first = int(ds._select_timestep_starts(avail, vp)[0])
+        self.assertGreaterEqual(first, 0)
+        self.assertLessEqual(first + T, avail)
+        self.assertIn(vp, range(first, first + T))
+
+    # ------------------------------------------------------------------
+    # SSL augmentation — turbo's fast path silently skipped this case
+    # ------------------------------------------------------------------
+
+    def test_ssl_augment_randomizes_window(self):
+        """SSL with augment=True must draw different windows across many draws.
+
+        Turbo's ``_fast_fetch_batch`` inlined ``if self.augment and not self.is_ssl``
+        which fell through to the deterministic center for SSL datasets.
+        ``_select_timestep_starts`` fixes that; this test ensures the window
+        actually moves around.
+
+        Note: for SSL, the window is NOT required to contain ``valid_position`` —
+        SSL augmentation freely jitters the window across the full timeseries.
+        """
+        ds = self._make_base_ds(augment=True, task_type="ssl")
+        self.assertTrue(ds.is_ssl)
+
+        T = self.NUM_TS
+        avail = self.AVAIL
+
+        firsts = set()
+        np.random.seed(0)
+        for _ in range(50):
+            first = int(ds._select_timestep_starts(avail, avail // 2)[0])
+            # Window must stay within timeseries bounds
+            self.assertGreaterEqual(first, 0)
+            self.assertLessEqual(first + T, avail)
+            firsts.add(first)
+
+        self.assertGreater(
+            len(firsts),
+            1,
+            "SSL augmentation must produce multiple distinct windows (got deterministic output)",
+        )
+
+    def test_ssl_augment_full_range_reachable(self):
+        """All valid first-timestep positions should be reachable under SSL augmentation."""
+        ds = self._make_base_ds(augment=True, task_type="ssl")
+        T = self.NUM_TS
+        avail = self.AVAIL
+        # For SSL: center ∈ [half, avail-half), so first ∈ [0, avail-T]
+        expected_min_first = 0
+        expected_max_first = avail - T
+
+        firsts = set()
+        np.random.seed(42)
+        for _ in range(500):
+            firsts.add(int(ds._select_timestep_starts(avail, avail // 2)[0]))
+
+        # Should cover most of the valid range after many draws
+        self.assertLessEqual(min(firsts), expected_min_first + 1)
+        self.assertGreaterEqual(max(firsts), expected_max_first - 1)
+
+    # ------------------------------------------------------------------
+    # Non-SSL augmentation
+    # ------------------------------------------------------------------
+
+    def test_non_ssl_augment_valid_pos_always_in_window(self):
+        """Non-SSL augmentation must keep valid_position inside the window."""
+        ds = self._make_base_ds(augment=True, task_type="binary")
+        T = self.NUM_TS
+        avail = self.AVAIL
+        vp = 12
+
+        np.random.seed(1)
+        for _ in range(100):
+            first = int(ds._select_timestep_starts(avail, vp)[0])
+            self.assertIn(
+                vp,
+                range(first, first + T),
+                f"valid_position={vp} not in window [{first}, {first + T})",
+            )
+
+    def test_non_ssl_augment_randomizes_window(self):
+        """Non-SSL augmentation must produce multiple distinct windows."""
+        ds = self._make_base_ds(augment=True, task_type="binary")
+        avail = self.AVAIL
+        vp = 12
+
+        firsts = set()
+        np.random.seed(2)
+        for _ in range(50):
+            firsts.add(int(ds._select_timestep_starts(avail, vp)[0]))
+
+        self.assertGreater(len(firsts), 1, "Non-SSL augmentation must vary the window")
+
+    def test_no_augment_when_avail_equals_num_timesteps(self):
+        """When available_timesteps == num_timesteps, window is always [0, T) regardless of augment."""
+        # augment=True but avail == T → no slack, must stay deterministic
+        ds = self._make_base_ds(augment=True, task_type="ssl")
+        T = self.NUM_TS
+        avail = T  # no slack
+        vp = T // 2
+
+        firsts = set()
+        np.random.seed(3)
+        for _ in range(20):
+            firsts.add(int(ds._select_timestep_starts(avail, vp)[0]))
+
+        self.assertEqual(firsts, {0}, "When avail == T, first must always be 0")
+
+    # ------------------------------------------------------------------
+    # Vectorized (batch) usage
+    # ------------------------------------------------------------------
+
+    def test_vectorized_matches_scalar(self):
+        """Passing a batch of identical rows must yield the same first as scalar calls."""
+        ds = self._make_base_ds(augment=False)
+        avail = self.AVAIL
+        vp = 12
+        B = 8
+
+        batch_firsts = ds._select_timestep_starts(np.full(B, avail), np.full(B, vp))
+        scalar_first = int(ds._select_timestep_starts(avail, vp)[0])
+        np.testing.assert_array_equal(
+            batch_firsts,
+            np.full(B, scalar_first),
+            err_msg="Vectorized result must match scalar for no-augment case",
+        )
+
+    def test_vectorized_ssl_augment_windows_in_bounds(self):
+        """Batch _select_timestep_starts with SSL augment: all windows stay within timeseries.
+
+        For SSL, the window is NOT constrained to contain valid_position —
+        augmentation freely jitters the window.  This test only checks bounds.
+        """
+        ds = self._make_base_ds(augment=True, task_type="ssl")
+        T = self.NUM_TS
+        # Batch with varying available_timesteps
+        avail = np.array([20, 22, 24, 18, 20])
+        # Use vp at midpoint (arbitrary for SSL)
+        vp = avail // 2
+        B = len(avail)
+
+        np.random.seed(5)
+        for _ in range(20):
+            firsts = ds._select_timestep_starts(avail, vp)
+            for i in range(B):
+                self.assertGreaterEqual(int(firsts[i]), 0)
+                self.assertLessEqual(
+                    int(firsts[i]) + T,
+                    int(avail[i]),
+                    f"Batch SSL: window [{firsts[i]}, {firsts[i] + T}) exceeds avail={avail[i]}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
