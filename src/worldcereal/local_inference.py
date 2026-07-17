@@ -97,6 +97,71 @@ def _parse_season_arg(season):
     )
 
 
+def _widen_slots_to(
+    slots: Sequence[Any],
+    *,
+    available: set,
+    max_timesteps: int,
+    timestep_freq: str,
+    prefer_tail: bool,
+) -> list:
+    """Widen ``slots`` to exactly ``max_timesteps`` using real cube slots.
+
+    Only composite slots present in ``available`` are added, growing toward the
+    ``prefer_tail`` side first (the end when ``prefer_tail``) and falling back
+    to the other side at data boundaries. Never fabricates nodata timesteps: a
+    fully-missing timestep would reach the encoder as a masked token column,
+    a distribution the heads never saw in training.
+
+    Raises
+    ------
+    ValueError
+        If the dataset cannot supply ``max_timesteps`` real slots around the
+        window.
+    """
+    head: list = []
+    tail: list = []
+
+    def _grow_tail() -> bool:
+        slot = advance_composite_slot(
+            slots[-1] if not tail else tail[-1], timestep_freq
+        )
+        if pd.Timestamp(slot) in available:
+            tail.append(slot.astype("datetime64[D]"))
+            return True
+        return False
+
+    def _grow_head() -> bool:
+        slot = align_to_composite_window(
+            (slots[0] if not head else head[0]) - np.timedelta64(1, "D"),
+            timestep_freq,
+        )
+        if pd.Timestamp(slot) in available:
+            head.insert(0, slot.astype("datetime64[D]"))
+            return True
+        return False
+
+    order = (_grow_tail, _grow_head) if prefer_tail else (_grow_head, _grow_tail)
+    while len(slots) + len(head) + len(tail) < max_timesteps:
+        if not (order[0]() or order[1]()):
+            raise ValueError(
+                f"Cannot widen the season window to {max_timesteps} "
+                f"{timestep_freq} slots: the dataset only provides "
+                f"{len(slots) + len(head) + len(tail)} real slots around the "
+                f"window. Refusing to pad with nodata timesteps (the model was "
+                f"trained on exactly {max_timesteps} real slots)."
+            )
+
+    if head or tail:
+        logger.info(
+            f"Widened season window from {len(slots)} to {max_timesteps} "
+            f"{timestep_freq} slots using real cube data: "
+            f"+{len(head)} slot(s) before ({', '.join(str(s) for s in head) or '-'}), "
+            f"+{len(tail)} after ({', '.join(str(s) for s in tail) or '-'})."
+        )
+    return head + list(slots) + tail
+
+
 def subset_ds_temporally(
     ds,
     season,
@@ -208,53 +273,13 @@ def subset_ds_temporally(
     t_index = ds.t.to_index()
 
     if pad_to_max and len(slots) < max_timesteps:
-        available = {pd.Timestamp(t) for t in t_index}
-        widened_head, widened_tail = [], []
-
-        def _grow_tail() -> bool:
-            slot = advance_composite_slot(
-                slots[-1] if not widened_tail else widened_tail[-1], timestep_freq
-            )
-            if pd.Timestamp(slot) in available:
-                widened_tail.append(slot.astype("datetime64[D]"))
-                return True
-            return False
-
-        def _grow_head() -> bool:
-            slot = align_to_composite_window(
-                (slots[0] if not widened_head else widened_head[0])
-                - np.timedelta64(1, "D"),
-                timestep_freq,
-            )
-            if pd.Timestamp(slot) in available:
-                widened_head.insert(0, slot.astype("datetime64[D]"))
-                return True
-            return False
-
-        # Grow toward the preferred end first: prefer_tail means the season's
-        # later slots carry the discriminative phenology, so extend the END
-        # forward before falling back to earlier context (and vice versa).
-        order = (_grow_tail, _grow_head) if prefer_tail else (_grow_head, _grow_tail)
-        while len(slots) + len(widened_head) + len(widened_tail) < max_timesteps:
-            if not (order[0]() or order[1]()):
-                raise ValueError(
-                    f"Cannot widen the season window to {max_timesteps} "
-                    f"{timestep_freq} slots: the dataset only provides "
-                    f"{len(slots) + len(widened_head) + len(widened_tail)} real "
-                    f"slots around the window. Refusing to pad with nodata "
-                    f"timesteps (the model was trained on exactly "
-                    f"{max_timesteps} real slots)."
-                )
-        if widened_head or widened_tail:
-            logger.info(
-                f"Widened season window from {len(slots)} to {max_timesteps} "
-                f"{timestep_freq} slots using real cube data: "
-                f"+{len(widened_head)} slot(s) before "
-                f"({', '.join(str(s) for s in widened_head) or '-'}), "
-                f"+{len(widened_tail)} after "
-                f"({', '.join(str(s) for s in widened_tail) or '-'})."
-            )
-        slots = widened_head + list(slots) + widened_tail
+        slots = _widen_slots_to(
+            slots,
+            available={pd.Timestamp(t) for t in t_index},
+            max_timesteps=max_timesteps,
+            timestep_freq=timestep_freq,
+            prefer_tail=prefer_tail,
+        )
 
     expected = [pd.Timestamp(s) for s in slots]
     present = [ts for ts in expected if ts in t_index]
@@ -354,34 +379,6 @@ def _clamp_season_windows_to_ds(
     return clamped
 
 
-def reconstruct_dataset(arr: xr.DataArray, ds: xr.Dataset) -> xr.Dataset:
-    """Reconstruct CRS attributes."""
-    crs_attrs = ds["crs"].attrs
-    x = ds.coords.get("x", None)
-    y = ds.coords.get("y", None)
-
-    # Build dataset with bands as separate variables
-    new_ds = arr.assign_coords(bands=arr.bands.astype(str)).to_dataset(dim="bands")
-
-    # Reset the coordinates
-    new_ds = new_ds.assign_coords(x=x)
-    new_ds["x"].attrs.setdefault("standard_name", "projection_x_coordinate")
-    new_ds["x"].attrs.setdefault("units", "m")
-
-    new_ds = new_ds.assign_coords(y=y)
-    new_ds["y"].attrs.setdefault("standard_name", "projection_y_coordinate")
-    new_ds["y"].attrs.setdefault("units", "m")
-
-    # Assign CRS attributes to all data variables
-    crs_name = "spatial_ref"
-    new_ds[crs_name] = xr.DataArray(0, attrs=crs_attrs)
-
-    for v in new_ds.data_vars:
-        new_ds[v].attrs["grid_mapping"] = crs_name
-
-    return new_ds
-
-
 def build_postprocess_spec(
     *,
     enabled: bool,
@@ -392,9 +389,7 @@ def build_postprocess_spec(
     if not requested:
         return None
 
-    spec: Dict[str, object] = {
-        "enabled": enabled or method is not None or kernel_size is not None
-    }
+    spec: Dict[str, object] = {"enabled": requested}
     if method:
         spec["method"] = method
     if kernel_size is not None:
