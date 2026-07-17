@@ -22,12 +22,12 @@ from tqdm import tqdm
 
 from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.backbone import build_presto_backbone, resolve_seasonal_encoder
+from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.train.datasets import (
     SeasonCalendarMode,
     SensorMaskingConfig,
     WorldCerealTrainingDataset,
 )
-from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.utils.refdata import (
     DATA_DIR,
     get_class_mappings,
@@ -131,9 +131,7 @@ def _attach_regions_from_boundaries(
 
     if valid_mask.any():
         n_target = int(valid_mask.sum())
-        logger.info(
-            f"Assigning regions for {n_target:,} samples via spatial join ..."
-        )
+        logger.info(f"Assigning regions for {n_target:,} samples via spatial join ...")
         coords = pd.DataFrame(
             {"lon": lon[valid_mask], "lat": lat[valid_mask]},
             index=df.index[valid_mask],
@@ -1196,8 +1194,12 @@ def get_training_dfs_from_parquet(
     pf = pq.ParquetFile(wide_parquet_output_path)
     arrow_parts = []
     for i in range(pf.num_row_groups):
-        arrow_parts.append(pf.read_row_group(i))  # stay in Arrow until all groups are loaded
-    df = pa.concat_tables(arrow_parts).to_pandas()  # single conversion: avoids N intermediate pandas frames
+        arrow_parts.append(
+            pf.read_row_group(i)
+        )  # stay in Arrow until all groups are loaded
+    df = pa.concat_tables(
+        arrow_parts
+    ).to_pandas()  # single conversion: avoids N intermediate pandas frames
     del arrow_parts
     gc.collect()
 
@@ -1264,7 +1266,9 @@ def get_training_dfs_from_parquet(
                 current_mode = os.stat(wide_parquet_output_path).st_mode
                 os.chmod(wide_parquet_output_path, current_mode | stat.S_IWGRP)
             except OSError as e:
-                logger.warning(f"Could not set group-write permission on {wide_parquet_output_path}: {e}")
+                logger.warning(
+                    f"Could not set group-write permission on {wide_parquet_output_path}: {e}"
+                )
         logger.info(
             f"Updated wide parquet file with region labels at {wide_parquet_output_path}"
         )
