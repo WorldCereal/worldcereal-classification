@@ -1258,6 +1258,63 @@ class WorldCerealDataset(Dataset):
         timestep_positions, _ = self.get_timestep_positions(row)
         return Predictors(**self.get_inputs(row, timestep_positions))
 
+    def _select_timestep_starts(
+        self,
+        available_timesteps: Union[int, np.ndarray, Sequence[int]],
+        valid_position: Union[int, np.ndarray, Sequence[int]],
+        min_edge_buffer: int = MIN_EDGE_BUFFER,
+        rng: Optional[np.random.Generator] = None,
+    ) -> np.ndarray:
+        """Select first timestep indices for one or more samples.
+
+        This is the shared implementation behind scalar ``get_timestep_positions``
+        and vectorized ``_fast_fetch_batch`` so augmentation/window-placement
+        semantics cannot drift between the two paths.
+        """
+        avail = np.atleast_1d(np.asarray(available_timesteps, dtype=np.int64))
+        vp = np.atleast_1d(np.asarray(valid_position, dtype=np.int64))
+        half = self.num_timesteps // 2
+
+        if not self.augment or np.all(avail == self.num_timesteps):
+            center = np.clip(vp, half, avail - half)
+        elif self.is_ssl:
+            low = np.full_like(avail, half)
+            high = avail - half
+            if rng is None:
+                center = np.array(
+                    [np.random.randint(lo, hi) for lo, hi in zip(low, high)],
+                    dtype=np.int64,
+                )
+            else:
+                center = rng.integers(low, high)
+        else:
+            buffer = max(1, min_edge_buffer)
+            min_center = np.maximum(half, vp + buffer - half)
+            max_center = np.minimum(avail - half, vp - buffer + half)
+            needs_rand = avail != self.num_timesteps
+            if (needs_rand & (min_center > max_center)).any():
+                raise ValueError(
+                    "low >= high while drawing augmented center point; "
+                    "run _filter_temporally_invalid_rows on the dataframe."
+                )
+            safe_min = np.where(needs_rand, min_center, 0)
+            safe_max = np.where(needs_rand, max_center, 0)
+            if rng is None:
+                rand_center = np.array(
+                    [
+                        np.random.randint(lo, hi + 1)
+                        for lo, hi in zip(safe_min, safe_max)
+                    ],
+                    dtype=np.int64,
+                )
+            else:
+                rand_center = rng.integers(safe_min, safe_max + 1)
+            det_center = np.clip(vp, half, avail - half)
+            center = np.where(needs_rand, rand_center, det_center)
+
+        last = np.minimum(avail, center + half)
+        return np.maximum(0, last - self.num_timesteps).astype(np.int64)
+
     def get_timestep_positions(
         self,
         row_d: Dict,
@@ -1266,15 +1323,16 @@ class WorldCerealDataset(Dataset):
         available_timesteps = int(row_d["available_timesteps"])
         valid_position = int(row_d["valid_position"])
 
-        # Get the center point to use for extracting a sequence of timesteps
-        center_point = self._get_center_point(
-            available_timesteps, valid_position, self.augment, min_edge_buffer
+        first_timestep = int(
+            self._select_timestep_starts(
+                available_timesteps,
+                valid_position,
+                min_edge_buffer=min_edge_buffer,
+            )[0]
         )
-
-        # Determine the timestep positions to extract
-        last_timestep = min(available_timesteps, center_point + self.num_timesteps // 2)
-        first_timestep = max(0, last_timestep - self.num_timesteps)
-        timestep_positions = list(range(first_timestep, last_timestep))
+        timestep_positions = list(
+            range(first_timestep, first_timestep + self.num_timesteps)
+        )
 
         # Sanity check to make sure we will extract the correct number of timesteps
         if len(timestep_positions) != self.num_timesteps:
@@ -2734,27 +2792,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         avail = c["avail"][rows]
         vp = c["vp"][rows]
 
-        # ---- timestep window (mirrors _get_center_point) -------------------
-        half = T // 2
-        det_center = np.clip(vp, half, avail - half)
-        if self.augment and not self.is_ssl:
-            buf = max(1, MIN_EDGE_BUFFER)
-            min_c = np.maximum(half, vp + buf - half)
-            max_c = np.minimum(avail - half, vp - buf + half)
-            needs_rand = avail != T
-            if (needs_rand & (min_c > max_c)).any():
-                raise ValueError(
-                    "low >= high while drawing augmented center point; "
-                    "run _filter_temporally_invalid_rows on the dataframe."
-                )
-            safe_min = np.where(needs_rand, min_c, 0)
-            safe_max = np.where(needs_rand, max_c, 0)
-            rand_center = rng.integers(safe_min, safe_max + 1)
-            center = np.where(needs_rand, rand_center, det_center)
-        else:
-            center = det_center
-        last = np.minimum(avail, center + half)
-        first = np.maximum(0, last - T)
+        # ---- timestep window ------------------------------------------------
+        first = self._select_timestep_starts(avail, vp, rng=rng)
 
         if ((vp < first) | (vp >= first + T)).any():
             bad = int(np.flatnonzero((vp < first) | (vp >= first + T))[0])
