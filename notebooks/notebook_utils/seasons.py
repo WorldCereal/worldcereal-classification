@@ -9,7 +9,10 @@ from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent
 from pyproj import Transformer
 
-from worldcereal.seasons import get_season_dates_for_extent
+from worldcereal.seasons import (
+    fetch_cropcalendar_dates_extent,
+    get_season_dates_for_extent,
+)
 
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 
@@ -185,6 +188,44 @@ def retrieve_worldcereal_seasons(
     # Plot the seasons if requested
     if plot:
         plot_worldcereal_seasons(results, extent)
+
+    return results
+
+
+def retrieve_worldcereal_seasons_parquet(
+    extent: BoundingBoxExtent,
+    seasons: List[str] = ["s1", "s2"],
+    plot: bool = True,
+):
+    """Retrieve WorldCereal seasons from parquet-based crop-calendar lookups.
+
+    Parameters
+    ----------
+    extent : BoundingBoxExtent
+        Extent for which to load seasonality.
+    seasons : List[str], optional
+        Seasons to load, by default s1 and s2.
+    plot : bool, optional
+        Whether to plot the seasons, by default True.
+
+    Returns
+    -------
+    dict
+        Dictionary with season names as keys and start and end dates as values.
+    """
+    results = {}
+
+    for season in seasons:
+        logger.info(
+            f"Retrieving parquet-based WorldCereal season '{season}' for the given extent"
+        )
+        seasonal_extent = fetch_cropcalendar_dates_extent(extent, 2021, f"tc-{season}")
+        sos = pd.to_datetime(seasonal_extent.start_date)
+        eos = pd.to_datetime(seasonal_extent.end_date)
+        results[season] = (sos, eos)
+
+    if plot:
+        plot_worldcereal_seasons(results, extent, tag="(parquet)")
 
     return results
 

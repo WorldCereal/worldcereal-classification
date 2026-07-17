@@ -77,7 +77,10 @@ from worldcereal.job_params import (
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
-from worldcereal.seasons import get_season_dates_for_extent
+from worldcereal.seasons import (
+    enrich_production_grid_from_crop_calendars,
+    get_season_dates_for_extent,
+)
 from worldcereal.utils.production_grid import create_production_grid, ensure_utm_grid
 
 
@@ -732,10 +735,27 @@ class WorldCerealJobManager(MultiBackendJobManager):
         df["season_windows"] = season_meta["season_windows"].values
         return df
 
+    def _infer_temporal_and_seasons_from_crop_calendars_parquet(
+            self, df: pd.DataFrame, get_seasons: bool = True
+    ) -> pd.DataFrame:
+        """Infer temporal extent and seasons from crop calendars parquet."""
+        
+        if self._year is None:
+            raise ValueError(
+                "Cannot infer seasons from crop calendars without a year specified in the job manager!"
+            )
+        year = self._year
+        return enrich_production_grid_from_crop_calendars(
+            grid_df=df,
+            year=year,
+            get_seasons=get_seasons,
+            extent_resolver=self._row_spatial_extent,
+        )
+
     def _infer_temporal_and_seasons_from_crop_calendars(
         self, df: pd.DataFrame, get_seasons: bool = True
     ) -> pd.DataFrame:
-        """Infer temporal extent and seasons from crop calendars."""
+        """Infer temporal extent and seasons from crop calendar global TIFFs."""
 
         if self._year is None:
             raise ValueError(
