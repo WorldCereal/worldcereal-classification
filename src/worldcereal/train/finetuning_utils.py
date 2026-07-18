@@ -2128,6 +2128,51 @@ def _compute_loss(
     return loss, masked_preds.detach(), masked_targets.detach()
 
 
+def _resolve_plateau_metric(
+    metric: str,
+    current_val_loss: float,
+    seasonal_metrics_flat: dict,
+) -> float:
+    """Return the scalar fed to ReduceLROnPlateau (which runs in mode='min').
+
+    For 'val_loss' the raw loss is returned unchanged. For the F1 metrics the
+    value is converted to ``1 - f1`` so that a higher F1 maps to a lower number
+    and mode='min' still detects plateaus.
+    """
+    if metric == "val_loss":
+        return current_val_loss
+    lc_f1 = seasonal_metrics_flat.get("landcover/f1_macro", -1.0)
+    ct_f1 = seasonal_metrics_flat.get("croptype/f1_macro", -1.0)
+    if metric == "lc_f1":
+        value = lc_f1
+    elif metric == "ct_f1":
+        value = ct_f1
+    elif metric == "mean_f1":
+        value = (max(0.0, lc_f1) + max(0.0, ct_f1)) / 2.0
+    elif metric == "regional_mean_f1":
+        lc_r = seasonal_metrics_flat.get("landcover/regional_f1_macro")
+        ct_r = seasonal_metrics_flat.get("croptype/regional_f1_macro")
+        value = (
+            (lc_r if lc_r is not None else max(0.0, lc_f1))
+            + (ct_r if ct_r is not None else max(0.0, ct_f1))
+        ) / 2.0
+    else:
+        return current_val_loss
+    # A negative value means the requested F1 was unavailable this epoch (no
+    # records for that head, or every crop-type sample gate-rejected, or too few
+    # regions clearing min_support for the regional variant).
+    if value < 0:
+        logger.warning(
+            f"lr_plateau_metric='{metric}' unavailable this epoch "
+            f"(value={value:.3f}); falling back to val_loss={current_val_loss:.4f} "
+            "for the ReduceLROnPlateau step. If this persists every epoch, the "
+            "chosen metric is never computed for this run -- pick a different "
+            "--lr_plateau_metric."
+        )
+        return current_val_loss
+    return 1.0 - value
+
+
 def run_finetuning(
     model: torch.nn.Module,
     train_dl: DataLoader,
@@ -2148,6 +2193,9 @@ def run_finetuning(
     checkpoint_metric: Literal[
         "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
     ] = "mean_f1",
+    lr_plateau_metric: Literal[
+        "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
+    ] = "val_loss",
     regional_f1_min_support: int = 50,
 ):
     """Perform the training loop for fine-tuning a model.
@@ -2591,7 +2639,11 @@ def run_finetuning(
         # returns one value per param group in ascending order, so the max.
         lr_before_step = max(scheduler.get_last_lr())
         if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
-            scheduler.step(current_val_loss)
+            scheduler.step(
+                _resolve_plateau_metric(
+                    lr_plateau_metric, current_val_loss, seasonal_metrics_flat
+                )
+            )
         else:
             scheduler.step()
         lr_after_step = max(scheduler.get_last_lr())
