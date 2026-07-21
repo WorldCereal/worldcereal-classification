@@ -23,11 +23,13 @@ from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
 from worldcereal.openeo.inference import (
+    SeasonWindowValue,
     SeasonalInferenceEngine,
     get_expected_timesteps_from_artifact,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 from worldcereal.train.seasonal import (
+    CompositeFreq,
     advance_composite_slot,
     align_to_composite_window,
     enumerate_composite_slots,
@@ -102,7 +104,7 @@ def _widen_slots_to(
     *,
     available: set,
     max_timesteps: int,
-    timestep_freq: str,
+    timestep_freq: CompositeFreq,
     prefer_tail: bool,
 ) -> list:
     """Widen ``slots`` to exactly ``max_timesteps`` using real cube slots.
@@ -169,7 +171,7 @@ def subset_ds_temporally(
     nodata_value: int = NODATAVALUE,
     max_timesteps: int = 12,
     prefer_tail: bool = True,
-    timestep_freq: str = "month",
+    timestep_freq: CompositeFreq = "month",
     pad_to_max: bool = False,
 ):
     """
@@ -406,7 +408,7 @@ def attach_crs_metadata(
         coords["x"] = template.coords["x"]
     if "y" in template.coords:
         coords["y"] = template.coords["y"]
-    out = result.assign_coords(**coords) if coords else result
+    out = result.assign_coords(coords) if coords else result
 
     if crs_var is None:
         return out
@@ -433,7 +435,7 @@ def run_seasonal_inference(
     landcover_head_zip: Optional[Union[str, Path]] = None,
     croptype_head_zip: Optional[Union[str, Path]] = None,
     season_ids: Optional[Sequence[str]] = None,
-    season_windows: Optional[Mapping[str, Sequence[object]]] = None,
+    season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
     export_class_probabilities: bool = False,
     enable_cropland_head: bool = True,
     enable_croptype_head: bool = True,
@@ -447,7 +449,7 @@ def run_seasonal_inference(
     fillna_value: int = NODATAVALUE,
     as_dataset: bool = True,
     mask_b8a: bool = True,
-    timestep_freq: str = "month",
+    timestep_freq: CompositeFreq = "month",
 ) -> Union[xr.Dataset, xr.DataArray]:
     """Run seasonal cropland/croptype inference locally with a single entrypoint.
 
