@@ -17,7 +17,6 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 import xarray as xr
-from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
@@ -245,8 +244,8 @@ def subset_ds_temporally(
     """
 
     start_str, end_str = _parse_season_arg(season)
-    start_dt = parse(start_str)
-    end_dt = parse(end_str)
+    start_dt = pd.Timestamp(start_str)
+    end_dt = pd.Timestamp(end_str)
 
     # Enumerate the composite slots (month or dekad starts) covered by the
     # season window, snapping both edges to their slot starts. 
