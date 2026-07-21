@@ -494,10 +494,79 @@ def _records_to_scalar_metrics(records: List[dict]) -> dict[str, float]:
         return {}
 
 
+def _records_to_regional_mean_f1(
+    records: List[dict],
+    min_support: int = 50,
+) -> Optional[float]:
+    """Unweighted mean of per-region macro F1 derived from prediction records.
+
+    Groups records by their ``region`` field and averages the per-region macro
+    F1 so every region counts equally.
+    Records without region information (missing, NaN or "unknown") are
+    ignored, as are regions with fewer than ``min_support`` records.
+    """
+    if not records:
+        return None
+
+    from sklearn.metrics import f1_score
+
+    records_by_region: dict[str, List[dict]] = defaultdict(list)
+    for rec in records:
+        region = rec.get("region")
+        if region is None or _is_missing_value(region) or str(region) == "unknown":
+            continue
+        records_by_region[str(region)].append(rec)
+
+    regional_f1s: List[float] = []
+    for region, region_records in records_by_region.items():
+        if len(region_records) < min_support:
+            continue
+        y_true = [rec["target_class"] for rec in region_records]
+        y_pred = [rec["pred_class"] for rec in region_records]
+        try:
+            regional_f1s.append(
+                f1_score(y_true, y_pred, average="macro", zero_division=0)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed computing macro F1 for region '{region}': {exc}")
+
+    if len(regional_f1s) < 2:
+        return None
+    return float(np.mean(regional_f1s))
+
+
+def _crop_false_positive_ratio(
+    y_true: Sequence[str],
+    y_pred: Sequence[str],
+    cropland_class_names: Sequence[str] = ("temporary_crops",),
+) -> Optional[float]:
+    """Share of true non-crop samples predicted as cropland: FP / (FP + TN).
+
+    Cropland is the *set* ``cropland_class_names``, as defined by the user. 
+    Returns ``None`` when the ratio would be meaningless: no cropland
+    class occurs in ``y_true`` (mismatched vocabulary), or there are no negatives.
+    """
+    positives = {str(c) for c in cropland_class_names}
+    truths = [str(t) for t in y_true]
+    if not any(t in positives for t in truths):
+        logger.warning(
+            f"crop_fpr skipped: none of the cropland classes {sorted(positives)} "
+            "occur in the true labels."
+        )
+        return None
+
+    negatives = [(t, p) for t, p in zip(truths, y_pred) if t not in positives]
+    if not negatives:
+        return None
+    false_positives = sum(1 for _, p in negatives if str(p) in positives)
+    return false_positives / len(negatives)
+
+
 def _log_regional_metrics(
     records: List[dict],
     task_name: str,
     class_names: Optional[List[str]] = None,
+    cropland_class_names: Optional[Sequence[str]] = None,
 ) -> None:
     """Log per-region macro F1 summary derived from prediction records.
 
@@ -505,6 +574,9 @@ def _log_regional_metrics(
     macro-averaged precision, recall and F1 per region so that training
     logs reveal which regions are doing better or worse each epoch.
     Silently returns when no region information is present.
+
+    ``cropland_class_names`` adds a per-region ``crop_fpr`` commission column
+    (see :func:`_crop_false_positive_ratio`).
     """
     if not records:
         return
@@ -539,15 +611,18 @@ def _log_regional_metrics(
             y_true, y_pred, labels=labels, output_dict=True, zero_division=0
         )
         macro = report.get("macro avg", {})
-        row_list.append(
-            {
-                "region": region,
-                "n_samples": len(region_df),
-                "macro_f1": macro.get("f1-score", float("nan")),
-                "macro_prec": macro.get("precision", float("nan")),
-                "macro_recall": macro.get("recall", float("nan")),
-            }
-        )
+        row = {
+            "region": region,
+            "n_samples": len(region_df),
+            "macro_f1": macro.get("f1-score", float("nan")),
+            "macro_prec": macro.get("precision", float("nan")),
+            "macro_recall": macro.get("recall", float("nan")),
+        }
+
+        if cropland_class_names:
+            fpr = _crop_false_positive_ratio(y_true, y_pred, cropland_class_names)
+            row["crop_fpr"] = fpr if fpr is not None else float("nan")
+        row_list.append(row)
     if not row_list:
         return
     summary_df = pd.DataFrame(row_list).sort_values("macro_f1", ascending=False)
@@ -949,23 +1024,20 @@ class SeasonalMultiTaskLoss(nn.Module):
     def last_croptype_supervision(self) -> Mapping[str, float]:
         return self._last_croptype_supervision
 
-    def _task_weights_for(
+    def _task_weights_tensor(
         self,
         attrs: dict,
-        sample_indices: Sequence[int],
-        *,
         task_name: str,
         batch_size: int,
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         attr_key = self._task_sample_weight_attrs.get(task_name)
-        if attr_key is None or not sample_indices:
+        if attr_key is None:
             return None
 
         attr_values = _ensure_list(attrs.get(attr_key), batch_size, fill=None)
         weights: List[float] = []
-        for idx in sample_indices:
-            value = attr_values[idx]
+        for value in attr_values:
             if value is None or _is_missing_value(value):
                 numeric = self._sample_weight_default
             else:
@@ -1000,6 +1072,20 @@ class SeasonalMultiTaskLoss(nn.Module):
             total, min=1e-6
         )
 
+    @staticmethod
+    def _labels_to_indices(
+        labels: List[Optional[Any]], mapping: Mapping[str, int]
+    ) -> np.ndarray:
+        """Map class-name labels to head indices; -1 for missing/unmapped."""
+        out = np.full(len(labels), -1, dtype=np.int64)
+        for i, value in enumerate(labels):
+            if value is None or _is_missing_value(value):
+                continue
+            mapped = mapping.get(str(value))
+            if mapped is not None:
+                out[i] = mapped
+        return out
+
     def forward(
         self,
         output: SeasonalHeadOutput,
@@ -1022,164 +1108,114 @@ class SeasonalMultiTaskLoss(nn.Module):
         )
         label_tasks = _ensure_list(attrs.get("label_task"), batch_size, fill=None)
 
-        tasks: List[str] = []
+        lc_target_idx = self._labels_to_indices(landcover_labels, self._lc_to_idx)
+        ct_target_idx = self._labels_to_indices(croptype_labels, self._ct_to_idx)
+
+        # Task routing (mirrors the original per-sample logic): explicit
+        # label_task wins; otherwise croptype when a croptype label is present,
+        # landcover otherwise.
+        task_is_lc = np.zeros(batch_size, dtype=bool)
+        task_is_ct = np.zeros(batch_size, dtype=bool)
         for idx in range(batch_size):
-            if label_tasks[idx] is not None:
-                tasks.append(str(label_tasks[idx]))
+            label_task = label_tasks[idx]
+            if label_task is not None:
+                name = str(label_task)
+                task_is_lc[idx] = name == self.landcover_task_name
+                task_is_ct[idx] = name == self.croptype_task_name
             elif croptype_labels[idx] is not None and not _is_missing_value(
                 croptype_labels[idx]
             ):
-                tasks.append(self.croptype_task_name)
+                task_is_ct[idx] = True
             else:
-                tasks.append(self.landcover_task_name)
+                task_is_lc[idx] = True
 
         loss = torch.zeros(1, device=device, dtype=torch.float32)
 
         # Landcover pathway – only activate for samples explicitly routed to the LC
-        # head (tasks[idx] == landcover_task_name).  When the SeasonalTaskBatchSampler is
-        # used, CT-assigned samples carry label_task="croptype" so they are excluded
-        # here, preventing cropland-class contamination of the LC supervision signal.
-        landcover_indices = [
-            idx
-            for idx in range(batch_size)
-            if tasks[idx] == self.landcover_task_name
-            and landcover_labels[idx] is not None
-            and not _is_missing_value(landcover_labels[idx])
-            and str(landcover_labels[idx]) in self._lc_to_idx
-        ]
-        landcover_weights_full = self._task_weights_for(
-            attrs,
-            landcover_indices,
-            task_name=self.landcover_task_name,
-            batch_size=batch_size,
-            device=device,
-        )
-        if landcover_indices:
+        # head.  When the SeasonalTaskBatchSampler is used, CT-assigned samples carry
+        # label_task="croptype" so they are excluded here, preventing
+        # cropland-class contamination of the LC supervision signal.
+        lc_selected = np.flatnonzero(task_is_lc & (lc_target_idx >= 0))
+        if lc_selected.size:
             if output.global_logits is None:
                 raise ValueError(
                     "Seasonal head missing global logits for landcover supervision"
                 )
-            lc_logits = output.global_logits[landcover_indices]
-            lc_targets: List[int] = []
-            valid_idx: List[int] = []
-            for batch_idx, sample_idx in enumerate(landcover_indices):
-                class_name = landcover_labels[sample_idx]
-                if class_name is None or _is_missing_value(class_name):
-                    continue
-                mapped = self._lc_to_idx.get(str(class_name))
-                if mapped is None:
-                    continue
-                lc_targets.append(mapped)
-                valid_idx.append(batch_idx)
+            lc_index = torch.as_tensor(lc_selected, device=device, dtype=torch.long)
+            logits = output.global_logits.index_select(0, lc_index)
+            targets = torch.as_tensor(
+                lc_target_idx[lc_selected], device=device, dtype=torch.long
+            )
+            per_sample_losses = F.cross_entropy(logits, targets, reduction="none")
 
-            if lc_targets:
-                logits = lc_logits[valid_idx]
-                targets = torch.tensor(lc_targets, device=device, dtype=torch.long)
-                per_sample_losses = F.cross_entropy(
-                    logits,
-                    targets,
-                    reduction="none",
-                )
-                lc_sample_weights = None
-                if landcover_weights_full is not None:
-                    weight_idx = torch.tensor(
-                        valid_idx,
-                        device=device,
-                        dtype=torch.long,
-                    )
-                    lc_sample_weights = landcover_weights_full[weight_idx]
-                branch_loss = self._reduce_loss(per_sample_losses, lc_sample_weights)
-                loss = loss + self.landcover_weight * branch_loss
+            lc_weights = self._task_weights_tensor(
+                attrs, self.landcover_task_name, batch_size, device
+            )
+            lc_sample_weights = lc_weights[lc_index] if lc_weights is not None else None
+            branch_loss = self._reduce_loss(per_sample_losses, lc_sample_weights)
+            loss = loss + self.landcover_weight * branch_loss
 
-                effective_weight = (
-                    float(torch.sum(lc_sample_weights).item())
-                    if lc_sample_weights is not None
-                    else float(len(lc_targets))
-                )
-                scaled_loss = branch_loss * self.landcover_weight
-                self._last_task_losses[self.landcover_task_name] = {
-                    "raw_loss": float(branch_loss.detach().item()),
-                    "scaled_loss": float(scaled_loss.detach().item()),
-                    "weight": max(effective_weight, 1e-8),
-                }
+            effective_weight = (
+                float(torch.sum(lc_sample_weights).item())
+                if lc_sample_weights is not None
+                else float(lc_selected.size)
+            )
+            scaled_loss = branch_loss * self.landcover_weight
+            self._last_task_losses[self.landcover_task_name] = {
+                "raw_loss": float(branch_loss.detach().item()),
+                "scaled_loss": float(scaled_loss.detach().item()),
+                "weight": max(effective_weight, 1e-8),
+            }
 
         # Crop-type pathway
-        croptype_indices = [
-            i for i, task in enumerate(tasks) if task == self.croptype_task_name
-        ]
-        croptype_weights_full = self._task_weights_for(
-            attrs,
-            croptype_indices,
-            task_name=self.croptype_task_name,
-            batch_size=batch_size,
-            device=device,
-        )
+        ct_routed = np.flatnonzero(task_is_ct)
         eligible_croptype_samples = 0
         missing_representative_season = 0
-        if croptype_indices:
+        if ct_routed.size:
             if output.season_logits is None:
                 raise ValueError(
                     "Seasonal head missing season logits for crop-type supervision"
                 )
 
-            season_selection = _select_representative_season(
-                output, attrs, croptype_indices, allow_multiple=True
-            )
+            candidates = _candidate_season_matrix(output, attrs, ct_routed)
+            eligible = ct_target_idx[ct_routed] >= 0
+            has_candidates = candidates.any(axis=1)
+            eligible_croptype_samples = int(eligible.sum())
+            missing_representative_season = int((eligible & ~has_candidates).sum())
 
-            selected_logits: List[torch.Tensor] = []
-            selected_targets: List[int] = []
-            selection_weights: List[float] = []
-            for local_idx, sample_idx in enumerate(croptype_indices):
-                class_name = croptype_labels[sample_idx]
-                if class_name is None or _is_missing_value(class_name):
-                    continue
-                mapped = self._ct_to_idx.get(str(class_name))
-                if mapped is None:
-                    continue
-
-                eligible_croptype_samples += 1
-                seasons = season_selection[local_idx]
-                if not seasons:
-                    missing_representative_season += 1
-                    continue
-
-                season_ids = torch.as_tensor(
-                    seasons, device=output.season_logits.device, dtype=torch.long
+            supervise = eligible & has_candidates
+            if supervise.any():
+                # (sample, season) pairs — one CE term per pair, exactly like
+                # the original per-sample gather + concat.
+                sub = candidates[supervise]
+                pair_local, pair_season = np.nonzero(sub)
+                pair_sample = ct_routed[supervise][pair_local]
+                pair_sample_tensor = torch.as_tensor(
+                    pair_sample, device=device, dtype=torch.long
                 )
-                logits = output.season_logits[sample_idx, season_ids, :]
-                if logits.dim() == 1:
-                    logits = logits.unsqueeze(0)
 
-                selected_logits.append(logits)
-                selected_targets.extend([mapped] * logits.shape[0])
-                if croptype_weights_full is not None:
-                    weight_value = float(croptype_weights_full[local_idx].item())
-                    selection_weights.extend([weight_value] * logits.shape[0])
+                logits = output.season_logits[
+                    pair_sample_tensor,
+                    torch.as_tensor(pair_season, device=device, dtype=torch.long),
+                ]
+                targets = torch.as_tensor(
+                    ct_target_idx[pair_sample], device=device, dtype=torch.long
+                )
+                per_sample_losses = F.cross_entropy(logits, targets, reduction="none")
 
-            if selected_logits:
-                logits_tensor = torch.cat(selected_logits, dim=0)
-                targets = torch.tensor(
-                    selected_targets, device=device, dtype=torch.long
+                ct_weights = self._task_weights_tensor(
+                    attrs, self.croptype_task_name, batch_size, device
                 )
-                per_sample_losses = F.cross_entropy(
-                    logits_tensor,
-                    targets,
-                    reduction="none",
+                ct_sample_weights = (
+                    ct_weights[pair_sample_tensor] if ct_weights is not None else None
                 )
-                ct_sample_weights = None
-                if croptype_weights_full is not None and selection_weights:
-                    ct_sample_weights = torch.tensor(
-                        selection_weights,
-                        device=device,
-                        dtype=torch.float32,
-                    )
                 branch_loss = self._reduce_loss(per_sample_losses, ct_sample_weights)
                 loss = loss + self.croptype_weight * branch_loss
 
                 effective_weight = (
                     float(torch.sum(ct_sample_weights).item())
                     if ct_sample_weights is not None
-                    else float(len(selected_targets))
+                    else float(len(pair_sample))
                 )
                 scaled_loss = branch_loss * self.croptype_weight
                 self._last_task_losses[self.croptype_task_name] = {
@@ -1533,7 +1569,10 @@ def evaluate_finetuned_model(
             seasonal_croptype_records, seasonal_croptype_classes
         )
         _log_regional_metrics(
-            seasonal_landcover_records, "landcover", seasonal_landcover_classes
+            seasonal_landcover_records,
+            "landcover",
+            seasonal_landcover_classes,
+            cropland_class_names=cropland_class_names,
         )
         _log_regional_metrics(
             seasonal_croptype_records, "croptype", seasonal_croptype_classes
@@ -1801,6 +1840,52 @@ def _compute_weight_mask(
     return weights > threshold
 
 
+def _to_cpu_bool_array(value) -> np.ndarray:
+    if torch.is_tensor(value):
+        return value.detach().cpu().numpy().astype(bool)
+    return np.asarray(value, dtype=bool)
+
+
+def _candidate_season_matrix(
+    output: SeasonalHeadOutput,
+    attrs: dict,
+    sample_indices: np.ndarray,
+) -> np.ndarray:
+    """Boolean (n_samples, n_seasons) matrix of candidate seasons per sample.
+
+    A sample's candidates are the seasons flagged in ``in_seasons`` when any
+    flag is set; otherwise the seasons whose mask covers the (clipped)
+    ``valid_position`` timestep. Computed on CPU with numpy so callers avoid
+    per-sample GPU synchronisation.
+    """
+    season_masks = _to_cpu_bool_array(output.season_masks)
+
+    valid_position = attrs.get("valid_position")
+    if valid_position is None:
+        raise ValueError(
+            "valid_position must be present in attrs for seasonal operations"
+        )
+    if torch.is_tensor(valid_position):
+        vp = valid_position.detach().cpu().numpy().astype(np.int64)
+    else:
+        vp = np.asarray(valid_position, dtype=np.int64)
+
+    num_timesteps = season_masks.shape[-1]
+    sel = np.asarray(sample_indices, dtype=np.int64)
+    vp_sel = np.clip(vp[sel], 0, num_timesteps - 1)
+    mask_at_vp = season_masks[sel, :, vp_sel]  # (n, S)
+
+    in_seasons = attrs.get("in_seasons")
+    if in_seasons is not None:
+        ins = _to_cpu_bool_array(in_seasons)
+        if ins.ndim == 1:
+            ins = ins[None, :]
+        ins_sel = ins[sel]
+        use_ins = ins_sel.any(axis=1)
+        return np.where(use_ins[:, None], ins_sel, mask_at_vp)
+    return mask_at_vp
+
+
 def _select_representative_season(
     output: SeasonalHeadOutput,
     attrs: dict,
@@ -1816,53 +1901,10 @@ def _select_representative_season(
     tensor of indices, matching the previous behavior expected by evaluation utilities.
     """
 
-    season_masks = output.season_masks
-    if not torch.is_tensor(season_masks):
-        season_masks = torch.as_tensor(season_masks, dtype=torch.bool)
-    season_masks = season_masks.to(device=output.global_embedding.device)
-
-    in_seasons = attrs.get("in_seasons")
-    if in_seasons is not None:
-        in_seasons_tensor = torch.as_tensor(
-            in_seasons, device=season_masks.device, dtype=torch.bool
-        )
-        if in_seasons_tensor.dim() == 1:
-            in_seasons_tensor = in_seasons_tensor.unsqueeze(0)
-    else:
-        in_seasons_tensor = None
-
-    valid_position = attrs.get("valid_position")
-    if valid_position is None:
-        raise ValueError(
-            "valid_position must be present in attrs for seasonal operations"
-        )
-    valid_position_tensor = torch.as_tensor(
-        valid_position, device=season_masks.device, dtype=torch.long
+    candidates = _candidate_season_matrix(
+        output, attrs, np.asarray(sample_indices, dtype=np.int64)
     )
-
-    num_timesteps = season_masks.shape[-1]
-
-    selections: List[List[int]] = []
-    for sample_idx in sample_indices:
-        candidate_indices: List[int] = []
-        if in_seasons_tensor is not None:
-            season_flags = in_seasons_tensor[sample_idx].flatten()
-            if season_flags.any():
-                candidate_indices.extend(
-                    torch.nonzero(season_flags, as_tuple=False).view(-1).tolist()
-                )
-
-        if not candidate_indices:
-            vp = int(valid_position_tensor[sample_idx].item())
-            vp = max(0, min(vp, num_timesteps - 1))
-            mask = season_masks[sample_idx, :, vp]
-            mask = mask.flatten()
-            if mask.any():
-                candidate_indices.extend(
-                    torch.nonzero(mask, as_tuple=False).view(-1).tolist()
-                )
-
-        selections.append(candidate_indices)
+    selections: List[List[int]] = [np.flatnonzero(row).tolist() for row in candidates]
 
     if allow_multiple:
         return selections
@@ -1872,7 +1914,11 @@ def _select_representative_season(
         logger.warning(
             "Dropping samples without representative season while returning tensor"
         )
-    return torch.tensor(first_indices, device=season_masks.device, dtype=torch.long)
+    return torch.tensor(
+        first_indices,
+        device=output.global_embedding.device,
+        dtype=torch.long,
+    )
 
 
 def summarize_seasonal_predictions(
@@ -1928,16 +1974,18 @@ def summarize_seasonal_predictions(
         label is not None and not _is_missing_value(label) for label in landcover_labels
     )
 
+    # All prediction post-processing happens on detached CPU tensors: indexing
+    # CUDA tensors per sample forces a device synchronisation per access, which
+    # dominates evaluation time at large batch sizes.
     lc_probs: Optional[torch.Tensor] = None
     if output.global_logits is not None:
-        lc_probs = torch.softmax(output.global_logits, dim=-1)
+        lc_probs = torch.softmax(output.global_logits.detach().float().cpu(), dim=-1)
     elif has_landcover_targets:
         raise ValueError("Landcover supervision requested but global logits are None")
 
     landcover_pred_names: List[Optional[str]] = []
     if lc_probs is not None:
-        for idx in range(batch_size):
-            pred_idx = int(torch.argmax(lc_probs[idx]).item())
+        for pred_idx in lc_probs.argmax(dim=-1).tolist():
             landcover_pred_names.append(landcover_classes[pred_idx])
     else:
         landcover_pred_names = [None] * batch_size
@@ -1959,8 +2007,7 @@ def summarize_seasonal_predictions(
         for sample_idx in landcover_indices:
             target_name = landcover_labels[sample_idx]
             probs = lc_probs[sample_idx]
-            pred_idx = int(torch.argmax(probs).item())
-            pred_class = landcover_classes[pred_idx]
+            pred_class = landcover_pred_names[sample_idx]
             landcover_records.append(
                 {
                     "pred_class": pred_class,
@@ -1990,6 +2037,7 @@ def summarize_seasonal_predictions(
             raise ValueError(
                 "Seasonal head missing season logits for crop-type supervision"
             )
+        season_logits_cpu = output.season_logits.detach().float().cpu()
         season_selection = _select_representative_season(
             output, attrs, croptype_indices, allow_multiple=True
         )
@@ -2022,10 +2070,8 @@ def summarize_seasonal_predictions(
             if not seasons:
                 continue
 
-            season_ids = torch.as_tensor(
-                seasons, device=output.season_logits.device, dtype=torch.long
-            )
-            logits = output.season_logits[sample_idx, season_ids, :]
+            season_ids = torch.as_tensor(seasons, dtype=torch.long)
+            logits = season_logits_cpu[sample_idx, season_ids, :]
             if logits.dim() == 1:
                 logits = logits.unsqueeze(0)
 
@@ -2099,7 +2145,10 @@ def run_finetuning(
     on_validation_improved: Optional[ValidationImprovementCallback] = None,
     tensorboard_logdir: Optional[Union[Path, str]] = None,
     model_ema_alpha: float = 0.0,
-    checkpoint_metric: Literal["val_loss", "lc_f1", "ct_f1", "mean_f1"] = "mean_f1",
+    checkpoint_metric: Literal[
+        "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
+    ] = "mean_f1",
+    regional_f1_min_support: int = 50,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -2122,6 +2171,7 @@ def run_finetuning(
     best_ct_f1: Optional[float] = None
     best_lc_f1: Optional[float] = None
     best_mean_f1: Optional[float] = None
+    best_regional_mean_f1: Optional[float] = None
     best_model_dict = None
     epochs_since_improvement = 0
     ema_model: Optional[torch.nn.Module] = (
@@ -2469,6 +2519,31 @@ def run_finetuning(
                 for key, value in ct_metrics.items():
                     seasonal_metrics_flat[f"croptype/{key}"] = value
 
+            # Unweighted mean of per-region macro F1.
+            lc_regional_f1 = _records_to_regional_mean_f1(
+                seasonal_landcover_records, min_support=regional_f1_min_support
+            )
+            if lc_regional_f1 is not None:
+                seasonal_metrics_flat["landcover/regional_f1_macro"] = lc_regional_f1
+            ct_regional_f1 = _records_to_regional_mean_f1(
+                seasonal_croptype_records, min_support=regional_f1_min_support
+            )
+            if ct_regional_f1 is not None:
+                seasonal_metrics_flat["croptype/regional_f1_macro"] = ct_regional_f1
+
+            # Commission monitor: share of true non-crop validation samples
+            # predicted as cropland (as the model itself defines cropland).
+            # Monitoring only.
+            lc_cropland_classes = getattr(seasonal_loss, "cropland_class_names", None)
+            if lc_cropland_classes:
+                lc_crop_fpr = _crop_false_positive_ratio(
+                    [rec["target_class"] for rec in seasonal_landcover_records],
+                    [rec["pred_class"] for rec in seasonal_landcover_records],
+                    lc_cropland_classes,
+                )
+                if lc_crop_fpr is not None:
+                    seasonal_metrics_flat["landcover/crop_fpr"] = lc_crop_fpr
+
             if seasonal_gate_rejections:
                 total_attempts = seasonal_gate_rejections + len(
                     seasonal_croptype_records
@@ -2545,9 +2620,7 @@ def run_finetuning(
                 "val": current_val_loss,
             }
             tb_writer.add_scalars("loss", _loss_scalars, global_step)
-            tb_writer.add_scalar(
-                "learning_rate", lr_after_step, global_step
-            )
+            tb_writer.add_scalar("learning_rate", lr_after_step, global_step)
             tb_writer.add_scalar(
                 "patience/epochs_since_improvement",
                 epochs_since_improvement,
@@ -2631,12 +2704,34 @@ def run_finetuning(
         # to 0.0 so the mean is not pulled negative when one head has no data.
         cur_mean_f1 = (max(0.0, cur_lc_f1) + max(0.0, cur_ct_f1)) / 2.0
 
+        # Regional mean F1: per task, fall back to the global macro F1 when the
+        # regional breakdown is unavailable.
+        cur_lc_regional_f1 = seasonal_metrics_flat.get("landcover/regional_f1_macro")
+        cur_ct_regional_f1 = seasonal_metrics_flat.get("croptype/regional_f1_macro")
+        cur_regional_mean_f1 = (
+            (
+                cur_lc_regional_f1
+                if cur_lc_regional_f1 is not None
+                else max(0.0, cur_lc_f1)
+            )
+            + (
+                cur_ct_regional_f1
+                if cur_ct_regional_f1 is not None
+                else max(0.0, cur_ct_f1)
+            )
+        ) / 2.0
+
         if _effective_metric == "lc_f1":
             loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
         elif _effective_metric == "ct_f1":
             loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
         elif _effective_metric == "mean_f1":
             loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
+        elif _effective_metric == "regional_mean_f1":
+            loss_improved = (
+                best_regional_mean_f1 is None
+                or cur_regional_mean_f1 > best_regional_mean_f1
+            )
         else:
             loss_improved = best_loss is None or current_val_loss < best_loss
 
@@ -2645,6 +2740,7 @@ def run_finetuning(
             best_lc_f1 = cur_lc_f1
             best_ct_f1 = cur_ct_f1
             best_mean_f1 = cur_mean_f1
+            best_regional_mean_f1 = cur_regional_mean_f1
             epochs_since_improvement = 0
             if _effective_metric == "lc_f1":
                 logger.info(
@@ -2660,6 +2756,22 @@ def run_finetuning(
                 logger.info(
                     f"Epoch {epoch + 1}: val mean F1 improved to {cur_mean_f1:.4f} "
                     f"(lc={cur_lc_f1:.4f}, ct={cur_ct_f1:.4f}, val_loss={current_val_loss:.4f})"
+                )
+            elif _effective_metric == "regional_mean_f1":
+                _lc_reg_str = (
+                    f"{cur_lc_regional_f1:.4f}"
+                    if cur_lc_regional_f1 is not None
+                    else f"global {max(0.0, cur_lc_f1):.4f}"
+                )
+                _ct_reg_str = (
+                    f"{cur_ct_regional_f1:.4f}"
+                    if cur_ct_regional_f1 is not None
+                    else f"global {max(0.0, cur_ct_f1):.4f}"
+                )
+                logger.info(
+                    f"Epoch {epoch + 1}: val regional mean F1 improved to "
+                    f"{cur_regional_mean_f1:.4f} (lc={_lc_reg_str}, ct={_ct_reg_str}, "
+                    f"val_loss={current_val_loss:.4f})"
                 )
             else:
                 logger.info(
@@ -2734,6 +2846,12 @@ def run_finetuning(
         elif _effective_metric == "mean_f1":
             _best_str = (
                 f"{best_mean_f1:.3f} (mean_f1)" if best_mean_f1 is not None else "n/a"
+            )
+        elif _effective_metric == "regional_mean_f1":
+            _best_str = (
+                f"{best_regional_mean_f1:.3f} (regional_mean_f1)"
+                if best_regional_mean_f1 is not None
+                else "n/a"
             )
         else:
             _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"

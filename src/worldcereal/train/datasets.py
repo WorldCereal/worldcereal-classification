@@ -1,8 +1,6 @@
 import re
 from collections import Counter
-from contextlib import nullcontext
 from dataclasses import dataclass
-from importlib import resources
 from math import floor
 from typing import (
     Any,
@@ -15,6 +13,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 import numpy as np
@@ -31,20 +30,17 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal.seasons import season_doys_to_dates_refyear
-from worldcereal.train import (
-    GLOBAL_SEASON_IDS,
-    MIN_EDGE_BUFFER,
-    OUTLIER_COLUMNS,
+from worldcereal.data.cropcalendars import (
     SEASONALITY_COLUMN_MAP,
     SEASONALITY_LAT_RANGE,
     SEASONALITY_LON_RANGE,
     SEASONALITY_LOOKUP_COLUMNS,
-    SEASONALITY_LOOKUP_FILENAME,
-    SEASONALITY_LOOKUP_PACKAGE,
-    SEASONALITY_LOOKUP_PATH,
+    load_seasonality_lookup,
 )
+from worldcereal.seasons import season_doys_to_dates_refyear
+from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
+from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
 from worldcereal.train.seasonal import (
     SeasonWindow,
     align_to_composite_window,
@@ -65,14 +61,6 @@ SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
 
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
-
-
-def _seasonality_lookup_context():
-    """Return a context manager pointing to the seasonality lookup parquet."""
-
-    if SEASONALITY_LOOKUP_PATH.exists():
-        return nullcontext(SEASONALITY_LOOKUP_PATH)
-    return resources.path(SEASONALITY_LOOKUP_PACKAGE, SEASONALITY_LOOKUP_FILENAME)
 
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
@@ -317,13 +305,10 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         return _SEASONALITY_LOOKUP_TABLE
 
     try:
-        with _seasonality_lookup_context() as lookup_path:
-            table = pd.read_parquet(lookup_path)
+        table = load_seasonality_lookup()
     except (FileNotFoundError, ModuleNotFoundError) as exc:
         raise FileNotFoundError(
-            "Seasonality lookup parquet not found at "
-            f"{SEASONALITY_LOOKUP_PATH} or within package "
-            f"'{SEASONALITY_LOOKUP_PACKAGE}'."
+            "Seasonality lookup parquet not found in worldcereal.data.cropcalendars."
         ) from exc
     required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
     missing = required.difference(table.columns)
@@ -331,7 +316,6 @@ def _ensure_seasonality_lookup() -> pd.DataFrame:
         raise ValueError(
             f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
         )
-
     table = table.astype({"lat": np.float64, "lon": np.float64})
     table = table.set_index(["lat", "lon"])
     if not table.index.is_unique:
@@ -1181,7 +1165,9 @@ class WorldCerealDataset(Dataset):
         ):
             return
 
-        # Per-(row, timestep) S1/S2 data presence
+        # Stream the per-(row, timestep) S1/S2 data presence in row chunks.
+        # Keeping a dense ``len(dataframe) x max_ts`` matrix around is too
+        # expensive for large training frames and can OOM before training starts.
         max_ts = 0
         while any(
             template.format(max_ts) in self.dataframe.columns
@@ -1190,30 +1176,45 @@ class WorldCerealDataset(Dataset):
             max_ts += 1
         if max_ts == 0:
             return
-        presence = np.zeros((len(self.dataframe), max_ts), dtype=bool)
-        for t in range(max_ts):
-            cols = [
-                template.format(t)
+        timestep_cols = [
+            [
+                col
                 for template in self.S1_S2_COLUMN_TEMPLATES
-                if template.format(t) in self.dataframe.columns
+                if (col := template.format(t)) in self.dataframe.columns
             ]
-            presence[:, t] = (self.dataframe[cols].to_numpy() != NODATAVALUE).any(
-                axis=1
-            )
+            for t in range(max_ts)
+        ]
 
         T = self.num_timesteps
         avail = self.dataframe["available_timesteps"].astype(int).to_numpy()
         vp = self.dataframe["valid_position"].astype(int).to_numpy()
         first_min = np.maximum(0, vp - T + 1)
         first_max = np.minimum(vp, avail - T)
-        bad = np.array(
-            [
-                not presence[
-                    i, first_min[i] : max(first_max[i], first_min[i]) + T
-                ].any()
-                for i in range(len(self.dataframe))
-            ]
-        )
+        last_exclusive = np.maximum(first_max, first_min) + T
+        bad = np.ones(len(self.dataframe), dtype=bool)
+        chunk_size = 50_000
+
+        for start in range(0, len(self.dataframe), chunk_size):
+            stop = min(start + chunk_size, len(self.dataframe))
+            chunk_bad = np.ones(stop - start, dtype=bool)
+            chunk_first = first_min[start:stop]
+            chunk_last = last_exclusive[start:stop]
+            chunk_df = self.dataframe.iloc[start:stop]
+            for t in range(max_ts):
+                cols = timestep_cols[t]
+                if not cols:
+                    continue
+                relevant = (chunk_first <= t) & (t < chunk_last)
+                if not relevant.any():
+                    continue
+                has_data = (chunk_df[cols].to_numpy(copy=False) != NODATAVALUE).any(
+                    axis=1
+                )
+                chunk_bad &= ~(relevant & has_data)
+                if not chunk_bad.any():
+                    break
+            bad[start:stop] = chunk_bad
+
         num_bad = int(bad.sum())
         if not num_bad:
             return
@@ -1240,6 +1241,63 @@ class WorldCerealDataset(Dataset):
         timestep_positions, _ = self.get_timestep_positions(row)
         return Predictors(**self.get_inputs(row, timestep_positions))
 
+    def _select_timestep_starts(
+        self,
+        available_timesteps: Union[int, np.ndarray, Sequence[int]],
+        valid_position: Union[int, np.ndarray, Sequence[int]],
+        min_edge_buffer: int = MIN_EDGE_BUFFER,
+        rng: Optional[np.random.Generator] = None,
+    ) -> np.ndarray:
+        """Select first timestep indices for one or more samples.
+
+        This is the shared implementation behind scalar ``get_timestep_positions``
+        and vectorized ``_fast_fetch_batch`` so augmentation/window-placement
+        semantics cannot drift between the two paths.
+        """
+        avail = np.atleast_1d(np.asarray(available_timesteps, dtype=np.int64))
+        vp = np.atleast_1d(np.asarray(valid_position, dtype=np.int64))
+        half = self.num_timesteps // 2
+
+        if not self.augment or np.all(avail == self.num_timesteps):
+            center = np.clip(vp, half, avail - half)
+        elif self.is_ssl:
+            low = np.full_like(avail, half)
+            high = avail - half
+            if rng is None:
+                center = np.array(
+                    [np.random.randint(lo, hi) for lo, hi in zip(low, high)],
+                    dtype=np.int64,
+                )
+            else:
+                center = rng.integers(low, high)
+        else:
+            buffer = max(1, min_edge_buffer)
+            min_center = np.maximum(half, vp + buffer - half)
+            max_center = np.minimum(avail - half, vp - buffer + half)
+            needs_rand = avail != self.num_timesteps
+            if (needs_rand & (min_center > max_center)).any():
+                raise ValueError(
+                    "low >= high while drawing augmented center point; "
+                    "run _filter_temporally_invalid_rows on the dataframe."
+                )
+            safe_min = np.where(needs_rand, min_center, 0)
+            safe_max = np.where(needs_rand, max_center, 0)
+            if rng is None:
+                rand_center = np.array(
+                    [
+                        np.random.randint(lo, hi + 1)
+                        for lo, hi in zip(safe_min, safe_max)
+                    ],
+                    dtype=np.int64,
+                )
+            else:
+                rand_center = rng.integers(safe_min, safe_max + 1)
+            det_center = np.clip(vp, half, avail - half)
+            center = np.where(needs_rand, rand_center, det_center)
+
+        last = np.minimum(avail, center + half)
+        return np.maximum(0, last - self.num_timesteps).astype(np.int64)
+
     def get_timestep_positions(
         self,
         row_d: Dict,
@@ -1248,15 +1306,16 @@ class WorldCerealDataset(Dataset):
         available_timesteps = int(row_d["available_timesteps"])
         valid_position = int(row_d["valid_position"])
 
-        # Get the center point to use for extracting a sequence of timesteps
-        center_point = self._get_center_point(
-            available_timesteps, valid_position, self.augment, min_edge_buffer
+        first_timestep = int(
+            self._select_timestep_starts(
+                available_timesteps,
+                valid_position,
+                min_edge_buffer=min_edge_buffer,
+            )[0]
         )
-
-        # Determine the timestep positions to extract
-        last_timestep = min(available_timesteps, center_point + self.num_timesteps // 2)
-        first_timestep = max(0, last_timestep - self.num_timesteps)
-        timestep_positions = list(range(first_timestep, last_timestep))
+        timestep_positions = list(
+            range(first_timestep, first_timestep + self.num_timesteps)
+        )
 
         # Sanity check to make sure we will extract the correct number of timesteps
         if len(timestep_positions) != self.num_timesteps:
@@ -1324,53 +1383,6 @@ class WorldCerealDataset(Dataset):
         if self.augment:
             return candidates[np.random.randint(len(candidates))]
         return min(candidates, key=lambda pos: abs(pos[0] - current_positions[0]))
-
-    def _get_center_point(
-        self, available_timesteps, valid_position, augment, min_edge_buffer
-    ):
-        """Helper method to decide on the center point based on which to
-        extract the timesteps."""
-
-        if not augment or available_timesteps == self.num_timesteps:
-            #  check if the valid position is too close to the start_date and force shifting it
-            if valid_position < self.num_timesteps // 2:
-                center_point = self.num_timesteps // 2
-            #  or too close to the end_date
-            elif valid_position > (available_timesteps - self.num_timesteps // 2):
-                center_point = available_timesteps - self.num_timesteps // 2
-            else:
-                # Center the timesteps around the valid position
-                center_point = valid_position
-        else:
-            if self.is_ssl:
-                # Take a random center point enabling horizontal jittering
-                center_point = int(
-                    np.random.choice(
-                        range(
-                            self.num_timesteps // 2,
-                            (available_timesteps - self.num_timesteps // 2),
-                        ),
-                        1,
-                    )[0]
-                )
-            else:
-                # Randomly shift the center point but make sure the resulting range
-                # well includes the valid position
-
-                min_center_point = max(
-                    self.num_timesteps // 2,
-                    valid_position + max(1, min_edge_buffer) - self.num_timesteps // 2,
-                )
-                max_center_point = min(
-                    available_timesteps - self.num_timesteps // 2,
-                    valid_position - max(1, min_edge_buffer) + self.num_timesteps // 2,
-                )
-
-                center_point = np.random.randint(
-                    min_center_point, max_center_point + 1
-                )  # max_center_point included
-
-        return center_point
 
     def _get_timestamps(self, row: Dict, timestep_positions: List[int]) -> np.ndarray:
         """
@@ -2118,33 +2130,50 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 )
             self.dataframe = filtered_df
 
-    def __getitem__(self, idx):
+        # Vectorized batch-fetch cache: precomputes numpy views of the expensive
+        # dataframe-derived pieces so whole training batches can be assembled
+        # without per-sample pandas access. Unsupported configurations fall back
+        # to the canonical per-sample path below.
+        self._batch_cache: Optional[Dict[str, Any]] = None
+        self._batch_rng: Optional[np.random.Generator] = None
+        self._batch_rng_key: Optional[Tuple[int, int]] = None
+        try:
+            self._build_fast_batch_cache()
+        except Exception as exc:  # noqa: BLE001 - never break dataset construction
+            logger.warning(
+                f"Fast batched fetching disabled ({exc!r}); "
+                "falling back to per-sample loading."
+            )
+            self._batch_cache = None
+
+    def _decode_task_index(self, idx: int) -> Tuple[int, Optional[str]]:
+        """Decode sampler virtual indices into dataframe rows and task overrides."""
         # During task-configurable training, SeasonalTaskBatchSampler tells each sample
         # which head it should supervise (landcover or croptype) by shifting its
         # index: indices in [N..2N) are landcover, [2N..3N) are croptype.
         # We decode the real row index and the intended task here, so the
         # dataframe itself never needs to be mutated (important for multi-worker
-        # data loading).  Plain [0..N) indices are used during validation/test.
+        # data loading). Plain [0..N) indices are used during validation/test.
         n = len(self.dataframe)
         if idx >= 2 * n:
-            real_idx = idx - 2 * n
-            task_override: Optional[str] = "croptype"
-        elif idx >= n:
-            real_idx = idx - n
-            task_override = "landcover"
-        else:
-            real_idx = idx
-            task_override = None
+            return idx - 2 * n, "croptype"
+        if idx >= n:
+            return idx - n, "landcover"
+        return idx, None
 
-        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+    def _sample_from_row(
+        self, row: Dict[str, Any], task_override: Optional[str] = None
+    ) -> Tuple[Predictors, Dict[str, Any]]:
+        """Build one labelled sample using the canonical per-sample helpers."""
         timestep_positions, valid_position = self.get_timestep_positions(row)
         relative_valid = valid_position - timestep_positions[0]
         inputs = self.get_inputs(row, timestep_positions)
 
         if self.emit_label_tensor:
+            assert self.task_type in ("binary", "multiclass")
             label = self.get_label(
                 row,
-                task_type=self.task_type,
+                task_type=cast(Literal["binary", "multiclass"], self.task_type),
                 classes_list=self.classes_list,
                 valid_position=relative_valid,
             )
@@ -2167,8 +2196,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         if task_override is not None:
             attrs["label_task"] = task_override
 
-        predictors = Predictors(**inputs, label=label)
-        return predictors, attrs
+        return Predictors(**inputs, label=label), attrs
+
+    def __getitem__(self, idx):
+        real_idx, task_override = self._decode_task_index(int(idx))
+        row = pd.Series.to_dict(self.dataframe.iloc[real_idx, :])
+        return self._sample_from_row(row, task_override)
 
     def initialize_label(self):
         tsteps = self.num_timesteps if self.time_explicit else 1
@@ -2282,6 +2315,673 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             label[0, 0, valid_idx, 0] = classes_list.index(row_d["finetune_class"])
 
         return label
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _factorize_attr_column(col: pd.Series) -> Tuple[np.ndarray, List[Any]]:
+        """Factorize an object column into codes plus a unique-value list.
+
+        Returns codes shifted by +1 so that 0 maps to the missing value (None).
+        Storing per-row small int codes instead of object arrays keeps
+        DataLoader workers from touching (and copy-on-write duplicating) the
+        large string pools of the parent process.
+        """
+        codes, uniques = pd.factorize(col, use_na_sentinel=True)
+        uniq_list: List[Any] = [None] + [
+            None if _is_missing_value(u) else u for u in uniques
+        ]
+        return (codes + 1).astype(np.int32), uniq_list
+
+    def _build_fast_batch_cache(self) -> None:
+        """Precompute numpy arrays enabling vectorized `__getitems__`."""
+        df = self.dataframe
+        n_rows = len(df)
+        if n_rows == 0:
+            return
+        if self.timestep_freq != "month":
+            logger.info(
+                "Fast batched fetching supports timestep_freq='month' only; "
+                "using per-sample loading."
+            )
+            return
+        if self._season_engine == "manual":
+            logger.info(
+                "Fast batched fetching does not support manual season windows; "
+                "using per-sample loading."
+            )
+            return
+        required_cols = {"available_timesteps", "valid_position", "start_date"}
+        if not required_cols.issubset(df.columns):
+            return
+
+        avail = df["available_timesteps"].to_numpy(dtype=np.int64)
+        vp = df["valid_position"].to_numpy(dtype=np.int64)
+        if (avail < self.num_timesteps).any():
+            logger.warning(
+                "Fast batched fetching disabled: some rows have fewer available "
+                "timesteps than num_timesteps; using per-sample loading."
+            )
+            return
+
+        # ---- band cubes -------------------------------------------------
+        max_ts = 0
+        while any(
+            template.format(max_ts) in df.columns
+            for template in self.S1_S2_COLUMN_TEMPLATES
+        ):
+            max_ts += 1
+        if max_ts == 0 or int(avail.max()) > max_ts:
+            return
+
+        temporal_templates = {
+            src: dst for src, dst in self.BAND_MAPPING.items() if dst not in DEM_BANDS
+        }
+        for src in temporal_templates:
+            for t in range(int(avail.max())):
+                if src.format(t) not in df.columns:
+                    logger.warning(
+                        f"Fast batched fetching disabled: missing column "
+                        f"{src.format(t)!r}; using per-sample loading."
+                    )
+                    return
+        for src, dst in self.BAND_MAPPING.items():
+            if dst in DEM_BANDS and src not in df.columns:
+                logger.warning(
+                    f"Fast batched fetching disabled: missing column {src!r}; "
+                    "using per-sample loading."
+                )
+                return
+        if "lat" not in df.columns or "lon" not in df.columns:
+            return
+
+        s2_src = [
+            (src, S2_BANDS.index(dst))
+            for src, dst in self.BAND_MAPPING.items()
+            if dst in S2_BANDS
+        ]
+        s1_src = [
+            (src, S1_BANDS.index(dst))
+            for src, dst in self.BAND_MAPPING.items()
+            if dst in S1_BANDS
+        ]
+
+        s2 = np.full((n_rows, max_ts, len(s2_src)), NODATAVALUE, dtype=np.float32)
+        for j, (src, _) in enumerate(s2_src):
+            for t in range(max_ts):
+                col = src.format(t)
+                if col in df.columns:
+                    s2[:, t, j] = df[col].to_numpy(dtype=np.float32)
+        s2_dst_idx = np.array([dst for _, dst in s2_src], dtype=np.int64)
+
+        s1 = np.full((n_rows, max_ts, len(S1_BANDS)), NODATAVALUE, dtype=np.float32)
+        for src, dst_idx in s1_src:
+            for t in range(max_ts):
+                col = src.format(t)
+                if col in df.columns:
+                    s1[:, t, dst_idx] = df[col].to_numpy(dtype=np.float32)
+
+        # Joint S1/S2 data presence per (row, timestep) — computed on raw
+        # values, before the dB conversion below (the NODATAVALUE sentinel is
+        # preserved by all transforms, so this matches _window_has_s1_s2).
+        presence = (s2 != NODATAVALUE).any(axis=-1) | (s1 != NODATAVALUE).any(axis=-1)
+
+        # S1 dB conversion (valid positive values only, as in get_inputs)
+        s1_valid = (s1 != NODATAVALUE) & (s1 > 0)
+        s1[s1_valid] = 20.0 * np.log10(s1[s1_valid]) - 83.0
+
+        meteo = np.full(
+            (n_rows, max_ts, len(METEO_BANDS)), NODATAVALUE, dtype=np.float32
+        )
+        for src, dst in self.BAND_MAPPING.items():
+            if dst not in METEO_BANDS:
+                continue
+            dst_idx = METEO_BANDS.index(dst)
+            scale = 100.0 * 1000.0 if dst == "precipitation" else 100.0
+            for t in range(max_ts):
+                col = src.format(t)
+                if col in df.columns:
+                    vals = df[col].to_numpy(dtype=np.float32)
+                    valid = vals != NODATAVALUE
+                    out = vals.copy()
+                    out[valid] = vals[valid] / scale
+                    meteo[:, t, dst_idx] = out
+
+        dem = np.full((n_rows, len(DEM_BANDS)), NODATAVALUE, dtype=np.float32)
+        for src, dst in self.BAND_MAPPING.items():
+            if dst in DEM_BANDS:
+                dem[:, DEM_BANDS.index(dst)] = df[src].to_numpy(dtype=np.float32)
+
+        latlon = np.stack(
+            [
+                df["lat"].to_numpy(dtype=np.float32),
+                df["lon"].to_numpy(dtype=np.float32),
+            ],
+            axis=1,
+        )
+
+        # ---- timestamps --------------------------------------------------
+        start_dates = pd.to_datetime(df["start_date"]).to_numpy()
+        start_month_num = start_dates.astype("datetime64[M]").astype(np.int64)
+
+        # ---- label metadata ----------------------------------------------
+        label_dt = _label_datetime_series(df)
+        cache: Dict[str, Any] = {
+            "avail": avail,
+            "vp": vp,
+            "max_ts": max_ts,
+            "s2": s2,
+            "s2_dst_idx": s2_dst_idx,
+            "s1": s1,
+            "meteo": meteo,
+            "dem": dem,
+            "latlon": latlon,
+            "presence": presence,
+            "start_month_num": start_month_num,
+        }
+
+        # ---- season-calendar metadata (fixed per row/season) --------------
+        if self._season_engine == "calendar" and self._season_ids:
+            if label_dt.isna().any():
+                logger.warning(
+                    "Fast batched fetching disabled: some samples lack a label "
+                    "datetime required for season calendars; using per-sample "
+                    "loading."
+                )
+                return
+            season_meta = self._build_season_calendar_cache(df, label_dt)
+            if season_meta is None:
+                return
+            cache.update(season_meta)
+
+        # ---- label values --------------------------------------------------
+        if self.emit_label_tensor:
+            if "finetune_class" not in df.columns:
+                logger.warning(
+                    "Fast batched fetching disabled: emit_label_tensor requires "
+                    "a 'finetune_class' column; using per-sample loading."
+                )
+                return
+            ft_codes, ft_uniques = self._factorize_attr_column(df["finetune_class"])
+            cache["finetune_codes"] = ft_codes
+            cache["finetune_uniques"] = ft_uniques
+
+        # ---- attrs ----------------------------------------------------------
+        attr_specs: List[Tuple[str, str, Any, Any]] = []
+        for key in SAMPLE_ATTR_COLUMNS:
+            if key == "region":
+                continue
+            if key not in df.columns:
+                continue
+            col = df[key]
+            if pd.api.types.is_numeric_dtype(col.dtype):
+                vals = col.to_numpy()
+                # Match the per-sample path's collate dtypes: row scalars are
+                # boxed to python float/int, which default_collate turns into
+                # float64 / int64 tensors.
+                if np.issubdtype(vals.dtype, np.floating):
+                    vals = vals.astype(np.float64)
+                elif np.issubdtype(vals.dtype, np.integer):
+                    vals = vals.astype(np.int64)
+                missing = vals == NODATAVALUE
+                if np.issubdtype(vals.dtype, np.floating):
+                    missing = missing | np.isnan(vals)
+                attr_specs.append(
+                    (key, "num", vals, missing if missing.any() else None)
+                )
+            else:
+                codes, uniques = self._factorize_attr_column(col)
+                attr_specs.append((key, "obj", codes, uniques))
+        cache["attr_specs"] = attr_specs
+
+        if self._region_column in df.columns:
+            region_codes, region_uniques = self._factorize_attr_column(
+                df[self._region_column]
+            )
+            region_uniques = [
+                "unknown" if u is None else str(u) for u in region_uniques
+            ]
+        else:
+            region_codes = np.zeros(n_rows, dtype=np.int32)
+            region_uniques = ["unknown"]
+        cache["region_codes"] = region_codes
+        cache["region_uniques"] = region_uniques
+
+        if "label_task" in df.columns:
+            lt_codes, lt_uniques = self._factorize_attr_column(df["label_task"])
+            cache["label_task_codes"] = lt_codes
+            cache["label_task_uniques"] = lt_uniques
+        else:
+            cache["label_task_codes"] = None
+            cache["label_task_uniques"] = None
+
+        self._batch_cache = cache
+        logger.info(
+            f"{self.__class__.__name__}: fast batched fetching enabled "
+            f"({n_rows} samples, {max_ts} timesteps)."
+        )
+
+    def _build_season_calendar_cache(
+        self, df: pd.DataFrame, label_dt: pd.Series
+    ) -> Optional[Dict[str, Any]]:
+        """Precompute per-row, per-season calendar windows (month numbers)."""
+        n_rows = len(df)
+        seasons = tuple(self._season_ids)
+        for season in seasons:
+            if season not in SEASONALITY_COLUMN_MAP:
+                logger.warning(
+                    f"Fast batched fetching disabled: season {season!r} not in "
+                    "seasonality lookup; using per-sample loading."
+                )
+                return None
+
+        table = _ensure_seasonality_lookup()
+        lat = df["lat"].to_numpy(dtype=np.float64)
+        lon = df["lon"].to_numpy(dtype=np.float64)
+        lat_c = (np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0) + 0.25
+        lon_c = (np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0) + 0.25
+
+        key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
+        joined = table.reindex(key_index)
+
+        # Nearest-cell fallback for grid cells absent from the lookup (mirrors
+        # the per-sample KeyError fallback, logged once per unique cell).
+        missing_rows = joined[list(SEASONALITY_LOOKUP_COLUMNS)].isna().all(axis=1)
+        if missing_rows.to_numpy().any():
+            lat_vals = table.index.get_level_values("lat").to_numpy()
+            lon_vals = table.index.get_level_values("lon").to_numpy()
+            missing_pos = np.flatnonzero(missing_rows.to_numpy())
+            missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
+            cell_to_row = {}
+            for cell_lat, cell_lon in missing_cells:
+                distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
+                best_idx = int(distances.argmin())
+                cell_to_row[(cell_lat, cell_lon)] = best_idx
+                logger.error(
+                    f"Seasonality lookup missing ({cell_lat}, {cell_lon}); using "
+                    f"nearest cell ({lat_vals[best_idx]}, {lon_vals[best_idx]})."
+                )
+            joined = joined.reset_index(drop=True)
+            for i in missing_pos:
+                joined.iloc[i] = table.iloc[
+                    cell_to_row[(float(lat_c[i]), float(lon_c[i]))]
+                ]
+
+        label_days = label_dt.to_numpy().astype("datetime64[D]")
+        label_month_num = label_days.astype("datetime64[M]").astype(np.int64)
+        label_year = label_days.astype("datetime64[Y]").astype(np.int64) + 1970
+        year_start = label_days.astype("datetime64[Y]").astype("datetime64[D]")
+        label_doy = (label_days - year_start).astype(np.int64) + 1
+
+        num_seasons = len(seasons)
+        season_start_m = np.zeros((n_rows, num_seasons), dtype=np.int64)
+        season_end_m = np.zeros((n_rows, num_seasons), dtype=np.int64)
+        season_n_slots = np.ones((n_rows, num_seasons), dtype=np.int64)
+        season_invalid = np.zeros((n_rows, num_seasons), dtype=bool)
+        season_in_raw = np.zeros((n_rows, num_seasons), dtype=bool)
+
+        for s_idx, season in enumerate(seasons):
+            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season]
+            if sos_col not in joined.columns or eos_col not in joined.columns:
+                logger.warning(
+                    f"Fast batched fetching disabled: seasonality lookup lacks "
+                    f"columns for season {season!r}; using per-sample loading."
+                )
+                return None
+            sos = joined[sos_col].to_numpy(dtype=np.float64)
+            eos = joined[eos_col].to_numpy(dtype=np.float64)
+            invalid = ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
+            sos_i = np.where(invalid, 1, sos).astype(np.int64)
+            eos_i = np.where(invalid, 1, eos).astype(np.int64)
+
+            # For year-crossing seasons, shift ref year when the label falls
+            # after EOS (mirrors _season_context_for).
+            ref_year = label_year + ((sos_i > eos_i) & (label_doy > eos_i)).astype(
+                np.int64
+            )
+
+            # season_doys_to_dates_refyear, vectorized:
+            #   end = Jan 1 of ref_year + eos days; start = end - duration
+            ref_year_start = (
+                (ref_year - 1970).astype("datetime64[Y]").astype("datetime64[D]")
+            )
+            end_date = ref_year_start + eos_i.astype("timedelta64[D]")
+            duration = np.where(sos_i < eos_i, eos_i - sos_i, eos_i + 365 - sos_i)
+            start_date = end_date - duration.astype("timedelta64[D]")
+
+            start_m = start_date.astype("datetime64[M]").astype(np.int64)
+            end_m = end_date.astype("datetime64[M]").astype(np.int64)
+
+            season_start_m[:, s_idx] = start_m
+            season_end_m[:, s_idx] = end_m
+            season_n_slots[:, s_idx] = np.maximum(end_m - start_m + 1, 1)
+            season_invalid[:, s_idx] = invalid
+            # date_in_season with freq='month': label month within [start, end]
+            season_in_raw[:, s_idx] = (
+                (label_month_num >= start_m) & (label_month_num <= end_m) & ~invalid
+            )
+
+        ref_ids = (
+            df["ref_id"].astype(str).to_numpy()
+            if "ref_id" in df.columns
+            else np.array([""] * n_rows)
+        )
+        lc_only = np.array([_is_lc_only_dataset(r) for r in ref_ids], dtype=bool)
+
+        return {
+            "season_start_m": season_start_m,
+            "season_end_m": season_end_m,
+            "season_n_slots": season_n_slots,
+            "season_invalid": season_invalid,
+            "season_in_raw": season_in_raw,
+            "lc_only": lc_only,
+        }
+
+    def _fast_rng(self) -> np.random.Generator:
+        """Per-worker numpy Generator, reseeded per DataLoader epoch.
+
+        Uses the DataLoader worker seed (derived from the torch base seed, so
+        `seed_everything` keeps runs reproducible) to decorrelate augmentation
+        and masking draws across workers and epochs.
+        """
+        info = torch.utils.data.get_worker_info()
+        key = (info.id, int(info.seed)) if info is not None else (-1, -1)
+        if self._batch_rng is None or self._batch_rng_key != key:
+            if info is not None:
+                seed = int(info.seed) % (2**32)
+            else:
+                seed = int(np.random.randint(0, 2**32 - 1))
+            self._batch_rng = np.random.default_rng(seed)
+            self._batch_rng_key = key
+        return self._batch_rng
+
+    def __getitems__(self, indices):
+        if self._batch_cache is None:
+            return [self[int(i)] for i in indices]
+        return self._fast_fetch_batch(np.asarray(indices, dtype=np.int64))
+
+    def _fast_fetch_batch(self, idx: np.ndarray):
+        """Assemble a fully collated (Predictors, attrs) batch with array ops."""
+        c = self._batch_cache
+        assert c is not None
+        n = len(self.dataframe)
+        T = self.num_timesteps
+        rng = self._fast_rng()
+
+        override_ct = idx >= 2 * n
+        override_lc = (idx >= n) & ~override_ct
+        rows = np.where(override_ct, idx - 2 * n, np.where(override_lc, idx - n, idx))
+        B = len(rows)
+
+        avail = c["avail"][rows]
+        vp = c["vp"][rows]
+
+        # ---- timestep window ------------------------------------------------
+        first = self._select_timestep_starts(avail, vp, rng=rng)
+
+        if ((vp < first) | (vp >= first + T)).any():
+            bad = int(np.flatnonzero((vp < first) | (vp >= first + T))[0])
+            raise AssertionError(
+                f"Valid position {vp[bad]} not in timestep window starting at "
+                f"{first[bad]}"
+            )
+
+        # ---- window rescue for empty S1/S2 windows -------------------------
+        if self.remove_samples_without_s1_s2:
+            pres = c["presence"][rows]
+            csum = np.zeros((B, c["max_ts"] + 1), dtype=np.int64)
+            csum[:, 1:] = np.cumsum(pres, axis=1)
+            arange_b = np.arange(B)
+            window_has = (csum[arange_b, first + T] - csum[arange_b, first]) > 0
+            for i in np.flatnonzero(~window_has):
+                first_min = max(0, vp[i] - T + 1)
+                first_max = min(vp[i], avail[i] - T)
+                cands = [
+                    f
+                    for f in range(first_min, first_max + 1)
+                    if pres[i, f : f + T].any()
+                ]
+                if not cands:
+                    continue
+                if self.augment:
+                    first[i] = cands[int(rng.integers(len(cands)))]
+                else:
+                    _cur = int(first[i])
+                    first[i] = min(cands, key=lambda f: abs(f - _cur))
+
+        tidx = first[:, None] + np.arange(T)[None, :]
+        rows_col = rows[:, None]
+
+        s2_win = c["s2"][rows_col, tidx]  # (B, T, 10)
+        s1_win = c["s1"][rows_col, tidx]  # (B, T, 2)
+        meteo_win = c["meteo"][rows_col, tidx]  # (B, T, 2)
+
+        s2_full = np.full((B, 1, 1, T, len(S2_BANDS)), NODATAVALUE, dtype=np.float32)
+        s2_full[:, 0, 0][:, :, c["s2_dst_idx"]] = s2_win
+        s1_full = s1_win.reshape(B, 1, 1, T, len(S1_BANDS)).copy()
+        meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
+        dem_full = c["dem"][rows].reshape(B, 1, 1, len(DEM_BANDS)).copy()
+        latlon_full = c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+
+        # ---- sensor masking (mirrors _apply_masking) ------------------------
+        if self.masking_config and self.masking_config.enable:
+            cfg = self.masking_config
+            s1_missing = np.all(s1_win == NODATAVALUE, axis=-1)
+            s2_missing = np.all(s2_win == NODATAVALUE, axis=-1)
+
+            s1_full_drop = rng.random(B) < cfg.s1_full_dropout_prob
+            if cfg.s1_timestep_dropout_prob > 0:
+                s1_drop = rng.random((B, T)) < cfg.s1_timestep_dropout_prob
+            else:
+                s1_drop = np.zeros((B, T), dtype=bool)
+            s1_drop[s1_full_drop] = True
+
+            s2_drop = np.zeros((B, T), dtype=bool)
+            if cfg.s2_cloud_block_prob > 0:
+                has_block = rng.random(B) < cfg.s2_cloud_block_prob
+                block_len = rng.integers(
+                    cfg.s2_cloud_block_min, cfg.s2_cloud_block_max + 1, size=B
+                )
+                full_block = block_len >= T
+                capped_len = np.minimum(block_len, T)
+                start = rng.integers(0, T - capped_len + 1)
+                offs = np.arange(T)[None, :]
+                block_mask = (offs >= start[:, None]) & (
+                    offs < (start + capped_len)[:, None]
+                )
+                block_mask[full_block] = True
+                s2_drop |= block_mask & has_block[:, None]
+            if cfg.s2_cloud_timestep_prob > 0:
+                s2_drop |= rng.random((B, T)) < cfg.s2_cloud_timestep_prob
+
+            # Joint S1/S2 guard (rare; per-row like _rescue_joint_s1_s2_wipe)
+            violated = ((s1_drop | s1_missing).all(axis=1)) & (
+                (s2_drop | s2_missing).all(axis=1)
+            )
+            for i in np.flatnonzero(violated):
+                restorable = np.flatnonzero(s2_drop[i] & ~s2_missing[i])
+                if restorable.size and cfg.s2_cloud_timestep_prob < 1.0:
+                    s2_drop[i, int(rng.choice(restorable))] = False
+                    continue
+                restorable = np.flatnonzero(s1_drop[i] & ~s1_missing[i])
+                if restorable.size and cfg.s1_full_dropout_prob < 1.0:
+                    s1_drop[i, int(rng.choice(restorable))] = False
+                    continue
+                logger.warning(
+                    "Sample has S1 and S2 fully masked-or-missing and no "
+                    "restorable timesteps; the joint S1/S2 guard cannot be "
+                    "enforced for this sample."
+                )
+
+            s1_view = s1_full[:, 0, 0]
+            s2_view = s2_full[:, 0, 0]
+            s1_view[s1_drop] = NODATAVALUE
+            s2_view[s2_drop] = NODATAVALUE
+
+            if cfg.meteo_timestep_dropout_prob > 0:
+                meteo_mask = rng.random((B, T)) < cfg.meteo_timestep_dropout_prob
+                meteo_full[:, 0, 0][meteo_mask] = NODATAVALUE
+
+            if cfg.dem_dropout_prob > 0:
+                dem_drop = rng.random(B) < cfg.dem_dropout_prob
+                dem_full[dem_drop] = NODATAVALUE
+
+        # ---- timestamps ------------------------------------------------------
+        month_num = c["start_month_num"][rows][:, None] + tidx  # (B, T)
+        timestamps = np.empty((B, T, 3), dtype=np.int64)
+        timestamps[:, :, 0] = 1
+        timestamps[:, :, 1] = (month_num % 12) + 1
+        timestamps[:, :, 2] = month_num // 12 + 1970
+
+        relative_valid = (vp - first).astype(np.int64)
+
+        # ---- label tensor ----------------------------------------------------
+        label_tensor = None
+        if self.emit_label_tensor:
+            codes = c["finetune_codes"][rows]
+            uniques = c["finetune_uniques"]
+            if self.task_type == "binary":
+                lut = np.array(
+                    [
+                        0 if (u is not None and str(u).startswith("not_")) else 1
+                        for u in uniques
+                    ],
+                    dtype=np.int32,
+                )
+            else:
+                lut = np.array(
+                    [
+                        self.classes_list.index(u) if u is not None else -1
+                        for u in uniques
+                    ],
+                    dtype=np.int32,
+                )
+            values = lut[codes]
+            if (codes == 0).any():
+                raise ValueError(
+                    "Missing finetune_class value encountered while building "
+                    "labels for a batch."
+                )
+            tsteps = T if self.time_explicit else 1
+            label = np.full((B, 1, 1, tsteps, 1), NODATAVALUE, dtype=np.int32)
+            if self.time_explicit:
+                p = relative_valid.copy()
+                if self.label_jitter > 0:
+                    shift = rng.integers(
+                        -self.label_jitter, self.label_jitter + 1, size=B
+                    )
+                    p = np.clip(p + shift, 0, T - 1)
+                if self.label_window > 0:
+                    w_start = np.maximum(0, p - self.label_window)
+                    w_end = np.minimum(T - 1, p + self.label_window)
+                    grid = np.arange(T)[None, :]
+                    in_window = (grid >= w_start[:, None]) & (grid <= w_end[:, None])
+                    label[:, 0, 0, :, 0] = np.where(
+                        in_window, values[:, None], NODATAVALUE
+                    )
+                else:
+                    label[np.arange(B), 0, 0, p, 0] = values
+            else:
+                label[:, 0, 0, 0, 0] = values
+            label_tensor = torch.from_numpy(label)
+
+        # ---- attrs -----------------------------------------------------------
+        attrs: Dict[str, Any] = {}
+        for key, kind, data, extra in c["attr_specs"]:
+            if kind == "num":
+                vals = data[rows]
+                miss = extra[rows] if extra is not None else None
+                if miss is not None and miss.any():
+                    if miss.all():
+                        attrs[key] = None
+                    elif key in ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                        attrs[key] = [
+                            None if m else v
+                            for v, m in zip(vals.tolist(), miss.tolist())
+                        ]
+                    else:
+                        raise ValueError(
+                            f"_collate_attrs received None values for key "
+                            f"'{key}' at indices "
+                            f"{np.flatnonzero(miss).tolist()}"
+                        )
+                else:
+                    attrs[key] = torch.from_numpy(vals)
+            else:
+                codes = data[rows]
+                values_list = [extra[k] for k in codes.tolist()]
+                if all(v is None for v in values_list):
+                    attrs[key] = None
+                elif any(v is None for v in values_list):
+                    if key in ATTR_KEYS_ALLOW_PARTIAL_NONE:
+                        attrs[key] = values_list
+                    else:
+                        missing_indices = [
+                            i for i, v in enumerate(values_list) if v is None
+                        ]
+                        raise ValueError(
+                            f"_collate_attrs received None values for key "
+                            f"'{key}' at indices {missing_indices}"
+                        )
+                else:
+                    attrs[key] = values_list
+
+        attrs["region"] = [
+            c["region_uniques"][k] for k in c["region_codes"][rows].tolist()
+        ]
+
+        lt_codes = c["label_task_codes"]
+        if lt_codes is not None:
+            label_task = [c["label_task_uniques"][k] for k in lt_codes[rows].tolist()]
+        else:
+            label_task = [None] * B
+        has_override = override_ct.any() or override_lc.any()
+        if has_override:
+            for i in np.flatnonzero(override_lc):
+                label_task[i] = "landcover"
+            for i in np.flatnonzero(override_ct):
+                label_task[i] = "croptype"
+        if any(v is not None for v in label_task):
+            attrs["label_task"] = label_task
+
+        attrs["valid_position"] = torch.from_numpy(relative_valid)
+
+        # ---- season metadata -------------------------------------------------
+        if self._season_engine == "off":
+            attrs["season_masks"] = None
+            attrs["in_seasons"] = None
+        else:
+            start_m = c["season_start_m"][rows]  # (B, S)
+            end_m = c["season_end_m"][rows]
+            n_slots = c["season_n_slots"][rows]
+            invalid = c["season_invalid"][rows]
+            in_raw = c["season_in_raw"][rows]
+            lc_only = c["lc_only"][rows]
+
+            month_grid = month_num[:, None, :]  # (B, 1, T)
+            masks = (month_grid >= start_m[:, :, None]) & (
+                month_grid <= end_m[:, :, None]
+            )
+            n_required = np.maximum(
+                1, np.rint(n_slots * self.min_season_coverage)
+            ).astype(np.int64)
+            meets = (masks.sum(axis=-1) >= n_required) & ~invalid
+            masks &= meets[:, :, None]
+            in_seasons = in_raw & meets
+            masks[lc_only] = True
+            in_seasons[lc_only] = True
+            attrs["season_masks"] = masks
+            attrs["in_seasons"] = in_seasons
+
+        predictors = Predictors(
+            s1=torch.from_numpy(s1_full),
+            s2=torch.from_numpy(s2_full),
+            meteo=torch.from_numpy(meteo_full),
+            dem=torch.from_numpy(dem_full),
+            latlon=torch.from_numpy(latlon_full),
+            timestamps=torch.from_numpy(timestamps),
+            label=label_tensor,
+        )
+        return predictors, attrs
 
     def get_task_batch_sampler(
         self,
@@ -2692,27 +3392,6 @@ class SeasonalTaskBatchSampler(Sampler):
             if has_ct_pool:
                 ct_class_arr = apply_class_weight_multipliers(
                     ct_class_arr, ct_labels, ct_regions, mults_canonical, pool_name="CT"
-                )
-
-            # Re-normalise to mean=1 and re-clip AFTER multipliers so a per-region
-            # or per-class multiplier can never push a class beyond the configured
-            # clip ceiling/floor. Without this a multiplier > 1 stacked on an
-            # already-high per-bin weight would exceed clip_range[1] and
-            # re-introduce exactly the over-sampling the clip is meant to bound
-            # (the root cause of e.g. oats over-commission into wheat).
-            if clip_range is not None:
-                lc_mean = lc_class_arr.mean()
-                if lc_mean > 0:
-                    lc_class_arr = lc_class_arr / lc_mean
-                lc_class_arr = np.clip(lc_class_arr, clip_range[0], clip_range[1])
-                if has_ct_pool:
-                    ct_mean = ct_class_arr.mean()
-                    if ct_mean > 0:
-                        ct_class_arr = ct_class_arr / ct_mean
-                    ct_class_arr = np.clip(ct_class_arr, clip_range[0], clip_range[1])
-                logger.info(
-                    "SeasonalTaskBatchSampler: re-normalised and re-clipped class "
-                    f"weights to {clip_range} after applying multipliers."
                 )
 
             # Warn once about classes that don't appear in either pool.
