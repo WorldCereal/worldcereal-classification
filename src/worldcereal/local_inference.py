@@ -23,8 +23,8 @@ from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
 from worldcereal.openeo.inference import (
-    SeasonWindowValue,
     SeasonalInferenceEngine,
+    SeasonWindowValue,
     get_expected_timesteps_from_artifact,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
