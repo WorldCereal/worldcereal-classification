@@ -2723,7 +2723,7 @@ def run_finetuning(
 
         # Require a minimum improvement to avoid floating-point noise at the
         # 5th+ decimal place from resetting patience when the model is converged.
-        _MIN_DELTA = 1e-4
+        _MIN_DELTA = 1e-5
         if _effective_metric == "lc_f1":
             loss_improved = best_lc_f1 is None or cur_lc_f1 - best_lc_f1 > _MIN_DELTA
         elif _effective_metric == "ct_f1":
