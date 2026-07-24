@@ -542,7 +542,7 @@ def _crop_false_positive_ratio(
 ) -> Optional[float]:
     """Share of true non-crop samples predicted as cropland: FP / (FP + TN).
 
-    Cropland is the *set* ``cropland_class_names``, as defined by the user. 
+    Cropland is the *set* ``cropland_class_names``, as defined by the user.
     Returns ``None`` when the ratio would be meaningless: no cropland
     class occurs in ``y_true`` (mismatched vocabulary), or there are no negatives.
     """
@@ -2721,19 +2721,26 @@ def run_finetuning(
             )
         ) / 2.0
 
+        # Require a minimum improvement to avoid floating-point noise at the
+        # 5th+ decimal place from resetting patience when the model is converged.
+        _MIN_DELTA = 1e-5
         if _effective_metric == "lc_f1":
-            loss_improved = best_lc_f1 is None or cur_lc_f1 > best_lc_f1
+            loss_improved = best_lc_f1 is None or cur_lc_f1 - best_lc_f1 > _MIN_DELTA
         elif _effective_metric == "ct_f1":
-            loss_improved = best_ct_f1 is None or cur_ct_f1 > best_ct_f1
+            loss_improved = best_ct_f1 is None or cur_ct_f1 - best_ct_f1 > _MIN_DELTA
         elif _effective_metric == "mean_f1":
-            loss_improved = best_mean_f1 is None or cur_mean_f1 > best_mean_f1
+            loss_improved = (
+                best_mean_f1 is None or cur_mean_f1 - best_mean_f1 > _MIN_DELTA
+            )
         elif _effective_metric == "regional_mean_f1":
             loss_improved = (
                 best_regional_mean_f1 is None
-                or cur_regional_mean_f1 > best_regional_mean_f1
+                or cur_regional_mean_f1 - best_regional_mean_f1 > _MIN_DELTA
             )
         else:
-            loss_improved = best_loss is None or current_val_loss < best_loss
+            loss_improved = (
+                best_loss is None or best_loss - current_val_loss > _MIN_DELTA
+            )
 
         if loss_improved:
             best_loss = current_val_loss
