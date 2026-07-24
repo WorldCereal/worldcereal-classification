@@ -412,11 +412,11 @@ def get_class_weights(
         logger.info(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
-    rounded = np.round(weights, 3)
-    result = {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
+    result = {cls: float(weight) for cls, weight in zip(classes, weights.tolist())}
     if verbose:
         display = {
-            str(cls): float(weight) for cls, weight in zip(classes, rounded.tolist())
+            str(cls): round(float(weight), 3)
+            for cls, weight in zip(classes, weights.tolist())
         }
         prefix = f"[{pool_name}] " if pool_name else ""
         logger.info(f"{prefix}Class weights ({method}): {display}")
@@ -605,13 +605,14 @@ def _get_per_bin_class_weights(
     weights — within-bin counts are too sparse to estimate a stable class
     distribution otherwise.
 
-    Within a bin, classes with fewer than *min_samples_per_class_per_bin*
-    samples are excluded from the within-bin weight computation entirely
-    (they don't count toward ``num_classes`` either, removing the
-    destabilising effect of rare classes on dense ones via the ``k_bin``
-    factor in the ``balanced`` recipe). Samples of those filtered classes
-    inherit the global class weight individually. ``None`` (default)
-    auto-derives as ``max(1, min_samples_per_bin // 10)``.
+    Within a dense bin, every class present receives a Laplace (additive)
+    pseudo-count of *min_samples_per_class_per_bin* before class weights are
+    computed.  This means classes with few local samples are never excluded;
+    instead their per-bin weight is smoothly pulled toward equal weight
+    relative to majority classes, while remaining locally meaningful.  The
+    final weight is always clipped to *clip_range* so no class can dominate.
+    ``None`` (default) auto-derives the pseudo-count as
+    ``max(1, min_samples_per_bin // 10)``.
     """
     if labels.shape != bins.shape:
         raise ValueError(
@@ -646,7 +647,7 @@ def _get_per_bin_class_weights(
     unique_bins = np.unique(bins)
     n_fallback_bins = 0
     n_fallback_samples = 0
-    n_class_filtered_samples = 0
+    pseudo = min_samples_per_class_per_bin  # Laplace pseudo-count
 
     for bin_id in unique_bins:
         mask = bins == bin_id
@@ -661,45 +662,36 @@ def _get_per_bin_class_weights(
             )
             continue
 
-        # Per-class filtering: drop classes with too few samples in this bin.
+        # Additive (Laplace) smoothing: add pseudo-count to every class present
+        # in this bin so that rare classes are never excluded from the per-bin
+        # weight computation.  A class with 2 real samples + pseudo=5 effective
+        # samples participates with a weight that reflects its local scarcity
+        # rather than falling back to the global weight.
         class_counts = pd.Series(bin_labels).value_counts()
-        well_represented = set(
-            class_counts.index[class_counts >= min_samples_per_class_per_bin]
-        )
-        if not well_represented:
-            # No class meets the per-class threshold; fall back wholesale.
-            weights[mask] = np.array(
-                [global_w_dict[str(lbl)] for lbl in bin_labels],
-                dtype=np.float64,
-            )
-            continue
-
-        kept_mask = np.array(
-            [lbl in well_represented for lbl in bin_labels], dtype=bool
-        )
-        filtered_labels = bin_labels[kept_mask]
+        smoothed_counts = {
+            str(lbl): int(cnt) + pseudo for lbl, cnt in class_counts.items()
+        }
         bin_w_dict = _stringify_weight_dict(
             get_class_weights(
-                filtered_labels,
+                bin_labels,
                 method=method,
                 clip_range=None,
-                normalize=True,
+                normalize=False,
                 verbose=False,
+                counts_override=smoothed_counts,
             )
         )
-        per_sample = np.array(
-            [
-                (
-                    bin_w_dict[str(lbl)]
-                    if lbl in well_represented
-                    else global_w_dict[str(lbl)]
-                )
-                for lbl in bin_labels
-            ],
+        sample_mean = (
+            sum(
+                int(cnt) * bin_w_dict[str(lbl)]
+                for lbl, cnt in class_counts.items()
+            )
+            / float(class_counts.sum())
+        )
+        weights[mask] = np.array(
+            [bin_w_dict[str(lbl)] / sample_mean for lbl in bin_labels],
             dtype=np.float64,
         )
-        weights[mask] = per_sample
-        n_class_filtered_samples += int((~kept_mask).sum())
 
     prefix = (
         f"_get_per_bin_class_weights[{pool_name}]"
@@ -712,14 +704,6 @@ def _get_per_bin_class_weights(
             f"bins ({n_fallback_samples}/{len(labels)} samples) below "
             f"min_samples_per_bin={min_samples_per_bin}; using global class "
             "weights for those samples."
-        )
-    if n_class_filtered_samples > 0:
-        logger.info(
-            f"{prefix}: {n_class_filtered_samples}/{len(labels)} samples "
-            f"belong to a class with < min_samples_per_class_per_bin="
-            f"{min_samples_per_class_per_bin} in their bin; using global "
-            "class weights for those samples (other classes in their bin "
-            "compute as if those samples weren't there)."
         )
 
     mean = weights.mean()
@@ -885,13 +869,14 @@ def _build_per_class_weight_grid(
     (n_dense_bins, n_total_bins) for logging.
 
     *min_samples_per_class_per_bin* defaults to ``max(1, min_samples_per_bin //
-    10)`` — within each dense bin, classes below this in-bin count are dropped
-    from the per-bin weight computation entirely (no entry in the grid for
-    that class in that bin), so they don't contribute to the ``num_classes``
-    factor for the remaining classes.
+    10)`` — within each dense bin, this value is used as the Laplace
+    pseudo-count added to every class's observed count before weights are
+    computed.  All classes present in the bin participate; rare ones are
+    smoothly pulled toward equal weight rather than being dropped entirely.
     """
     if min_samples_per_class_per_bin is None:
         min_samples_per_class_per_bin = max(1, min_samples_per_bin // 10)
+    pseudo = min_samples_per_class_per_bin  # Laplace pseudo-count
 
     df = pd.DataFrame({"lat_bin": lat_bin, "lon_bin": lon_bin, "label": str_labels})
     bin_groups = df.groupby(["lat_bin", "lon_bin"])
@@ -901,21 +886,26 @@ def _build_per_class_weight_grid(
             continue
         bin_labels = group["label"].to_numpy()
         class_counts = pd.Series(bin_labels).value_counts()
-        well_represented = set(
-            class_counts.index[class_counts >= min_samples_per_class_per_bin]
-        )
-        if not well_represented:
-            continue
-        kept = bin_labels[np.isin(bin_labels, list(well_represented))]
-        bin_weights[(li, lo)] = _stringify_weight_dict(
+        smoothed_counts = {
+            str(lbl): int(cnt) + pseudo for lbl, cnt in class_counts.items()
+        }
+        wdict = _stringify_weight_dict(
             get_class_weights(
-                kept,
+                bin_labels,
                 method=method,
                 clip_range=None,
-                normalize=True,
+                normalize=False,
                 verbose=False,
+                counts_override=smoothed_counts,
             )
         )
+        sample_mean = (
+            sum(int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items())
+            / float(class_counts.sum())
+        )
+        bin_weights[(li, lo)] = {
+            cls: w / sample_mean for cls, w in wdict.items()
+        }
     n_total_bins = bin_groups.ngroups
     n_dense_bins = len(bin_weights)
 

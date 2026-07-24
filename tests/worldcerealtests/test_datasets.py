@@ -1798,8 +1798,14 @@ class TestPerBinClassWeights(unittest.TestCase):
         np.testing.assert_allclose(weights, np.ones_like(weights))
 
     def test_within_bin_class_balancing(self):
-        """Rare classes within a bin receive higher weight than dominant classes."""
-        # Bin has 1 'a' and 9 'b' → 'a' weight should be ~9× 'b' weight (balanced).
+        """Rare classes within a bin receive higher weight than dominant classes.
+
+        With Laplace pseudo-count smoothing, the pseudo-count
+        ``pseudo = max(1, min_samples_per_bin // 10)`` is added to every class
+        before computing the balanced ratio.  Here ``min_samples_per_bin=1``
+        → ``pseudo=1``, so smoothed counts are ``a=1+1=2`` and ``b=9+1=10``,
+        giving an expected ratio of 10/2 = 5× (instead of the raw-count 9×).
+        """
         labels = np.array(["a"] + ["b"] * 9)
         bins = np.array(["B0"] * 10)
         weights = _get_per_bin_class_weights(
@@ -1808,7 +1814,10 @@ class TestPerBinClassWeights(unittest.TestCase):
         a_weight = weights[labels == "a"][0]
         b_weight = weights[labels == "b"][0]
         self.assertGreater(a_weight, b_weight)
-        np.testing.assert_allclose(a_weight / b_weight, 9.0, rtol=1e-6)
+        # pseudo = max(1, 1//10) = 1; smoothed counts: a=2, b=10 → ratio ≈ 10/2 = 5.0.
+        # A small deviation (<0.2%) is expected due to 3-decimal-place rounding
+        # inside get_class_weights.
+        np.testing.assert_allclose(a_weight / b_weight, 5.0, rtol=5e-3)
 
     def test_global_mean_is_one(self):
         """The assembled per-sample array should have mean = 1 after normalisation."""
