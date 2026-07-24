@@ -412,11 +412,11 @@ def get_class_weights(
         logger.info(f"Clipping weights to range {clip_range}")
         weights = np.clip(weights, clip_range[0], clip_range[1])
 
-    rounded = np.round(weights, 3)
-    result = {cls: float(weight) for cls, weight in zip(classes, rounded.tolist())}
+    result = {cls: float(weight) for cls, weight in zip(classes, weights.tolist())}
     if verbose:
         display = {
-            str(cls): float(weight) for cls, weight in zip(classes, rounded.tolist())
+            str(cls): round(float(weight), 3)
+            for cls, weight in zip(classes, weights.tolist())
         }
         prefix = f"[{pool_name}] " if pool_name else ""
         logger.info(f"{prefix}Class weights ({method}): {display}")
@@ -676,13 +676,20 @@ def _get_per_bin_class_weights(
                 bin_labels,
                 method=method,
                 clip_range=None,
-                normalize=True,
+                normalize=False,
                 verbose=False,
                 counts_override=smoothed_counts,
             )
         )
+        sample_mean = (
+            sum(
+                int(cnt) * bin_w_dict[str(lbl)]
+                for lbl, cnt in class_counts.items()
+            )
+            / float(class_counts.sum())
+        )
         weights[mask] = np.array(
-            [bin_w_dict[str(lbl)] for lbl in bin_labels],
+            [bin_w_dict[str(lbl)] / sample_mean for lbl in bin_labels],
             dtype=np.float64,
         )
 
@@ -882,16 +889,23 @@ def _build_per_class_weight_grid(
         smoothed_counts = {
             str(lbl): int(cnt) + pseudo for lbl, cnt in class_counts.items()
         }
-        bin_weights[(li, lo)] = _stringify_weight_dict(
+        wdict = _stringify_weight_dict(
             get_class_weights(
                 bin_labels,
                 method=method,
                 clip_range=None,
-                normalize=True,
+                normalize=False,
                 verbose=False,
                 counts_override=smoothed_counts,
             )
         )
+        sample_mean = (
+            sum(int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items())
+            / float(class_counts.sum())
+        )
+        bin_weights[(li, lo)] = {
+            cls: w / sample_mean for cls, w in wdict.items()
+        }
     n_total_bins = bin_groups.ngroups
     n_dense_bins = len(bin_weights)
 
