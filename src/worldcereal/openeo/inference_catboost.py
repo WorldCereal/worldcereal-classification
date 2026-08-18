@@ -42,7 +42,7 @@ except ImportError:
 _MODULE_CACHE_KEY = f"__model_cache_{__name__}"
 
 # Constants
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.4-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.5-py3-none-any.whl"
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
@@ -98,7 +98,12 @@ def get_model_cache():
 
 def _ensure_prometheo_dependencies():
     """Non-cached dependency check."""
-    global _PROMETHEO_INSTALLED, Presto, load_presto_weights, run_model_inference, PoolingMethods
+    global \
+        _PROMETHEO_INSTALLED, \
+        Presto, \
+        load_presto_weights, \
+        run_model_inference, \
+        PoolingMethods
 
     if _PROMETHEO_INSTALLED:
         return
@@ -315,9 +320,9 @@ def majority_vote(
 
     # As the probabilities are in integers between 0 and 100,
     # we use uint16 matrices to store the vote scores
-    assert (
-        kernel_size <= 25
-    ), f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
+    assert kernel_size <= 25, (
+        f"Kernel value cannot be larger than 25 (currently: {kernel_size}) because it might lead to scenarios where the 16-bit count matrix is overflown"
+    )
 
     # Build a class mapping, so classes are converted to indexes and vice-versa
     unique_values = set(np.unique(prediction))
@@ -659,8 +664,7 @@ class DataPreprocessor:
 
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Validate S1 bands; keep compressed uint16 DN values untouched.
-        """
+        """Validate S1 bands; keep compressed uint16 DN values untouched."""
         s1_bands_present = [b for b in S1_BANDS if b in arr.bands.values]
         if not s1_bands_present:
             return arr
@@ -668,18 +672,14 @@ class DataPreprocessor:
         s1_data = arr.sel(bands=s1_bands_present).values
         valid_mask = s1_data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(
-                s1_data[valid_mask].astype(np.float32)
-            )
+            DataPreprocessor._validate_s1_data(s1_data[valid_mask].astype(np.float32))
         return arr
 
     @staticmethod
     def _validate_s1_data(data: np.ndarray) -> None:
         """Validate S1 data meets preprocessing requirements."""
         if data.min() < 1 or data.max() > NODATA_VALUE:
-            raise ValueError(
-                "S1 data should be uint16 format with values 1-65535."
-            )
+            raise ValueError("S1 data should be uint16 format with values 1-65535.")
 
 
 class PrestoFeatureExtractor:

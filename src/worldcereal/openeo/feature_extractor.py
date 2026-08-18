@@ -26,7 +26,7 @@ sys.path.append("feature_deps")
 
 import torch  # noqa: E402
 
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.4-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.5-py3-none-any.whl"
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
@@ -377,17 +377,14 @@ class DataPreprocessor:
 
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Validate S1 bands; keep compressed uint16 DN values untouched.
-        """
+        """Validate S1 bands; keep compressed uint16 DN values untouched."""
         present = [b for b in S1_INPUT_BANDS if b in arr.bands.values]
         if not present:
             return arr
         data = arr.sel(bands=present).values
         valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(
-                data[valid_mask].astype(np.float32)
-            )
+            DataPreprocessor._validate_s1_data(data[valid_mask].astype(np.float32))
         return arr
 
     @staticmethod
