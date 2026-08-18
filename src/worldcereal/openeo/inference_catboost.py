@@ -42,7 +42,7 @@ except ImportError:
 _MODULE_CACHE_KEY = f"__model_cache_{__name__}"
 
 # Constants
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.3-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.4-py3-none-any.whl"
 
 GFMAP_BAND_MAPPING = {
     "S2-L2A-B02": "B2",
