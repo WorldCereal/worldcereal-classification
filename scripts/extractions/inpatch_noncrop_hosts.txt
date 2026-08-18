@@ -1,0 +1,106 @@
+# In-patch hard-negative non-crop campaign (2017-2025, ~195k points): the 92
+# host ref_ids whose patches carry the sampled points. Largest first —
+# run_patch_to_point_local.sh shards this list round-robin by line index, so
+# each shard gets a mix of big and small hosts.
+#
+# Format: <host_ref_id> [point_count]; '#' starts a comment; blank lines are
+# ignored. Resume is handled by the extractor's output-exists skip, so no
+# done-markers belong in this file.
+#
+# (2017_FRA and 2017_AUT have large S1 gaps on disk: affected samples get
+# S1=65535 by design — do not chase this as an error in the logs.)
+#
+# openEO-era outputs of this campaign live untouched in
+# MERGED_PARQUETS_INPATCH_NONCROP/_openeo_reference/.
+2022_EU_LUCAS_POLY_111                25258
+2018_EU_LUCAS_POINT_110               23370
+2025_POL_LPIS_POLY_110                11729
+2017_FRA_LPIS_POLY_110                10465
+2024_FIN_LPIS_POLY_110                10124
+2017_AUT_LPIS_POLY_110                7736
+2023_ESP_Eurocrops_POLY_110           6408
+2021_SWE_Eurocrops_POLY_110           5199
+2020_ESP_ESYRCE_POLY_111              4847
+2021_ESP_ESYRCE_POLY_111              4714
+2023_FRA_LPIS_POLY_110                4537
+2022_FRA_LPIS_POLY_110                4161
+2021_FRA_LPIS_POLY_110                4156
+2025_DNK_LPIS_POLY_110                3708
+2024_AUT_LPIS_POLY_110                3404
+2020_FRA_LPIS_POLY_110                2792
+2024_DNK_LPIS_POLY_110                2753
+2019_FRA_LPIS_POLY_110                2490
+2024_CZE_LPIS_POLY_110                2336
+2025_BGR_LPIS_POLY_110                2209
+2020_FIN_LPIS_POLY_110                2146
+2021_FIN_LPIS_POLY_110                2126
+2023_FIN_LPIS_POLY_110                1970
+2024_BGR_LPIS_POLY_110                1962
+2020_AUT_LPIS_POLY_110                1910
+2018_FRA_LPIS_POLY_110                1905
+2021_AUT_LPIS_POLY_110                1782
+2022_FIN_LPIS_POLY_110                1721
+2023_IRL_LPIS_POLY_110                1622
+2022_IRL_LPIS_POLY_110                1580
+2019_AUT_LPIS_POLY_110                1410
+2019_ESP_ESYRCE_POLY_111              1377
+2018_AUT_LPIS_POLY_110                1242
+2017_BEL_LPIS-Flanders_POLY_110       1176
+2023_AUT_LPIS_POLY_110                1145
+2020_NLD_LPIS_POLY_110                978
+2021_NLD_LPIS_POLY_110                952
+2019_NLD_LPIS_POLY_110                928
+2023_CZE_LPIS_POLY_110                926
+2021_DEU_Eurocrops-NRW_POLY_110       925
+2024_BEL_LPIS-Flanders_POLY_110       921
+2019_CZE_LPIS_POLY_110                891
+2020_CZE_LPIS_POLY_110                878
+2022_NLD_LPIS_POLY_110                873
+2020_SVN_LPIS_POLY_110                813
+2021_DEU_Eurocrops-LS_POLY_110        799
+2019_ESP_SIGPAC-Catalunya_POLY_111    795
+2018_NLD_LPIS_POLY_110                789
+2022_AUT_LPIS_POLY_110                763
+2021_CZE_LPIS_POLY_110                735
+2022_CZE_LPIS_POLY_110                704
+2021_IRL_LPIS_POLY_110                698
+2021_EST_Eurocrops_POLY_110           693
+2020_IRL_LPIS_POLY_110                687
+2023_DNK_LPIS_POLY_110                665
+2019_IRL_LPIS_POLY_110                595
+2021_DNK_LPIS_POLY_110                591
+2020_DNK_LPIS_POLY_110                566
+2018_IRL_LPIS_POLY_110                563
+2023_DEU_Eurocrops-BB_POLY_110        552
+2019_DNK_Eurocrops_POLY_110           493
+2019_LVA_LPIS_POLY_110                486
+2021_LVA_LPIS_POLY_110                460
+2023_EU_LUCAS_POLY_111                446
+2021_LTU_Eurocrops_POLY_110           430
+2018_BEL_LPIS-Flanders_POLY_110       429
+2022_DNK_LPIS_POLY_110                414
+2018_DNK_LPIS_POLY_110                384
+2021_BGR_Eurocrops_POLY_110           375
+2020_BGR_Eurocrops_POLY_110           373
+2019_BGR_Eurocrops_POLY_110           345
+2023_BGR_Eurocrops_POLY_110           343
+2020_ESP_Eurocrops-Navarre_POLY_110   318
+2019_DNK_LPIS_POLY_110                316
+2022_BEL_LPIS-Flanders_POLY_110       308
+2021_SVK_Eurocrops_POLY_110           266
+2019_BEL_LPIS-Flanders_POLY_110       265
+2022_BGR_Eurocrops_POLY_110           258
+2023_BEL_LPIS-Flanders_POLY_110       247
+2021_BEL_LPIS-Flanders_POLY_110       245
+2020_BEL_LPIS-Flanders_POLY_110       238
+2018_BGR_Eurocrops_POLY_110           220
+2019_UKR_NHI-01_POINT_110             162
+2021_GLO_EWOC-VAL_POLY_111            158
+2021_LUX_LPIS_POLY_110                154
+2019_UKR_JECAM-1_POLY_110             136
+2019_UKR_JECAM-2_POLY_100             121
+2020_LUX_LPIS_POLY_110                113
+2019_LUX_LPIS_POLY_110                96
+2018_UKR_NHI-01_POINT_110             62
+2022_GLO_EWOC-VAL_POLY_111            36
+2021_UKR_sunflowermap_POINT_110       27
