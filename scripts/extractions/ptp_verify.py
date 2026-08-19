@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -148,7 +149,10 @@ def _fullscan_matches(patch: dict, months: List[tuple],
             continue
         vals = band[idx].astype(float)
         vals[(mask[idx] == 1) | (vals == NODATA)] = np.nan
-        with np.errstate(all="ignore"):
+        # nanmedian emits "All-NaN slice" RuntimeWarnings (warnings module,
+        # not errstate) for fully-masked months; expected and harmless.
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
             cube[mi] = np.floor(np.nanmedian(vals, axis=0))
     cube = np.nan_to_num(cube, nan=NODATA).astype(np.int64)
     hit = (cube == b04_store[:, None, None]).all(axis=0)

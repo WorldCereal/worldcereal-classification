@@ -293,6 +293,11 @@ def run_ref(
 
 
 def main() -> None:
+    # Campaign logs are INFO-level: per-batch detail (e.g. centroid drops)
+    # is logger.debug and floods a large ref's log otherwise. Override with
+    # PTP_LOG_LEVEL=DEBUG when actually debugging.
+    logger.remove()
+    logger.add(sys.stderr, level=os.environ.get("PTP_LOG_LEVEL", "INFO"))
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
