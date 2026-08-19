@@ -35,7 +35,11 @@ AGERA5_CACHE="$BASE/_AGERA5_CACHE"
 WORKERS="${WORKERS:-8}"
 VERIFY_N="${VERIFY_N:-20}"
 
-mkdir -p "$OUT" "$CATALOG_CACHE" "$AGERA5_CACHE"
+mkdir -p "$OUT" "$OUT/_verify" "$OUT/_stats" "$CATALOG_CACHE" "$AGERA5_CACHE"
+# Shared campaign folder: several people write here. Group-writable with
+# setgid dirs; harmless no-op for whoever doesn't own them.
+chmod g+ws "$BASE" "$OUT" "$OUT/_verify" "$OUT/_stats" \
+    "$CATALOG_CACHE" "$AGERA5_CACHE" 2>/dev/null || true
 
 # Round-robin selection of this shard's refs
 mapfile -t ALL < <(grep -vE '^\s*(#|$)' "$REFS_FILE" | awk '{print $1}')

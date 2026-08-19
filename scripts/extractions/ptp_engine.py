@@ -54,6 +54,7 @@ produced, into --merged-dir.
 import argparse
 import calendar
 import json
+import os
 import sys as _sys
 
 # The ptp_* modules and ref_catalog live as flat scripts in this directory
@@ -401,8 +402,15 @@ class MonthlyMeteo:
         url = f"{AGERA5_S3}/openEO_{year}-{month:02d}-01Z_{band}.tif"
         r = requests.get(url, timeout=120)
         if r.status_code == 200:
-            tmp = p.with_suffix(".tmp")
+            # Per-process temp name: parallel shards may fetch the same
+            # month; rename is atomic and last-writer-wins with identical
+            # content. chmod so any group member can refresh it later.
+            tmp = p.with_suffix(f".tmp{os.getpid()}")
             tmp.write_bytes(r.content)
+            try:
+                os.chmod(tmp, 0o664)
+            except OSError:
+                pass
             tmp.rename(p)
             return p
         if (year, month) > self._daily_horizon():
@@ -429,8 +437,14 @@ class MonthlyMeteo:
         assert acc is not None and profile is not None  # ndays >= 28
         comp = (np.floor(acc / ndays) if band == "temperature-mean" else acc)
         profile.update(dtype="uint16", nodata=NODATA)
-        with rasterio.open(p, "w", **profile) as dst:
+        tmp = p.with_suffix(f".tmp{os.getpid()}.tif")
+        with rasterio.open(tmp, "w", **profile) as dst:
             dst.write(comp.astype(np.uint16), 1)
+        try:
+            os.chmod(tmp, 0o664)
+        except OSError:
+            pass
+        tmp.rename(p)
         return p
 
     def sample(self, year: int, month: int, band: str,

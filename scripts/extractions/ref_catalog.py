@@ -266,8 +266,15 @@ class RefCatalog:
         cat = cls(ref_id, entries, used)
         # Never cache fs-built catalogs: they have no footprints, and a cached
         # footprint-less catalog would poison every future run of this ref.
+        # Cache writes are best-effort: the cache is an optimization shared
+        # between users, and e.g. a permission problem on it must not fail
+        # the ref itself.
         if cache_dir is not None and entries and used == "stac":
-            cat.to_parquet(Path(cache_dir) / f"{ref_id}.catalog.parquet")
+            try:
+                cat.to_parquet(Path(cache_dir) / f"{ref_id}.catalog.parquet")
+            except OSError as exc:
+                logger.warning(f"{ref_id}: could not write catalog cache "
+                               f"({exc}); continuing without caching")
         return cat
 
     # -- spatial
@@ -306,7 +313,15 @@ class RefCatalog:
                 "source": self.source,
             })
         path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(rows).to_parquet(path, index=False)
+        # Write via a per-process temp name: two shards indexing the same ref
+        # concurrently must not collide, and rename is atomic on one filer.
+        tmp = path.with_suffix(f".tmp{os.getpid()}")
+        pd.DataFrame(rows).to_parquet(tmp, index=False)
+        try:
+            os.chmod(tmp, 0o664)  # let any group member refresh/self-heal it
+        except OSError:
+            pass
+        tmp.rename(path)
 
     @classmethod
     def from_parquet(cls, ref_id: str, path: Path) -> "RefCatalog":
