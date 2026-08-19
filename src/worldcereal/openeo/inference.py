@@ -1585,7 +1585,13 @@ class SeasonalInferenceEngine:
             preds_np = preds.numpy().reshape(height, width)
 
             landcover_classes = list(self.bundle.landcover_spec.class_names)
-            if len(landcover_classes) > 2:
+            if len(landcover_classes) > 2 and not _emit_multiclass_landcover():
+                logger.debug(
+                    "Multiclass landcover head detected but band export is "
+                    "disabled; set WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER=1 "
+                    "to emit landcover_classification/landcover_probability."
+                )
+            if len(landcover_classes) > 2 and _emit_multiclass_landcover():
                 _ensure_uint8_range(preds_np, name="landcover_classification")
                 landcover_multiclass_layers = (
                     preds_np.astype(np.uint8, copy=False),
@@ -2098,6 +2104,17 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
     if arr.ndim < 2:
         raise ValueError("season_masks must have at least two dimensions (S, T)")
     return arr
+
+
+def _emit_multiclass_landcover() -> bool:
+    """Hidden switch, deliberately NOT a job parameter: the multiclass
+    landcover bands are for local inspection only. Enable with
+    WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER=1 in the environment. Read at
+    call time so a late ``os.environ`` assignment (e.g. in a notebook)
+    still takes effect."""
+    return os.environ.get(
+        "WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0"
+    ).lower() in ("1", "true", "yes")
 
 
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
