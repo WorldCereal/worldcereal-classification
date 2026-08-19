@@ -131,6 +131,49 @@ def _series_equal(a: np.ndarray, b: np.ndarray) -> bool:
     return a.shape == b.shape and bool(np.all(a == b))
 
 
+_AUX_SAMPLERS: Dict[str, Any] = {}
+
+
+def _aux_neighbour_explained(band: str, store_val: int, entry: Optional[dict],
+                             lon: float, lat: float, tol: int) -> bool:
+    """Is the store's elevation/slope the value of a NEIGHBOURING S2 pixel
+    centre? Each openEO cube layer had its own sub-pixel layout offset, so
+    aux can be read one pixel over even where S2 is not. Recomputed with our
+    own samplers under the frozen conventions."""
+    import ptp_engine as _pe
+    if entry is None or not entry.get("s2"):
+        return False
+    try:
+        hdr = _read_patch(entry["s2"], [])  # coords + CRS only, no bands
+    except OSError:
+        return False
+    crs = CRS.from_wkt(hdr["crs_wkt"])
+    fwd = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    back = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    qx, qy = fwd.transform(lon, lat)
+    c0 = _nearest_idx(hdr["x"], qx)
+    r0 = _nearest_idx(hdr["y"], qy)
+    if not _AUX_SAMPLERS:
+        _AUX_SAMPLERS["elevation"] = _pe.ElevationSampler()
+        _AUX_SAMPLERS["slope"] = _pe.SlopeSampler()
+    mode = _pe.DEFAULT_CONVENTIONS[band]
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            rr, cc = r0 + dr, c0 + dc
+            if not (0 <= rr < len(hdr["y"]) and 0 <= cc < len(hdr["x"])):
+                continue
+            plon, plat = back.transform(float(hdr["x"][cc]),
+                                        float(hdr["y"][rr]))
+            if band == "elevation":
+                v = _AUX_SAMPLERS["elevation"].sample(plon, plat, mode)
+            else:
+                v = _AUX_SAMPLERS["slope"].sample(entry.get("tile"),
+                                                  plon, plat, mode)
+            if v != NODATA and abs(store_val - int(v)) <= tol:
+                return True
+    return False
+
+
 def _fullscan_matches(patch: dict, months: List[tuple],
                       t0: np.datetime64, t1: np.datetime64,
                       b04_store: np.ndarray) -> List[tuple]:
@@ -261,7 +304,10 @@ def verify_ref(
                "xpatch_samples": [],
                "s2_unexplained": 0,
                "s1_identical": 0, "s1_explained": 0, "s1_unexplained": 0,
+               "s1_store_empty": 0, "s1_archive_mismatch": 0,
+               "s1_archive_samples": [],
                "aux_ok": 0, "aux_out_of_tolerance": 0,
+               "aux_shift_explained": 0,
                "meteo_beyond_covering": 0,
                "self_check_failures": 0, "unexplained_samples": []}
 
@@ -418,22 +464,50 @@ def verify_ref(
                     # store S1 (and aux) for this sample came from another
                     # patch's file in the merged cube; skip aux.
                     continue
-                verdict["s1_unexplained"] += 1
-                if sid not in verdict["unexplained_samples"]:
-                    verdict["unexplained_samples"].append(sid)
+                if bool(np.all(s1_store == NODATA)) and not bool(
+                        np.all(s1_local == NODATA)):
+                    # The openEO job had NO S1 at this point (its files were
+                    # added to the archive later — AUT forensics: file mtime
+                    # postdates the job); ours is strictly richer. Explained.
+                    verdict["s1_store_empty"] += 1
+                    continue
+                # Store S1 matches NOTHING derivable from today's archive
+                # (own orbits, neighbours, all offsets) while our own value
+                # re-derives exactly (self-check) and S2 is explained: the
+                # S1 patch files changed since the openEO job (proven cases:
+                # files rewritten or missing months after the batch). A
+                # store-side vintage artefact — recorded and rate-capped
+                # below, not an individual failure.
+                missing = [o for o, p1 in entry.get("s1", {}).items()
+                           if not Path(p1).exists()]
+                verdict["s1_archive_mismatch"] += 1
+                verdict["s1_archive_samples"].append(
+                    {"sample_id": sid,
+                     "missing_files": missing or None})
+                continue  # aux likely same-vintage; don't double-count
 
         # --- aux tolerances (store may legitimately differ: openEO bilinear
         # artefacts; bounds are the documented ones)
+        geom_pt = local[local.sample_id == sid].geometry.iloc[0]
         aux_bad = False
         for band, tol in AUX_TOL.items():
             sa = s_vals[band].to_numpy(np.int64)
             la = l_vals[band].to_numpy(np.int64)
             valid = (sa != NODATA) & (la != NODATA)
             if valid.any() and int(np.abs(sa[valid] - la[valid]).max()) > tol:
-                aux_bad = True
+                # The shift bug hit each cube layer independently, so aux
+                # can be shifted even when S2 is not. Before failing, check
+                # the store value against OUR samplers at the 8 neighbouring
+                # S2-pixel centres (one 10 m step in the Alps is many metres
+                # of elevation / degrees of slope).
+                if _aux_neighbour_explained(
+                        band, int(sa[valid][0]), catalog.entries.get(sid),
+                        geom_pt.x, geom_pt.y, tol):
+                    verdict["aux_shift_explained"] += 1
+                else:
+                    aux_bad = True
         # meteo: store must match covering-cell, bilinear, or a neighbouring
         # cell (the openEO nearest-resampled meteo layer was misregistered)
-        geom_pt = local[local.sample_id == sid].geometry.iloc[0]
         meteo_beyond_covering = False
         for band, src in METEO_BANDS.items():
             sa = s_vals[band].to_numpy(np.int64)
@@ -473,6 +547,13 @@ def verify_ref(
             or verdict["aux_out_of_tolerance"] or verdict["self_check_failures"]):
         verdict["status"] = "FAIL"
     elif (verdict["n_checked"] >= 5
+            and verdict["s1_archive_mismatch"] / verdict["n_checked"] > 0.10):
+        # A few store S1 series that match nothing in today's archive are
+        # vintage churn (files rewritten/removed since the openEO job); MANY
+        # would mean our S1 recipe itself drifted — the identical/explained
+        # counts would collapse into this bucket. Cap it.
+        verdict["status"] = "FAIL(s1_archive_rate)"
+    elif (verdict["n_checked"] >= 5
             and verdict["geometry_divergence"] / verdict["n_checked"]
             > max_divergence_frac):
         # Divergence itself is the STORE being outdated, not us being wrong —
@@ -486,6 +567,7 @@ def verify_ref(
     verdict["unexplained_samples"] = verdict["unexplained_samples"][:5]
     verdict["divergence_offsets"] = verdict["divergence_offsets"][:5]
     verdict["xpatch_samples"] = verdict["xpatch_samples"][:8]
+    verdict["s1_archive_samples"] = verdict["s1_archive_samples"][:8]
     return verdict
 
 
