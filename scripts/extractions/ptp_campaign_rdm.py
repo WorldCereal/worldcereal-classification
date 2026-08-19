@@ -73,8 +73,7 @@ def _centroid_points(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         centroids.within(merc.geometry)
     dropped = int((~inside).sum())
     if dropped:
-        logger.warning(f"dropped {dropped} sample(s) whose centroid lies "
-                       "outside their own polygon")
+        logger.debug(f"batch: {dropped} centroid-outside sample(s) dropped")
     out = gdf.loc[inside].copy()
     out["geometry"] = gpd.GeoSeries(centroids[inside], crs=3857).to_crs(4326)
     return out
@@ -182,6 +181,13 @@ def select_and_assign(
     points = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True),
                               crs="EPSG:4326")
     points = points.drop_duplicates(subset="sample_id", keep="first")
+    if stats["centroid_dropped"]:
+        logger.warning(
+            f"{ref_id}: {stats['centroid_dropped']:,} of "
+            f"{stats['kept_time']:,} candidate sample(s) "
+            f"({100 * stats['centroid_dropped'] / max(stats['kept_time'], 1):.1f}%) "
+            "do not contain their own centroid and were dropped (same rule "
+            "and same samples as the openEO-era gdf_to_points)")
     if sample_limit:
         points = points.head(sample_limit)
 
@@ -256,6 +262,7 @@ def run_ref(
         points=points,
         index_source=args.index_source,
         catalog_cache=Path(args.catalog_cache) if args.catalog_cache else None,
+        index=catalog.entries,
     )
     stats["out_path"] = str(out_path)
 
