@@ -88,25 +88,42 @@ def _load_store_ref(store: Path, ref_id: str,
     return pd.concat(frames, ignore_index=True) if frames else None
 
 
-def _meteo_bilinear(year: int, month: int, band: str,
-                    lon: float, lat: float):
-    """Bilinear value of the cached monthly composite at (lon, lat), or None
-    if the raster is unavailable. Used to explain store values produced by
-    the bilinear-era openEO graph."""
+def _meteo_candidates(year: int, month: int, band: str,
+                      lon: float, lat: float) -> List[int]:
+    """Every value the openEO-era store could legitimately hold at (lon,
+    lat): our covering 0.1-deg cell, bilinear (the newer graph), and the 8
+    NEIGHBOURING cells' values. The openEO cube resampled the meteo raster
+    to 10 m with nearest-neighbour on a misregistered grid, so near-edge
+    points were served an adjacent cell's value (CAN forensics 2026-08-19:
+    store PRECIP = the neighbouring cell, 31 mm/month off, at a point 100 m
+    from the cell edge; TMEAN offsets cluster in discrete per-cell steps).
+    A genuine bug on OUR side (wrong scale, wrong indexing) matches none of
+    these. Empty list if the raster is unavailable."""
     import ptp_engine
     import rasterio
     from ptp_engine import _bilinear
     cache = ptp_engine.AGERA5_CACHE
     if cache is None:
-        return None
+        return []
     path = Path(cache) / f"openEO_{year}-{month:02d}-01Z_{band}.tif"
     if not path.exists():
-        return None
+        return []
     with rasterio.open(path) as ds:
         arr = ds.read(1)
         fc, fr = (~ds.transform) * (lon, lat)
-    v = _bilinear(arr.astype(float), fr - 0.5, fc - 0.5, nodata=NODATA)
-    return None if v is None or np.isnan(v) else int(np.floor(v))
+    out: List[int] = []
+    r0, c0 = int(np.floor(fr)), int(np.floor(fc))
+    for dr in (0, -1, 1):
+        for dc in (0, -1, 1):
+            rr, cc = r0 + dr, c0 + dc
+            if 0 <= rr < arr.shape[0] and 0 <= cc < arr.shape[1]:
+                v = int(arr[rr, cc])
+                if v != NODATA:
+                    out.append(v)
+    vb = _bilinear(arr.astype(float), fr - 0.5, fc - 0.5, nodata=NODATA)
+    if vb is not None and not np.isnan(vb) and vb != NODATA:
+        out.append(int(np.floor(vb)))
+    return out
 
 
 def _series_equal(a: np.ndarray, b: np.ndarray) -> bool:
@@ -139,6 +156,91 @@ def _fullscan_matches(patch: dict, months: List[tuple],
     return list(zip(ys.tolist(), xs.tolist()))
 
 
+def _xpatch_s2_match(catalog: RefCatalog, sid: str, geom,
+                     months: List[tuple], t0: np.datetime64,
+                     t1: np.datetime64, s2_store: np.ndarray,
+                     max_patches: int = 6) -> Optional[Dict[str, Any]]:
+    """openEO merged ALL of a ref's patches into one cube. Where patches
+    OVERLAP (ubiquitous for POINT refs: each point gets its own window),
+    the store's values for a point could come from a NEIGHBOUR's patch
+    file — which may hold a different extraction vintage of the same
+    pixels — plus the usual pixel-shift bug. Try centre+8 in each other
+    covering patch; an exact series match proves the store row was read
+    from that file, not the sample's own."""
+    try:
+        others = [h for h in catalog.covering(geom) if h != sid]
+    except Exception:
+        return None
+    for host in others[:max_patches]:
+        entry = catalog.entries.get(host)
+        if not entry or not entry.get("s2"):
+            continue
+        try:
+            patch = _read_patch(entry["s2"],
+                                S2_BANDS + ["S2-L2A-SCL_DILATED_MASK"])
+        except OSError:
+            continue
+        tr = Transformer.from_crs("EPSG:4326", CRS.from_wkt(patch["crs_wkt"]),
+                                  always_xy=True)
+        qx, qy = tr.transform(geom.x, geom.y)
+        r0, c0 = _nearest_idx(patch["y"], qy), _nearest_idx(patch["x"], qx)
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r0 + dr, c0 + dc
+                if not (0 <= rr < len(patch["y"])
+                        and 0 <= cc < len(patch["x"])):
+                    continue
+                series = composite_s2(patch, rr, cc, months, t0, t1)
+                if _series_equal(series.T.astype(np.int64), s2_store):
+                    return {"via": host, "offset_px": [dr, dc]}
+    return None
+
+
+def _xpatch_s1_match(catalog: RefCatalog, sid: str, geom,
+                     months: List[tuple], t0: np.datetime64,
+                     t1: np.datetime64, s1_store: np.ndarray,
+                     max_patches: int = 6) -> Optional[Dict[str, Any]]:
+    """S1 flavour of _xpatch_s2_match — e.g. the sample's own patch has no
+    S1 file at all, but an overlapping neighbour's does (the merged cube
+    then HAD S1 there; our patch-local route correctly does not). Same
+    edge-month tolerance as the own-patch S1 check."""
+    try:
+        others = [h for h in catalog.covering(geom) if h != sid]
+    except Exception:
+        return None
+    for host in others[:max_patches]:
+        entry = catalog.entries.get(host)
+        if not entry:
+            continue
+        for orbit, s1_path in entry.get("s1", {}).items():
+            try:
+                s1p = _read_patch(s1_path, S1_BANDS)
+            except OSError:
+                continue
+            tr1 = Transformer.from_crs("EPSG:4326",
+                                       CRS.from_wkt(s1p["crs_wkt"]),
+                                       always_xy=True)
+            qx, qy = tr1.transform(geom.x, geom.y)
+            c0 = _nearest_idx(s1p["x"], qx)
+            r0 = _nearest_idx(s1p["y"], qy)
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    rr, cc = r0 + dr, c0 + dc
+                    if not (0 <= rr < len(s1p["y"])
+                            and 0 <= cc < len(s1p["x"])):
+                        continue
+                    series = composite_s1(s1p, rr, cc, months, t0, t1)
+                    series = series.T.astype(np.int64)
+                    diff = series != s1_store
+                    bad_months = int(np.any(diff, axis=1).sum())
+                    if bad_months == 0 or (
+                            bad_months <= 2
+                            and int(np.abs(series - s1_store)[diff].max()) <= 2):
+                        return {"via": host, "orbit": orbit,
+                                "offset_px": [dr, dc]}
+    return None
+
+
 def verify_ref(
     ref_id: str,
     local_path: Path,
@@ -151,9 +253,12 @@ def verify_ref(
     verdict: Dict[str, Any] = {"ref_id": ref_id, "status": "PASS", "n_checked": 0,
                "s2_identical": 0, "s2_shift_explained": 0,
                "geometry_divergence": 0, "divergence_offsets": [],
+               "s2_xpatch_explained": 0, "s1_xpatch_explained": 0,
+               "xpatch_samples": [],
                "s2_unexplained": 0,
                "s1_identical": 0, "s1_explained": 0, "s1_unexplained": 0,
                "aux_ok": 0, "aux_out_of_tolerance": 0,
+               "meteo_beyond_covering": 0,
                "self_check_failures": 0, "unexplained_samples": []}
 
     local = gpd.read_parquet(local_path)
@@ -247,6 +352,15 @@ def verify_ref(
                     # location differs -> S1/aux comparisons are meaningless
                     # for this sample; skip them.
                     continue
+                xp = _xpatch_s2_match(catalog, sid, geom, months, t0, t1,
+                                      s2_store)
+                if xp is not None and self_ok:
+                    verdict["s2_xpatch_explained"] += 1
+                    verdict["xpatch_samples"].append({"sample_id": sid, **xp})
+                    # The store row was read from ANOTHER patch's file in the
+                    # merged cube; its S1/aux came from the same contaminated
+                    # read -> those comparisons are meaningless here too.
+                    continue
                 verdict["s2_unexplained"] += 1
                 verdict["unexplained_samples"].append(sid)
 
@@ -291,6 +405,15 @@ def verify_ref(
             if explained:
                 verdict["s1_explained"] += 1
             else:
+                xp1 = _xpatch_s1_match(catalog, sid, geom, months, t0, t1,
+                                       s1_store)
+                if xp1 is not None:
+                    verdict["s1_xpatch_explained"] += 1
+                    verdict["xpatch_samples"].append(
+                        {"sample_id": sid, "band": "s1", **xp1})
+                    # store S1 (and aux) for this sample came from another
+                    # patch's file in the merged cube; skip aux.
+                    continue
                 verdict["s1_unexplained"] += 1
                 if sid not in verdict["unexplained_samples"]:
                     verdict["unexplained_samples"].append(sid)
@@ -304,8 +427,10 @@ def verify_ref(
             valid = (sa != NODATA) & (la != NODATA)
             if valid.any() and int(np.abs(sa[valid] - la[valid]).max()) > tol:
                 aux_bad = True
-        # meteo: store must match covering-cell OR bilinear from our raster
+        # meteo: store must match covering-cell, bilinear, or a neighbouring
+        # cell (the openEO nearest-resampled meteo layer was misregistered)
         geom_pt = local[local.sample_id == sid].geometry.iloc[0]
+        meteo_beyond_covering = False
         for band, src in METEO_BANDS.items():
             sa = s_vals[band].to_numpy(np.int64)
             la = l_vals[band].to_numpy(np.int64)
@@ -315,11 +440,19 @@ def verify_ref(
                     continue
                 if abs(int(sa[k]) - int(la[k])) <= METEO_TOL:
                     continue  # matches our (covering-cell) value
-                bil = _meteo_bilinear(ts.year, ts.month, src,
-                                      geom_pt.x, geom_pt.y)
-                if bil is None or abs(int(sa[k]) - bil) > METEO_TOL:
+                cands = _meteo_candidates(ts.year, ts.month, src,
+                                          geom_pt.x, geom_pt.y)
+                # The store value must lie within the local 3x3 cells' value
+                # range: the openEO meteo layer was nearest-resampled on a
+                # misregistered grid and sometimes bilinear, so any local
+                # mixture is a store-side artefact. Our own would-be bugs
+                # (scale, indexing, month alignment) leave this range.
+                if (not cands or
+                        not (min(cands) - METEO_TOL <= int(sa[k])
+                             <= max(cands) + METEO_TOL)):
                     hit_bad = True
                     break
+                meteo_beyond_covering = True
             if hit_bad:
                 aux_bad = True
                 break
@@ -329,6 +462,8 @@ def verify_ref(
                 verdict["unexplained_samples"].append(sid)
         else:
             verdict["aux_ok"] += 1
+            if meteo_beyond_covering:
+                verdict["meteo_beyond_covering"] += 1
 
     if (verdict["s2_unexplained"] or verdict["s1_unexplained"]
             or verdict["aux_out_of_tolerance"] or verdict["self_check_failures"]):
@@ -346,6 +481,7 @@ def verify_ref(
         verdict["status"] = "FAIL(divergence_rate)"
     verdict["unexplained_samples"] = verdict["unexplained_samples"][:5]
     verdict["divergence_offsets"] = verdict["divergence_offsets"][:5]
+    verdict["xpatch_samples"] = verdict["xpatch_samples"][:8]
     return verdict
 
 
