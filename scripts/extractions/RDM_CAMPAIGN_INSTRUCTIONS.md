@@ -71,8 +71,12 @@ the raw patch and match it exactly), cross-patch contamination (POINT refs:
 patches overlap, and the openEO merged cube served some points from a
 NEIGHBOUR's patch file — we name the file and offset that reproduces the
 store exactly), S1 orbit choice, float32 edge-month noise (±1 DN),
-documented aux tolerances, meteo resampling artefacts (the openEO meteo
-layer was nearest-resampled on a misregistered grid; the store value must
-at least lie within the local 3x3 cells' value range), or RDM geometry
-revisions (reported with the pixel offset). Anything else fails the ref
-loudly.
+documented aux tolerances (including the shift bug hitting the elevation /
+slope layers independently — the store value must match a neighbouring S2
+pixel centre), meteo resampling artefacts (the openEO meteo layer was
+nearest-resampled on a misregistered grid; the store value must at least
+lie within the local 3x3 cells' value range), RDM geometry revisions
+(reported with the pixel offset), or S1 archive vintage (the S1 patch
+files were rewritten/removed since the openEO job ran ; 
+recorded per sample and capped at 10% of checked points, above
+which the ref still fails). Anything else fails the ref loudly.
