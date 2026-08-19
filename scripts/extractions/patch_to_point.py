@@ -290,8 +290,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--image_name",
         type=str,
-        default="python38",
-        help="openEO image name.",  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+        default=None,
+        help="openEO image name.",
     )
     parser.add_argument(
         "--organization_id", type=int, default=None, help="Organization id."
