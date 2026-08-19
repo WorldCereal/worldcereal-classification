@@ -53,7 +53,9 @@ NetCDFs → **verify 20 random points against the old openEO store** → write
 /vitodata/worldcereal/data/PATCH_TO_POINT_LOCAL/
     MERGED_PARQUETS/<ref_id>.geoparquet     ← the deliverables
     MERGED_PARQUETS/_verify/<ref_id>.json   ← per-ref verification certificate
-    MERGED_PARQUETS/_rdm_campaign_stats.csv ← selection/assignment stats
+    MERGED_PARQUETS/_stats/<ref_id>.json    ← per-ref selection/assignment stats
+    MERGED_PARQUETS/_rdm_campaign_stats.csv ← compiled view of _stats/ (auto-
+                                              regenerated; safe with 3 shards)
     _CATALOG/  _AGERA5_CACHE/               ← shared caches (auto-managed)
 ```
 
@@ -65,6 +67,12 @@ the old store minus the anomaly columns (added downstream as before).
 Each ref's certificate proves that, for the checked points, our values are
 either bit-identical to the openEO-era store or differ ONLY in explained
 ways: the openEO pixel-shift bug (we recompute the neighbouring pixel from
-the raw patch and match it exactly), S1 orbit choice, float32 edge-month
-noise (±1 DN), documented aux tolerances, or RDM geometry revisions
-(reported with the pixel offset). Anything else fails the ref loudly.
+the raw patch and match it exactly), cross-patch contamination (POINT refs:
+patches overlap, and the openEO merged cube served some points from a
+NEIGHBOUR's patch file — we name the file and offset that reproduces the
+store exactly), S1 orbit choice, float32 edge-month noise (±1 DN),
+documented aux tolerances, meteo resampling artefacts (the openEO meteo
+layer was nearest-resampled on a misregistered grid; the store value must
+at least lie within the local 3x3 cells' value range), or RDM geometry
+revisions (reported with the pixel offset). Anything else fails the ref
+loudly.
