@@ -54,6 +54,15 @@ produced, into --merged-dir.
 import argparse
 import calendar
 import json
+import sys as _sys
+
+# The ptp_* modules and ref_catalog live as flat scripts in this directory
+# (not installed as a package). Drivers insert this dir on sys.path and
+# direct execution gets it automatically; this line covers the remaining
+# case — ptp_engine imported via an exotic mechanism (importlib-by-path,
+# notebooks) — so the lazy `from ref_catalog import ...` inside
+# extract_host always resolves for every user.
+_sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -581,6 +590,7 @@ def extract_host(
     index_source: str = "fs",
     catalog_cache: Optional[Path] = None,
     points: Optional[gpd.GeoDataFrame] = None,
+    index: Optional[Dict[str, dict]] = None,
 ) -> Tuple[pd.DataFrame, List[dict]]:
     """Extract one host. Returns (long dataframe, raw per-point records).
 
@@ -595,12 +605,13 @@ def extract_host(
         points = load_host_points(host_ref_id)
     if sample_limit:
         points = points.head(sample_limit)
-    if index_source == "fs":
-        index = index_patches(host_ref_id)
-    else:
-        from ref_catalog import RefCatalog
-        index = RefCatalog.load(host_ref_id, source=index_source,
-                                cache_dir=catalog_cache).entries
+    if index is None:
+        if index_source == "fs":
+            index = index_patches(host_ref_id)
+        else:
+            from ref_catalog import RefCatalog
+            index = RefCatalog.load(host_ref_id, source=index_source,
+                                    cache_dir=catalog_cache).entries
     needed = set(points.host_sample_id)
     missing_s2 = [s for s in needed if s not in index or not index[s]["s2"]]
     if missing_s2:
