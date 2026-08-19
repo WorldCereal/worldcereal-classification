@@ -5,6 +5,7 @@ Script that generates the worldcereal_crop_type UDP from the source code.
 from pathlib import Path
 
 import openeo
+from openeo.testing.results import assert_job_results_allclose
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import Backend, BackendContext, cdse_connection
 
@@ -129,12 +130,8 @@ def test_inference_benchmark(tmp_path):
         job_options=default_job_options,
     )
 
-    reference_dir = Path(__file__).parent / "reference" / "inference_benchmark"
-    # actual_dir = tmp_path / "actual"
+    reference_dir = Path(__file__).parent / "testresources" / "reference" / "inference_benchmark"
+    actual_dir = tmp_path / "actual"
 
-    # Below only needs to be run once to get the reference data
-    job.get_results().download_files(target=reference_dir, include_stac_metadata=True)
-
-    # Once we have the reference data, we can run the comparison
-    # job.get_results().download_files(target=actual_dir, include_stac_metadata=True)
-    # assert_job_results_allclose(actual=actual_dir, reference=reference_dir)
+    job.get_results().download_files(target=actual_dir, include_stac_metadata=True)
+    assert_job_results_allclose(actual=actual_dir, expected=reference_dir, atol=10, rtol=1e-2, pixel_tolerance=1)
