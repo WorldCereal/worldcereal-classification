@@ -30,7 +30,7 @@ and separated again at the rekey stage.
 
 Stages: prepare -> [extraction] -> rekey -> gate. The extraction step between
 `prepare` and `rekey` is NOT part of this driver: run it locally with
-`patch_to_point_local.py` (or `run_patch_to_point_local.sh` for the sharded
+`ptp_engine.py` (or `run_ptp_campaign.sh` for the sharded
 screen layout) on the per-host ground-truth files that `prepare` writes.
 
 This driver used to carry an openEO `run` stage that drove the extraction as
@@ -38,7 +38,7 @@ patch-to-point batch jobs. It was removed after openEO's `aggregate_spatial`
 was found to return the value of a NEIGHBOURING pixel for ~48% of sampled
 points (a sub-pixel job-layout offset: the whole time series and all bands
 shift together), so the campaign switched to the local route in
-`patch_to_point_local.py`, validated bit-exact against the host patches. The
+`ptp_engine.py`, validated bit-exact against the host patches. The
 removed stage stays recoverable on branch `ptp-heavy-job-split`.
 
 Campaign history (the in-patch non-crop run, ~90 hosts): host sample_ids come
@@ -440,7 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["prepare", "rekey", "gate"],
         required=True,
         help="Which stage to execute. The extraction itself runs externally "
-        "via patch_to_point_local.py between prepare and rekey.",
+        "via ptp_engine.py between prepare and rekey.",
     )
     parser.add_argument(
         "--input-dir",
@@ -467,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=RUN_SUFFIX,
         help="Suffix appended to the host ref_id in per-run file/folder names. "
         "Must match the --run-suffix the extraction ran with "
-        "(patch_to_point_local.py defaults to 'LOCAL').",
+        "(ptp_engine.py defaults to 'LOCAL').",
     )
     parser.add_argument(
         "--hosts",

@@ -33,7 +33,7 @@ bit-exact).
 Output: the same host-keyed <host>_<run-suffix>.geoparquet the openEO route
 produced, into --merged-dir (for the original campaign that was
 <host>_INPATCH-NONCROP.geoparquet into MERGED_PARQUETS_INPATCH_NONCROP) —
-`rekey` and `gate` in patch_to_point_inpatch.py run unchanged on top.
+`rekey` and `gate` in ptp_campaign_inpatch.py run unchanged on top.
 """
 
 import argparse
@@ -596,12 +596,29 @@ def extract_host(
     t_axis_override: Optional[dict] = None,
     calibrate_s1: bool = False,
     sample_limit: Optional[int] = None,
+    index_source: str = "fs",
+    catalog_cache: Optional[Path] = None,
+    points: Optional[gpd.GeoDataFrame] = None,
 ) -> Tuple[pd.DataFrame, List[dict]]:
-    """Extract one host. Returns (long dataframe, raw per-point records)."""
-    points = load_host_points(host_ref_id)
+    """Extract one host. Returns (long dataframe, raw per-point records).
+
+    index_source: "fs" walks the extraction tree (original behaviour);
+    "stac"/"auto" build the patch index from the STAC catalogue via
+    RefCatalog (seconds instead of minutes per ref; identical entry shape).
+    `points` lets a campaign driver supply its own point set (columns
+    sample_id, host_sample_id, geometry); defaults to the in-patch
+    ground-truth+provenance loader.
+    """
+    if points is None:
+        points = load_host_points(host_ref_id)
     if sample_limit:
         points = points.head(sample_limit)
-    index = index_patches(host_ref_id)
+    if index_source == "fs":
+        index = index_patches(host_ref_id)
+    else:
+        from ref_catalog import RefCatalog
+        index = RefCatalog.load(host_ref_id, source=index_source,
+                                cache_dir=catalog_cache).entries
     needed = set(points.host_sample_id)
     missing_s2 = [s for s in needed if s not in index or not index[s]["s2"]]
     if missing_s2:
@@ -983,6 +1000,15 @@ def main():
     ap.add_argument("--hosts", nargs="+", required=True)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--sample-limit", type=int, default=None)
+    ap.add_argument(
+        "--index-source", choices=["fs", "stac", "auto"], default="fs",
+        help="patch index: 'fs' walks the extraction tree (original "
+             "behaviour, minutes/ref on NFS); 'stac' paginates the STAC "
+             "catalogue (seconds/ref); 'auto' = stac with fs fallback")
+    ap.add_argument(
+        "--catalog-cache", type=Path, default=None,
+        help="with --index-source stac/auto: reuse/write "
+             "<ref>.catalog.parquet files here (see ref_catalog.py)")
     # Campaign-specific locations (no defaults).
     ap.add_argument(
         "--gt-dir", type=Path, required=True,
@@ -996,7 +1022,7 @@ def main():
         "--run-suffix", type=str, default=RUN_SUFFIX,
         help="suffix in the output filename <host>_<suffix>.geoparquet "
              "(default: %(default)s); must match the --run-suffix used by "
-             "patch_to_point_inpatch.py at rekey/gate time")
+             "ptp_campaign_inpatch.py at rekey/gate time")
     ap.add_argument(
         "--agera5-cache", type=Path, default=None,
         help="cache dir for AGERA5 monthly composites "
@@ -1060,7 +1086,9 @@ def main():
                 logger.warning(f"{host}: output exists, skipping ({out_path})")
                 continue
             extract_host(host, conv, workers=args.workers, out_path=out_path,
-                         sample_limit=args.sample_limit)
+                         sample_limit=args.sample_limit,
+                         index_source=args.index_source,
+                         catalog_cache=args.catalog_cache)
     logger.success("Done.")
 
 

@@ -1,6 +1,6 @@
 # In-patch hard-negative non-crop campaign (2017-2025, ~195k points): the 92
 # host ref_ids whose patches carry the sampled points. Largest first —
-# run_patch_to_point_local.sh shards this list round-robin by line index, so
+# run_ptp_campaign.sh shards this list round-robin by line index, so
 # each shard gets a mix of big and small hosts.
 #
 # Format: <host_ref_id> [point_count]; '#' starts a comment; blank lines are
