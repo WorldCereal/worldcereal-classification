@@ -312,17 +312,23 @@ class RefCatalog:
     @classmethod
     def from_parquet(cls, ref_id: str, path: Path) -> "RefCatalog":
         df = pd.read_parquet(path)
+
+        def _str(v):
+            # parquet round-trips None as NaN (a truthy float!) — guard hard
+            return v if isinstance(v, str) and v else None
+
         entries: Dict[str, dict] = {}
         for r in df.itertuples():
             s1 = {}
-            if r.s1_asc: s1["ASCENDING"] = Path(r.s1_asc)
-            if r.s1_desc: s1["DESCENDING"] = Path(r.s1_desc)
+            if _str(r.s1_asc): s1["ASCENDING"] = Path(r.s1_asc)
+            if _str(r.s1_desc): s1["DESCENDING"] = Path(r.s1_desc)
+            fp = r.footprint_wkb
             entries[r.sample_id] = {
-                "tile": r.tile, "zone": r.zone,
-                "s2": Path(r.s2_path) if r.s2_path else None,
-                "s1": s1, "h3": r.h3,
-                "footprint": (shapely_wkb.loads(bytes(r.footprint_wkb))
-                              if r.footprint_wkb is not None else None),
+                "tile": _str(r.tile), "zone": _str(r.zone),
+                "s2": Path(r.s2_path) if _str(r.s2_path) else None,
+                "s1": s1, "h3": _str(r.h3),
+                "footprint": (shapely_wkb.loads(bytes(fp))
+                              if isinstance(fp, (bytes, bytearray)) else None),
             }
         source = df["source"].iloc[0] if len(df) else "cache"
         return cls(ref_id, entries, f"cache({source})")
