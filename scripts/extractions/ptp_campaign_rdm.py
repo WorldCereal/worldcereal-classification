@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 from loguru import logger
@@ -105,7 +104,8 @@ def select_and_assign(
         if e.get("s2") is None:
             continue
         stem = e["s2"].stem.split("_")
-        starts.append(stem[-2]); ends.append(stem[-1])
+        starts.append(stem[-2])
+        ends.append(stem[-1])
     t_lo, t_hi = min(starts), max(ends)
 
     stats = {"ref_id": ref_id, "rows_read": 0, "kept_h3": 0, "kept_time": 0,

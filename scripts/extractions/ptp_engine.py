@@ -63,7 +63,6 @@ import sys as _sys
 # notebooks) — so the lazy `from ref_catalog import ...` inside
 # extract_host always resolves for every user.
 _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -491,8 +490,6 @@ class ElevationSampler:
     def _tile_name(lon: float, lat: float) -> str:
         ns = "N" if lat >= 0 else "S"
         ew = "E" if lon >= 0 else "W"
-        la = int(np.floor(lat)) if lat >= 0 else -int(np.floor(lat))
-        lo = int(np.floor(lon)) if lon >= 0 else -int(np.floor(lon))
         return (f"Copernicus_DSM_COG_10_{ns}{abs(int(np.floor(lat))):02d}_00_"
                 f"{ew}{abs(int(np.floor(lon))):03d}_00_DEM")
 

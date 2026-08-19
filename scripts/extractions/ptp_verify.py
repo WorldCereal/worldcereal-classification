@@ -38,7 +38,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import geopandas as gpd
 import numpy as np
@@ -48,8 +48,13 @@ from pyproj import CRS, Transformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ptp_engine import (  # noqa: E402
-    NODATA, S1_BANDS, S2_BANDS, _nearest_idx, _read_patch,
-    composite_s1, composite_s2,
+    NODATA,
+    S1_BANDS,
+    S2_BANDS,
+    _nearest_idx,
+    _read_patch,
+    composite_s1,
+    composite_s2,
 )
 from ref_catalog import RefCatalog  # noqa: E402
 

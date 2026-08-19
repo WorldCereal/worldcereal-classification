@@ -27,13 +27,11 @@ CLI:
 """
 
 import argparse
-import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import geopandas as gpd
 import pandas as pd
 import requests
 from loguru import logger
@@ -320,8 +318,10 @@ class RefCatalog:
         entries: Dict[str, dict] = {}
         for r in df.itertuples():
             s1 = {}
-            if _str(r.s1_asc): s1["ASCENDING"] = Path(r.s1_asc)
-            if _str(r.s1_desc): s1["DESCENDING"] = Path(r.s1_desc)
+            if _str(r.s1_asc):
+                s1["ASCENDING"] = Path(r.s1_asc)
+            if _str(r.s1_desc):
+                s1["DESCENDING"] = Path(r.s1_desc)
             fp = r.footprint_wkb
             entries[r.sample_id] = {
                 "tile": _str(r.tile), "zone": _str(r.zone),
@@ -340,7 +340,8 @@ class RefCatalog:
         referenced files are missing on disk (dangling), per sensor."""
         paths = []
         for sid, e in self.entries.items():
-            if e.get("s2"): paths.append(("s2", sid, e["s2"]))
+            if e.get("s2"):
+                paths.append(("s2", sid, e["s2"]))
             for orbit, p in e.get("s1", {}).items():
                 paths.append((f"s1_{orbit[:3].lower()}", sid, p))
         with ThreadPoolExecutor(max_workers=stat_workers) as pool:
@@ -362,8 +363,11 @@ def _compare_with_fs(ref_id: str) -> None:
     """Parity check: STAC-built catalog vs filesystem walk (the current
     index_patches behaviour). Proves drop-in-ness per ref."""
     import time
-    t0 = time.time(); stac = build_from_stac(ref_id); t1 = time.time()
-    fs = build_from_fs(ref_id); t2 = time.time()
+    t0 = time.time()
+    stac = build_from_stac(ref_id)
+    t1 = time.time()
+    fs = build_from_fs(ref_id)
+    t2 = time.time()
     logger.info(f"{ref_id}: STAC {len(stac)} entries in {t1-t0:.1f}s | "
                 f"FS {len(fs)} entries in {t2-t1:.1f}s")
     s_only = set(stac) - set(fs)
@@ -381,8 +385,10 @@ def _compare_with_fs(ref_id: str) -> None:
           f"fs-only={len(f_only)} (missing from STAC)")
     print(f"  s2-path mismatches={path_mismatch}  s1-orbit-set mismatches={orbit_mismatch}")
     print(f"  footprints present: {n_fp}/{len(stac)}")
-    if s_only: print(f"  stac-only examples: {sorted(s_only)[:3]}")
-    if f_only: print(f"  fs-only examples: {sorted(f_only)[:3]}")
+    if s_only:
+        print(f"  stac-only examples: {sorted(s_only)[:3]}")
+    if f_only:
+        print(f"  fs-only examples: {sorted(f_only)[:3]}")
 
 
 def main() -> None:
