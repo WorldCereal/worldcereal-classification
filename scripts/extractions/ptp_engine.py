@@ -1,39 +1,54 @@
-"""Local (openEO-free) patch-to-point extraction for the IN-PATCH campaign.
+"""ENGINE for local (openEO-free) patch-to-point extraction.
 
-Reads the host S2/S1 patch NetCDFs directly from /data/worldcereal_data and
+Campaign-agnostic core shared by all extraction campaigns: it turns
+(points assigned to patches) into validated time-series values. Campaign
+drivers own everything else — which points, mapped to which patches, written
+where:
+
+  * ptp_campaign_inpatch.py — in-patch hard negatives (host_sample_id
+    routing, h3 remap, rekey to our ref_ids). First user of this engine;
+    its point loader (`load_host_points`) is also still the default when
+    `extract_host(points=None)` — supply `points=` to bypass it.
+  * ptp_campaign_rdm.py — full-RDM reprocessing: points from the
+    harmonized RDM files, primaries at their own patch, collaterals assigned
+    via ref_catalog footprints.
+
+Patch discovery is pluggable too: `index_source="fs"` walks the extraction
+tree (original behaviour), "stac"/"auto" use ref_catalog.RefCatalog
+(seconds per ref instead of minutes).
+
+Reads the S2/S1 patch NetCDFs directly from /data/worldcereal_data and
 reproduces the openEO patch-to-point output bit-for-bit, per the empirically
-validated recipe (see the feasibility study of 2026-08-12):
+validated recipe:
 
   S2   : drop obs where SCL_DILATED_MASK == 1 or DN == 65535; per-calendar-month
-         MEDIAN per band; floor to uint16. Verified 13/13 exact vs the store.
+         MEDIAN per band; floor to uint16.
   S1   : uint16 DN -> dB = 20*log10(DN) - 83 -> linear power; per-month MEAN in
          the linear domain; DN = 10**((10*log10(mean)+83)/20); FLOOR (truncation);
-         clamp [1, 65534]. Verified 29/29 exact.
+         clamp [1, 65534].
   METEO: AGERA5 monthly composites (public CloudFerro S3, identical to the
          collection openEO loads; local-daily fallback). Value of the covering
-         0.1-degree cell. Verified 8/8 exact.
+         0.1-degree cell.
   SLOPE: the exact Terrascope product openEO loads has LOCAL hrefs:
          /data/worldcereal_data/AUXDATA/COP-DEM_GLO-30_SLOPE/S2grid_20m/slope_<TILE>.tif
   ELEV : /data/MTDA/DEM/COPERNICUS-DEM-30 (bilinear at the S2 pixel centre,
          matches the store within ~2 m).
 
-Pixel conventions (which patch pixel a point maps to, per sensor and CRS case)
-are NOT hardcoded on faith: `--mode calibrate` recovers them empirically from
-hosts already extracted through openEO, and `--mode extract` then uses the
-locked conventions. The one known quirk: cross-CRS S1 showed a systematic
-+1-row (20 m south) offset caused by the backend's resample_cube_spatial.
+Pixel selection is deterministic geometry: the point's coordinates plus the
+patch's own georeferencing identify the containing pixel with certainty. 
+DEFAULT_CONVENTIONS below records the frozen SEMANTIC/ENCODING decisions of 
+the recipe (interpolation modes, the aux-at-S2-pixel-centre rule, float32 S1 arithmetic). 
+They were established once by empirical calibration against openEO ground truth 
+(bit-exact on 1,188 samples / 3 hosts, then 59 hosts) and subsequently confirmed line-by-line in
+the openEO backend source.
 
-Why local at all: that s1_cross_crs row_off=1 convention — and this whole
-local route — exist because openEO's aggregate_spatial returns a NEIGHBOURING
-pixel (not the point's own) for ~48% of points. The bug was reported to the
-openEO team on 2026-08-13; this route was validated against openEO ground
-truth on 1188 samples across 3 hosts (13/13 S2, 29/29 S1, 8/8 meteo
-bit-exact).
+Why local at all: this whole local route exist because openEO's aggregate_spatial 
+returns a NEIGHBOURING pixel (not the point's own) for ~48% of points. 
+The bug was reported to the openEO team on 2026-08-13; this route was validated against 
+openEO ground truth on 1188 samples across 3 hosts. And it's much faster.
 
 Output: the same host-keyed <host>_<run-suffix>.geoparquet the openEO route
-produced, into --merged-dir (for the original campaign that was
-<host>_INPATCH-NONCROP.geoparquet into MERGED_PARQUETS_INPATCH_NONCROP) —
-`rekey` and `gate` in ptp_campaign_inpatch.py run unchanged on top.
+produced, into --merged-dir.
 """
 
 import argparse
@@ -69,7 +84,6 @@ AGERA5_S3 = "https://s3.waw3-1.cloudferro.com/agera_monthly_v2/agera5_monthly_co
 # --reference-dir) before any of the functions below run.
 GT_DIR: Optional[Path] = None
 MERGED_DIR: Optional[Path] = None
-REFERENCE_DIR: Optional[Path] = None  # calibrate-mode openEO truth parquets
 AGERA5_CACHE: Optional[Path] = None
 RUN_SUFFIX = "LOCAL"
 
@@ -80,12 +94,13 @@ S2_BANDS = [
 S1_BANDS = ["S1-SIGMA0-VH", "S1-SIGMA0-VV"]
 NODATA = 65535
 
-# Locked by --mode calibrate; loaded by --mode extract. Row/col offsets are in
-# grid steps relative to the nearest-pixel-centre match, keyed per case.
+# Frozen semantic/encoding decisions (see header). Row/col offsets are grid
+# steps relative to the nearest-pixel-centre match, keyed per case; all zero =
+# pure geometry.
 DEFAULT_CONVENTIONS = {
     "s2": {"row_off": 0, "col_off": 0},
     "s1_same_crs": {"row_off": 0, "col_off": 0},
-    "s1_cross_crs": {"row_off": 1, "col_off": 0},
+    "s1_cross_crs": {"row_off": 0, "col_off": 0},
     "meteo": "covering_cell",       # vs "bilinear"
     "slope": "bilinear_floor",      # vs "nearest"
     "elevation": "bilinear_floor",  # vs "nearest"
@@ -313,38 +328,6 @@ def process_patch(task: dict) -> List[dict]:
                                          t_start, t_end_excl)
             else:
                 rec["s1"] = np.full((2, len(months)), NODATA, np.uint16)
-            # Calibration support: series for every offset candidate.
-            if task.get("calibrate_s1"):
-                grid = {}
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        rr = _nearest_idx(s1_patch["y"], qy) + dr
-                        cc = _nearest_idx(s1_patch["x"], qx) + dc
-                        if 0 <= rr < len(s1_patch["y"]) and 0 <= cc < len(s1_patch["x"]):
-                            grid[(dr, dc)] = composite_s1(
-                                s1_patch, rr, cc, months, t_start, t_end_excl)
-                rec["s1_grid"] = grid
-                # Both orbits for orbit-inference during calibration.
-                other = [o for o in cand if o != s1_orbit]
-                if other and task.get("calibrate_s1"):
-                    try:
-                        alt = _read_patch(cand[other[0]], S1_BANDS)
-                    except OSError:
-                        other = []
-                if other and task.get("calibrate_s1"):
-                    alt_to = Transformer.from_crs(
-                        s2_crs, CRS.from_wkt(alt["crs_wkt"]), always_xy=True)
-                    ax, ay = alt_to.transform(cx, cy)
-                    agrid = {}
-                    for dr in (-1, 0, 1):
-                        for dc in (-1, 0, 1):
-                            rr = _nearest_idx(alt["y"], ay) + dr
-                            cc = _nearest_idx(alt["x"], ax) + dc
-                            if 0 <= rr < len(alt["y"]) and 0 <= cc < len(alt["x"]):
-                                agrid[(dr, dc)] = composite_s1(
-                                    alt, rr, cc, months, t_start, t_end_excl)
-                    rec["s1_grid_alt"] = agrid
-                    rec["s1_orbit_alt"] = other[0]
         else:
             rec["s1"] = np.full((2, len(months)), NODATA, np.uint16)
         results.append(rec)
@@ -594,7 +577,6 @@ def extract_host(
     workers: int = 16,
     out_path: Optional[Path] = None,
     t_axis_override: Optional[dict] = None,
-    calibrate_s1: bool = False,
     sample_limit: Optional[int] = None,
     index_source: str = "fs",
     catalog_cache: Optional[Path] = None,
@@ -651,7 +633,6 @@ def extract_host(
             "t_start": axis["start"],
             "t_end_excl": axis["end"],
             "conventions": conventions,
-            "calibrate_s1": calibrate_s1,
         })
 
     logger.info(f"{host_ref_id}: {len(points)} points in {len(tasks)} patches; "
@@ -700,10 +681,8 @@ def extract_host(
         meteo_vals[(yy, mm, "P")] = meteo.sample(
             yy, mm, "precipitation-flux", lons, lats, conventions["meteo"])
 
-    # Vectorised column-wise assembly. The previous per-row-dict path peaked
-    # at several GB for 25k-point hosts (500k dicts + DataFrame conversion)
-    # and got OOM-killed on this 15 GB machine; flat numpy columns keep the
-    # peak at a few hundred MB.
+    # Vectorised column-wise assembly. Flat numpy columns keep the
+    # peak memory at a few hundred MB.
     axis_of = {r["sample_id"]: sid_axis[r["sample_id"]] for r in records}
     ts_cache: Dict[tuple, np.ndarray] = {}
     n_per: List[int] = []
@@ -821,182 +800,21 @@ def extract_host(
     return df, records
 
 
-# --- Calibration ----------------------------------------------------------
-
-
-def calibrate_host(host_ref_id: str, workers: int,
-                   sample_limit: Optional[int] = None) -> dict:
-    """Extract a host locally and diff against its openEO-produced parquet,
-    voting on every pixel/interp convention."""
-    truth_path = REFERENCE_DIR / f"{host_ref_id}_{RUN_SUFFIX}.geoparquet"
-    truth = gpd.read_parquet(truth_path)
-    logger.info(f"[calibrate] {host_ref_id}: truth has "
-                f"{truth.sample_id.nunique()} samples")
-
-    # Use the openEO output's own axis so months line up exactly.
-    t_ax = {}
-    tmp = truth[["sample_id", "timestamp", "start_date", "end_date"]]
-    months_all = sorted({(t.year, t.month) for t in tmp.timestamp})
-    start = str(tmp.start_date.iloc[0])
-    end = str(tmp.end_date.iloc[0])
-    # end_exclusive: openEO passes end_date (last day) with exclusive upper bound
-    axis = {"months": [list(m) for m in months_all], "start": start, "end": end}
-    # one axis for all zones during calibration
-    t_ax = defaultdict(lambda: axis)
-    t_ax["_"] = axis
-
-    conv = json.loads(json.dumps(DEFAULT_CONVENTIONS))
-    df, records = extract_host(
-        host_ref_id, conv, workers=workers, t_axis_override=t_ax,
-        calibrate_s1=True, sample_limit=sample_limit)
-
-    truth_idx = truth.set_index(["sample_id", "timestamp"])
-    months_ts = [pd.Timestamp(y, m, 1) for (y, m) in months_all]
-
-    report = {"host": host_ref_id, "n_samples": len(records)}
-
-    # --- S2 agreement (fixed nearest-centre convention), per sample ---
-    s2_stats = Counter()
-    s2_rate: Dict[str, float] = {}
-    for rec in records:
-        sid = rec["sample_id"]
-        hit = tot = 0
-        for mi, ts in enumerate(months_ts):
-            if (sid, ts) not in truth_idx.index:
-                continue
-            trow = truth_idx.loc[(sid, ts)]
-            for bi, b in enumerate(S2_BANDS):
-                d = int(rec["s2"][bi, mi]) - int(trow[b])
-                tot += 1
-                if d == 0:
-                    hit += 1
-                s2_stats["exact" if d == 0 else
-                         "within1" if abs(d) <= 1 else "off"] += 1
-        if tot:
-            s2_rate[sid] = hit / tot
-    report["s2"] = dict(s2_stats)
-    # Samples whose truth is fully reproduced from the HOST patch vs samples
-    # whose truth openEO's mosaic served from another overlapping patch.
-    report["s2_per_sample"] = {
-        "clean_ge99": sum(1 for v in s2_rate.values() if v >= 0.99),
-        "mid": sum(1 for v in s2_rate.values() if 0.5 <= v < 0.99),
-        "contaminated_lt50": sum(1 for v in s2_rate.values() if v < 0.5),
-    }
-    clean_sids = {s for s, v in s2_rate.items() if v >= 0.99}
-
-    # --- S1 convention vote: per sample, which (orbit, dr, dc) reproduces
-    # the stored series exactly (or best) ---
-    votes = {"s1_same_crs": Counter(), "s1_cross_crs": Counter()}
-    orbit_agree = Counter()
-    s1_after = Counter()
-    for rec in records:
-        sid = rec["sample_id"]
-        stored = []
-        for mi, ts in enumerate(months_ts):
-            if (sid, ts) in truth_idx.index:
-                trow = truth_idx.loc[(sid, ts)]
-                stored.append((mi, int(trow["S1-SIGMA0-VH"]),
-                               int(trow["S1-SIGMA0-VV"])))
-        if not stored or all(vh == NODATA and vv == NODATA
-                             for (_, vh, vv) in stored):
-            continue
-        best = None  # (n_mismatch, orbit_tag, (dr,dc))
-        for tag, grid in (("primary", rec.get("s1_grid") or {}),
-                          ("alt", rec.get("s1_grid_alt") or {})):
-            for (dr, dc), series in grid.items():
-                mm = sum(1 for (mi, vh, vv) in stored
-                         if int(series[0, mi]) != vh or int(series[1, mi]) != vv)
-                cand_t = (mm, tag, (dr, dc))
-                if best is None or cand_t < best:
-                    best = cand_t
-        if best is None:
-            continue
-        n_mis, tag, off = best
-        case = rec.get("s1_case")
-        clean = sid in clean_sids
-        if case:
-            votes[case][(("clean" if clean else "contam"), tag, off,
-                         "exact" if n_mis == 0 else "approx")] += 1
-        if clean:
-            orbit_agree["file_size_pick_matches" if tag == "primary"
-                        else "other_orbit_matches"] += 1
-            s1_after["samples_exact" if n_mis == 0
-                     else "samples_with_mismatch"] += 1
-    report["s1_votes"] = {k: {str(kk): vv for kk, vv in v.items()}
-                          for k, v in votes.items()}
-    report["s1_orbit_clean"] = dict(orbit_agree)
-    report["s1_summary_clean"] = dict(s1_after)
-
-    # --- aux bands: compare both interpolation modes per band ---
-    aux = {}
-    meteo = MonthlyMeteo()
-    slope_s, elev_s = SlopeSampler(), ElevationSampler()
-    pt = {r["sample_id"]: r for r in records}
-    pts = load_host_points(host_ref_id).set_index("sample_id")
-    test_sids = [r["sample_id"] for r in records]
-    # Aux sampling location = S2 pixel centre in 4326 (same as extract mode).
-    centre = {}
-    for r in records:
-        tf = Transformer.from_crs(CRS.from_wkt(r["s2_crs_wkt"]), "EPSG:4326",
-                                  always_xy=True)
-        centre[r["sample_id"]] = tf.transform(*r["s2_pixel_xy"])
-    for band, modes in (("AGERA5-TMEAN", ["covering_cell", "bilinear"]),
-                        ("AGERA5-PRECIP", ["covering_cell", "bilinear"]),
-                        ("slope", ["nearest", "bilinear_floor"]),
-                        ("elevation", ["nearest", "bilinear_floor"])):
-        aux[band] = {}
-        for mode in modes:
-            stats = Counter()
-            for sid in test_sids:
-                clon, clat = centre[sid]
-                geom = type("G", (), {"x": clon, "y": clat})()
-                if band.startswith("AGERA5"):
-                    src = "temperature-mean" if band.endswith("TMEAN") else \
-                          "precipitation-flux"
-                    for (yy, mm) in months_all:
-                        ts = pd.Timestamp(yy, mm, 1)
-                        if (sid, ts) not in truth_idx.index:
-                            continue
-                        tv = truth_idx.loc[(sid, ts)][band]
-                        lv = meteo.sample(yy, mm, src, np.array([geom.x]),
-                                          np.array([geom.y]),
-                                          "bilinear" if mode == "bilinear"
-                                          else "covering_cell")[0]
-                        lv = min(np.floor(lv), NODATA)
-                        d = int(lv) - int(tv)
-                        stats["exact" if d == 0 else
-                              "within1" if abs(d) <= 1 else "off"] += 1
-                else:
-                    ts0 = months_ts[0]
-                    if (sid, ts0) not in truth_idx.index:
-                        continue
-                    tv = int(truth_idx.loc[(sid, ts0)][band])
-                    if band == "slope":
-                        lv = slope_s.sample(pt[sid]["tile"], geom.x, geom.y,
-                                            mode)
-                    else:
-                        lv = elev_s.sample(geom.x, geom.y, mode)
-                    d = int(lv) - int(tv)
-                    stats["exact" if d == 0 else
-                          "within1" if abs(d) <= 1 else
-                          "within2" if abs(d) <= 2 else "off"] += 1
-            aux[band][mode] = dict(stats)
-    report["aux"] = aux
-    return report
-
-
 # --- CLI ------------------------------------------------------------------
 
 
 def main():
     global S2_ROOT, S1_ROOT, SLOPE_DIR, DEM_DIR, AGERA5_DAILY, AGERA5_S3
-    global GT_DIR, MERGED_DIR, REFERENCE_DIR, AGERA5_CACHE, RUN_SUFFIX
+    global GT_DIR, MERGED_DIR, AGERA5_CACHE, RUN_SUFFIX
     global CONVENTIONS_FILE
 
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mode", choices=["calibrate", "extract"], required=True)
+    ap.add_argument("--mode", choices=["extract"], default="extract",
+                    help="kept for CLI compatibility; extraction is the only "
+                         "mode (calibration was a one-time bootstrap, see "
+                         "header)")
     ap.add_argument("--hosts", nargs="+", required=True)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--sample-limit", type=int, default=None)
@@ -1028,11 +846,6 @@ def main():
         help="cache dir for AGERA5 monthly composites "
              "(default: <merged-dir>/_agera5_cache)")
     ap.add_argument(
-        "--reference-dir", type=Path, default=None,
-        help="calibrate mode: dir with the openEO-produced "
-             "<host>_<run-suffix>.geoparquet truth files "
-             "(default: --merged-dir)")
-    ap.add_argument(
         "--conventions", type=str, default=None,
         help="JSON file with locked conventions (default: "
              "<merged-dir>/_local_extractor_conventions.json if present, "
@@ -1058,7 +871,6 @@ def main():
     SLOPE_DIR, DEM_DIR = args.slope_dir, args.dem_dir
     AGERA5_DAILY, AGERA5_S3 = args.agera5_daily, args.agera5_s3
     GT_DIR, MERGED_DIR = args.gt_dir, args.merged_dir
-    REFERENCE_DIR = args.reference_dir or MERGED_DIR
     AGERA5_CACHE = args.agera5_cache or MERGED_DIR / "_agera5_cache"
     RUN_SUFFIX = args.run_suffix
     CONVENTIONS_FILE = MERGED_DIR / "_local_extractor_conventions.json"
@@ -1069,23 +881,12 @@ def main():
         conv = json.loads(conv_path.read_text())
         logger.info(f"Loaded conventions from {conv_path}")
 
-    if args.mode == "calibrate":
-        reports = []
-        for host in args.hosts:
-            reports.append(calibrate_host(host, args.workers,
-                                          args.sample_limit))
-        out = MERGED_DIR / "_calibration_report.json"
-        out.write_text(json.dumps(reports, indent=2, default=str))
-        logger.success(f"Calibration report -> {out}")
-        for r in reports:
-            print(json.dumps(r, indent=2, default=str))
-    else:
-        for host in args.hosts:
-            out_path = MERGED_DIR / f"{host}_{RUN_SUFFIX}.geoparquet"
-            if out_path.exists():
-                logger.warning(f"{host}: output exists, skipping ({out_path})")
-                continue
-            extract_host(host, conv, workers=args.workers, out_path=out_path,
+    for host in args.hosts:
+        out_path = MERGED_DIR / f"{host}_{RUN_SUFFIX}.geoparquet"
+        if out_path.exists():
+            logger.warning(f"{host}: output exists, skipping ({out_path})")
+            continue
+        extract_host(host, conv, workers=args.workers, out_path=out_path,
                          sample_limit=args.sample_limit,
                          index_source=args.index_source,
                          catalog_cache=args.catalog_cache)
