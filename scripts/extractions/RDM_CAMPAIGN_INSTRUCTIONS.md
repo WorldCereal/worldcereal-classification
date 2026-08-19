@@ -40,6 +40,12 @@ NetCDFs → **verify 20 random points against the old openEO store** → write
 * **Machine etiquette**: one shard per machine; ~8 workers is polite to the
   NFS filer. Memory footprint is bounded (~2 GB); expect 2 min (small ref)
   to a few hours (LUCAS/ESP monsters) per ref.
+* **In-season refs** (the 2025/2026 TUN + ZMB ones): a warning like
+  `AGERA5-TMEAN/PRECIP = NODATA for month(s) 2026-06, ...` is EXPECTED —
+  those months have no AGERA5 data anywhere yet. The rows keep their S2/S1
+  values; meteo can be backfilled once AGERA5 catches up. This is only
+  allowed for months beyond the archive horizon — a missing meteo month in
+  the past still fails the ref (that would be a real problem).
 
 ## Outputs
 
