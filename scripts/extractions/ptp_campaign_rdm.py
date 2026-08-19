@@ -31,6 +31,8 @@ Usage:
 """
 
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -282,8 +284,7 @@ def run_ref(
          logger.error)(f"{ref_id}: verification {v['status']}")
         vdir = Path(args.out_dir) / "_verify"
         vdir.mkdir(exist_ok=True)
-        import json as _json
-        (vdir / f"{ref_id}.json").write_text(_json.dumps(v, indent=2))
+        (vdir / f"{ref_id}.json").write_text(json.dumps(v, indent=2))
         if v["status"] == "FAIL":
             raise RuntimeError(f"verification FAILED for {ref_id} "
                                f"(unexplained differences vs openEO store; "
@@ -355,7 +356,6 @@ def main() -> None:
 
     conventions = DEFAULT_CONVENTIONS
     if args.conventions and Path(args.conventions).exists():
-        import json
         conventions = json.loads(Path(args.conventions).read_text())
         logger.info(f"Loaded conventions from {args.conventions}")
 
@@ -379,9 +379,20 @@ def main() -> None:
         summary = pd.DataFrame(all_stats)
         print(summary.to_string(index=False))
         if args.out_dir:
-            summary.to_csv(args.out_dir / "_rdm_campaign_stats.csv",
-                           mode="a", header=not (args.out_dir / "_rdm_campaign_stats.csv").exists(),
-                           index=False)
+            # One JSON per ref (idempotent on rerun), then regenerate the
+            # CSV whole and rename into place. Appending would interleave
+            # and duplicate: three shard machines write here concurrently,
+            # and NFS appends are not atomic.
+            stats_dir = args.out_dir / "_stats"
+            stats_dir.mkdir(exist_ok=True)
+            for s in all_stats:
+                (stats_dir / f"{s['ref_id']}.json").write_text(
+                    json.dumps(s, default=str, indent=1))
+            rows = [json.loads(p.read_text())
+                    for p in sorted(stats_dir.glob("*.json"))]
+            tmp = args.out_dir / f"_rdm_campaign_stats.csv.tmp{os.getpid()}"
+            pd.DataFrame(rows).to_csv(tmp, index=False)
+            tmp.rename(args.out_dir / "_rdm_campaign_stats.csv")
     if failed:
         logger.error(f"{len(failed)} ref(s) failed: {failed}")
         raise SystemExit(1)
