@@ -258,6 +258,29 @@ def run_ref(
         catalog_cache=Path(args.catalog_cache) if args.catalog_cache else None,
     )
     stats["out_path"] = str(out_path)
+
+    if args.verify or args.verify_pct:
+        from ptp_verify import verify_ref
+        n = args.verify
+        if args.verify_pct:
+            n = max(10, min(200, int(stats["primary"] * args.verify_pct / 100)))
+        v = verify_ref(ref_id, out_path, catalog,
+                       store=Path(args.verify_store), n_samples=n,
+                       max_divergence_frac=args.max_divergence_frac)
+        stats["verify_status"] = v["status"]
+        stats["verify"] = {k: val for k, val in v.items()
+                           if k not in ("ref_id",)}
+        (logger.success if v["status"] == "PASS" else
+         logger.warning if v["status"].startswith("SKIP") else
+         logger.error)(f"{ref_id}: verification {v['status']}")
+        vdir = Path(args.out_dir) / "_verify"
+        vdir.mkdir(exist_ok=True)
+        import json as _json
+        (vdir / f"{ref_id}.json").write_text(_json.dumps(v, indent=2))
+        if v["status"] == "FAIL":
+            raise RuntimeError(f"verification FAILED for {ref_id} "
+                               f"(unexplained differences vs openEO store; "
+                               f"see {vdir / (ref_id + '.json')})")
     return stats
 
 
@@ -290,6 +313,25 @@ def main() -> None:
                          "only_flagged_samples; default keeps collaterals)")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--sample-limit", type=int, default=None)
+    ap.add_argument("--verify-pct", type=float, default=None, metavar="P",
+                    help="verify P%% of a ref's primary samples, clamped to "
+                         "[10, 200] points (overrides --verify). Fixed N is "
+                         "statistically sufficient for systematic faults; "
+                         "use pct only if per-ref proportionality matters.")
+    ap.add_argument("--verify", type=int, default=0, metavar="N",
+                    help="after each ref's extraction, verify N random "
+                         "primary samples against the openEO-era store: "
+                         "every difference must be explainable (neighbour-"
+                         "pixel bug / orbit / float32 edge noise / documented "
+                         "aux tolerance) or the ref FAILS. 0 disables.")
+    ap.add_argument("--max-divergence-frac", type=float, default=0.3,
+                    help="verification tripwire: FAIL a ref when more than "
+                         "this fraction of checked points are geometry-"
+                         "divergent (see ptp_verify.py)")
+    ap.add_argument("--verify-store", type=Path,
+                    default=None,
+                    help="openEO-era reference store "
+                         "(default: the canonical WITH_ANOMALY store)")
     args = ap.parse_args()
 
     if args.mode == "extract":
@@ -299,6 +341,10 @@ def main() -> None:
         ptp_engine.AGERA5_CACHE = (args.agera5_cache
                                    or args.out_dir / "_agera5_cache")
         ptp_engine.AGERA5_CACHE.mkdir(parents=True, exist_ok=True)
+
+    if (args.verify or args.verify_pct) and args.verify_store is None:
+        from ptp_verify import STORE_DEFAULT
+        args.verify_store = STORE_DEFAULT
 
     conventions = DEFAULT_CONVENTIONS
     if args.conventions and Path(args.conventions).exists():
