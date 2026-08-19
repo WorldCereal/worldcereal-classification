@@ -69,8 +69,24 @@ def _iter_items(ref_id: str, collection: str, page_size: int = 500):
         }
         if token:
             body["token"] = token
-        resp = requests.post(STAC_SEARCH, json=body, timeout=300)
-        resp.raise_for_status()
+        # Transient 5xx happen on this server; a single blip must not dump
+        # callers to the minutes-long filesystem walk (or worse, a
+        # footprint-less catalog). Retry with backoff before giving up.
+        last_exc = None
+        for attempt in range(4):
+            try:
+                resp = requests.post(STAC_SEARCH, json=body, timeout=300)
+                resp.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                last_exc = exc
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status is not None and 400 <= status < 500:
+                    raise  # our request is wrong; retrying won't help
+                import time as _time
+                _time.sleep(2 ** attempt)
+        else:
+            raise last_exc
         payload = resp.json()
         yield from payload.get("features", [])
         token = None
@@ -230,7 +246,13 @@ class RefCatalog:
         if cache_dir is not None:
             cached = Path(cache_dir) / f"{ref_id}.catalog.parquet"
             if cached.exists():
-                return cls.from_parquet(ref_id, cached)
+                cat = cls.from_parquet(ref_id, cached)
+                has_fp = any(e.get("footprint") is not None
+                             for e in cat.entries.values())
+                if has_fp or source == "fs":
+                    return cat
+                logger.warning(f"{ref_id}: cached catalog has no footprints "
+                               "(old fs build?); rebuilding from STAC")
         entries, used = {}, source
         if source in ("stac", "auto"):
             try:
@@ -243,7 +265,9 @@ class RefCatalog:
             entries = build_from_fs(ref_id)
             used = "fs"
         cat = cls(ref_id, entries, used)
-        if cache_dir is not None and entries:
+        # Never cache fs-built catalogs: they have no footprints, and a cached
+        # footprint-less catalog would poison every future run of this ref.
+        if cache_dir is not None and entries and used == "stac":
             cat.to_parquet(Path(cache_dir) / f"{ref_id}.catalog.parquet")
         return cat
 
