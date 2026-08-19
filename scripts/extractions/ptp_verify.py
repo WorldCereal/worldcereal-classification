@@ -38,7 +38,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import geopandas as gpd
 import numpy as np
@@ -148,7 +148,7 @@ def verify_ref(
     max_divergence_frac: float = 0.3,
 ) -> dict:
     """Classify a deterministic random sample of points; return the verdict."""
-    verdict = {"ref_id": ref_id, "status": "PASS", "n_checked": 0,
+    verdict: Dict[str, Any] = {"ref_id": ref_id, "status": "PASS", "n_checked": 0,
                "s2_identical": 0, "s2_shift_explained": 0,
                "geometry_divergence": 0, "divergence_offsets": [],
                "s2_unexplained": 0,

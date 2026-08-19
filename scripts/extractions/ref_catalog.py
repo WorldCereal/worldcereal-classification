@@ -70,7 +70,7 @@ def _iter_items(ref_id: str, collection: str, page_size: int = 500):
         # Transient 5xx happen on this server; a single blip must not dump
         # callers to the minutes-long filesystem walk (or worse, a
         # footprint-less catalog). Retry with backoff before giving up.
-        last_exc = None
+        last_exc: Optional[requests.RequestException] = None
         for attempt in range(4):
             try:
                 resp = requests.post(STAC_SEARCH, json=body, timeout=300)
@@ -84,6 +84,7 @@ def _iter_items(ref_id: str, collection: str, page_size: int = 500):
                 import time as _time
                 _time.sleep(2 ** attempt)
         else:
+            assert last_exc is not None  # loop only falls through after raises
             raise last_exc
         payload = resp.json()
         yield from payload.get("features", [])

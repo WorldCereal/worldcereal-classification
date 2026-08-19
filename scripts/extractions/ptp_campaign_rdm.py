@@ -33,7 +33,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
 import pandas as pd
@@ -108,7 +108,7 @@ def select_and_assign(
         ends.append(stem[-1])
     t_lo, t_hi = min(starts), max(ends)
 
-    stats = {"ref_id": ref_id, "rows_read": 0, "kept_h3": 0, "kept_time": 0,
+    stats: Dict[str, Any] = {"ref_id": ref_id, "rows_read": 0, "kept_h3": 0, "kept_time": 0,
              "kept_spatial": 0, "primary": 0, "collateral": 0,
              "multi_cover_resolved": 0, "centroid_dropped": 0}
 
@@ -237,7 +237,7 @@ def run_ref(
 ) -> Optional[dict]:
     out_path = (Path(args.out_dir) / f"{ref_id}.geoparquet"
                 if args.out_dir else None)
-    if args.mode == "extract" and out_path.exists():
+    if args.mode == "extract" and out_path is not None and out_path.exists():
         logger.warning(f"{ref_id}: output exists, skipping ({out_path})")
         return None
 
@@ -266,7 +266,7 @@ def run_ref(
     )
     stats["out_path"] = str(out_path)
 
-    if args.verify or args.verify_pct:
+    if (args.verify or args.verify_pct) and out_path is not None:
         from ptp_verify import verify_ref
         n = args.verify
         if args.verify_pct:

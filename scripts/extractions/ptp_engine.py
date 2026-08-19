@@ -353,21 +353,48 @@ def process_patch(task: dict) -> List[dict]:
 
 
 class MonthlyMeteo:
-    """AGERA5 monthly composites: S3-staged primary, local-daily fallback."""
+    """AGERA5 monthly composites: S3-staged primary, local-daily fallback.
+
+    In-season refs (patch windows extending past what AGERA5 covers yet)
+    get NODATA meteo for those months instead of a hard failure — but ONLY
+    for months beyond the daily archive's last complete month. A missing
+    month *behind* that horizon means archive corruption and still raises.
+    """
 
     def __init__(self, cache_dir: Optional[Path] = None):
-        if cache_dir is None and AGERA5_CACHE is None:
+        resolved = cache_dir if cache_dir is not None else AGERA5_CACHE
+        if resolved is None:
             raise ValueError(
                 "MonthlyMeteo needs a cache_dir (or the module-level "
                 "AGERA5_CACHE set, which main() does from --agera5-cache)")
-        self.cache_dir = Path(cache_dir or AGERA5_CACHE)
+        self.cache_dir = Path(resolved)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._open: Dict[Tuple[int, int, str], tuple] = {}
+        self._open: Dict[Tuple[int, int, str], Optional[tuple]] = {}
+        self._horizon: Optional[Tuple[int, int]] = None
+        self.missing: set = set()  # (year, month) served as NODATA
 
     def _local_path(self, year: int, month: int, band: str) -> Path:
         return self.cache_dir / f"openEO_{year}-{month:02d}-01Z_{band}.tif"
 
-    def _ensure(self, year: int, month: int, band: str) -> Path:
+    def _daily_horizon(self) -> Tuple[int, int]:
+        """Last month FULLY covered by the local daily archive."""
+        if self._horizon is None:
+            for ydir in sorted((p for p in AGERA5_DAILY.iterdir()
+                                if p.name.isdigit()), reverse=True):
+                days = sorted(d.name for d in ydir.iterdir()
+                              if len(d.name) == 8 and d.name.isdigit())
+                if days:
+                    y, m, d = (int(days[-1][:4]), int(days[-1][4:6]),
+                               int(days[-1][6:8]))
+                    if d < calendar.monthrange(y, m)[1]:
+                        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+                    self._horizon = (y, m)
+                    break
+            if self._horizon is None:
+                raise RuntimeError(f"no day folders under {AGERA5_DAILY}")
+        return self._horizon
+
+    def _ensure(self, year: int, month: int, band: str) -> Optional[Path]:
         p = self._local_path(year, month, band)
         if p.exists() and p.stat().st_size > 0:
             return p
@@ -378,12 +405,20 @@ class MonthlyMeteo:
             tmp.write_bytes(r.content)
             tmp.rename(p)
             return p
+        if (year, month) > self._daily_horizon():
+            h = self._daily_horizon()
+            logger.warning(
+                f"AGERA5 {year}-{month:02d} not on S3 and beyond the daily "
+                f"archive horizon ({h[0]}-{h[1]:02d}) — no source has it yet; "
+                "meteo = NODATA for this month")
+            return None
         # Fallback: composite from the local daily archive (proven identical:
         # temp = floor(mean of raw K*100), precip = sum of raw mm*100).
         logger.warning(f"S3 miss for {year}-{month:02d} {band}; compositing "
                        "from /data/MTDA/AgERA5 dailies")
         ndays = calendar.monthrange(year, month)[1]
-        acc, profile = None, None
+        acc: Optional[np.ndarray] = None
+        profile = None
         for day in range(1, ndays + 1):
             f = (AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{day:02d}" /
                  f"AgERA5_{band}_{year}{month:02d}{day:02d}.tif")
@@ -391,6 +426,7 @@ class MonthlyMeteo:
                 arr = ds.read(1).astype(np.float64)
                 profile = profile or ds.profile
             acc = arr if acc is None else acc + arr
+        assert acc is not None and profile is not None  # ndays >= 28
         comp = (np.floor(acc / ndays) if band == "temperature-mean" else acc)
         profile.update(dtype="uint16", nodata=NODATA)
         with rasterio.open(p, "w", **profile) as dst:
@@ -402,11 +438,18 @@ class MonthlyMeteo:
         key = (year, month, band)
         if key not in self._open:
             path = self._ensure(year, month, band)
-            with rasterio.open(path) as ds:
-                self._open[key] = (ds.read(1), ds.transform)
+            if path is None:
+                self._open[key] = None
+            else:
+                with rasterio.open(path) as ds:
+                    self._open[key] = (ds.read(1), ds.transform)
             if len(self._open) > 25:  # keep memory bounded (13 MB per raster)
                 self._open.pop(next(iter(self._open)))
-        arr, transform = self._open[key]
+        entry = self._open[key]
+        if entry is None:
+            self.missing.add((year, month))
+            return np.full(len(lons), NODATA, dtype=np.float64)
+        arr, transform = entry
         out = np.full(len(lons), NODATA, dtype=np.float64)
         inv = ~transform
         for i, (lon, lat) in enumerate(zip(lons, lats)):
@@ -421,7 +464,7 @@ class MonthlyMeteo:
 
 
 def _bilinear(arr: np.ndarray, fr: float, fc: float,
-              nodata: float = None) -> float:
+              nodata: Optional[float] = None) -> float:
     """Bilinear interpolation at fractional (row, col) in pixel-centre space."""
     r0, c0 = int(np.floor(fr)), int(np.floor(fc))
     dr, dc = fr - r0, fc - c0
@@ -443,7 +486,7 @@ class SlopeSampler:
     """Terrascope 20 m slope tiles (uint8 degrees, nodata 255), per S2 tile."""
 
     def __init__(self):
-        self._open: Dict[str, tuple] = {}
+        self._open: Dict[str, Optional[tuple]] = {}
         self._tf: Dict[object, Transformer] = {}
 
     def sample(self, tile: str, lon: float, lat: float, mode: str) -> int:
@@ -476,15 +519,15 @@ class SlopeSampler:
                 return NODATA
             v = int(arr[r, c])
             return NODATA if v == 255 else v
-        v = _bilinear(arr, fr - 0.5, fc - 0.5, nodata=255)
-        return NODATA if v == 255 or np.isnan(v) else int(np.floor(v))
+        vb = _bilinear(arr, fr - 0.5, fc - 0.5, nodata=255)
+        return NODATA if vb == 255 or np.isnan(vb) else int(np.floor(vb))
 
 
 class ElevationSampler:
     """Copernicus 30 m DEM 1x1-degree COG tiles (float32 metres)."""
 
     def __init__(self):
-        self._open: Dict[str, tuple] = {}
+        self._open: Dict[str, Optional[tuple]] = {}
 
     @staticmethod
     def _tile_name(lon: float, lat: float) -> str:
@@ -572,6 +615,9 @@ def month_axis_from_patches(index: Dict[str, dict], needed: set) -> dict:
 
 
 def load_host_points(host_ref_id: str) -> gpd.GeoDataFrame:
+    if GT_DIR is None:
+        raise ValueError("GT_DIR is not set (main() sets it from --gt-dir; "
+                         "campaign drivers pass points= instead)")
     gt = gpd.read_parquet(GT_DIR / f"{host_ref_id}.geoparquet")
     prov = pd.read_parquet(GT_DIR / "provenance.parquet")
     prov = prov[prov.host_ref_id == host_ref_id]
@@ -695,6 +741,12 @@ def extract_host(
             yy, mm, "temperature-mean", lons, lats, conventions["meteo"])
         meteo_vals[(yy, mm, "P")] = meteo.sample(
             yy, mm, "precipitation-flux", lons, lats, conventions["meteo"])
+    if meteo.missing:
+        mm_str = ", ".join(f"{y}-{m:02d}" for (y, m) in sorted(meteo.missing))
+        logger.warning(
+            f"{host_ref_id}: AGERA5-TMEAN/PRECIP = NODATA for month(s) "
+            f"{mm_str} — in-season ref, no AGERA5 source covers them yet. "
+            "Rows keep their S2/S1 values.")
 
     # Vectorised column-wise assembly. Flat numpy columns keep the
     # peak memory at a few hundred MB.
