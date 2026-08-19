@@ -72,7 +72,8 @@ def _load_store_ref(store: Path, ref_id: str,
     part = store / f"ref_id={ref_id}"
     if not part.exists():
         return None
-    cols = ["sample_id", "timestamp"] + S2_BANDS + S1_BANDS + list(AUX_TOL)
+    cols = ["sample_id", "timestamp"] + S2_BANDS + S1_BANDS \
+        + list(AUX_TOL) + list(METEO_BANDS)
     frames = []
     for f in part.glob("*.parquet"):
         df = pd.read_parquet(f, columns=cols)
@@ -353,6 +354,9 @@ def main() -> None:
     ap.add_argument("--store", type=Path, default=STORE_DEFAULT)
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--catalog-cache", type=Path, default=None)
+    ap.add_argument("--agera5-cache", type=Path, default=None,
+                    help="AGERA5 monthly cache dir — needed to explain "
+                         "bilinear-era store meteo values")
     ap.add_argument("--out", type=Path, default=None,
                     help="append verdicts to this CSV")
     ap.add_argument("--max-divergence-frac", type=float, default=0.3,
@@ -365,6 +369,10 @@ def main() -> None:
                     help="also FAIL refs with geometry_divergence samples "
                          "(default: divergence is reported but passes)")
     args = ap.parse_args()
+
+    if args.agera5_cache:
+        import ptp_engine
+        ptp_engine.AGERA5_CACHE = args.agera5_cache
 
     refs = (args.ref_ids if args.ref_ids else
             [line.strip() for line in
