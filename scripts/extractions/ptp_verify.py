@@ -57,7 +57,14 @@ STORE_DEFAULT = Path(
     "/data/worldcereal_data/EXTRACTIONS/WORLDCEREAL/"
     "WORLDCEREAL_ALL_EXTRACTIONS_WITH_ANOMALY/worldcereal_all_extractions.parquet")
 
-AUX_TOL = {"elevation": 2, "slope": 2, "AGERA5-TMEAN": 20, "AGERA5-PRECIP": 1}
+AUX_TOL = {"elevation": 2, "slope": 2}
+# Meteo is validated differently: the openEO-era store mixes TWO conventions
+# (covering-cell from the nearest-era graph, bilinear from the newer one), so
+# a store value is EXPLAINED if it matches either convention recomputed from
+# our cached composite raster (±METEO_TOL), and unexplained otherwise.
+METEO_BANDS = {"AGERA5-TMEAN": "temperature-mean",
+               "AGERA5-PRECIP": "precipitation-flux"}
+METEO_TOL = 25  # covers floor()-vs-round and shifted-pixel-centre residuals
 
 
 def _load_store_ref(store: Path, ref_id: str,
@@ -73,6 +80,27 @@ def _load_store_ref(store: Path, ref_id: str,
             df = df[df.sample_id.isin(sample_ids)]
         frames.append(df)
     return pd.concat(frames, ignore_index=True) if frames else None
+
+
+def _meteo_bilinear(year: int, month: int, band: str,
+                    lon: float, lat: float):
+    """Bilinear value of the cached monthly composite at (lon, lat), or None
+    if the raster is unavailable. Used to explain store values produced by
+    the bilinear-era openEO graph."""
+    import ptp_engine
+    import rasterio
+    from ptp_engine import _bilinear
+    cache = ptp_engine.AGERA5_CACHE
+    if cache is None:
+        return None
+    path = Path(cache) / f"openEO_{year}-{month:02d}-01Z_{band}.tif"
+    if not path.exists():
+        return None
+    with rasterio.open(path) as ds:
+        arr = ds.read(1)
+        fc, fr = (~ds.transform) * (lon, lat)
+    v = _bilinear(arr.astype(float), fr - 0.5, fc - 0.5, nodata=NODATA)
+    return None if v is None or np.isnan(v) else int(np.floor(v))
 
 
 def _series_equal(a: np.ndarray, b: np.ndarray) -> bool:
@@ -270,6 +298,25 @@ def verify_ref(
             valid = (sa != NODATA) & (la != NODATA)
             if valid.any() and int(np.abs(sa[valid] - la[valid]).max()) > tol:
                 aux_bad = True
+        # meteo: store must match covering-cell OR bilinear from our raster
+        geom_pt = local[local.sample_id == sid].geometry.iloc[0]
+        for band, src in METEO_BANDS.items():
+            sa = s_vals[band].to_numpy(np.int64)
+            la = l_vals[band].to_numpy(np.int64)
+            hit_bad = False
+            for k, ts in enumerate(common_ts):
+                if sa[k] == NODATA or la[k] == NODATA:
+                    continue
+                if abs(int(sa[k]) - int(la[k])) <= METEO_TOL:
+                    continue  # matches our (covering-cell) value
+                bil = _meteo_bilinear(ts.year, ts.month, src,
+                                      geom_pt.x, geom_pt.y)
+                if bil is None or abs(int(sa[k]) - bil) > METEO_TOL:
+                    hit_bad = True
+                    break
+            if hit_bad:
+                aux_bad = True
+                break
         if aux_bad:
             verdict["aux_out_of_tolerance"] += 1
             if sid not in verdict["unexplained_samples"]:

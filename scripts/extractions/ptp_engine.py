@@ -110,6 +110,13 @@ DEFAULT_CONVENTIONS = {
     "s2": {"row_off": 0, "col_off": 0},
     "s1_same_crs": {"row_off": 0, "col_off": 0},
     "s1_cross_crs": {"row_off": 0, "col_off": 0},
+    # Meteo = value of the COVERING 0.1-deg cell. The openEO-era store is a
+    # MIXTURE (mostly covering-cell from the nearest-era graph; some
+    # near-cell-edge samples bilinear from the newer graph, 
+    # so no single choice matches it everywhere; covering_cell
+    # matches the dominant historical semantics and keeps "monthly total of
+    # the containing cell" interpretable. ptp_verify accepts either
+    # convention on the store side.
     "meteo": "covering_cell",       # vs "bilinear"
     "slope": "bilinear_floor",      # vs "nearest"
     "elevation": "bilinear_floor",  # vs "nearest"
