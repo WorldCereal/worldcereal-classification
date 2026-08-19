@@ -72,6 +72,7 @@ import geopandas as gpd
 import netCDF4
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import rasterio
 import requests
 from loguru import logger
@@ -102,6 +103,12 @@ S2_BANDS = [
 ]
 S1_BANDS = ["S1-SIGMA0-VH", "S1-SIGMA0-VV"]
 NODATA = 65535
+# Big ref_ids (ESP/POL/AUT: 200k+ samples -> millions of rows) might OOM'd a 15 GB
+# VM when the whole long-format frame plus its Arrow copy were materialized at
+# once. extract_host assembles and writes in blocks of at most this many rows:
+# peak memory is one block regardless of ref size. Small refs (the common
+# case) stay single-shot.
+CHUNK_ROWS = 1_500_000
 
 # Frozen semantic/encoding decisions (see header). Row/col offsets are grid
 # steps relative to the nearest-pixel-centre match, keyed per case; all zero =
@@ -777,13 +784,6 @@ def extract_host(
     reps = np.asarray(n_per)
     total = int(reps.sum())
 
-    cols: Dict[str, np.ndarray] = {
-        b: np.full(total, NODATA, dtype=np.uint16)
-        for b in S2_BANDS + S1_BANDS
-        + ["slope", "elevation", "AGERA5-PRECIP", "AGERA5-TMEAN"]}
-    ts_col = np.empty(total, dtype="datetime64[ns]")
-    fidx_col = np.empty(total, dtype=np.int64)
-
     # Elevation and slope must be sampled grouped by raster tile, not in point
     # order: the DEM COGs are 32 MB each and points of a host are scattered
     # over many 1-degree tiles, so per-point ordering reloads a tile per point
@@ -799,86 +799,151 @@ def extract_host(
             slope_all[ri] = slope_s.sample(tile, lons[ri], lats[ri],
                                            conventions["slope"])
 
-    offs = 0
-    for ri, rec in enumerate(records):
-        months = tuple(map(tuple, axis_of[rec["sample_id"]][0]))
-        T = len(months)
-        sl = slice(offs, offs + T)
-        for bi, b in enumerate(S2_BANDS):
-            cols[b][sl] = rec["s2"][bi, :T]
-        cols["S1-SIGMA0-VH"][sl] = rec["s1"][0, :T]
-        cols["S1-SIGMA0-VV"][sl] = rec["s1"][1, :T]
-        ts_col[sl] = ts_cache[months]
-        fidx_col[sl] = ri
-        cols["slope"][sl] = np.uint16(slope_all[ri])
-        cols["elevation"][sl] = np.uint16(elev_all[ri])
-        for mi, (yy, mm) in enumerate(months):
-            cols["AGERA5-TMEAN"][offs + mi] = np.uint16(
-                min(np.floor(meteo_vals[(yy, mm, "T")][ri]), NODATA))
-            cols["AGERA5-PRECIP"][offs + mi] = np.uint16(
-                min(np.floor(meteo_vals[(yy, mm, "P")][ri]), NODATA))
-        offs += T
+    def _build_block(i0: int, i1: int) -> pd.DataFrame:
+        """Assemble the long-format frame for records[i0:i1]. Rows of one
+        sample never straddle blocks, so per-block all-nodata dropping is
+        identical to the global rule."""
+        recs = records[i0:i1]
+        reps_b = reps[i0:i1]
+        total_b = int(reps_b.sum())
+        cols: Dict[str, np.ndarray] = {
+            b: np.full(total_b, NODATA, dtype=np.uint16)
+            for b in S2_BANDS + S1_BANDS
+            + ["slope", "elevation", "AGERA5-PRECIP", "AGERA5-TMEAN"]}
+        ts_col = np.empty(total_b, dtype="datetime64[ns]")
+        fidx_col = np.empty(total_b, dtype=np.int64)
 
-    # Per-record scalars, repeated per month row. np.repeat on object arrays
-    # copies references, not values.
-    rec_sids = np.array([r["sample_id"] for r in records], dtype=object)
-    a = attrs.loc[list(rec_sids)]
-    geom_arr = np.array([pt_geom[s] for s in rec_sids], dtype=object)
-    df = pd.DataFrame({
-        "feature_index": fidx_col,
-        "sample_id": np.repeat(rec_sids, reps),
-        "timestamp": ts_col,
-        **{b: cols[b] for b in S2_BANDS},
-        "S1-SIGMA0-VH": cols["S1-SIGMA0-VH"],
-        "S1-SIGMA0-VV": cols["S1-SIGMA0-VV"],
-        "slope": cols["slope"],
-        "elevation": cols["elevation"],
-        "AGERA5-PRECIP": cols["AGERA5-PRECIP"],
-        "AGERA5-TMEAN": cols["AGERA5-TMEAN"],
-        "lon": np.repeat(np.array([g.x for g in geom_arr]), reps),
-        "lat": np.repeat(np.array([g.y for g in geom_arr]), reps),
-        "geometry": np.repeat(geom_arr, reps),
-        "tile": np.repeat(
-            np.array([r["tile"] for r in records], dtype=object), reps),
-        "h3_l3_cell": np.repeat(
-            a["h3_l3_cell"].astype(str).to_numpy(dtype=object), reps),
-        "start_date": np.repeat(np.array(
-            [axis_of[s][1] for s in rec_sids], dtype=object), reps),
-        "end_date": np.repeat(np.array(
-            [axis_of[s][2] for s in rec_sids], dtype=object), reps),
-        "year": np.full(total, int(host_ref_id.split("_")[0]), dtype=np.int64),
-        "valid_time": np.repeat(
-            a["valid_time"].astype(str).str[:10].to_numpy(dtype=object), reps),
-        "ewoc_code": np.repeat(a["ewoc_code"].to_numpy(np.int64), reps),
-        "irrigation_status": np.repeat(
-            a["irrigation_status"].to_numpy(np.int64), reps),
-        "quality_score_lc": np.repeat(
-            a["quality_score_lc"].to_numpy(np.int64), reps),
-        "quality_score_ct": np.repeat(
-            a["quality_score_ct"].to_numpy(np.int64), reps),
-        "extract": np.repeat(a["extract"].to_numpy(np.int64), reps),
-    })
-    # all-nodata drop, same rule as post_job_action: every S2/S1 column at
-    # NODATA for every timestep of the sample.
-    sensor_cols = [c for c in df.columns if "S2" in c or "S1" in c]
-    nodata_rows = (df[sensor_cols] == NODATA).all(axis=1)
-    drop = df.assign(_nd=nodata_rows).groupby("sample_id")["_nd"].transform("all")
-    if drop.any():
-        n = df.loc[drop, "sample_id"].nunique()
-        logger.warning(f"{host_ref_id}: dropping {n} all-nodata sample(s)")
-        df = df[~drop]
+        offs = 0
+        for bi_r, rec in enumerate(recs):
+            ri = i0 + bi_r
+            months = tuple(map(tuple, axis_of[rec["sample_id"]][0]))
+            T = len(months)
+            sl = slice(offs, offs + T)
+            for bi, b in enumerate(S2_BANDS):
+                cols[b][sl] = rec["s2"][bi, :T]
+            cols["S1-SIGMA0-VH"][sl] = rec["s1"][0, :T]
+            cols["S1-SIGMA0-VV"][sl] = rec["s1"][1, :T]
+            ts_col[sl] = ts_cache[months]
+            fidx_col[sl] = ri
+            cols["slope"][sl] = np.uint16(slope_all[ri])
+            cols["elevation"][sl] = np.uint16(elev_all[ri])
+            for mi, (yy, mm) in enumerate(months):
+                cols["AGERA5-TMEAN"][offs + mi] = np.uint16(
+                    min(np.floor(meteo_vals[(yy, mm, "T")][ri]), NODATA))
+                cols["AGERA5-PRECIP"][offs + mi] = np.uint16(
+                    min(np.floor(meteo_vals[(yy, mm, "P")][ri]), NODATA))
+            offs += T
 
-    df["ref_id"] = pd.Series(
-        [host_ref_id] * len(df), index=df.index,
-        dtype=pd.CategoricalDtype(categories=[host_ref_id], ordered=False))
+        # Per-record scalars, repeated per month row. np.repeat on object
+        # arrays copies references, not values.
+        rec_sids = np.array([r["sample_id"] for r in recs], dtype=object)
+        a = attrs.loc[list(rec_sids)]
+        geom_arr = np.array([pt_geom[s] for s in rec_sids], dtype=object)
+        df = pd.DataFrame({
+            "feature_index": fidx_col,
+            "sample_id": np.repeat(rec_sids, reps_b),
+            "timestamp": ts_col,
+            **{b: cols[b] for b in S2_BANDS},
+            "S1-SIGMA0-VH": cols["S1-SIGMA0-VH"],
+            "S1-SIGMA0-VV": cols["S1-SIGMA0-VV"],
+            "slope": cols["slope"],
+            "elevation": cols["elevation"],
+            "AGERA5-PRECIP": cols["AGERA5-PRECIP"],
+            "AGERA5-TMEAN": cols["AGERA5-TMEAN"],
+            "lon": np.repeat(np.array([g.x for g in geom_arr]), reps_b),
+            "lat": np.repeat(np.array([g.y for g in geom_arr]), reps_b),
+            "geometry": np.repeat(geom_arr, reps_b),
+            "tile": np.repeat(
+                np.array([r["tile"] for r in recs], dtype=object), reps_b),
+            "h3_l3_cell": np.repeat(
+                a["h3_l3_cell"].astype(str).to_numpy(dtype=object), reps_b),
+            "start_date": np.repeat(np.array(
+                [axis_of[s][1] for s in rec_sids], dtype=object), reps_b),
+            "end_date": np.repeat(np.array(
+                [axis_of[s][2] for s in rec_sids], dtype=object), reps_b),
+            "year": np.full(total_b, int(host_ref_id.split("_")[0]),
+                            dtype=np.int64),
+            "valid_time": np.repeat(
+                a["valid_time"].astype(str).str[:10].to_numpy(dtype=object),
+                reps_b),
+            "ewoc_code": np.repeat(a["ewoc_code"].to_numpy(np.int64), reps_b),
+            "irrigation_status": np.repeat(
+                a["irrigation_status"].to_numpy(np.int64), reps_b),
+            "quality_score_lc": np.repeat(
+                a["quality_score_lc"].to_numpy(np.int64), reps_b),
+            "quality_score_ct": np.repeat(
+                a["quality_score_ct"].to_numpy(np.int64), reps_b),
+            "extract": np.repeat(a["extract"].to_numpy(np.int64), reps_b),
+        })
+        # all-nodata drop, same rule as post_job_action: every S2/S1 column
+        # at NODATA for every timestep of the sample.
+        sensor_cols = [c for c in df.columns if "S2" in c or "S1" in c]
+        nodata_rows = (df[sensor_cols] == NODATA).all(axis=1)
+        drop = df.assign(_nd=nodata_rows).groupby(
+            "sample_id")["_nd"].transform("all")
+        if drop.any():
+            n = df.loc[drop, "sample_id"].nunique()
+            logger.warning(f"{host_ref_id}: dropping {n} all-nodata sample(s)")
+            df = df[~drop]
+        df["ref_id"] = pd.Series(
+            [host_ref_id] * len(df), index=df.index,
+            dtype=pd.CategoricalDtype(categories=[host_ref_id], ordered=False))
+        return df
 
-    if out_path is not None:
-        gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        gdf.to_parquet(out_path, index=False)
-        logger.success(f"{host_ref_id}: wrote {df.sample_id.nunique():,} samples "
-                       f"/ {len(df):,} rows -> {out_path}")
-    return df, records
+    if total <= CHUNK_ROWS or out_path is None:
+        df = _build_block(0, len(records))
+        if out_path is not None:
+            gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            gdf.to_parquet(out_path, index=False)
+            logger.success(
+                f"{host_ref_id}: wrote {df.sample_id.nunique():,} samples "
+                f"/ {len(df):,} rows -> {out_path}")
+        return df, records
+
+    blocks: List[Tuple[int, int]] = []
+    start, acc = 0, 0
+    for ri in range(len(records)):
+        acc += int(reps[ri])
+        if acc >= CHUNK_ROWS:
+            blocks.append((start, ri + 1))
+            start, acc = ri + 1, 0
+    if start < len(records):
+        blocks.append((start, len(records)))
+    logger.info(f"{host_ref_id}: {total:,} rows -> chunked write "
+                f"({len(blocks)} blocks)")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_blocks: List[Path] = []
+    n_rows = 0
+    n_samples = 0
+    try:
+        for (i0, i1) in blocks:
+            df_b = _build_block(i0, i1)
+            gdf_b = gpd.GeoDataFrame(df_b, geometry="geometry",
+                                     crs="EPSG:4326")
+            f = out_path.with_suffix(
+                f".tmp{os.getpid()}.b{len(tmp_blocks)}.parquet")
+            gdf_b.to_parquet(f, index=False)
+            tmp_blocks.append(f)
+            n_rows += len(df_b)
+            n_samples += df_b["sample_id"].nunique()
+            del df_b, gdf_b
+        # Merge: stream block tables through one writer. read_schema keeps
+        # the geoparquet 'geo' metadata geopandas wrote into block 0.
+        schema = pq.read_schema(tmp_blocks[0])
+        tmp_out = out_path.with_suffix(f".tmp{os.getpid()}.parquet")
+        with pq.ParquetWriter(tmp_out, schema) as writer:
+            for f in tmp_blocks:
+                writer.write_table(pq.read_table(f, schema=schema))
+        tmp_out.rename(out_path)
+    finally:
+        for f in tmp_blocks:
+            f.unlink(missing_ok=True)
+    logger.success(f"{host_ref_id}: wrote {n_samples:,} samples "
+                   f"/ {n_rows:,} rows -> {out_path} "
+                   f"({len(blocks)} blocks)")
+    return None, records
 
 
 # --- CLI ------------------------------------------------------------------
