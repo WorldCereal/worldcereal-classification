@@ -566,7 +566,7 @@ def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
 
 
 def dekad_to_date(
-    dekad: int, target_year: int = 2000, mode: Literal["first", "last"] = None
+    dekad: int, target_year: int = 2000, mode: Optional[Literal["first", "last"]] = None
 ) -> datetime.date:
     """Convert dekad (1-108) to date in a 3-year window around target_year.
     Attention: 
