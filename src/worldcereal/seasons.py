@@ -1,28 +1,15 @@
 import datetime
-import importlib.resources as pkg_resources
 import json
 import math
-from typing import Callable, Literal, Optional, Sequence, Tuple
+from typing import Callable, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 from openeo_gfmap import BoundingBoxExtent, TemporalContext
 
-from worldcereal import SEASONAL_MAPPING, SUPPORTED_SEASONS
+from worldcereal import SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
-
-# from worldcereal.utils import aez as aezloader
-from worldcereal.utils.geoloader import load_reproject
-
-
-class NoSeasonError(Exception):
-    pass
-
-
-class SeasonMaxDiffError(Exception):
-    pass
-
 
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
 
@@ -380,17 +367,33 @@ def _fetch_cropcalendar_dekad_extent_stats(
     return sos_med, eos_med, sos_arr, eos_arr
 
 
-def fetch_cropcalendar_dates_extent(
+def get_season_dates_for_extent(
     extent: BoundingBoxExtent,
     year: int,
     season: str = "tc-annual",
     max_dekad_difference: int = 7,
 ) -> TemporalContext:
-    """Infer a temporal context from extent-level crop-calendar dekad values.
 
-    Uses `fetch_cropcalendar_dekad_extent` for the median SOS/EOS dekads and
-    converts those to dates via `dekad_to_date`.
-    """
+    """Function to retrieve seasonality for a specific year based on WorldCereal
+        crop calendars for a given extent and season.
+        
+        Uses `fetch_cropcalendar_dekad_extent` for the median SOS/EOS dekads and
+            converts those to dates via `dekad_to_date`.
+    
+        Args:
+            extent (BoundingBoxExtent): extent for which to infer dates
+            year (int): target year
+            season (str): season identifier for which to infer dates. Defaults to `tc-annual`
+            max_dekad_difference (int): maximum difference in seasonality for all pixels
+                    in extent before raising a warning. Defaults to 7.
+    
+        Raises:
+            ValueError: invalid season specified
+            Warning: raised when seasonality difference is too large within the extent
+    
+        Returns:
+            TemporalContext: inferred temporal range
+        """
 
     if season not in SUPPORTED_SEASONS:
         raise ValueError(f"Season `{season}` not supported!")
@@ -503,7 +506,7 @@ def enrich_production_grid_from_crop_calendars(
 
     for idx, row in result.iterrows():
         extent = resolver(row)
-        annual_ctx = fetch_cropcalendar_dates_extent(extent, year, "tc-annual")
+        annual_ctx = get_season_dates_for_extent(extent, year, "tc-annual")
         result.loc[idx, "start_date"] = annual_ctx.start_date
         result.loc[idx, "end_date"] = annual_ctx.end_date
 
@@ -512,7 +515,7 @@ def enrich_production_grid_from_crop_calendars(
 
         season_windows = {}
         for season in ["tc-s1", "tc-s2"]:
-            season_ctx = fetch_cropcalendar_dates_extent(extent, year, season)
+            season_ctx = get_season_dates_for_extent(extent, year, season)
             season_windows[season] = [season_ctx.start_date, season_ctx.end_date]
 
         season_ids = sorted(season_windows.keys())
@@ -520,181 +523,6 @@ def enrich_production_grid_from_crop_calendars(
         result.loc[idx, "season_windows"] = json.dumps(season_windows, sort_keys=True)
 
     return result
-
-
-def doy_to_angle(day_of_year, total_days=365):
-    return 2 * math.pi * (day_of_year / total_days)
-
-
-def angle_to_doy(angle, total_days=365):
-    return (angle / (2 * math.pi)) * total_days
-
-
-def max_doy_difference(doy_array):
-    """
-    Method to check the max difference in days between all DOY values
-    in an array taking into account wrap-around effects due to the circular nature.
-    Optimized for integer DOY arrays.
-    """
-    # Ensure we're working with integers for efficiency
-    doy_array = np.asarray(doy_array, dtype=np.int32)
-
-    # For small arrays, use the full pairwise approach
-    if len(doy_array) <= 1000:
-        doy_array = np.expand_dims(doy_array, axis=1)
-        x, y = np.meshgrid(doy_array, doy_array.T)
-
-        days_in_year = 365  # True for crop calendars
-
-        # Calculate the direct difference
-        direct_difference = np.abs(x - y)
-
-        # Calculate the wrap-around difference
-        wrap_around_difference = days_in_year - direct_difference
-
-        # Determine the minimum difference
-        effective_difference = np.minimum(direct_difference, wrap_around_difference)
-
-        return int(effective_difference.max())
-
-    else:
-        # For large arrays, use a more efficient approach
-        # Find min and max, then check if the gap is larger going the other way
-        min_doy = int(np.min(doy_array))
-        max_doy = int(np.max(doy_array))
-
-        # Direct span
-        direct_span = max_doy - min_doy
-
-        # Wrap-around span (going the other direction around the circle)
-        wrap_span = (365 - max_doy) + min_doy
-
-        # The maximum difference is the smaller of the two spans
-        return int(min(direct_span, wrap_span))
-
-
-def circular_median_day_of_year(doy_array, total_days=365):
-    """Compute the circular median DOY (exact) using a weighted histogram approach.
-
-    The circular median is the day-of-year (DOY) that minimizes the sum of
-    circular distances to all observations, where circular distance between two
-    DOYs d1 and d2 is ``min(|d1-d2|, total_days - |d1-d2|)``.
-
-    Implementation details:
-    * Filters invalid entries (<=0 or > ``total_days``).
-    * Collapses duplicates via a histogram (frequency weighting) so runtime depends
-      on the number of distinct DOYs (k ≤ 365) instead of raw sample size (n).
-    * Uses a fully vectorized k×k distance matrix over unique DOYs to obtain the
-      exact weighted 1-median solution on the circle.
-
-    Contract:
-    * Returns an ``int`` DOY in [1, total_days] when at least one valid value is present.
-    * Raises ``ValueError`` if, after filtering, there are no valid DOY values.
-
-    Parameters
-    ----------
-    doy_array : array-like
-        Input day-of-year values (integers expected). May include zeros or other invalid
-        values that will be filtered out.
-    total_days : int, default 365
-        Length of the circular period (e.g. 365 for non-leap-year crop calendars).
-
-    Returns
-    -------
-    int
-        Circular median DOY.
-
-    Raises
-    ------
-    ValueError
-        If no valid DOY values remain after filtering.
-    """
-    vals = np.asarray(doy_array, dtype=np.int32)
-    vals = vals[(vals > 0) & (vals <= total_days)]
-    if vals.size == 0:
-        raise ValueError(
-            "circular_median_day_of_year: no valid DOY values (after filtering) to compute median."
-        )
-    if vals.size == 1:
-        return int(vals[0])
-
-    # Histogram counts for each DOY (1..total_days). Index 0 unused.
-    counts = np.bincount(vals, minlength=total_days + 1)[1:]
-    nonzero = np.nonzero(counts)[0] + 1  # actual DOYs present
-    weights = counts[nonzero - 1].astype(np.int64)
-
-    if nonzero.size == 1:
-        return int(nonzero[0])
-
-    # Vectorized pairwise circular distances between candidate DOYs and observed DOYs.
-    cand = nonzero.reshape(-1, 1)
-    other = nonzero.reshape(1, -1)
-    direct = np.abs(cand - other)
-    circ = np.minimum(direct, total_days - direct)
-    # Weighted sum of distances for each candidate median.
-    total_dist = (circ * weights).sum(axis=1)
-    median_idx = int(np.argmin(total_dist))
-    return int(nonzero[median_idx])
-
-
-def doy_from_tiff(season: str, kind: str, bounds: tuple, epsg: int, resolution: int):
-    """Function to read SOS/EOS DOY from TIFF
-
-    Optimized to return integer arrays for maximum efficiency. Missing/nodata
-    values are represented as 0 - filter these out with array[array > 0].
-
-    Args:
-        season (str): crop season to process
-        kind (str): which DOY to read (SOS/EOS)
-        bounds (tuple): the bounds to read
-        epsg (int): epsg in which bounds are expressed
-        resolution (int): resolution in meters of resulting array
-
-    Raises:
-        FileNotFoundError: when required TIFF file was not found
-        ValueError: when requested season is not supported
-        ValueError: when `kind` value is not supported
-
-    Returns:
-        np.ndarray: resulting DOY array as uint16 integers (1-365), with 0 for nodata
-    """
-
-    if epsg == 4326:
-        raise ValueError(
-            "EPSG 4326 not supported for DOY data. Use a projected CRS instead."
-        )
-
-    if season not in SUPPORTED_SEASONS:
-        raise ValueError(f"Season `{season}` not supported.")
-    else:
-        season = SEASONAL_MAPPING[season]
-
-    if kind not in ["SOS", "EOS"]:
-        raise ValueError(
-            ("Only `SOS` and `EOS` are valid " f"values of `kind`. Got: `{kind}`")
-        )
-
-    doy_file = season + f"_{kind}_WGS84.tif"
-
-    if not pkg_resources.is_resource(cropcalendars, doy_file):
-        raise FileNotFoundError(
-            ("Required season DOY file " f"`{doy_file}` not found.")
-        )
-
-    with pkg_resources.open_binary(cropcalendars, doy_file) as doy_file:  # type: ignore
-        # Use integer-optimized loading for DOY data (1-365 values)
-        # Keep as integers throughout - much more memory efficient
-        doy_data = load_reproject(
-            doy_file,
-            bounds,
-            epsg,
-            resolution,
-            nodata_value=0,
-            fill_value=0,
-            dtype=np.uint16,
-        )
-
-    return doy_data
 
 
 def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
@@ -735,87 +563,6 @@ def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
     start_date = end_date - pd.Timedelta(days=seasonduration)
 
     return start_date, end_date
-
-
-def get_season_dates_for_extent(
-    extent: BoundingBoxExtent,
-    year: int,
-    season: str = "tc-annual",
-    max_seasonality_difference: int = 60,
-) -> TemporalContext:
-    """Function to retrieve seasonality for a specific year based on WorldCereal
-    crop calendars for a given extent and season.
-
-    Args:
-        extent (BoundingBoxExtent): extent for which to infer dates
-        year (int): year in which the end of season needs to be
-        season (str): season identifier for which to infer dates. Defaults to `tc-annual`
-        max_seasonality_difference (int): maximum difference in seasonality for all pixels
-                in extent before raising an exception. Defaults to 60.
-
-    Raises:
-        ValueError: invalid season specified
-        SeasonMaxDiffError: raised when seasonality difference is too large
-
-    Returns:
-        TemporalContext: inferred temporal range
-    """
-
-    if season not in SUPPORTED_SEASONS:
-        raise ValueError(f"Season `{season}` not supported!")
-
-    bounds = (extent.west, extent.south, extent.east, extent.north)
-    epsg = extent.epsg
-
-    # Get DOY of SOS and EOS for the target season (now returns integers directly)
-    sos_doy = doy_from_tiff(season, "SOS", bounds, epsg, 10000).flatten()
-    eos_doy = doy_from_tiff(season, "EOS", bounds, epsg, 10000).flatten()
-
-    # Check if we have seasonality - filter out nodata values (0)
-    if not (sos_doy > 0).any():
-        logger.error("No start of season information available for this location!")
-        raise NoSeasonError(f"No valid SOS DOY found for season `{season}`")
-    if not (eos_doy > 0).any():
-        logger.error("No end of season information available for this location!")
-        raise NoSeasonError(f"No valid EOS DOY found for season `{season}`")
-
-    # Only consider valid seasonality pixels (DOY > 0)
-    # Already integers, much more efficient!
-    sos_doy = sos_doy[sos_doy > 0].astype(np.int32)
-    eos_doy = eos_doy[eos_doy > 0].astype(np.int32)
-
-    # Check max seasonality difference
-    seasonality_difference_sos = max_doy_difference(sos_doy)
-    seasonality_difference_eos = max_doy_difference(eos_doy)
-    warning = False
-    if seasonality_difference_sos > max_seasonality_difference:
-        logger.warning(
-            f"Seasonality difference for SOS is large: {seasonality_difference_sos} days"
-        )
-        warning = True
-    if seasonality_difference_eos > max_seasonality_difference:
-        logger.warning(
-            f"Seasonality difference for EOS is large: {seasonality_difference_eos} days"
-        )
-        warning = True
-
-    if warning:
-        logger.warning(
-            "Computation of median crop calendars will be inaccurate. Consider downsizing your area of interest for more accurate results."
-        )
-
-    # Compute median DOY
-    sos_doy_median = circular_median_day_of_year(sos_doy)
-    eos_doy_median = circular_median_day_of_year(eos_doy)
-
-    # Get the seasonality dates
-    start_date, end_date = season_doys_to_dates_refyear(
-        sos_doy_median, eos_doy_median, year
-    )
-
-    return TemporalContext(
-        start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
-    )
 
 
 def dekad_to_date(
