@@ -84,6 +84,13 @@ def test_fetch_cropcalendar_point_can_disable_nearest_fallback(patched_lookup):
 		)
 
 
+def test_fetch_cropcalendar_point_rejects_distant_nearest_cell(patched_lookup):
+	with pytest.raises(ValueError, match="too far"):
+		seasons.fetch_cropcalendar_doy_point(
+			"tc-s1", 12, 22, max_fallback_distance_degrees=1.0
+		)
+
+
 @pytest.mark.parametrize(
 	("function", "column", "invalid_value", "limit"),
 	[
@@ -113,9 +120,18 @@ def test_fetch_cropcalendar_dekad_extent_handles_dateline(patched_lookup):
 
 
 def test_fetch_cropcalendar_dekad_extent_falls_back_to_centroid(patched_lookup):
+	extent = BoundingBoxExtent(
+		west=20.5, south=10.5, east=20.75, north=10.75, epsg=4326
+	)
+
+	assert seasons.fetch_cropcalendar_dekad_extent("tc-s1", extent) == (30, 60)
+
+
+def test_fetch_cropcalendar_dekad_extent_rejects_distant_centroid(patched_lookup):
 	extent = BoundingBoxExtent(west=30, south=30, east=31, north=31, epsg=4326)
 
-	assert seasons.fetch_cropcalendar_dekad_extent("tc-s1", extent) == (33, 63)
+	with pytest.raises(ValueError, match="too far"):
+		seasons.fetch_cropcalendar_dekad_extent("tc-s1", extent)
 
 
 def test_get_season_dates_for_extent_returns_temporal_context(patched_lookup):

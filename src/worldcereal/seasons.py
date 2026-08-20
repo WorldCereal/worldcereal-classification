@@ -37,6 +37,7 @@ from worldcereal import SUPPORTED_SEASONS
 from worldcereal.data import cropcalendars
 
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
+DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES = 5.0
 
 
 def ensure_seasonality_lookup_table() -> pd.DataFrame:
@@ -139,6 +140,7 @@ def _fetch_cropcalendar_point(
     parameter: Literal["doy", "dekad"] = "doy",
     *,
     fallback_to_nearest: bool = True,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int]:
     """Fetch (SOS, EOS) values for one point from the global parquet lookup.
 
@@ -157,7 +159,15 @@ def _fetch_cropcalendar_point(
     fallback_to_nearest : bool, default True
         Whether to use the nearest available lookup cell when the snapped cell
         is not present in the table.
+    max_fallback_distance_degrees : float, default 5.0
+        Maximum Euclidean distance in latitude/longitude degrees between the
+        snapped coordinate and a fallback lookup cell.
     """
+
+    if not math.isfinite(max_fallback_distance_degrees) or max_fallback_distance_degrees < 0:
+        raise ValueError(
+            "max_fallback_distance_degrees must be a finite non-negative value"
+        )
 
     sos_col, eos_col = resolve_cropcalendar_columns(season_id, parameter)
 
@@ -195,6 +205,14 @@ def _fetch_cropcalendar_point(
         distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
         best_idx = int(distances.argmin())
         fallback_key = (float(lat_vals[best_idx]), float(lon_vals[best_idx]))
+        fallback_distance = math.sqrt(float(distances[best_idx]))
+        if fallback_distance > max_fallback_distance_degrees:
+            raise ValueError(
+                "Nearest seasonality lookup cell is too far from snapped "
+                f"lat/lon ({lat_center}, {lon_center}): distance is "
+                f"{fallback_distance:.3f} degrees, maximum allowed is "
+                f"{max_fallback_distance_degrees:.3f} degrees."
+            ) from exc
         logger.error(
             f"Seasonality lookup missing ({lat_center}, {lon_center}); "
             f"using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
@@ -222,6 +240,7 @@ def fetch_cropcalendar_doy_point(
     lon: float,
     *,
     fallback_to_nearest: bool = True,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int]:
     """Fetch (SOS, EOS) DOY values for one point from the global parquet lookup."""
 
@@ -231,6 +250,7 @@ def fetch_cropcalendar_doy_point(
         lon=lon,
         parameter="doy",
         fallback_to_nearest=fallback_to_nearest,
+        max_fallback_distance_degrees=max_fallback_distance_degrees,
     )
 
     if (sos_value > 366 or eos_value > 366):
@@ -254,6 +274,7 @@ def fetch_cropcalendar_dekad_point(
     lon: float,
     *,
     fallback_to_nearest: bool = True,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int]:
     """Fetch (SOS, EOS) dekad values for one point from the global parquet lookup."""
 
@@ -263,6 +284,7 @@ def fetch_cropcalendar_dekad_point(
         lon=lon,
         parameter="dekad",
         fallback_to_nearest=fallback_to_nearest,
+        max_fallback_distance_degrees=max_fallback_distance_degrees,
     )
 
     if sos_value > 108 or eos_value > 108:
@@ -285,6 +307,7 @@ def fetch_cropcalendar_dekad_extent(
     extent: BoundingBoxExtent,
     *,
     fallback_to_nearest: bool = True,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int]:
     """Fetch median (SOS, EOS) dekad values for an extent from parquet points.
 
@@ -298,6 +321,7 @@ def fetch_cropcalendar_dekad_extent(
         season_id=season_id,
         extent=extent,
         fallback_to_nearest=fallback_to_nearest,
+        max_fallback_distance_degrees=max_fallback_distance_degrees,
     )
     return sos_med, eos_med
 
@@ -351,6 +375,7 @@ def _fetch_cropcalendar_dekad_extent_stats(
     extent: BoundingBoxExtent,
     *,
     fallback_to_nearest: bool = True,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int, np.ndarray, np.ndarray]:
     """Return median dekads and in-extent dekad arrays for a season."""
 
@@ -384,6 +409,7 @@ def _fetch_cropcalendar_dekad_extent_stats(
         lat=centroid_lat,
         lon=centroid_lon,
         fallback_to_nearest=True,
+        max_fallback_distance_degrees=max_fallback_distance_degrees,
     )
     # Expose fallback-derived values in the returned arrays as well, so callers
     # don't keep receiving empty arrays after a successful fallback.
@@ -397,6 +423,7 @@ def get_season_dates_for_extent(
     year: int,
     season: str = "tc-annual",
     max_dekad_difference: int = 7,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> TemporalContext:
 
     """Function to retrieve seasonality for a specific year based on WorldCereal
@@ -429,6 +456,7 @@ def get_season_dates_for_extent(
         season_id=season,
         extent=extent,
         fallback_to_nearest=True,
+        max_fallback_distance_degrees=max_fallback_distance_degrees,
     )
 
     if sos_arr.size and eos_arr.size:
