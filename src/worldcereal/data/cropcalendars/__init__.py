@@ -7,9 +7,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Dict, Iterator, Tuple
 
-import pandas as pd
+import geopandas as gpd
 
-SEASONALITY_LOOKUP_FILENAME = "seasonality_lookup.parquet"
+SEASONALITY_LOOKUP_FILENAME = "seasonality_lookup.geoparquet"
 SEASONALITY_REQUIRED_COLUMNS = (
     "lat",
     "lon",
@@ -17,6 +17,10 @@ SEASONALITY_REQUIRED_COLUMNS = (
     "s1_eos_doy",
     "s2_sos_doy",
     "s2_eos_doy",
+    "s1_sos_dekad",
+    "s1_eos_dekad",
+    "s2_sos_dekad",
+    "s2_eos_dekad",
 )
 SEASONALITY_LOOKUP_COLUMNS: Tuple[str, ...] = (
     "s1_sos_doy",
@@ -55,11 +59,11 @@ def seasonality_lookup_file() -> Iterator[Path]:
         yield resource_path
 
 
-def load_seasonality_lookup() -> pd.DataFrame:
-    """Load the bundled seasonality lookup table as a pandas DataFrame."""
+def load_seasonality_lookup() -> gpd.GeoDataFrame:
+    """Load the bundled seasonality lookup table as a geopandas GeoDataFrame."""
 
     with seasonality_lookup_file() as lookup_path:
-        table = pd.read_parquet(lookup_path)
+        table = gpd.read_parquet(lookup_path)
 
     missing_columns = set(SEASONALITY_REQUIRED_COLUMNS).difference(table.columns)
     if missing_columns:
