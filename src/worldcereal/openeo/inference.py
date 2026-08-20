@@ -1561,6 +1561,10 @@ class SeasonalInferenceEngine:
 
         band_layers: List[Tuple[str, np.ndarray]] = []
         cropland_mask_bool: Optional[np.ndarray] = None
+        # Multiclass landcover layers (argmax + winning probability), only
+        # produced when the landcover head has more than 2 classes AND the
+        # WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER env switch is explicitly set.
+        landcover_multiclass_layers: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
         def _register_band(name: str, values: np.ndarray) -> None:
             if values.shape != (height, width):
@@ -1582,6 +1586,12 @@ class SeasonalInferenceEngine:
             preds_np = preds.numpy().reshape(height, width)
 
             landcover_classes = list(self.bundle.landcover_spec.class_names)
+            if len(landcover_classes) > 2 and _emit_multiclass_landcover():
+                _ensure_uint8_range(preds_np, name="landcover_classification")
+                landcover_multiclass_layers = (
+                    preds_np.astype(np.uint8, copy=False),
+                    _probabilities_to_uint8(prob_cube.max(axis=0)),
+                )
             cropland_gate_labels = list(self.bundle.cropland_gate_classes)
             class_index = {name: idx for idx, name in enumerate(landcover_classes)}
             cropland_label_order = [
@@ -1773,6 +1783,15 @@ class SeasonalInferenceEngine:
             logger.info(
                 "Croptype outputs skipped because the croptype head is disabled."
             )
+
+        if landcover_multiclass_layers is not None:
+            logger.info(
+                "Landcover head is multiclass "
+                f"({self.bundle.landcover_spec.num_classes} classes); exporting "
+                "landcover_classification and landcover_probability bands."
+            )
+            _register_band("landcover_classification", landcover_multiclass_layers[0])
+            _register_band("landcover_probability", landcover_multiclass_layers[1])
 
         if (
             global_embeddings is not None
@@ -2080,6 +2099,13 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
     if arr.ndim < 2:
         raise ValueError("season_masks must have at least two dimensions (S, T)")
     return arr
+
+
+def _emit_multiclass_landcover() -> bool:
+    """Env switch (not a job parameter) gating the multiclass landcover bands."""
+    return os.environ.get(
+        "WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0"
+    ).lower() in ("1", "true", "yes")
 
 
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
