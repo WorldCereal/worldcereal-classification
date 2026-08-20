@@ -284,7 +284,15 @@ def run_ref(
          logger.error)(f"{ref_id}: verification {v['status']}")
         vdir = Path(args.out_dir) / "_verify"
         vdir.mkdir(exist_ok=True)
-        (vdir / f"{ref_id}.json").write_text(json.dumps(v, indent=2))
+        # tmp+rename: certs may be owned by another user (not group-
+        # writable); replacing needs only directory write permission.
+        vtmp = vdir / f"{ref_id}.json.tmp{os.getpid()}"
+        vtmp.write_text(json.dumps(v, indent=2))
+        try:
+            os.chmod(vtmp, 0o664)
+        except OSError:
+            pass
+        vtmp.rename(vdir / f"{ref_id}.json")
         if v["status"] == "FAIL":
             raise RuntimeError(f"verification FAILED for {ref_id} "
                                f"(unexplained differences vs openEO store; "
@@ -391,8 +399,13 @@ def main() -> None:
             stats_dir = args.out_dir / "_stats"
             stats_dir.mkdir(exist_ok=True)
             for s in all_stats:
-                (stats_dir / f"{s['ref_id']}.json").write_text(
-                    json.dumps(s, default=str, indent=1))
+                stmp = stats_dir / f"{s['ref_id']}.json.tmp{os.getpid()}"
+                stmp.write_text(json.dumps(s, default=str, indent=1))
+                try:
+                    os.chmod(stmp, 0o664)
+                except OSError:
+                    pass
+                stmp.rename(stats_dir / f"{s['ref_id']}.json")
             rows = [json.loads(p.read_text())
                     for p in sorted(stats_dir.glob("*.json"))]
             tmp = args.out_dir / f"_rdm_campaign_stats.csv.tmp{os.getpid()}"
