@@ -157,8 +157,12 @@ def _aux_neighbour_explained(band: str, store_val: int, entry: Optional[dict],
         _AUX_SAMPLERS["elevation"] = _pe.ElevationSampler()
         _AUX_SAMPLERS["slope"] = _pe.SlopeSampler()
     mode = _pe.DEFAULT_CONVENTIONS[band]
-    for dr in (-1, 0, 1):
-        for dc in (-1, 0, 1):
+    # +/-3 S2 pixels: the aux layers come from coarser sources (DEM 30 m,
+    # slope 20 m), so the cube's misregistration can reach one SOURCE cell
+    # = up to 3 S2 pixels (FRA forensics: store elevation = the value two
+    # pixels away, on a 14 m bluff). The match itself stays tight (tol).
+    for dr in range(-3, 4):
+        for dc in range(-3, 4):
             rr, cc = r0 + dr, c0 + dc
             if not (0 <= rr < len(hdr["y"]) and 0 <= cc < len(hdr["x"])):
                 continue
