@@ -144,16 +144,16 @@ def test_get_season_dates_for_extent_rejects_unknown_season(patched_lookup):
 		(73, "first", "2001-01-01"),
 	],
 )
-def test_dekad_to_date_handles_three_year_window(dekad, mode, expected):
-	assert seasons.dekad_to_date(dekad, target_year=2000, mode=mode).isoformat() == expected
+def test_season_dekad_to_date_handles_three_year_window(dekad, mode, expected):
+	assert seasons.season_dekad_to_date(dekad, target_year=2000, mode=mode).isoformat() == expected
 
 
-def test_dekad_to_date_handles_leap_year_and_invalid_mode():
-	assert seasons.dekad_to_date(8, target_year=2024, mode="last") == pd.Timestamp(
+def test_season_dekad_to_date_handles_leap_year_and_invalid_mode():
+	assert seasons.season_dekad_to_date(8, target_year=2024, mode="last") == pd.Timestamp(
 		"2023-03-31"
 	).date()
 	with pytest.raises(ValueError, match="mode"):
-		seasons.dekad_to_date(1, mode="middle")
+		seasons.season_dekad_to_date(1, mode="middle")
 
 
 @pytest.mark.parametrize(

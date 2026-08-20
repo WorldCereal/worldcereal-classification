@@ -1,3 +1,28 @@
+"""
+This module provides functions to retrieve crop calendar seasonality information
+from the WorldCereal seasonality lookup geoparquet.
+This geoparquet represents a simplified version of the global WorldCereal crop calendars.
+
+Originally, crop calendars in WorldCereal have always been represented by the DOY (day of year) metric.
+Due to the circular nature of this metric however and the fact that some seasons cross calendar years,
+it is not always straightforward to compute the start and end dates of a season from DOY values.
+
+To address this, we introduced the concept of "season dekads" as a more robust representation of crop calendars.
+Each month has 3 dekads:
+1-10: first dekad of the month
+11-20: second dekad of the month
+21-last day of the month: third dekad of the month
+
+Dekads are expressed on a 3-year scale, where dekads 1-36 represent the first year, 37-72 the second year, and 73-108 the third year.
+We chose a 3 year scale because for a given target year for map generation, a season can start in the year before and end in the year after,
+so we need to be able to represent all three years.
+
+The main function to be used to access the seasonality information is `get_season_dates_for_extent`, 
+which returns a TemporalContext object with the start and end dates of the season for a given extent and year.
+
+"""
+
+
 import datetime
 import json
 import math
@@ -378,7 +403,9 @@ def get_season_dates_for_extent(
         crop calendars for a given extent and season.
         
         Uses `fetch_cropcalendar_dekad_extent` for the median SOS/EOS dekads and
-            converts those to dates via `dekad_to_date`.
+            converts those to dates via `season_dekad_to_date`.
+        
+        More explanation on the concept of "dekads" can be found at the top of this file.
     
         Args:
             extent (BoundingBoxExtent): extent for which to infer dates
@@ -426,8 +453,8 @@ def get_season_dates_for_extent(
                 "Consider downsizing your area of interest for more accurate results."
             )
 
-    start_date = dekad_to_date(sos_dekad, target_year=year, mode="first")
-    end_date = dekad_to_date(eos_dekad, target_year=year, mode="last")
+    start_date = season_dekad_to_date(sos_dekad, target_year=year, mode="first")
+    end_date = season_dekad_to_date(eos_dekad, target_year=year, mode="last")
 
     return TemporalContext(
         start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
@@ -565,7 +592,7 @@ def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
     return start_date, end_date
 
 
-def dekad_to_date(
+def season_dekad_to_date(
     dekad: int, target_year: int = 2000, mode: Optional[Literal["first", "last"]] = None
 ) -> datetime.date:
     """Convert dekad (1-108) to date in a 3-year window around target_year.
