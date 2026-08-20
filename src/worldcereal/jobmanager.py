@@ -77,10 +77,7 @@ from worldcereal.job_params import (
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
-from worldcereal.seasons import (
-    enrich_production_grid_from_crop_calendars,
-    get_season_dates_for_extent,
-)
+from worldcereal.seasons import enrich_production_grid_from_crop_calendars
 from worldcereal.utils.production_grid import create_production_grid, ensure_utm_grid
 
 
