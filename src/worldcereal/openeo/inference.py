@@ -1562,7 +1562,8 @@ class SeasonalInferenceEngine:
         band_layers: List[Tuple[str, np.ndarray]] = []
         cropland_mask_bool: Optional[np.ndarray] = None
         # Multiclass landcover layers (argmax + winning probability), only
-        # produced when the landcover head has more than 2 classes.
+        # produced when the landcover head has more than 2 classes AND the
+        # WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER env switch is explicitly set.
         landcover_multiclass_layers: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
         def _register_band(name: str, values: np.ndarray) -> None:
@@ -1585,12 +1586,6 @@ class SeasonalInferenceEngine:
             preds_np = preds.numpy().reshape(height, width)
 
             landcover_classes = list(self.bundle.landcover_spec.class_names)
-            if len(landcover_classes) > 2 and not _emit_multiclass_landcover():
-                logger.debug(
-                    "Multiclass landcover head detected but band export is "
-                    "disabled; set WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER=1 "
-                    "to emit landcover_classification/landcover_probability."
-                )
             if len(landcover_classes) > 2 and _emit_multiclass_landcover():
                 _ensure_uint8_range(preds_np, name="landcover_classification")
                 landcover_multiclass_layers = (
@@ -2107,11 +2102,7 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
 
 
 def _emit_multiclass_landcover() -> bool:
-    """Hidden switch, deliberately NOT a job parameter: the multiclass
-    landcover bands are for local inspection only. Enable with
-    WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER=1 in the environment. Read at
-    call time so a late ``os.environ`` assignment (e.g. in a notebook)
-    still takes effect."""
+    """Env switch (not a job parameter) gating the multiclass landcover bands."""
     return os.environ.get(
         "WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0"
     ).lower() in ("1", "true", "yes")
