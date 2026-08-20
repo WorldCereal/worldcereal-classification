@@ -1,26 +1,38 @@
-"""Perform cropland and croptype mapping inference using local execution of UDFs.
+"""Run cropland and croptype mapping inference in-process, without OpenEO.
 
-This script tests both cropland and croptype mapping workflows by calling
-the UDF functions directly without running batch jobs on OpenEO.
+This module drives the same cropland/croptype workflows as the OpenEO batch
+path, but by calling the UDF functions directly on a NetCDF patch — the
+convenient entry point for notebooks, tests and local/spatial inference.
+
+The main entry point is :func:`run_seasonal_inference`; supporting helpers
+handle temporal subsetting (aligned to the model's composite grid, reusing
+``worldcereal.train.seasonal``), season-window clamping, CRS/GeoTIFF export,
+and product isolation.
 """
 
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import xarray as xr
-from dateutil.parser import parse
 from loguru import logger
 from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
 from worldcereal.openeo.inference import (
     SeasonalInferenceEngine,
+    SeasonWindowValue,
     get_expected_timesteps_from_artifact,
 )
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
+from worldcereal.train.seasonal import (
+    CompositeFreq,
+    advance_composite_slot,
+    align_to_composite_window,
+    enumerate_composite_slots,
+)
 from worldcereal.utils.models import load_model_artifact
 
 _WKT_AUTHORITY_EPSG_RE = re.compile(r'AUTHORITY\["EPSG","(\d+)"\]', re.IGNORECASE)
@@ -86,6 +98,71 @@ def _parse_season_arg(season):
     )
 
 
+def _widen_slots_to(
+    slots: Sequence[Any],
+    *,
+    available: set,
+    max_timesteps: int,
+    timestep_freq: CompositeFreq,
+    prefer_tail: bool,
+) -> list:
+    """Widen ``slots`` to exactly ``max_timesteps`` using real cube slots.
+
+    Only composite slots present in ``available`` are added, growing toward the
+    ``prefer_tail`` side first (the end when ``prefer_tail``) and falling back
+    to the other side at data boundaries. Never fabricates nodata timesteps: a
+    fully-missing timestep would reach the encoder as a masked token column,
+    a distribution the heads never saw in training.
+
+    Raises
+    ------
+    ValueError
+        If the dataset cannot supply ``max_timesteps`` real slots around the
+        window.
+    """
+    head: list = []
+    tail: list = []
+
+    def _grow_tail() -> bool:
+        slot = advance_composite_slot(
+            slots[-1] if not tail else tail[-1], timestep_freq
+        )
+        if pd.Timestamp(slot) in available:
+            tail.append(slot.astype("datetime64[D]"))
+            return True
+        return False
+
+    def _grow_head() -> bool:
+        slot = align_to_composite_window(
+            (slots[0] if not head else head[0]) - np.timedelta64(1, "D"),
+            timestep_freq,
+        )
+        if pd.Timestamp(slot) in available:
+            head.insert(0, slot.astype("datetime64[D]"))
+            return True
+        return False
+
+    order = (_grow_tail, _grow_head) if prefer_tail else (_grow_head, _grow_tail)
+    while len(slots) + len(head) + len(tail) < max_timesteps:
+        if not (order[0]() or order[1]()):
+            raise ValueError(
+                f"Cannot widen the season window to {max_timesteps} "
+                f"{timestep_freq} slots: the dataset only provides "
+                f"{len(slots) + len(head) + len(tail)} real slots around the "
+                f"window. Refusing to pad with nodata timesteps (the model was "
+                f"trained on exactly {max_timesteps} real slots)."
+            )
+
+    if head or tail:
+        logger.info(
+            f"Widened season window from {len(slots)} to {max_timesteps} "
+            f"{timestep_freq} slots using real cube data: "
+            f"+{len(head)} slot(s) before ({', '.join(str(s) for s in head) or '-'}), "
+            f"+{len(tail)} after ({', '.join(str(s) for s in tail) or '-'})."
+        )
+    return head + list(slots) + tail
+
+
 def subset_ds_temporally(
     ds,
     season,
@@ -93,6 +170,8 @@ def subset_ds_temporally(
     nodata_value: int = NODATAVALUE,
     max_timesteps: int = 12,
     prefer_tail: bool = True,
+    timestep_freq: CompositeFreq = "month",
+    pad_to_max: bool = False,
 ):
     """
     Subsets a dataset temporally based on a given season.
@@ -100,12 +179,16 @@ def subset_ds_temporally(
     This function extracts a subset of the dataset ``ds`` that matches the
     temporal context defined by ``season``.  The season provides a start and
     end date; the function ensures that the subset spans at most
-    ``max_timesteps`` monthly slots, even if the raw season window is wider
-    (e.g. 13 months for an annual season).
+    ``max_timesteps`` composite slots (months or dekads), even if the raw
+    season window is wider (e.g. 13 months for an annual season).
 
-    When the season window contains more than ``max_timesteps`` months the
+    Slot enumeration reuses ``worldcereal.train.seasonal`` — the same
+    primitives the training datasets use — so inference and training agree
+    on composite-window semantics.
+
+    When the season window contains more than ``max_timesteps`` slots the
     window is trimmed.  By default (``prefer_tail=True``) the **first**
-    month(s) are dropped — keeping the later months which tend to carry
+    slot(s) are dropped — keeping the later ones which tend to carry
     more discriminative crop phenology.
 
     Parameters
@@ -120,110 +203,106 @@ def subset_ds_temporally(
         * A ``(start_date_str, end_date_str)`` tuple.
         * A ``dict`` with keys ``"start_date"`` and ``"end_date"``.
     min_coverage : float, optional
-        Minimum fraction of the ``max_timesteps`` monthly slots that must
-        be present in the dataset (default 1.0 = all months required).
+        Minimum fraction of the ``max_timesteps`` composite slots that must
+        be present in the dataset (default 1.0 = all slots required).
         When the actual coverage is below this threshold a ``ValueError``
         is raised.  When coverage is at or above the threshold but some
-        months are still missing, they are filled with *nodata_value*.
+        slots are still missing, they are filled with *nodata_value*.
         Set to 0.0 to accept any coverage.  Analogous to
         ``eval_min_season_coverage`` in the training pipeline.
     nodata_value : int, optional
         Fill value for missing timestamps.  Default is ``NODATAVALUE``
         (65535).
     max_timesteps : int, optional
-        Maximum number of monthly slots to keep (default 12).
+        Maximum number of composite slots to keep (default 12).
     prefer_tail : bool, optional
-        When the month sequence exceeds ``max_timesteps``, keep the **last**
-        months (drop the head) if *True* (default), or keep the **first**
-        months (drop the tail) if *False*.
+        When the slot sequence exceeds ``max_timesteps``, keep the **last**
+        slots (drop the head) if *True* (default), or keep the **first**
+        slots (drop the tail) if *False*.
+    timestep_freq : str, optional
+        Composite frequency of the dataset's time axis: ``"month"``
+        (default) or ``"dekad"``. Must match the model's training
+        ``timestep_freq``.
+    pad_to_max : bool, optional
+        When *True* and the season window covers fewer than
+        ``max_timesteps`` slots (e.g. an 11-month union of two seasons),
+        WIDEN the selection to exactly ``max_timesteps`` slots using
+        additional **real** composite slots present in the dataset.
+        Only slots actually present in ``ds`` are added. Slots grow on the
+        ``prefer_tail`` side first — the end for ``prefer_tail=True`` — and
+        fall back to the other side at data boundaries.
 
     Returns
     -------
     xarray.Dataset
-        Temporal subset with at most ``max_timesteps`` monthly slots.
+        Temporal subset with at most ``max_timesteps`` composite slots.
 
     Raises
     ------
     ValueError
-        If the fraction of available months is below ``min_coverage``.
+        If the fraction of available slots is below ``min_coverage``.
     """
 
     start_str, end_str = _parse_season_arg(season)
-    start_dt = parse(start_str)
-    end_dt = parse(end_str)
+    start_dt = pd.Timestamp(start_str)
+    end_dt = pd.Timestamp(end_str)
 
-    # Does the season wrap over year end?
-    wrap = (end_dt.month, end_dt.day) <= (start_dt.month, start_dt.day)
-
-    # Full month sequence for the season (may be >12 for annual seasons)
-    months = (
-        (list(range(start_dt.month, 13)) + list(range(1, end_dt.month + 1)))
-        if wrap
-        else list(range(start_dt.month, end_dt.month + 1))
+    # Enumerate the composite slots (month or dekad starts) covered by the
+    # season window, snapping both edges to their slot starts. 
+    start_slot = align_to_composite_window(
+        np.datetime64(start_dt.date()), timestep_freq
     )
+    end_slot = align_to_composite_window(np.datetime64(end_dt.date()), timestep_freq)
+    slots = enumerate_composite_slots(start_slot, end_slot, timestep_freq)
 
     # Trim to max_timesteps, preferring tail or head as requested
-    if len(months) > max_timesteps:
-        dropped = len(months) - max_timesteps
+    if len(slots) > max_timesteps:
+        dropped = len(slots) - max_timesteps
         if prefer_tail:
-            trimmed = months[dropped:]
-            logger.info(
-                f"Season has {len(months)} months; dropping first {dropped} "
-                f"month(s) {months[:dropped]} to keep {max_timesteps} (prefer_tail=True)."
-            )
+            gone, slots = slots[:dropped], slots[dropped:]
+            side = "first"
         else:
-            trimmed = months[:max_timesteps]
-            logger.info(
-                f"Season has {len(months)} months; dropping last {dropped} "
-                f"month(s) {months[max_timesteps:]} to keep {max_timesteps} (prefer_tail=False)."
-            )
-        months = trimmed
+            gone, slots = slots[max_timesteps:], slots[:max_timesteps]
+            side = "last"
+        logger.info(
+            f"Season window spans {len(slots) + dropped} {timestep_freq} slots; "
+            f"dropping {side} {dropped} slot(s) "
+            f"{[str(s) for s in gone]} to keep {max_timesteps} "
+            f"(prefer_tail={prefer_tail})."
+        )
 
     t_index = ds.t.to_index()
 
-    # Use the season's own start year as the anchor — iterating over all years
-    # in the dataset would silently pick the wrong year (e.g. 2022 data for a
-    # 2023 season window) whenever the month numbers happen to match.
-    y = start_dt.year
-    selected = None
-    if wrap:
-        expected = [
-            pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1)) for m in months
-        ]
-    else:
-        expected = [pd.Timestamp(datetime(y, m, 1)) for m in months]
-    if all(ts in t_index for ts in expected):
-        selected = ds.sel(t=expected)
+    if pad_to_max and len(slots) < max_timesteps:
+        slots = _widen_slots_to(
+            slots,
+            available={pd.Timestamp(t) for t in t_index},
+            max_timesteps=max_timesteps,
+            timestep_freq=timestep_freq,
+            prefer_tail=prefer_tail,
+        )
 
-    if selected is None:
-        # Partial mode: check coverage against threshold using the same anchor year
-        if wrap:
-            expected = [
-                pd.Timestamp(datetime(y if m >= months[0] else y + 1, m, 1))
-                for m in months
-            ]
-        else:
-            expected = [pd.Timestamp(datetime(y, m, 1)) for m in months]
-        present = [ts for ts in expected if ts in t_index]
-        missing = [ts for ts in expected if ts not in t_index]
-        coverage = len(present) / len(expected) if expected else 0.0
-        if coverage < min_coverage:
-            raise ValueError(
-                f"Temporal coverage {coverage:.0%} ({len(present)}/{len(expected)} months) "
-                f"is below min_coverage={min_coverage:.0%} for the season pattern."
-            )
-        if missing:
-            logger.warning(
-                f"Partial temporal subset: coverage={coverage:.0%} "
-                f"({len(present)}/{len(expected)} months present); "
-                f"missing {', '.join(ts.strftime('%Y-%m') for ts in missing)}; "
-                f"filling with nodata_value={nodata_value}."
-            )
-        # Reindex will insert missing timestamps with nodata_value
-        selected = ds.sel(t=present).reindex(t=expected, fill_value=nodata_value)
+    expected = [pd.Timestamp(s) for s in slots]
+    present = [ts for ts in expected if ts in t_index]
+    missing = [ts for ts in expected if ts not in t_index]
 
-    return selected
+    if not missing:
+        return ds.sel(t=expected)
 
+    coverage = len(present) / len(expected) if expected else 0.0
+    if coverage < min_coverage:
+        raise ValueError(
+            f"Temporal coverage {coverage:.0%} ({len(present)}/{len(expected)} slots) "
+            f"is below min_coverage={min_coverage:.0%} for the season pattern."
+        )
+    logger.warning(
+        f"Partial temporal subset: coverage={coverage:.0%} "
+        f"({len(present)}/{len(expected)} slots present); "
+        f"missing {', '.join(ts.strftime('%Y-%m-%d') for ts in missing)}; "
+        f"filling with nodata_value={nodata_value}."
+    )
+    # Reindex will insert missing timestamps with nodata_value
+    return ds.sel(t=present).reindex(t=expected, fill_value=nodata_value)
 
 def compute_temporal_subset_window(
     season_windows: Mapping[str, object],
@@ -301,34 +380,6 @@ def _clamp_season_windows_to_ds(
     return clamped
 
 
-def reconstruct_dataset(arr: xr.DataArray, ds: xr.Dataset) -> xr.Dataset:
-    """Reconstruct CRS attributes."""
-    crs_attrs = ds["crs"].attrs
-    x = ds.coords.get("x", None)
-    y = ds.coords.get("y", None)
-
-    # Build dataset with bands as separate variables
-    new_ds = arr.assign_coords(bands=arr.bands.astype(str)).to_dataset(dim="bands")
-
-    # Reset the coordinates
-    new_ds = new_ds.assign_coords(x=x)
-    new_ds["x"].attrs.setdefault("standard_name", "projection_x_coordinate")
-    new_ds["x"].attrs.setdefault("units", "m")
-
-    new_ds = new_ds.assign_coords(y=y)
-    new_ds["y"].attrs.setdefault("standard_name", "projection_y_coordinate")
-    new_ds["y"].attrs.setdefault("units", "m")
-
-    # Assign CRS attributes to all data variables
-    crs_name = "spatial_ref"
-    new_ds[crs_name] = xr.DataArray(0, attrs=crs_attrs)
-
-    for v in new_ds.data_vars:
-        new_ds[v].attrs["grid_mapping"] = crs_name
-
-    return new_ds
-
-
 def build_postprocess_spec(
     *,
     enabled: bool,
@@ -339,9 +390,7 @@ def build_postprocess_spec(
     if not requested:
         return None
 
-    spec: Dict[str, object] = {
-        "enabled": enabled or method is not None or kernel_size is not None
-    }
+    spec: Dict[str, object] = {"enabled": requested}
     if method:
         spec["method"] = method
     if kernel_size is not None:
@@ -358,7 +407,7 @@ def attach_crs_metadata(
         coords["x"] = template.coords["x"]
     if "y" in template.coords:
         coords["y"] = template.coords["y"]
-    out = result.assign_coords(**coords) if coords else result
+    out = result.assign_coords(coords) if coords else result
 
     if crs_var is None:
         return out
@@ -385,7 +434,7 @@ def run_seasonal_inference(
     landcover_head_zip: Optional[Union[str, Path]] = None,
     croptype_head_zip: Optional[Union[str, Path]] = None,
     season_ids: Optional[Sequence[str]] = None,
-    season_windows: Optional[Mapping[str, Sequence[object]]] = None,
+    season_windows: Optional[Mapping[str, SeasonWindowValue]] = None,
     export_class_probabilities: bool = False,
     enable_cropland_head: bool = True,
     enable_croptype_head: bool = True,
@@ -399,12 +448,17 @@ def run_seasonal_inference(
     fillna_value: int = NODATAVALUE,
     as_dataset: bool = True,
     mask_b8a: bool = True,
+    timestep_freq: CompositeFreq = "month",
 ) -> Union[xr.Dataset, xr.DataArray]:
     """Run seasonal cropland/croptype inference locally with a single entrypoint.
 
     ``mask_b8a`` must mirror the model's training-time ``--mask_b8a`` setting
     (True by default in both places) so the B8A token distribution at
     inference matches what the finetuned heads saw.
+
+    ``timestep_freq`` must mirror the model's training composite frequency
+    (``"month"`` or ``"dekad"``); it drives the temporal subsetting so the
+    cube is widened/trimmed on the correct composite grid.
     """
 
     if isinstance(ds_or_path, (str, Path)):
@@ -436,7 +490,9 @@ def run_seasonal_inference(
             if t_count > expected_timesteps:
                 logger.info(
                     f"Temporal subsetting: input has {t_count} timesteps; "
-                    f"subsetting to ≤{expected_timesteps} using union season window {union_window}."
+                    f"subsetting to exactly {expected_timesteps} using union "
+                    f"season window {union_window} (widened with real cube "
+                    f"slots when the union is shorter)."
                 )
                 ds = subset_ds_temporally(
                     ds,
@@ -445,6 +501,8 @@ def run_seasonal_inference(
                     nodata_value=fillna_value,
                     max_timesteps=expected_timesteps,
                     prefer_tail=True,
+                    timestep_freq=timestep_freq,
+                    pad_to_max=True,
                 )
                 logger.info(
                     f"After temporal subset: {ds.sizes.get('t', 0)} timesteps "
@@ -462,6 +520,14 @@ def run_seasonal_inference(
             f"timesteps; provide season_windows or pre-subset the data."
         )
 
+    # Hard guarantee: the encoder must see exactly the timestep count it was trained with. 
+    t_final = ds.sizes.get("t", 0)
+    if t_final != expected_timesteps:
+        raise ValueError(
+            f"Prepared cube has {t_final} timesteps but the model expects "
+            f"exactly {expected_timesteps}."
+        )
+
     if epsg is None:
         epsg = _epsg_from_dataset(ds)
 
@@ -476,6 +542,7 @@ def run_seasonal_inference(
         batch_size=batch_size,
         season_ids=season_ids,
         mask_b8a=mask_b8a,
+        season_composite_frequency=timestep_freq,
         export_class_probabilities=export_class_probabilities,
         enable_cropland_head=enable_cropland_head,
         enable_croptype_head=enable_croptype_head,

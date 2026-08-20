@@ -91,7 +91,12 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
     x, y = np.meshgrid(arr.x, arr.y)
     lon, lat = transformer.transform(x, y)
-    latlon = rearrange(np.stack([lat, lon]), "c x y -> y x c")
+    # np.meshgrid(x, y) yields (len(y), len(x)) grids, so the stacked array is
+    # (c, y, x). Moving channels last must NOT swap the spatial axes — the
+    # subsequent "(h w)" flatten has to match the (y, x) row-major order used
+    # for s1/s2/meteo above, otherwise every pixel is paired with the latlon
+    # of its transposed counterpart.
+    latlon = rearrange(np.stack([lat, lon]), "c h w -> h w c")
 
     predictors_dict: dict[str, Any] = {
         "s1": rearrange(s1, "1 h w t c -> (h w) 1 1 t c"),

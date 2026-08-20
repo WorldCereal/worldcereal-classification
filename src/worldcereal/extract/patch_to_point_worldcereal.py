@@ -603,7 +603,7 @@ def worldcereal_preprocessed_inputs_from_patches(
             temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
             bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
         )
-        s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True})
+        s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True, "post_query_property_filtering": False, "use_raw_asset_href": True})
         s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
         s1 = mean_compositing(s1, period=period)
         s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
@@ -615,7 +615,9 @@ def worldcereal_preprocessed_inputs_from_patches(
         properties=s2_stac_property_filter,
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=S2_BANDS,
-    ).filter_bands(S2_BANDS_SELECTED)
+    )
+    s2_raw.result_node().update_arguments(featureflags={"post_query_property_filtering": False, "use_raw_asset_href": True})
+    s2_raw = s2_raw.filter_bands(S2_BANDS_SELECTED)
 
     def optimized_mask_precomputed(input: ProcessBuilder):
         """
@@ -674,7 +676,9 @@ def worldcereal_preprocessed_inputs_from_patches(
     slope = connection.load_stac(
         STAC_ENDPOINT_SLOPE_TERRASCOPE,
         bands=["Slope"],
-    ).rename_labels(dimension="bands", target=["slope"])
+    )
+    slope.result_node().update_arguments(featureflags={"use_raw_asset_href": True})
+    slope = slope.rename_labels(dimension="bands", target=["slope"])
     slope = slope.resample_spatial(resolution=10.0, projection=epsg, method="bilinear")
     # Client fix for CDSE, the openeo client might be unsynchronized with
     # the backend.
