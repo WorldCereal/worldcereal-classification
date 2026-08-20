@@ -56,14 +56,14 @@ def test_snap_coordinate_to_lookup_grid_clamps_and_snaps():
 	],
 )
 def test_resolve_cropcalendar_columns(season, parameter, expected):
-	assert seasons._resolve_cropcalendar_columns(season, parameter) == expected
+	assert seasons.resolve_cropcalendar_columns(season, parameter) == expected
 
 
 def test_resolve_cropcalendar_columns_rejects_unknown_values():
 	with pytest.raises(ValueError, match="parameter"):
-		seasons._resolve_cropcalendar_columns("tc-s1", "month")
+		seasons.resolve_cropcalendar_columns("tc-s1", "month")
 	with pytest.raises(ValueError, match="not available"):
-		seasons._resolve_cropcalendar_columns("tc-unknown", "doy")
+		seasons.resolve_cropcalendar_columns("tc-unknown", "doy")
 
 
 def test_fetch_cropcalendar_points_uses_snapped_cell(patched_lookup):
