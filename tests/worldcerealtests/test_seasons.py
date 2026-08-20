@@ -36,7 +36,7 @@ def lookup_table():
 @pytest.fixture
 def patched_lookup(monkeypatch, lookup_table):
 	monkeypatch.setattr(
-		seasons, "_ensure_seasonality_lookup_table", lambda: lookup_table
+		seasons, "ensure_seasonality_lookup_table", lambda: lookup_table
 	)
 	return lookup_table
 

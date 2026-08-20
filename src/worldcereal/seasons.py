@@ -14,7 +14,7 @@ from worldcereal.data import cropcalendars
 _SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
 
 
-def _ensure_seasonality_lookup_table() -> pd.DataFrame:
+def ensure_seasonality_lookup_table() -> pd.DataFrame:
     """Load and cache the seasonality lookup table indexed by lat/lon centers."""
 
     global _SEASONALITY_LOOKUP_TABLE
@@ -50,7 +50,7 @@ def _snap_coordinate_to_lookup_grid(
     return (math.floor(clamped * 2.0) / 2.0) + 0.25
 
 
-def _resolve_cropcalendar_columns(
+def resolve_cropcalendar_columns(
     season_id: str, parameter: Literal["doy", "dekad"]
 ) -> Tuple[str, str]:
     """Resolve season identifier and parameter to SOS/EOS parquet columns."""
@@ -134,9 +134,9 @@ def _fetch_cropcalendar_point(
         is not present in the table.
     """
 
-    sos_col, eos_col = _resolve_cropcalendar_columns(season_id, parameter)
+    sos_col, eos_col = resolve_cropcalendar_columns(season_id, parameter)
 
-    table = _ensure_seasonality_lookup_table()
+    table = ensure_seasonality_lookup_table()
     if sos_col not in table.columns or eos_col not in table.columns:
         raise ValueError(
             f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
@@ -284,9 +284,9 @@ def _collect_cropcalendar_dekad_extent_values(
     """Collect valid in-extent SOS/EOS dekad arrays for a season."""
 
     west, south, east, north = _extent_to_wgs84_bounds(extent)
-    table = _ensure_seasonality_lookup_table()
+    table = ensure_seasonality_lookup_table()
 
-    sos_col, eos_col = _resolve_cropcalendar_columns(season_id, "dekad")
+    sos_col, eos_col = resolve_cropcalendar_columns(season_id, "dekad")
     if sos_col not in table.columns or eos_col not in table.columns:
         raise ValueError(
             f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "

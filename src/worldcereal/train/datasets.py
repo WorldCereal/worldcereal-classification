@@ -29,10 +29,15 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal import seasons as _seasons_module
-from worldcereal.data import cropcalendars as _cropcalendars
+from worldcereal.data.cropcalendars import (
+    SEASONALITY_LAT_RANGE,
+    SEASONALITY_LON_RANGE,
+    SEASONALITY_LOOKUP_COLUMNS,
+)
 from worldcereal.seasons import (
+    ensure_seasonality_lookup_table,
     fetch_cropcalendar_doy_point,
+    resolve_cropcalendar_columns,
     season_doys_to_dates_refyear,
 )
 from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
@@ -2476,7 +2481,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         seasons = tuple(self._season_ids)
         for season in seasons:
             try:
-                _seasons_module._resolve_cropcalendar_columns(season, "doy")
+                resolve_cropcalendar_columns(season, "doy")
             except ValueError as exc:
                 logger.warning(
                     f"Fast batched fetching disabled: season {season!r} is not "
@@ -2485,18 +2490,18 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 )
                 return None
 
-        table = _seasons_module._ensure_seasonality_lookup_table()
+        table = ensure_seasonality_lookup_table()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
         lat_c = (
             np.floor(
-                np.clip(lat, *_cropcalendars.SEASONALITY_LAT_RANGE) * 2.0
+                np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0
             )
             / 2.0
         ) + 0.25
         lon_c = (
             np.floor(
-                np.clip(lon, *_cropcalendars.SEASONALITY_LON_RANGE) * 2.0
+                np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0
             )
             / 2.0
         ) + 0.25
@@ -2507,7 +2512,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         # Nearest-cell fallback for grid cells absent from the lookup (mirrors
         # the per-sample KeyError fallback, logged once per unique cell).
         missing_rows = joined[
-            list(_cropcalendars.SEASONALITY_LOOKUP_COLUMNS)
+            list(SEASONALITY_LOOKUP_COLUMNS)
         ].isna().all(axis=1)
         if missing_rows.to_numpy().any():
             lat_vals = table.index.get_level_values("lat").to_numpy()
@@ -2543,7 +2548,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_in_raw = np.zeros((n_rows, num_seasons), dtype=bool)
 
         for s_idx, season in enumerate(seasons):
-            sos_col, eos_col = _seasons_module._resolve_cropcalendar_columns(
+            sos_col, eos_col = resolve_cropcalendar_columns(
                 season, "doy"
             )
             if sos_col not in joined.columns or eos_col not in joined.columns:
