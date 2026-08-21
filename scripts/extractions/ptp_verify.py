@@ -131,6 +131,49 @@ def _series_equal(a: np.ndarray, b: np.ndarray) -> bool:
     return a.shape == b.shape and bool(np.all(a == b))
 
 
+def _meteo_month_matches_dailies(src: str, year: int, month: int,
+                                 pts: List[tuple]) -> bool:
+    """Does OUR cached monthly composite equal a fresh recompute from the
+    daily archive at these points? Guards the vintage-month exemption: it
+    may only fire when our side is independently proven correct."""
+    import calendar as _cal
+
+    import ptp_engine as _pe
+    import rasterio
+    cache = _pe.AGERA5_CACHE
+    if cache is None:
+        return False
+    p = Path(cache) / f"openEO_{year}-{month:02d}-01Z_{src}.tif"
+    if not p.exists():
+        return False
+    with rasterio.open(p) as ds:
+        inv = ~ds.transform
+        arr = ds.read(1)
+        ours = []
+        for lon, lat in pts:
+            fc, fr = inv * (lon, lat)
+            ours.append(int(arr[int(np.floor(fr)), int(np.floor(fc))]))
+    ndays = _cal.monthrange(year, month)[1]
+    acc = [0.0] * len(pts)
+    for day in range(1, ndays + 1):
+        f = (_pe.AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{day:02d}" /
+             f"AgERA5_{src}_{year}{month:02d}{day:02d}.tif")
+        if not f.exists():
+            return False  # incomplete daily archive: cannot prove our side
+        with rasterio.open(f) as ds:
+            inv = ~ds.transform
+            a = ds.read(1)
+            for i, (lon, lat) in enumerate(pts):
+                fc, fr = inv * (lon, lat)
+                acc[i] += float(a[int(np.floor(fr)), int(np.floor(fc))])
+    for i in range(len(pts)):
+        derived = (np.floor(acc[i] / ndays) if src == "temperature-mean"
+                   else acc[i])
+        if abs(int(derived) - ours[i]) > METEO_TOL:
+            return False
+    return True
+
+
 _AUX_SAMPLERS: Dict[str, Any] = {}
 
 
@@ -313,6 +356,7 @@ def verify_ref(
                "aux_ok": 0, "aux_out_of_tolerance": 0,
                "aux_shift_explained": 0,
                "meteo_beyond_covering": 0,
+               "meteo_vintage_months": [], "meteo_vintage_explained": 0,
                "self_check_failures": 0, "unexplained_samples": []}
 
     local = gpd.read_parquet(local_path)
@@ -324,6 +368,7 @@ def verify_ref(
     if not own:
         verdict["status"] = "SKIP(no primary samples)"
         return verdict
+    aux_pending: Dict[str, tuple] = {}
     rng = np.random.default_rng(
         int(hashlib.sha256(ref_id.encode()).hexdigest()[:8], 16))
     picked = list(rng.choice(own, size=min(n_samples, len(own)),
@@ -511,12 +556,16 @@ def verify_ref(
                 else:
                     aux_bad = True
         # meteo: store must match covering-cell, bilinear, or a neighbouring
-        # cell (the openEO nearest-resampled meteo layer was misregistered)
+        # cell (the openEO nearest-resampled meteo layer was misregistered).
+        # Per-month failures are only COLLECTED here; the final aux verdict
+        # is settled after the sample loop, because a failure shared by many
+        # samples in the SAME month is a store-side raster-vintage artefact
+        # (see the quorum pass below), not a per-point problem.
         meteo_beyond_covering = False
+        meteo_fails = set()
         for band, src in METEO_BANDS.items():
             sa = s_vals[band].to_numpy(np.int64)
             la = l_vals[band].to_numpy(np.int64)
-            hit_bad = False
             for k, ts in enumerate(common_ts):
                 if sa[k] == NODATA or la[k] == NODATA:
                     continue
@@ -532,19 +581,44 @@ def verify_ref(
                 if (not cands or
                         not (min(cands) - METEO_TOL <= int(sa[k])
                              <= max(cands) + METEO_TOL)):
-                    hit_bad = True
-                    break
-                meteo_beyond_covering = True
-            if hit_bad:
-                aux_bad = True
-                break
-        if aux_bad:
+                    meteo_fails.add((src, (ts.year, ts.month)))
+                else:
+                    meteo_beyond_covering = True
+        aux_pending[sid] = (aux_bad, meteo_fails, meteo_beyond_covering,
+                            (geom_pt.x, geom_pt.y))
+
+    # --- settle aux verdicts: quorum pass for meteo VINTAGE months.
+    # Failures shared by many samples in the SAME (band, month) mean the
+    # store was built from a superseded meteo raster (upstream AGERA5
+    # regeneration — DNK forensics: Dec-2024 PRECIP store 5787 = incomplete
+    # month; complete daily-archive sum 7214 = our composite exactly). The
+    # exemption fires ONLY when our composite is independently re-derived
+    # from the daily archive at failing points — a corrupt cache month on
+    # OUR side fails that proof and keeps the ref FAILed.
+    month_fail: Dict[tuple, List[str]] = {}
+    for _sid, (_, mf, _, _) in aux_pending.items():
+        for bm in mf:
+            month_fail.setdefault(bm, []).append(_sid)
+    vintage: set = set()
+    for (src, (yy, mm)), sids in month_fail.items():
+        if (len(sids) >= 5
+                and len(sids) >= 0.25 * max(verdict["n_checked"], 1)):
+            pts = [aux_pending[s][3] for s in sids[:3]]
+            if _meteo_month_matches_dailies(src, yy, mm, pts):
+                vintage.add((src, (yy, mm)))
+    if vintage:
+        verdict["meteo_vintage_months"] = sorted(
+            f"{src}:{yy}-{mm:02d}" for (src, (yy, mm)) in vintage)
+    for _sid, (hard_bad, mf, beyond, _) in aux_pending.items():
+        if hard_bad or (mf - vintage):
             verdict["aux_out_of_tolerance"] += 1
-            if sid not in verdict["unexplained_samples"]:
-                verdict["unexplained_samples"].append(sid)
+            if _sid not in verdict["unexplained_samples"]:
+                verdict["unexplained_samples"].append(_sid)
         else:
             verdict["aux_ok"] += 1
-            if meteo_beyond_covering:
+            if mf & vintage:
+                verdict["meteo_vintage_explained"] += 1
+            if beyond:
                 verdict["meteo_beyond_covering"] += 1
 
     if (verdict["s2_unexplained"] or verdict["s1_unexplained"]
