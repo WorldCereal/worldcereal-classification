@@ -9,8 +9,21 @@ Per ref, three steps:
      (<rdm-dir>/<ref>/harmonized/<ref>.geoparquet) row-group by row-group,
      keeping samples that (a) fall inside any patch footprint of the ref and
      (b) have valid_time inside the ref's patch window. Polygon samples are
-     reduced to their centroid (EPSG:3857 centroid, dropped if outside the
-     polygon) — the same `gdf_to_points` semantics the openEO flow used.
+     reduced to a point by the HYBRID rule (2026-08-21):
+       * true centroid — the EPSG:3857 centroid of the full polygon, when it
+         lies inside its own polygon and inside a patch footprint;
+       * clipped fallback — otherwise, the production/openEO-era point: the
+         3857 centroid of the polygon clipped to the job's patch-footprint
+         MultiPolygon shrunk 20 m inward (rdm_interaction.get_samples,
+         buffer=-20, cap_style=3; ST_Simplify 1e-6 on both geometries), kept
+         only if that centroid lies inside the clipped piece (gdf_to_points).
+     The fallback recovers the collateral polygons that overlap a patch while
+     their centroid falls just outside it (~1.3 M samples campaign-wide),
+     placing them exactly where the openEO-era store had them. `point_kind`
+     ('centroid' | 'clipped' | 'point') records the rule per sample.
+     --edge-fallback additionally applies the fallback to centroids inside the
+     outer 20 m band of their patch (fully production-faithful; moves ~5-10 %
+     of existing samples). --legacy-centroid disables the fallback.
   2. ASSIGN — each sample is mapped to ONE patch:
        primary   : the sample's own patch (sample_id == patch id), when it
                    exists — the vast majority;
@@ -28,6 +41,8 @@ per ref; use --catalog-cache to persist).
 Usage:
   ptp_campaign_rdm.py --mode assign  --ref-ids <ref> ...   # stats only, no extraction
   ptp_campaign_rdm.py --mode extract --ref-ids <ref> ... --out-dir DIR
+  # targeted delta: extract only samples NOT already in an earlier output
+  ptp_campaign_rdm.py --mode extract --ref-ids <ref> --out-dir DIR_DELTA --delta-from DIR
 """
 
 import argparse
@@ -41,8 +56,14 @@ import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
 from loguru import logger
+import numpy as np
+from pyproj import Transformer
+from shapely import make_valid
 from shapely import wkb as shapely_wkb
-from shapely.geometry import Point
+from shapely.geometry import MultiPolygon, Point
+from shapely.ops import transform as shapely_transform
+from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ptp_engine  # noqa: E402
@@ -63,20 +84,134 @@ RDM_ATTR_COLUMNS = [
 # --- Step 1+2: select and assign ------------------------------------------
 
 
-def _centroid_points(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """gdf_to_points semantics: EPSG:3857 centroid, drop if outside its own
-    polygon, return EPSG:4326 points. Point geometries pass through."""
+EDGE_MARGIN_M_DEFAULT = 20.0   # production: rdm_interaction.get_samples buffer=-20
+SIMPLIFY_DEG = 1e-6            # production: ST_Simplify(geometry, 0.000001)
+_TO_MERC = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+_TO_LL = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True).transform
+
+
+def _tile_epsg(tile: Optional[str], zone: Optional[str]) -> Optional[int]:
+    """EPSG of a patch from its S2 tile id (31TDJ -> 32631, 33KXA -> 32733)."""
+    try:
+        z = int(zone) if zone not in (None, "") else int(str(tile)[:2])
+    except (TypeError, ValueError):
+        return None
+    band = str(tile)[2].upper() if tile and len(str(tile)) >= 3 else "N"
+    return (32600 if band >= "N" else 32700) + z
+
+
+def shrunk_extents(catalog: RefCatalog,
+                   margin_m: float = EDGE_MARGIN_M_DEFAULT) -> Dict[int, list]:
+    """Production's spatial extent per openEO job (one ref x one EPSG), as
+    eroded footprint PARTS.
+
+    patch_to_point_worldcereal.get_label_points builds a MultiPolygon of the
+    job's S2 STAC item footprints (each .buffer(1e-9)); rdm_interaction.
+    get_samples estimates one UTM CRS for it, buffers it by -20 m with square
+    corners (cap_style=3) — GEOS erodes each member and unions the results —
+    returns to EPSG:4326 and ST_Simplify(1e-6)s it before clipping the RDM
+    polygons. Reproduced here from the catalog footprints grouped by patch
+    EPSG; the eroded members are kept as a list so that a polygon is clipped
+    only against the few parts it touches (intersection distributes over the
+    union; intersecting each polygon with a 10k-part union is ~100x slower)."""
+    groups: Dict[int, list] = {}
+    for e in catalog.entries.values():
+        fp = e.get("footprint")
+        if fp is None:
+            continue
+        parts = list(fp.geoms) if fp.geom_type == "MultiPolygon" else [fp]
+        epsg = _tile_epsg(e.get("tile"), e.get("zone"))
+        groups.setdefault(epsg, []).extend(p.buffer(1e-9) for p in parts)
+    out: Dict[int, list] = {}
+    for epsg, polys in groups.items():
+        g = gpd.GeoSeries(polys, crs="EPSG:4326")
+        utm = gpd.GeoSeries([MultiPolygon(polys)], crs="EPSG:4326").estimate_utm_crs()
+        shr = g.to_crs(utm).buffer(-margin_m, cap_style=3).to_crs("EPSG:4326")
+        keep = [s.simplify(SIMPLIFY_DEG, preserve_topology=True)
+                for s in shr.values if not s.is_empty]
+        if keep:
+            out[epsg] = keep
+    return out
+
+
+def _clipped_centroid(poly, parts: List[Any]):
+    """gdf_to_points on the production-clipped polygon: 3857 centroid of
+    make_valid(simplify(poly)) ∩ (union of the eroded footprint parts the
+    polygon touches), kept only if inside the clipped piece. Returns a 4326
+    Point or None."""
+    spoly = make_valid(poly.simplify(SIMPLIFY_DEG, preserve_topology=True))
+    pieces = [spoly.intersection(p) for p in parts]
+    pieces = [q for q in pieces if not q.is_empty]
+    if not pieces:
+        return None
+    clip = pieces[0] if len(pieces) == 1 else unary_union(pieces)
+    clip_m = shapely_transform(_TO_MERC, clip)
+    c = clip_m.centroid
+    if clip_m.is_empty or not c.within(clip_m):
+        return None
+    return shapely_transform(_TO_LL, c)
+
+
+def _place_points(
+    gdf: gpd.GeoDataFrame,
+    raw_tree: STRtree,
+    shrunk: Dict[int, Any],
+    stats: dict,
+    edge_fallback: bool = False,
+    legacy_centroid: bool = False,
+) -> gpd.GeoDataFrame:
+    """Hybrid point rule (see module docstring). Returns the kept rows with
+    EPSG:4326 point geometry and a `point_kind` column."""
     if gdf.empty:
         return gdf
+    is_pt = gdf.geometry.geom_type.isin(("Point", "MultiPoint")).to_numpy()
     merc = gdf.to_crs(epsg=3857)
-    centroids = merc.geometry.centroid
-    inside = merc.geometry.geom_type.isin(("Point", "MultiPoint")) | \
-        centroids.within(merc.geometry)
-    dropped = int((~inside).sum())
-    if dropped:
-        logger.debug(f"batch: {dropped} centroid-outside sample(s) dropped")
-    out = gdf.loc[inside].copy()
-    out["geometry"] = gpd.GeoSeries(centroids[inside], crs=3857).to_crs(4326)
+    cen_m = merc.geometry.centroid
+    inside_poly = (cen_m.within(merc.geometry).to_numpy() | is_pt)
+    cen_ll = gpd.GeoSeries(cen_m, crs=3857).to_crs(4326)
+    cen_vals = np.asarray(cen_ll.values, dtype=object)
+    covered = np.zeros(len(gdf), dtype=bool)
+    hit = raw_tree.query(cen_vals, predicate="intersects")
+    if len(hit[0]):
+        covered[np.unique(hit[0])] = True
+    keep_true = inside_poly & covered
+    shr_parts = [g for parts in shrunk.values() for g in parts]
+    shr_tree = STRtree(shr_parts) if shr_parts else None
+    if edge_fallback and shr_tree is not None:
+        deep = np.zeros(len(gdf), dtype=bool)
+        h2 = shr_tree.query(cen_vals, predicate="intersects")
+        if len(h2[0]):
+            deep[np.unique(h2[0])] = True
+        keep_true = keep_true & (deep | is_pt)
+    kinds = np.where(is_pt, "point", "centroid").astype(object)
+    geoms = list(cen_vals)
+    sel = keep_true.copy()
+    if not legacy_centroid and shr_tree is not None:
+        for i in np.where(~keep_true & ~is_pt)[0]:
+            poly = gdf.geometry.iloc[i]
+            cand = shr_tree.query(poly, predicate="intersects")
+            pt = _clipped_centroid(poly, [shr_parts[int(j)] for j in cand]) \
+                if len(cand) else None
+            if pt is not None:
+                geoms[i] = pt
+                kinds[i] = "clipped"
+                sel[i] = True
+                stats["clipped_fallback"] += 1
+                if inside_poly[i] and covered[i]:   # only under --edge-fallback
+                    stats["edge_relocated"] += 1
+            elif len(raw_tree.query(poly, predicate="intersects")):
+                # the polygon does touch a patch, yet no point could be placed:
+                # either it only grazes the outer 20 m band, or its centroid
+                # lies outside the polygon and so does the clipped piece's.
+                stats["outside_patches" if inside_poly[i] else "centroid_dropped"] += 1
+            # else: polygon nowhere near a patch — the ordinary spatial exclusion
+    else:
+        stats["centroid_dropped"] += int((~sel & ~inside_poly & covered).sum())
+        stats["outside_patches"] += int((~sel & inside_poly & covered).sum())
+    out = gdf.loc[sel].copy()
+    out["geometry"] = gpd.GeoSeries([geoms[i] for i in np.where(sel)[0]],
+                                    index=out.index, crs="EPSG:4326")
+    out["point_kind"] = kinds[sel]
     return out
 
 
@@ -86,6 +221,10 @@ def select_and_assign(
     rdm_dir: Path,
     only_flagged: bool = False,
     sample_limit: Optional[int] = None,
+    edge_fallback: bool = False,
+    legacy_centroid: bool = False,
+    edge_margin_m: float = EDGE_MARGIN_M_DEFAULT,
+    delta_from: Optional[Path] = None,
 ) -> Tuple[gpd.GeoDataFrame, dict]:
     """Stream the ref's harmonized RDM file; return the engine-ready points
     frame (RDM attrs + host_sample_id) and selection statistics."""
@@ -112,7 +251,13 @@ def select_and_assign(
 
     stats: Dict[str, Any] = {"ref_id": ref_id, "rows_read": 0, "kept_h3": 0, "kept_time": 0,
              "kept_spatial": 0, "primary": 0, "collateral": 0,
-             "multi_cover_resolved": 0, "centroid_dropped": 0}
+             "multi_cover_resolved": 0, "centroid_dropped": 0,
+             "clipped_fallback": 0, "edge_relocated": 0, "outside_patches": 0,
+             "skipped_existing": 0}
+    shrunk = {} if legacy_centroid else shrunk_extents(catalog, edge_margin_m)
+    if not legacy_centroid and not shrunk:
+        logger.warning(f"{ref_id}: no shrunk extents could be built; "
+                       "clipped fallback disabled for this ref")
 
     pf = pq.ParquetFile(src)
     read_cols = [c for c in RDM_ATTR_COLUMNS if c != "geometry"] + ["geometry"]
@@ -161,9 +306,9 @@ def select_and_assign(
         df["geometry"] = df["geometry"].apply(lambda b: shapely_wkb.loads(bytes(b)))
         gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
-        n_before = len(gdf)
-        gdf = _centroid_points(gdf)
-        stats["centroid_dropped"] += n_before - len(gdf)
+        gdf = _place_points(gdf, tree, shrunk, stats,
+                            edge_fallback=edge_fallback,
+                            legacy_centroid=legacy_centroid)
         if gdf.empty:
             continue
 
@@ -183,13 +328,29 @@ def select_and_assign(
     points = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True),
                               crs="EPSG:4326")
     points = points.drop_duplicates(subset="sample_id", keep="first")
-    if stats["centroid_dropped"]:
+    if delta_from is not None:
+        prev = Path(delta_from) / f"{ref_id}.geoparquet"
+        if prev.exists():
+            existing = set(pq.read_table(prev, columns=["sample_id"])
+                           .column("sample_id").unique().to_pylist())
+            n0 = len(points)
+            points = points[~points["sample_id"].isin(existing)]
+            stats["skipped_existing"] = n0 - len(points)
+            logger.info(f"{ref_id}: delta mode — {stats['skipped_existing']:,} "
+                        f"sample(s) already in {prev.name} skipped, "
+                        f"{len(points):,} new to extract")
+        else:
+            logger.info(f"{ref_id}: delta mode — no earlier output at {prev}; "
+                        "extracting the full selection")
+    if stats["clipped_fallback"]:
+        logger.info(f"{ref_id}: {stats['clipped_fallback']:,} sample(s) placed "
+                    "by the clipped fallback (point_kind='clipped')")
+    if stats["centroid_dropped"] or stats["outside_patches"]:
         logger.warning(
-            f"{ref_id}: {stats['centroid_dropped']:,} of "
-            f"{stats['kept_time']:,} candidate sample(s) "
-            f"({100 * stats['centroid_dropped'] / max(stats['kept_time'], 1):.1f}%) "
-            "do not contain their own centroid and were dropped (same rule "
-            "and same samples as the openEO-era gdf_to_points)")
+            f"{ref_id}: {stats['centroid_dropped']:,} sample(s) touching a patch "
+            "have no usable point (centroid outside the polygon, no clipped "
+            f"fallback) and {stats['outside_patches']:,} only graze a patch's "
+            "outer 20 m band; both dropped")
     if sample_limit:
         points = points.head(sample_limit)
 
@@ -252,8 +413,16 @@ def run_ref(
 
     points, stats = select_and_assign(
         ref_id, catalog, Path(args.rdm_dir),
-        only_flagged=args.only_flagged, sample_limit=args.sample_limit)
+        only_flagged=args.only_flagged, sample_limit=args.sample_limit,
+        edge_fallback=args.edge_fallback, legacy_centroid=args.legacy_centroid,
+        edge_margin_m=args.edge_margin_m,
+        delta_from=Path(args.delta_from) if args.delta_from else None)
     logger.info(f"{ref_id}: {stats}")
+    if args.dump_points:
+        dp = Path(args.dump_points)
+        dp.mkdir(parents=True, exist_ok=True)
+        points.to_parquet(dp / f"{ref_id}.points.geoparquet", index=False)
+        logger.info(f"{ref_id}: points frame dumped to {dp}")
     if args.mode == "assign" or points.empty:
         return stats
 
@@ -332,6 +501,23 @@ def main() -> None:
     ap.add_argument("--only-flagged", action="store_true",
                     help="keep only samples with extract > 0 (the flow's "
                          "only_flagged_samples; default keeps collaterals)")
+    ap.add_argument("--delta-from", type=Path, default=None, metavar="DIR",
+                    help="targeted re-extraction: skip samples whose sample_id "
+                         "is already in DIR/<ref>.geoparquet (an earlier "
+                         "campaign output); write only the new ones to "
+                         "--out-dir (use a separate dir, then ptp_merge_delta)")
+    ap.add_argument("--edge-fallback", action="store_true",
+                    help="also apply the clipped fallback to centroids in the "
+                         "outer --edge-margin-m band of their patch (fully "
+                         "production-faithful; moves ~5-10%% of samples)")
+    ap.add_argument("--edge-margin-m", type=float, default=EDGE_MARGIN_M_DEFAULT,
+                    help="inward shrink of the patch footprints for the "
+                         "clipped fallback (production: 20 m)")
+    ap.add_argument("--legacy-centroid", action="store_true",
+                    help="disable the clipped fallback (pre-2026-08-21 rule)")
+    ap.add_argument("--dump-points", type=Path, default=None, metavar="DIR",
+                    help="write the selected points frame (with point_kind and "
+                         "host_sample_id) to DIR/<ref>.points.geoparquet")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--sample-limit", type=int, default=None)
     ap.add_argument("--verify-pct", type=float, default=None, metavar="P",
