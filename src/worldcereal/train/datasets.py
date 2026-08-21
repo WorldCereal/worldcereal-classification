@@ -1,7 +1,6 @@
 import re
 from collections import Counter
 from dataclasses import dataclass
-from math import floor
 from typing import (
     Any,
     Dict,
@@ -31,13 +30,16 @@ from prometheo.predictors import (
 from torch.utils.data import Dataset, Sampler
 
 from worldcereal.data.cropcalendars import (
-    SEASONALITY_COLUMN_MAP,
     SEASONALITY_LAT_RANGE,
     SEASONALITY_LON_RANGE,
     SEASONALITY_LOOKUP_COLUMNS,
-    load_seasonality_lookup,
 )
-from worldcereal.seasons import season_doys_to_dates_refyear
+from worldcereal.seasons import (
+    ensure_seasonality_lookup_table,
+    fetch_cropcalendar_doy_point,
+    resolve_cropcalendar_columns,
+    season_doys_to_dates_refyear,
+)
 from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
@@ -59,9 +61,6 @@ run_model_inference = _predictor_utils.run_model_inference
 # we need to define it globally so that it can be used in process_parquet as well
 SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
-
-_SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
-
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
     """Return True for LC-only datasets whose ref_id ends in ``_100`` or ``_101``.
@@ -295,50 +294,6 @@ def _filter_frame_by_manual_windows(
 
     filtered = dataframe.loc[keep_mask].copy().reset_index(drop=True)
     return filtered, dropped
-
-
-def _ensure_seasonality_lookup() -> pd.DataFrame:
-    """Load and cache the seasonality lookup table indexed by lat/lon centers."""
-
-    global _SEASONALITY_LOOKUP_TABLE
-    if _SEASONALITY_LOOKUP_TABLE is not None:
-        return _SEASONALITY_LOOKUP_TABLE
-
-    try:
-        table = load_seasonality_lookup()
-    except (FileNotFoundError, ModuleNotFoundError) as exc:
-        raise FileNotFoundError(
-            "Seasonality lookup parquet not found in worldcereal.data.cropcalendars."
-        ) from exc
-    required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
-    missing = required.difference(table.columns)
-    if missing:
-        raise ValueError(
-            f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
-        )
-    table = table.astype({"lat": np.float64, "lon": np.float64})
-    table = table.set_index(["lat", "lon"])
-    if not table.index.is_unique:
-        raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
-
-    _SEASONALITY_LOOKUP_TABLE = table[list(SEASONALITY_LOOKUP_COLUMNS)].sort_index()
-    return _SEASONALITY_LOOKUP_TABLE
-
-
-def _snap_coordinate_to_grid(value: float, bounds: Tuple[float, float]) -> float:
-    """Snap a coordinate to the 0.5° grid center used by the lookup."""
-
-    min_value, max_value = bounds
-    if value is None:
-        raise ValueError("Cannot snap a missing coordinate to the seasonality grid.")
-    clamped = max(min(float(value), max_value), min_value)
-    return (floor(clamped * 2.0) / 2.0) + 0.25
-
-
-def _snap_latlon_to_calendar_grid(lat: float, lon: float) -> Tuple[float, float]:
-    lat_center = _snap_coordinate_to_grid(lat, SEASONALITY_LAT_RANGE)
-    lon_center = _snap_coordinate_to_grid(lon, SEASONALITY_LON_RANGE)
-    return lat_center, lon_center
 
 
 def get_class_weights(
@@ -1947,49 +1902,17 @@ class WorldCerealDataset(Dataset):
     ) -> Tuple[np.datetime64, np.datetime64]:
         """Fetch (start, end) dates for a season/grid cell from the lookup."""
 
-        lat_center, lon_center = _snap_latlon_to_calendar_grid(lat, lon)
         try:
-            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"Season '{season_id}' is not available in the seasonality lookup. "
-                f"Known seasons: {sorted(SEASONALITY_COLUMN_MAP)}"
-            ) from exc
-
-        table = _ensure_seasonality_lookup()
-        if sos_col not in table.columns or eos_col not in table.columns:
-            raise ValueError(
-                f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
-                "but they are not present in the seasonality lookup parquet. "
-                "Regenerate the parquet with the required bands included."
+            sos_doy, eos_doy = fetch_cropcalendar_doy_point(
+                season_id=season_id,
+                lat=lat,
+                lon=lon,
             )
-        try:
-            doy_row = table.loc[(lat_center, lon_center)]
-        except KeyError as exc:  # pragma: no cover - unexpected gaps
-            lat_vals = table.index.get_level_values("lat").to_numpy()
-            lon_vals = table.index.get_level_values("lon").to_numpy()
-            if lat_vals.size == 0:
-                raise ValueError(
-                    "No seasonality record found for snapped lat/lon "
-                    f"({lat_center}, {lon_center})."
-                ) from exc
-            distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
-            best_idx = int(distances.argmin())
-            fallback_key = (lat_vals[best_idx], lon_vals[best_idx])
-            logger.error(
-                f"Seasonality lookup missing ({lat_center}, {lon_center}); using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
-            )
-            lat_center, lon_center = float(fallback_key[0]), float(fallback_key[1])
-            doy_row = table.iloc[best_idx]
-
-        sos_doy = int(doy_row[sos_col])
-        eos_doy = int(doy_row[eos_col])
-        if sos_doy <= 0 or eos_doy <= 0:
+        except ValueError as exc:
             sample_id = row.get("sample_id", "n/a")
             raise ValueError(
-                "Seasonality lookup returned nodata DOY values for "
-                f"season '{season_id}' (sample_id={sample_id})."
-            )
+                f"{exc} (sample_id={sample_id}, season={season_id})"
+            ) from exc
 
         # For year-crossing seasons (SOS DOY > EOS DOY), season_doys_to_dates_refyear
         # places the EOS in ref_year. When target_year is derived from label_datetime.year,
@@ -2557,25 +2480,40 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         n_rows = len(df)
         seasons = tuple(self._season_ids)
         for season in seasons:
-            if season not in SEASONALITY_COLUMN_MAP:
+            try:
+                resolve_cropcalendar_columns(season, "doy")
+            except ValueError as exc:
                 logger.warning(
-                    f"Fast batched fetching disabled: season {season!r} not in "
-                    "seasonality lookup; using per-sample loading."
+                    f"Fast batched fetching disabled: season {season!r} is not "
+                    f"available in the seasonality lookup ({exc}); using "
+                    "per-sample loading."
                 )
                 return None
 
-        table = _ensure_seasonality_lookup()
+        table = ensure_seasonality_lookup_table()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
-        lat_c = (np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0) + 0.25
-        lon_c = (np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0) + 0.25
+        lat_c = (
+            np.floor(
+                np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0
+            )
+            / 2.0
+        ) + 0.25
+        lon_c = (
+            np.floor(
+                np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0
+            )
+            / 2.0
+        ) + 0.25
 
         key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
         joined = table.reindex(key_index)
 
         # Nearest-cell fallback for grid cells absent from the lookup (mirrors
         # the per-sample KeyError fallback, logged once per unique cell).
-        missing_rows = joined[list(SEASONALITY_LOOKUP_COLUMNS)].isna().all(axis=1)
+        missing_rows = joined[
+            list(SEASONALITY_LOOKUP_COLUMNS)
+        ].isna().all(axis=1)
         if missing_rows.to_numpy().any():
             lat_vals = table.index.get_level_values("lat").to_numpy()
             lon_vals = table.index.get_level_values("lon").to_numpy()
@@ -2610,7 +2548,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_in_raw = np.zeros((n_rows, num_seasons), dtype=bool)
 
         for s_idx, season in enumerate(seasons):
-            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season]
+            sos_col, eos_col = resolve_cropcalendar_columns(
+                season, "doy"
+            )
             if sos_col not in joined.columns or eos_col not in joined.columns:
                 logger.warning(
                     f"Fast batched fetching disabled: seasonality lookup lacks "

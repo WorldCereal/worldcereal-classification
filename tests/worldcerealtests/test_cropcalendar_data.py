@@ -11,7 +11,7 @@ def test_seasonality_lookup_file_exists():
     with seasonality_lookup_file() as lookup_path:
         assert isinstance(lookup_path, Path)
         assert lookup_path.exists()
-        assert lookup_path.name == "seasonality_lookup.parquet"
+        assert lookup_path.name == "seasonality_lookup.geoparquet"
 
 
 def test_load_seasonality_lookup_columns():

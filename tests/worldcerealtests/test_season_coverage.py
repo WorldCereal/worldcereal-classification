@@ -563,19 +563,14 @@ class TestSeasonContextForYearCrossing:
     def _call_season_context(
         self, label_datetime, year: int
     ):
-        """Invoke _season_context_for with mocked lookup plumbing."""
+        """Invoke _season_context_for with a deterministic calendar lookup."""
         ds = self._make_ds()
         lat, lon = -35.0, -71.0
-        lookup_df = self._make_lookup_df()
 
         with (
             mock.patch(
-                f"{_datasets_module.__name__}._ensure_seasonality_lookup",
-                return_value=lookup_df,
-            ),
-            mock.patch(
-                f"{_datasets_module.__name__}._snap_latlon_to_calendar_grid",
-                return_value=(lat, lon),
+                f"{_datasets_module.__name__}.fetch_cropcalendar_doy_point",
+                return_value=(self._SOS_DOY, self._EOS_DOY),
             ),
         ):
             return ds._season_context_for(

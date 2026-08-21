@@ -77,7 +77,7 @@ from worldcereal.job_params import (
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.workflow_config import WorldCerealWorkflowConfig
 from worldcereal.parameters import EmbeddingsParameters, WorldCerealProductType
-from worldcereal.seasons import get_season_dates_for_extent
+from worldcereal.seasons import enrich_production_grid_from_crop_calendars
 from worldcereal.utils.production_grid import create_production_grid, ensure_utm_grid
 
 
@@ -732,10 +732,11 @@ class WorldCerealJobManager(MultiBackendJobManager):
         df["season_windows"] = season_meta["season_windows"].values
         return df
 
+
     def _infer_temporal_and_seasons_from_crop_calendars(
         self, df: pd.DataFrame, get_seasons: bool = True
     ) -> pd.DataFrame:
-        """Infer temporal extent and seasons from crop calendars."""
+        """Infer temporal extent and seasons from crop calendar parquet lookup."""
 
         if self._year is None:
             raise ValueError(
@@ -743,62 +744,13 @@ class WorldCerealJobManager(MultiBackendJobManager):
             )
         year = self._year
 
-        df = df.copy()
+        return enrich_production_grid_from_crop_calendars(
+            grid_df=df,
+            year=year,
+            get_seasons=get_seasons,
+            extent_resolver=self._row_spatial_extent,
+        )
 
-        for idx, row in df.iterrows():
-
-            # Get the start and end date for each season
-            extent = self._row_spatial_extent(row)
-            seasons = {}
-            for season_idx, season in enumerate(["s1", "s2"]):
-                seasons[season] = get_season_dates_for_extent(
-                    extent, year, f"tc-{season}"
-                )
-
-            # Infer overall temporal extent from the latest season end
-            all_end_dates = [
-                pd.to_datetime(season.end_date) for season in seasons.values()
-            ]
-            proposed_end = max(all_end_dates)
-            # snap to end of month
-            proposed_end = proposed_end + pd.offsets.MonthEnd(0)
-            # proposed start should be 12 months before, on first day of month
-            proposed_start = (
-                proposed_end - pd.DateOffset(months=12) + pd.offsets.MonthBegin(1)
-            )
-            df.loc[idx, "end_date"] = proposed_end.strftime("%Y-%m-%d")
-            df.loc[idx, "start_date"] = proposed_start.strftime("%Y-%m-%d")
-            logger.info(f"Start date: {proposed_start.strftime('%Y-%m-%d')}")
-            logger.info(f"End date: {proposed_end.strftime('%Y-%m-%d')}")
-
-            # If get_seasons is True, we also return the seasons
-            if get_seasons:
-
-                # Check whether season start date not before temporal extent start
-                for season_id, season in seasons.items():
-                    if pd.to_datetime(season.start_date) < proposed_start:
-                        logger.warning(
-                            f"Season '{season_id}' start date {season.start_date} is before inferred temporal extent start date {proposed_start}. Adjusting season start date to match temporal extent start date."
-                        )
-                        seasons[season_id] = TemporalContext(
-                            proposed_start.strftime("%Y-%m-%d"), season.end_date
-                        )
-
-                logger.info(
-                    f"Inferred seasons for tile {row['tile_name']}:\n"
-                    + "\n".join(
-                        [
-                            f"  {season_id}: {season.start_date} to {season.end_date}"
-                            for season_id, season in seasons.items()
-                        ]
-                    )
-                )
-
-                row = self._apply_season_specifications(row, seasons)
-                df.loc[idx, "season_ids"] = row["season_ids"]
-                df.loc[idx, "season_windows"] = row["season_windows"]
-
-        return df
 
     def _resolve_temporal_and_seasons(self, df: pd.DataFrame) -> pd.DataFrame:
         """Resolve temporal extent and seasons based on grid, user, or inference."""

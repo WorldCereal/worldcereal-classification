@@ -79,6 +79,7 @@ pip-delete-this-directory.txt
 
 # Allow crop calendar resources to be tracked
 !/src/worldcereal/data/cropcalendars/*.tif
+!src/worldcereal/data/cropcalendars/*.parquet
 
 # Allow resource CSV files to be tracked
 # !/src/worldcereal/resources/*.csv
