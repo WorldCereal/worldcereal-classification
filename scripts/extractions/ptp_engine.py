@@ -874,6 +874,12 @@ def extract_host(
             "quality_score_ct": np.repeat(
                 a["quality_score_ct"].to_numpy(np.int64), reps_b),
             "extract": np.repeat(a["extract"].to_numpy(np.int64), reps_b),
+            # point_kind ('centroid' | 'clipped' | 'point'): set by the RDM
+            # campaign driver's hybrid placement rule; absent for callers that
+            # do not provide it (in-patch campaign), keeping their schema.
+            **({"point_kind": np.repeat(
+                a["point_kind"].astype(str).to_numpy(dtype=object), reps_b)}
+               if "point_kind" in a.columns else {}),
         })
         # all-nodata drop, same rule as post_job_action: every S2/S1 column
         # at NODATA for every timestep of the sample.
