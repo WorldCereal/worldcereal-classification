@@ -215,6 +215,82 @@ def _place_points(
     return out
 
 
+def assign_hosts(points: gpd.GeoDataFrame, catalog: RefCatalog,
+                 stats: dict) -> gpd.GeoDataFrame:
+    """Map each point to ONE patch: its own (primary) when that patch has an
+    S2 file, else the covering patch with an S2 file whose footprint centre
+    is nearest (ties by sample_id). Points covered only by S2-less patches
+    are dropped."""
+    entries = catalog.entries
+    centre_cache: Dict[str, Point] = {}
+    for k in ("primary", "collateral", "multi_cover_resolved"):
+        stats.setdefault(k, 0)
+
+    def _assign(row) -> Optional[str]:
+        sid = row.sample_id
+        own = entries.get(sid)
+        if own is not None and own.get("s2") is not None:
+            stats["primary"] += 1
+            return sid
+        covering = catalog.covering(row.geometry)
+        covering = [c for c in covering
+                    if entries[c].get("s2") is not None]
+        if not covering:
+            return None
+        if len(covering) > 1:
+            stats["multi_cover_resolved"] += 1
+            for c in covering:
+                if c not in centre_cache:
+                    centre_cache[c] = entries[c]["footprint"].centroid
+            covering = sorted(
+                covering,
+                key=lambda c: (row.geometry.distance(centre_cache[c]), c))
+        stats["collateral"] += 1
+        return covering[0]
+
+    points = points.copy()
+    points["host_sample_id"] = [_assign(r) for r in points.itertuples()]
+    unassigned = points["host_sample_id"].isna()
+    if unassigned.any():
+        logger.warning(f"{catalog.ref_id}: {int(unassigned.sum())} sample(s) inside a "
+                       "footprint whose patch lacks an S2 file; dropped")
+        points = points[~unassigned]
+    return points
+
+
+def run_s1_refresh(ref_id: str, catalog: RefCatalog, args, conventions: dict):
+    """S1-only pass over an existing output: re-derive every sample's S1
+    series with the coverage-aware orbit rule and record the orbit
+    (--s1-refresh-from DIR -> <out-dir>/<ref>.parquet; merge with
+    ptp_merge_s1refresh.py)."""
+    src = Path(args.s1_refresh_from) / f"{ref_id}.geoparquet"
+    out_path = Path(args.out_dir) / f"{ref_id}.parquet" if args.out_dir else None
+    if out_path is not None and out_path.exists():
+        logger.warning(f"{ref_id}: refresh output exists, skipping ({out_path})")
+        return None
+    if not src.exists():
+        logger.error(f"{ref_id}: no source output at {src}; skipping")
+        return None
+    names = pq.read_schema(src).names
+    cols = [c for c in names if c in ("sample_id", "lon", "lat", "extract")]
+    df = pq.read_table(src, columns=cols).to_pandas().drop_duplicates("sample_id")
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["lon"], df["lat"]),
+                           crs="EPSG:4326")
+    stats: Dict[str, Any] = {"ref_id": ref_id, "mode": "s1_refresh",
+                             "samples": int(len(gdf))}
+    points = assign_hosts(gdf, catalog, stats)
+    logger.info(f"{ref_id}: {stats}")
+    if args.mode == "assign" or points.empty:
+        return stats
+    extract_host(
+        ref_id, conventions, workers=args.workers, out_path=out_path,
+        points=points, index_source=args.index_source,
+        catalog_cache=Path(args.catalog_cache) if args.catalog_cache else None,
+        index=catalog.entries, s1_only=True)
+    stats["out_path"] = str(out_path)
+    return stats
+
+
 def select_and_assign(
     ref_id: str,
     catalog: RefCatalog,
@@ -354,39 +430,7 @@ def select_and_assign(
     if sample_limit:
         points = points.head(sample_limit)
 
-    # --- assignment ---
-    entries = catalog.entries
-    centre_cache: Dict[str, Point] = {}
-
-    def _assign(row) -> Optional[str]:
-        sid = row.sample_id
-        own = entries.get(sid)
-        if own is not None and own.get("s2") is not None:
-            stats["primary"] += 1
-            return sid
-        covering = catalog.covering(row.geometry)
-        covering = [c for c in covering
-                    if entries[c].get("s2") is not None]
-        if not covering:
-            return None
-        if len(covering) > 1:
-            stats["multi_cover_resolved"] += 1
-            for c in covering:
-                if c not in centre_cache:
-                    centre_cache[c] = entries[c]["footprint"].centroid
-            covering = sorted(
-                covering,
-                key=lambda c: (row.geometry.distance(centre_cache[c]), c))
-        stats["collateral"] += 1
-        return covering[0]
-
-    points["host_sample_id"] = [
-        _assign(r) for r in points.itertuples()]
-    unassigned = points["host_sample_id"].isna()
-    if unassigned.any():
-        logger.warning(f"{ref_id}: {int(unassigned.sum())} sample(s) inside a "
-                       "footprint whose patch lacks an S2 file; dropped")
-        points = points[~unassigned]
+    points = assign_hosts(points, catalog, stats)
     return points, stats
 
 
@@ -400,7 +444,8 @@ def run_ref(
 ) -> Optional[dict]:
     out_path = (Path(args.out_dir) / f"{ref_id}.geoparquet"
                 if args.out_dir else None)
-    if args.mode == "extract" and out_path is not None and out_path.exists():
+    if (args.mode == "extract" and out_path is not None and out_path.exists()
+            and not args.s1_refresh_from):
         logger.warning(f"{ref_id}: output exists, skipping ({out_path})")
         return None
 
@@ -410,6 +455,9 @@ def run_ref(
     if not catalog.entries:
         logger.error(f"{ref_id}: no patches found ({catalog.source}); skipping")
         return None
+
+    if args.s1_refresh_from:
+        return run_s1_refresh(ref_id, catalog, args, conventions)
 
     points, stats = select_and_assign(
         ref_id, catalog, Path(args.rdm_dir),
@@ -518,6 +566,11 @@ def main() -> None:
     ap.add_argument("--dump-points", type=Path, default=None, metavar="DIR",
                     help="write the selected points frame (with point_kind and "
                          "host_sample_id) to DIR/<ref>.points.geoparquet")
+    ap.add_argument("--s1-refresh-from", type=Path, default=None, metavar="DIR",
+                    help="S1-only refresh: take every sample of DIR/<ref>."
+                         "geoparquet, re-derive its S1 series with the "
+                         "coverage-aware orbit rule and record the orbit, into "
+                         "--out-dir/<ref>.parquet (merge with ptp_merge_s1refresh)")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--sample-limit", type=int, default=None)
     ap.add_argument("--verify-pct", type=float, default=None, metavar="P",

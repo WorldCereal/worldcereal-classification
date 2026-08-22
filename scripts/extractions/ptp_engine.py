@@ -203,6 +203,15 @@ def _nearest_idx(coords: np.ndarray, value: float) -> int:
     return int(np.argmin(np.abs(coords - value)))
 
 
+def _longest_run(mask: np.ndarray) -> int:
+    """Length of the longest run of True values (consecutive NODATA months)."""
+    best = cur = 0
+    for m in mask:
+        cur = cur + 1 if m else 0
+        best = max(best, cur)
+    return best
+
+
 # --- Compositing (the exact openEO recipe) --------------------------------
 
 
@@ -233,6 +242,46 @@ def composite_s2(
             if vals:
                 out[bi, mi] = np.uint16(np.floor(np.median(vals)))
     return out
+
+
+def s1_month_index(
+    s1: dict, months: List[Tuple[int, int]],
+    t_start: np.datetime64, t_end_excl: np.datetime64,
+) -> np.ndarray:
+    """Per time step: index into `months`, or -1 when out of window / month.
+
+    Computed once per patch (not per point) and consumed by
+    s1_nodata_months, which is called for every candidate orbit of every
+    point during orbit selection.
+    """
+    times = s1["times"]
+    sel = (times >= t_start) & (times < t_end_excl)
+    midx = {m: i for i, m in enumerate(months)}
+    out = np.full(len(times), -1, dtype=np.int64)
+    for ti, t in enumerate(times):
+        if sel[ti]:
+            out[ti] = midx.get(_month_key(t), -1)
+    return out
+
+
+def s1_nodata_months(
+    s1: dict, row: int, col: int, month_index: np.ndarray, n_months: int,
+) -> np.ndarray:
+    """Boolean per month: would composite_s1 leave BOTH bands at NODATA?
+
+    Same rule as composite_s1 (an in-window observation whose DN is neither 0
+    nor NODATA), without the power/log arithmetic — so orbit selection is
+    cheap and only the winning orbit pays for the full composite.
+    """
+    has = np.zeros(n_months, dtype=bool)
+    for band in S1_BANDS:
+        if band not in s1["bands"]:
+            continue
+        series = s1["bands"][band][:, row, col]
+        ok = (month_index >= 0) & (series != 0) & (series != NODATA)
+        if ok.any():
+            has[month_index[ok]] = True
+    return ~has
 
 
 def composite_s1(
@@ -285,10 +334,12 @@ def process_patch(task: dict) -> List[dict]:
     t_start = np.datetime64(task["t_start"])
     t_end_excl = np.datetime64(task["t_end_excl"])
     results = []
+    s1_only = bool(task.get("s1_only", False))
 
     try:
         s2_patch = _read_patch(
-            task["s2_path"], S2_BANDS + ["S2-L2A-SCL_DILATED_MASK"]
+            task["s2_path"],
+            [] if s1_only else S2_BANDS + ["S2-L2A-SCL_DILATED_MASK"]
         )
     except OSError as exc:
         # Corrupt/truncated NetCDF on disk. Without S2 there is nothing to
@@ -300,22 +351,25 @@ def process_patch(task: dict) -> List[dict]:
     s2_crs = CRS.from_wkt(s2_patch["crs_wkt"])
     to_s2 = Transformer.from_crs("EPSG:4326", s2_crs, always_xy=True)
 
-    # S1: pick the orbit like the flow's own tiebreak — the larger file
-    # (~4 KB per timestep, monotone with series density) — but fall back to
-    # the other orbit if the preferred file turns out corrupt on disk.
+    # S1: read every readable orbit patch, largest file first. The
+    # orbit is then chosen PER POINT on coverage — see the point loop.
     cand = {o: p for o, p in task["s1_paths"].items() if p and Path(p).exists()}
-    s1_patch = s1_orbit = s1_case = None
+    s1_patches: List[Tuple[str, dict]] = []
+    s1_cases: Dict[str, str] = {}
+    s1_tf: Dict[str, Transformer] = {}
+    s1_midx: Dict[str, np.ndarray] = {}
     for orbit in sorted(cand, key=lambda o: -Path(cand[o]).stat().st_size):
         try:
-            s1_patch = _read_patch(cand[orbit], S1_BANDS)
-            s1_orbit = orbit
-            break
+            s1p = _read_patch(cand[orbit], S1_BANDS)
         except OSError as exc:
-            logger.warning(f"S1 {orbit} unreadable, trying other orbit: "
+            logger.warning(f"S1 {orbit} unreadable, skipping it: "
                            f"{cand[orbit]} ({exc})")
-    if s1_patch is not None:
-        s1_crs = CRS.from_wkt(s1_patch["crs_wkt"])
-        s1_case = "s1_same_crs" if s1_crs.equals(s2_crs) else "s1_cross_crs"
+            continue
+        s1_crs = CRS.from_wkt(s1p["crs_wkt"])
+        s1_patches.append((orbit, s1p))
+        s1_cases[orbit] = "s1_same_crs" if s1_crs.equals(s2_crs) else "s1_cross_crs"
+        s1_tf[orbit] = Transformer.from_crs(s2_crs, s1_crs, always_xy=True)
+        s1_midx[orbit] = s1_month_index(s1p, months, t_start, t_end_excl)
 
     for sample_id, lon, lat in task["points"]:
         px, py = to_s2.transform(lon, lat)
@@ -328,31 +382,44 @@ def process_patch(task: dict) -> List[dict]:
         cx = float(s2_patch["x"][min(max(col, 0), len(s2_patch["x"]) - 1)])
         cy = float(s2_patch["y"][min(max(row, 0), len(s2_patch["y"]) - 1)])
         rec = {"sample_id": sample_id, "tile": task["tile"],
-               "s1_orbit": s1_orbit, "s1_case": s1_case,
+               "s1_orbit": None, "s1_case": None,
                "s2_pixel_xy": (cx, cy), "s2_crs_wkt": s2_patch["crs_wkt"]}
-        if 0 <= row < len(s2_patch["y"]) and 0 <= col < len(s2_patch["x"]):
+        if s1_only:
+            rec["s2"] = None
+        elif 0 <= row < len(s2_patch["y"]) and 0 <= col < len(s2_patch["x"]):
             rec["s2"] = composite_s2(s2_patch, row, col, months,
                                      t_start, t_end_excl)
         else:
             rec["s2"] = np.full((len(S2_BANDS), len(months)), NODATA, np.uint16)
 
-        if s1_patch is not None:
-            # Query location = S2 pixel centre transformed into the S1 CRS.
-            s2_to_s1 = Transformer.from_crs(s2_crs, CRS.from_wkt(
-                s1_patch["crs_wkt"]), always_xy=True)
-            qx, qy = s2_to_s1.transform(cx, cy)
-            c_off = conv[s1_case]["col_off"]
-            r_off = conv[s1_case]["row_off"]
-            s1_col = _nearest_idx(s1_patch["x"], qx) + c_off
-            s1_row = _nearest_idx(s1_patch["y"], qy) + r_off
-            if (0 <= s1_row < len(s1_patch["y"])
-                    and 0 <= s1_col < len(s1_patch["x"])):
-                rec["s1"] = composite_s1(s1_patch, s1_row, s1_col, months,
-                                         t_start, t_end_excl)
-            else:
-                rec["s1"] = np.full((2, len(months)), NODATA, np.uint16)
-        else:
+        # S1: coverage-aware orbit choice per point. Each readable
+        # orbit is composited at the point's S2 pixel centre; the orbit with
+        # the fewest NODATA months wins, then the shortest NODATA run, then
+        # the larger file (list order). Rationale: the openEO-era flow chose
+        # one orbit per job with a max-temporal-gap rule; the file-size proxy
+        # picked a denser orbit with a seasonal hole in ~20 refs.
+        best = None
+        for orbit, s1p in s1_patches:
+            qx, qy = s1_tf[orbit].transform(cx, cy)
+            case = s1_cases[orbit]
+            s1_col = _nearest_idx(s1p["x"], qx) + conv[case]["col_off"]
+            s1_row = _nearest_idx(s1p["y"], qy) + conv[case]["row_off"]
+            inside = (0 <= s1_row < len(s1p["y"])
+                      and 0 <= s1_col < len(s1p["x"]))
+            nod = (s1_nodata_months(s1p, s1_row, s1_col, s1_midx[orbit],
+                                    len(months)) if inside
+                   else np.ones(len(months), dtype=bool))
+            key = (int(nod.sum()), _longest_run(nod))
+            if best is None or key < best[0]:
+                best = (key, orbit, case, s1p, s1_row, s1_col, inside)
+        if best is None:
             rec["s1"] = np.full((2, len(months)), NODATA, np.uint16)
+        else:
+            _, orbit, case, s1p, s1_row, s1_col, inside = best
+            rec["s1"] = (composite_s1(s1p, s1_row, s1_col, months,
+                                      t_start, t_end_excl) if inside
+                         else np.full((2, len(months)), NODATA, np.uint16))
+            rec["s1_orbit"], rec["s1_case"] = orbit, case
         results.append(rec)
     return results
 
@@ -651,6 +718,35 @@ def load_host_points(host_ref_id: str) -> gpd.GeoDataFrame:
     return gdf
 
 
+def _assemble_s1_only(host_ref_id: str, records: List[dict], sid_axis: dict,
+                      out_path: Optional[Path]) -> pd.DataFrame:
+    """Long-format frame with only the S1 columns + s1_orbit (S1 refresh)."""
+    cols = {"sample_id": [], "timestamp": [], "S1-SIGMA0-VH": [],
+            "S1-SIGMA0-VV": [], "s1_orbit": [], "tile": []}
+    for rec in records:
+        months = [tuple(m) for m in sid_axis[rec["sample_id"]][0]]
+        T = len(months)
+        cols["sample_id"].extend([rec["sample_id"]] * T)
+        cols["timestamp"].extend(
+            np.datetime64(f"{y:04d}-{m:02d}-01") for (y, m) in months)
+        cols["S1-SIGMA0-VH"].extend(rec["s1"][0, :T].tolist())
+        cols["S1-SIGMA0-VV"].extend(rec["s1"][1, :T].tolist())
+        cols["s1_orbit"].extend([rec["s1_orbit"] or "none"] * T)
+        cols["tile"].extend([rec["tile"]] * T)
+    df = pd.DataFrame(cols)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    for b in ("S1-SIGMA0-VH", "S1-SIGMA0-VV"):
+        df[b] = df[b].astype(np.uint16)
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out_path.with_suffix(f".tmp{os.getpid()}.parquet")
+        df.to_parquet(tmp, index=False)
+        tmp.rename(out_path)
+        logger.success(f"{host_ref_id}: S1 refresh wrote {df.sample_id.nunique():,} "
+                       f"samples / {len(df):,} rows -> {out_path}")
+    return df
+
+
 def extract_host(
     host_ref_id: str,
     conventions: dict,
@@ -662,6 +758,7 @@ def extract_host(
     catalog_cache: Optional[Path] = None,
     points: Optional[gpd.GeoDataFrame] = None,
     index: Optional[Dict[str, dict]] = None,
+    s1_only: bool = False,
 ) -> Tuple[pd.DataFrame, List[dict]]:
     """Extract one host. Returns (long dataframe, raw per-point records).
 
@@ -715,6 +812,7 @@ def extract_host(
             "t_start": axis["start"],
             "t_end_excl": axis["end"],
             "conventions": conventions,
+            "s1_only": s1_only,
         })
 
     logger.info(f"{host_ref_id}: {len(points)} points in {len(tasks)} patches; "
@@ -735,6 +833,9 @@ def extract_host(
     for t in tasks:
         for (sample_id, _, _) in t["points"]:
             sid_axis[sample_id] = (t["months"], t["t_start"], t["t_end_excl"])
+
+    if s1_only:
+        return _assemble_s1_only(host_ref_id, records, sid_axis, out_path), records
 
     # --- Auxiliary bands (main process; cheap) ---
     meteo = MonthlyMeteo()
@@ -855,6 +956,9 @@ def extract_host(
             "geometry": np.repeat(geom_arr, reps_b),
             "tile": np.repeat(
                 np.array([r["tile"] for r in recs], dtype=object), reps_b),
+            "s1_orbit": np.repeat(
+                np.array([r["s1_orbit"] or "none" for r in recs], dtype=object),
+                reps_b),
             "h3_l3_cell": np.repeat(
                 a["h3_l3_cell"].astype(str).to_numpy(dtype=object), reps_b),
             "start_date": np.repeat(np.array(
