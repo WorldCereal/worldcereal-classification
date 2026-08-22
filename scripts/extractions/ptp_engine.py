@@ -984,6 +984,12 @@ def extract_host(
             **({"point_kind": np.repeat(
                 a["point_kind"].astype(str).to_numpy(dtype=object), reps_b)}
                if "point_kind" in a.columns else {}),
+            # parent_sample_id: '' for normal samples, the parent's id for
+            # multi-point children (point_kind='sampled'); driver-provided.
+            **({"parent_sample_id": np.repeat(
+                a["parent_sample_id"].astype(str).to_numpy(dtype=object),
+                reps_b)}
+               if "parent_sample_id" in a.columns else {}),
         })
         # all-nodata drop, same rule as post_job_action: every S2/S1 column
         # at NODATA for every timestep of the sample.

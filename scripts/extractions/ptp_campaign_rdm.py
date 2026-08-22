@@ -47,6 +47,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -291,6 +292,115 @@ def run_s1_refresh(ref_id: str, catalog: RefCatalog, args, conventions: dict):
     return stats
 
 
+# --- Children: multi-point sampling per polygon -----------------------------
+# One extra point set per polygon ("children"), patch-bounded: points live in
+# polygon.buffer(-edge) ∩ (footprint union − 20 m), so extraction needs no new
+# patches. Tier by ref-level median polygon area: smallholder refs get a
+# smaller edge buffer and spacing (assessment 2026-08-22,
+# _investigation_20260822_multipoint/). Child ids are parent + '_child<k>'
+# ('child' occurs in none of the 9,272,598 existing ids); parents keep their
+# row untouched and children carry parent_sample_id / point_kind='sampled' /
+# extract=0 so they can never trigger patch creation and are excluded from
+# store verification.
+SMALLHOLDER_MEDIAN_HA = 1.5
+CHILD_TIER_PARAMS = {          # tier -> (polygon edge buffer m, min spacing m)
+    "smallholder": (10.0, 40.0),
+    "commercial": (30.0, 100.0),
+}
+
+
+def sample_children(
+    points: gpd.GeoDataFrame,
+    poly_store: Dict[str, Any],
+    shrunk: Dict[int, list],
+    k_max: int,
+    tier: str,
+    stats: dict,
+    min_dist: Optional[float] = None,
+    edge_buffer: Optional[float] = None,
+) -> gpd.GeoDataFrame:
+    """Blue-noise children for every placed polygon parent, capacity-capped
+    at k_max points per polygon (parent included), deterministic per parent."""
+    import random as _random
+    import zlib
+    empty = points.iloc[0:0].copy()
+    parents = points[points["point_kind"].isin(("centroid", "clipped"))
+                     & points["sample_id"].isin(poly_store)]
+    if parents.empty or not shrunk:
+        if not shrunk and not parents.empty:
+            logger.warning("children requested but no shrunk extents; skipped")
+        return empty
+    utm = parents.estimate_utm_crs()
+    to_utm = Transformer.from_crs("EPSG:4326", utm, always_xy=True).transform
+    to_ll = Transformer.from_crs(utm, "EPSG:4326", always_xy=True).transform
+    parts_utm = [shapely_transform(to_utm, g)
+                 for parts in shrunk.values() for g in parts]
+    part_tree = STRtree(parts_utm)
+    if tier == "auto":
+        med = float(np.median([shapely_transform(to_utm, poly_store[s]).area
+                               for s in parents["sample_id"]]))
+        tier = "smallholder" if med / 1e4 < SMALLHOLDER_MEDIAN_HA else "commercial"
+        stats["children_median_poly_ha"] = round(med / 1e4, 3)
+    edge, d = CHILD_TIER_PARAMS[tier]
+    if edge_buffer is not None:
+        edge = float(edge_buffer)
+    if min_dist is not None:
+        d = float(min_dist)
+    stats["children_tier"] = tier
+    hex_cell = (math.sqrt(3.0) / 2.0) * d * d
+    rows = []
+    for parent in parents.itertuples():
+        poly_u = shapely_transform(to_utm, make_valid(poly_store[parent.sample_id]))
+        er = poly_u.buffer(-edge)
+        if er.is_empty:
+            continue
+        cand = part_tree.query(er, predicate="intersects")
+        if not len(cand):
+            continue
+        region = er.intersection(unary_union([parts_utm[int(j)] for j in cand]))
+        area = region.area
+        if region.is_empty or area <= hex_cell:
+            continue
+        n_extra = min(k_max, max(1, int(0.5 * area / (d * d)))) - 1
+        if n_extra <= 0:
+            continue
+        rng = _random.Random(zlib.crc32(parent.sample_id.encode()))
+        px, py = to_utm(parent.geometry.x, parent.geometry.y)
+        placed = [(px, py)]
+        minx, miny, maxx, maxy = region.bounds
+        got = 0
+        for _ in range(200 * n_extra + 200):
+            if got >= n_extra:
+                break
+            x = rng.uniform(minx, maxx)
+            y = rng.uniform(miny, maxy)
+            if not region.contains(Point(x, y)):
+                continue
+            if any((x - qx) ** 2 + (y - qy) ** 2 < d * d for qx, qy in placed):
+                continue
+            placed.append((x, y))
+            got += 1
+            child = points.loc[[parent.Index]].copy()
+            child["sample_id"] = f"{parent.sample_id}_child{got + 1}"
+            child["parent_sample_id"] = parent.sample_id
+            child["point_kind"] = "sampled"
+            child["extract"] = 0
+            lon, lat = to_ll(x, y)
+            child["geometry"] = gpd.GeoSeries([Point(lon, lat)],
+                                              index=child.index, crs="EPSG:4326")
+            rows.append(child)
+        if got:
+            stats["children_parents"] = stats.get("children_parents", 0) + 1
+    if not rows:
+        return empty
+    out = gpd.GeoDataFrame(pd.concat(rows, ignore_index=True), crs="EPSG:4326")
+    stats["children_generated"] = len(out)
+    logger.info(f"{stats['ref_id']}: {len(out):,} children generated for "
+                f"{stats.get('children_parents', 0):,} polygon(s) "
+                f"(tier={tier}, edge={edge:g} m, min_dist={d:g} m, K={k_max})")
+    return out
+
+
 def select_and_assign(
     ref_id: str,
     catalog: RefCatalog,
@@ -301,6 +411,10 @@ def select_and_assign(
     legacy_centroid: bool = False,
     edge_margin_m: float = EDGE_MARGIN_M_DEFAULT,
     delta_from: Optional[Path] = None,
+    children_k: int = 0,
+    children_tier: str = "auto",
+    children_min_dist: Optional[float] = None,
+    children_edge_buffer: Optional[float] = None,
 ) -> Tuple[gpd.GeoDataFrame, dict]:
     """Stream the ref's harmonized RDM file; return the engine-ready points
     frame (RDM attrs + host_sample_id) and selection statistics."""
@@ -330,6 +444,7 @@ def select_and_assign(
              "multi_cover_resolved": 0, "centroid_dropped": 0,
              "clipped_fallback": 0, "edge_relocated": 0, "outside_patches": 0,
              "skipped_existing": 0}
+    poly_store: Dict[str, Any] = {}
     shrunk = {} if legacy_centroid else shrunk_extents(catalog, edge_margin_m)
     if not legacy_centroid and not shrunk:
         logger.warning(f"{ref_id}: no shrunk extents could be built; "
@@ -382,11 +497,16 @@ def select_and_assign(
         df["geometry"] = df["geometry"].apply(lambda b: shapely_wkb.loads(bytes(b)))
         gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
+        polys_pre = gdf.geometry if children_k else None
         gdf = _place_points(gdf, tree, shrunk, stats,
                             edge_fallback=edge_fallback,
                             legacy_centroid=legacy_centroid)
         if gdf.empty:
             continue
+        if children_k:
+            for idx, kind in gdf["point_kind"].items():
+                if kind != "point":
+                    poly_store[gdf.at[idx, "sample_id"]] = polys_pre.loc[idx]
 
         hits = tree.query(gdf.geometry.values, predicate="intersects")
         covered = sorted(set(hits[0]))
@@ -404,6 +524,15 @@ def select_and_assign(
     points = gpd.GeoDataFrame(pd.concat(chunks, ignore_index=True),
                               crs="EPSG:4326")
     points = points.drop_duplicates(subset="sample_id", keep="first")
+    points["parent_sample_id"] = ""
+    if children_k:
+        kids = sample_children(points, poly_store, shrunk, children_k,
+                               children_tier, stats,
+                               min_dist=children_min_dist,
+                               edge_buffer=children_edge_buffer)
+        if len(kids):
+            points = gpd.GeoDataFrame(
+                pd.concat([points, kids], ignore_index=True), crs="EPSG:4326")
     if delta_from is not None:
         prev = Path(delta_from) / f"{ref_id}.geoparquet"
         if prev.exists():
@@ -464,7 +593,10 @@ def run_ref(
         only_flagged=args.only_flagged, sample_limit=args.sample_limit,
         edge_fallback=args.edge_fallback, legacy_centroid=args.legacy_centroid,
         edge_margin_m=args.edge_margin_m,
-        delta_from=Path(args.delta_from) if args.delta_from else None)
+        delta_from=Path(args.delta_from) if args.delta_from else None,
+        children_k=args.children, children_tier=args.children_tier,
+        children_min_dist=args.children_min_dist,
+        children_edge_buffer=args.children_edge_buffer)
     logger.info(f"{ref_id}: {stats}")
     if args.dump_points:
         dp = Path(args.dump_points)
@@ -563,6 +695,20 @@ def main() -> None:
                          "clipped fallback (production: 20 m)")
     ap.add_argument("--legacy-centroid", action="store_true",
                     help="disable the clipped fallback (pre-2026-08-21 rule)")
+    ap.add_argument("--children", type=int, default=0, metavar="K",
+                    help="multi-point sampling: cap of K points per polygon "
+                         "(parent + children); 0 disables. Children are patch-"
+                         "bounded, ids get '_child<n>' suffixes, extract=0. "
+                         "Combine with --delta-from to extract children only.")
+    ap.add_argument("--children-tier", choices=["auto", "smallholder",
+                    "commercial"], default="auto",
+                    help="parameter tier; auto = by ref median polygon area "
+                         f"(< {SMALLHOLDER_MEDIAN_HA} ha -> smallholder "
+                         "10 m/40 m, else 30 m/100 m)")
+    ap.add_argument("--children-min-dist", type=float, default=None,
+                    help="override the tier's min point spacing (m)")
+    ap.add_argument("--children-edge-buffer", type=float, default=None,
+                    help="override the tier's polygon edge buffer (m)")
     ap.add_argument("--dump-points", type=Path, default=None, metavar="DIR",
                     help="write the selected points frame (with point_kind and "
                          "host_sample_id) to DIR/<ref>.points.geoparquet")
