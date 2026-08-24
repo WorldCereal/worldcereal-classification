@@ -847,7 +847,8 @@ def remove_small_classes(df, min_samples, class_column: str = "finetune_class"):
             f"The following classes have fewer than {min_samples} samples and will be removed for stratified splitting: {minor_classes}. "
             f"Samples removed: {df[df[class_column].isin(minor_classes)].shape[0]}"
         )
-        df = df[~df[class_column].isin(minor_classes)].copy()
+        # One copy instead of two (the boolean selection already copies).
+        df = df.take(np.flatnonzero((~df[class_column].isin(minor_classes)).to_numpy()))
         # After removal, check again for any classes with too few samples
         class_counts = df[class_column].value_counts()
         if (class_counts < min_samples).any():
@@ -937,6 +938,208 @@ def align_batch_to_table_columns(batch_df, table_cols, nodata_value):
     # Reorder columns to match table
     batch_df = batch_df[table_cols]
     return batch_df
+
+
+# ---------------------------------------------------------------------------
+# Memory-lean materialisation of the wide training frame.
+#
+# ---------------------------------------------------------------------------
+# list when absent from the file, so listing one that may not exist is safe.
+_SELECTION_COLUMNS: Tuple[str, ...] = ("ewoc_code", "sample_id", "lat", "lon")
+
+# Row-group size used when (re)writing the wide parquet; matches the
+# ROW_GROUP_SIZE of the DuckDB COPY that originally produces the file.
+_WIDE_ROW_GROUP_SIZE = 20_000
+
+
+def _row_group_offsets(metadata) -> np.ndarray:
+    """Cumulative first-row index of every row group (length num_row_groups+1)."""
+    offsets = np.zeros(metadata.num_row_groups + 1, dtype=np.int64)
+    for i in range(metadata.num_row_groups):
+        offsets[i + 1] = offsets[i] + metadata.row_group(i).num_rows
+    return offsets
+
+
+def _read_selection_frame(
+    parquet_path: Union[Path, str], region_column: str
+) -> pd.DataFrame:
+    """Read only the columns needed to decide which rows survive filtering.
+
+    The returned frame carries a ``RangeIndex`` over the whole file, so its
+    index labels double as global row positions for :func:`_materialize_rows`.
+    """
+    available = set(pq.ParquetFile(parquet_path).schema_arrow.names)
+    columns = [c for c in _SELECTION_COLUMNS if c in available]
+    if region_column in available:
+        columns.append(region_column)
+    return pq.read_table(parquet_path, columns=columns).to_pandas()
+
+
+def _materialize_rows(
+    parquet_path: Union[Path, str],
+    positions: np.ndarray,
+    index: Optional[pd.Index] = None,
+    drop_columns: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Load the given row positions from a wide parquet at full width.
+
+    Row groups are streamed and immediately subset, so peak memory scales with
+    the number of SELECTED rows rather than with the size of the file.  The
+    returned frame preserves the order of ``positions`` and carries ``index``
+    as its labels, exactly as boolean-masking the fully loaded frame would.
+    ``index`` defaults to ``positions`` and differs from it only when the file
+    has been rewritten with rows removed.  ``drop_columns`` are removed before
+    conversion, so a caller that re-adds them afterwards gets them appended at
+    the end -- matching a ``drop`` + re-assignment on the fully loaded frame.
+    """
+    positions = np.asarray(positions, dtype=np.int64)
+    pf = pq.ParquetFile(parquet_path)
+    dropped = [c for c in (drop_columns or []) if c in pf.schema_arrow.names]
+
+    if positions.size == 0:
+        empty = pf.schema_arrow.empty_table()
+        if dropped:
+            empty = empty.drop(dropped)
+        df = empty.to_pandas()
+        df.index = pd.Index([], dtype="int64") if index is None else index
+        return df
+
+    starts = _row_group_offsets(pf.metadata)
+    order = np.argsort(positions, kind="stable")
+    sorted_positions = positions[order]
+
+    parts = []
+    lo = 0
+    for group in range(pf.metadata.num_row_groups):
+        if lo >= sorted_positions.size:
+            break
+        hi = int(np.searchsorted(sorted_positions, starts[group + 1], side="left"))
+        if hi > lo:
+            local = sorted_positions[lo:hi] - starts[group]
+            table = pf.read_row_group(group)
+            if dropped:
+                table = table.drop(dropped)
+            parts.append(table.take(pa.array(local)))
+            del table
+        lo = hi
+
+    table = pa.concat_tables(parts)
+    del parts
+    gc.collect()
+
+    # Restore the caller's ordering.  A no-op for the sorted, mask-derived
+    # selections; needed for the shuffled output of train_test_split.
+    if not np.array_equal(order, np.arange(order.size)):
+        inverse = np.empty_like(order)
+        inverse[order] = np.arange(order.size)
+        table = table.take(pa.array(inverse))
+        gc.collect()
+
+    # self_destruct releases each Arrow buffer as soon as it has been converted
+    df = table.to_pandas(self_destruct=True)
+    del table
+    gc.collect()
+    df.index = pd.Index(positions, dtype="int64") if index is None else index
+    return df
+
+
+def _apply_derived_columns(df: pd.DataFrame, derived: pd.DataFrame) -> pd.DataFrame:
+    """Copy the narrow pass's derived columns onto a materialised wide split.
+
+    ``derived`` must already be restricted to -- and ordered like -- ``df``.
+    Columns that already exist keep their position (matching an in-place
+    assignment on the fully loaded frame); new ones are appended in order.
+    """
+    for column in derived.columns:
+        values = derived[column].to_numpy()
+        if column in df.columns:
+            # `.loc[:, col]` writes into the existing block, exactly as
+            # map_classes does, so the frame keeps its consolidated layout.
+            df.loc[:, column] = values
+        else:
+            df[column] = values
+    return df
+
+
+def _rewrite_wide_parquet(
+    parquet_path: Union[Path, str],
+    positions: np.ndarray,
+    derived: pd.DataFrame,
+    drop_columns: Optional[Sequence[str]] = None,
+) -> None:
+    """Rewrite the wide parquet with only ``positions``, applying ``derived``.
+
+    Streams row group by row group and re-chunks the output to
+    ``_WIDE_ROW_GROUP_SIZE`` so the rewritten file keeps the layout of the
+    DuckDB COPY that produced it.  Equivalent to writing the filtered,
+    column-updated pandas frame in one go, without ever holding it in memory.
+    """
+    parquet_path = Path(parquet_path)
+    positions = np.asarray(positions, dtype=np.int64)
+    # The row-group walk below seeks forward only, so the kept rows must be in
+    # file order (they are: they come from a boolean mask over the frame).
+    if positions.size and not np.all(np.diff(positions) > 0):
+        raise ValueError("_rewrite_wide_parquet requires strictly ascending positions")
+    pf = pq.ParquetFile(parquet_path)
+    starts = _row_group_offsets(pf.metadata)
+    dropped = [c for c in (drop_columns or []) if c in pf.schema_arrow.names]
+
+    derived_arrays = {
+        column: pa.array(derived[column].to_numpy(), from_pandas=True)
+        for column in derived.columns
+    }
+
+    tmp_path = parquet_path.with_suffix(parquet_path.suffix + ".tmp")
+    writer: Optional[pq.ParquetWriter] = None
+    buffer: List[pa.Table] = []
+    buffered_rows = 0
+    written = 0
+
+    def _flush(force: bool) -> None:
+        nonlocal buffer, buffered_rows, writer
+        while buffered_rows >= _WIDE_ROW_GROUP_SIZE or (force and buffered_rows):
+            chunk = min(buffered_rows, _WIDE_ROW_GROUP_SIZE)
+            combined = pa.concat_tables(buffer) if len(buffer) > 1 else buffer[0]
+            assert writer is not None
+            writer.write_table(combined.slice(0, chunk))
+            tail = combined.slice(chunk)
+            buffer = [tail] if tail.num_rows else []
+            buffered_rows = tail.num_rows
+
+    try:
+        lo = 0
+        for group in range(pf.metadata.num_row_groups):
+            if lo >= positions.size:
+                break
+            hi = int(np.searchsorted(positions, starts[group + 1], side="left"))
+            if hi <= lo:
+                continue
+            table = pf.read_row_group(group)
+            if dropped:
+                table = table.drop(dropped)
+            table = table.take(pa.array(positions[lo:hi] - starts[group]))
+            for column, values in derived_arrays.items():
+                replacement = values.slice(written, hi - lo)
+                if column in table.column_names:
+                    table = table.set_column(
+                        table.schema.get_field_index(column), column, replacement
+                    )
+                else:
+                    table = table.append_column(column, replacement)
+            written += hi - lo
+            lo = hi
+            if writer is None:
+                writer = pq.ParquetWriter(tmp_path, table.schema, compression="snappy")
+            buffer.append(table)
+            buffered_rows += table.num_rows
+            del table
+            _flush(force=False)
+        _flush(force=True)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    os.replace(tmp_path, parquet_path)
 
 
 def get_training_dfs_from_parquet(
@@ -1188,29 +1391,28 @@ def get_training_dfs_from_parquet(
         """
         )
 
-    # Load the merged Parquet -> accumulate Arrow tables first (much lower overhead
-    # than converting each to pandas individually), then do a single to_pandas() call.
+    # ------------------------------------------------------------------
+    # Pass 1: decide the row selection on a NARROW frame.  Every step from
+    # here down to the splits reads only ewoc_code / sample_id / lat / lon /
+    # region, so there is no need to carry full wide columns through them.
+    # ------------------------------------------------------------------
     logger.info(f"Loading wide parquet file from {wide_parquet_output_path} ...")
-    pf = pq.ParquetFile(wide_parquet_output_path)
-    arrow_parts = []
-    for i in range(pf.num_row_groups):
-        arrow_parts.append(
-            pf.read_row_group(i)
-        )  # stay in Arrow until all groups are loaded
-    df = pa.concat_tables(
-        arrow_parts
-    ).to_pandas()  # single conversion: avoids N intermediate pandas frames
-    del arrow_parts
-    gc.collect()
+    df = _read_selection_frame(wide_parquet_output_path, region_column)
+    # Maps an index label onto its row position in the wide parquet. The two
+    # coincide until a region-enrichment rewrite drops rows from the file.
+    file_positions = pd.Series(np.arange(len(df), dtype=np.int64), index=df.index)
 
     df = map_classes(df, finetune_classes, class_mappings=class_mappings)
-
+    # NOTE: pass 2 copies *every* column the narrow frame ends up carrying onto
+    # the wide splits, in narrow-frame order.
+    dropped_columns: List[str] = []
     if force_recompute_regions and region_column in df.columns:
         logger.info(
             f"force_recompute_regions=True: dropping existing '{region_column}' column "
             "to trigger full recomputation."
         )
         df = df.drop(columns=[region_column])
+        dropped_columns.append(region_column)
 
     normalized_regions = _normalize_region_filter(region_filter)
     if normalized_regions is not None:
@@ -1253,14 +1455,23 @@ def get_training_dfs_from_parquet(
                     f"boundaries file is unavailable ({exc})."
                 ) from exc
         if not is_tempfile:
-            tbl = pa.Table.from_pandas(df, preserve_index=False)
-            pq.write_table(
-                tbl,
+            # Persist the enriched regions (and the recomputed class columns)
+            # by streaming the wide parquet through, instead of holding the
+            # whole frame in memory just to write it back out.
+            _rewrite_wide_parquet(
                 wide_parquet_output_path,
-                compression="snappy",
-                row_group_size=20_000,
+                df.index.to_numpy(),
+                df,
+                drop_columns=dropped_columns,
             )
-            del tbl
+            # The rewritten file already has the columns in their final order.
+            dropped_columns = []
+            # Rows dropped by map_classes are gone from the rewritten file, so
+            # re-base the seek positions onto it.  Index labels are left alone:
+            # they still refer to rows of the frame as originally loaded.
+            file_positions = pd.Series(
+                np.arange(len(df), dtype=np.int64), index=df.index
+            )
             # Ensure group-write permission so teammates can overwrite the file
             try:
                 current_mode = os.stat(wide_parquet_output_path).st_mode
@@ -1285,6 +1496,7 @@ def get_training_dfs_from_parquet(
         )
         logger.info("=" * 66)
         df = df[~df["sample_id"].isin(ignore_samples_df.sample_id.tolist())]
+        del ignore_samples_df
     else:
         logger.info(
             "No ignore_samples_file provided; skipping explicit sample exclusion step."
@@ -1377,6 +1589,41 @@ def get_training_dfs_from_parquet(
                 "Removed classes from test set because they "
                 f"do not occur train/val: {nontrainval_classes}"
             )
+
+    # ------------------------------------------------------------------
+    # Pass 2: materialise only the selected rows, at full width.  Each split
+    # is streamed out of the wide parquet in turn, so the peak footprint is
+    # one split rather than the whole file plus every intermediate copy.
+    # ------------------------------------------------------------------
+    derived = df
+    del df, trainval_df
+    gc.collect()
+
+    materialized = []
+    for split_name, narrow_split in (
+        ("train", train_df),
+        ("val", val_df),
+        ("test", test_df),
+    ):
+        logger.info(
+            f"Materializing {split_name} split ({len(narrow_split):,} samples) "
+            "from the wide parquet ..."
+        )
+        wide_split = _materialize_rows(
+            wide_parquet_output_path,
+            file_positions.loc[narrow_split.index].to_numpy(),
+            index=narrow_split.index,
+            drop_columns=dropped_columns,
+        )
+        materialized.append(
+            _apply_derived_columns(wide_split, derived.loc[narrow_split.index])
+        )
+        del wide_split
+        gc.collect()
+    train_df, val_df, test_df = materialized
+    del materialized, derived
+    gc.collect()
+
 
     # Cleanup temporary files if created
     if is_tempfile:

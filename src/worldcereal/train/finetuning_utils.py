@@ -145,7 +145,10 @@ def attach_sample_weights(
     ).astype(float)  # Invert to get 1 for non-outliers, 0 for outliers
     combined = (quality * outlier * zero_outlier_weights).clip(0.0, 1.0)
 
-    updated = df.copy()
+    # Shallow copy: `output_col` is a new column, so it lands in this frame's
+    # manager only and `df` is left untouched -- same result as a deep copy,
+    # without duplicating a multi-GB frame on each of the six calls.
+    updated = df.copy(deep=False)
     updated[output_col] = combined
 
     # Log percentage of zero weights and stats on non-zero weights
@@ -197,10 +200,12 @@ def patch_lc_dataset_ct_quality(df: pd.DataFrame) -> pd.DataFrame:
             f"Patching quality_score_ct → quality_score_lc for "
             f"{n_patched} LC-only samples (ref_id ending _100/_101)."
         )
-        df = df.copy()
-        df.loc[is_lc_dataset, "quality_score_ct"] = df.loc[
-            is_lc_dataset, "quality_score_lc"
-        ]
+        # This one writes an *existing* column, so detach just that column
+        # rather than deep-copying the whole frame.
+        patched = df["quality_score_ct"].copy()
+        patched.loc[is_lc_dataset] = df.loc[is_lc_dataset, "quality_score_lc"]
+        df = df.copy(deep=False)
+        df["quality_score_ct"] = patched
     return df
 
 
@@ -314,7 +319,9 @@ def drop_zero_quality_samples(
             f"{split_name}: dropping {n_dropped} samples where all quality "
             f"scores are zero in columns {present_cols}."
         )
-        df = df[~all_zero].copy()
+        # One copy instead of two (`df[mask].copy()` copies the boolean
+        # selection, which is already a fresh frame).
+        df = df.take(np.flatnonzero((~all_zero).to_numpy()))
     else:
         logger.info(f"{split_name}: no samples with all-zero quality scores found.")
     return df
