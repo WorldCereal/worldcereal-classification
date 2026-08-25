@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Dict,
     List,
     Literal,
     Mapping,
@@ -2146,9 +2147,16 @@ def run_finetuning(
     tensorboard_logdir: Optional[Union[Path, str]] = None,
     model_ema_alpha: float = 0.0,
     checkpoint_metric: Literal[
-        "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
+        "val_loss",
+        "lc_f1",
+        "ct_f1",
+        "mean_f1",
+        "regional_mean_f1",
+        "lc_regional_f1",
+        "ct_regional_f1",
     ] = "mean_f1",
     regional_f1_min_support: int = 50,
+    baseline_scores: Optional[Dict[str, float]] = None,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -2172,7 +2180,10 @@ def run_finetuning(
     best_lc_f1: Optional[float] = None
     best_mean_f1: Optional[float] = None
     best_regional_mean_f1: Optional[float] = None
+    best_lc_regional_f1: Optional[float] = None
+    best_ct_regional_f1: Optional[float] = None
     best_model_dict = None
+    improved_over_baseline = False
     epochs_since_improvement = 0
     ema_model: Optional[torch.nn.Module] = (
         None  # EMA of model weights (used when model_ema_alpha > 0)
@@ -2309,6 +2320,57 @@ def run_finetuning(
                     originally_frozen_layers.add(name)
                 param.requires_grad = False
                 logger.info(f"Freezing layer: {name}")
+
+    # ------------------------------------------------------------------
+    # Baseline floor for model selection.
+    #
+    # Without this, every ``best_*`` tracker starts at None, so epoch 1
+    # *always* counts as an improvement and is always checkpointed -- even
+    # when it is far worse than the weights we started from. For a warm-started
+    # head-only run (frozen encoder, head loaded from a converged checkpoint)
+    # that means the run can only ever ship a degraded head: the pre-training
+    # state is never a candidate. Seeding the trackers with the pre-training
+    # validation scores makes the warm start compete like any other epoch, so
+    # the returned model is guaranteed to be no worse than the input.
+    # ------------------------------------------------------------------
+    if baseline_scores:
+        best_lc_f1 = baseline_scores.get("lc_f1")
+        best_ct_f1 = baseline_scores.get("ct_f1")
+        best_mean_f1 = baseline_scores.get("mean_f1")
+        best_regional_mean_f1 = baseline_scores.get("regional_mean_f1")
+        best_lc_regional_f1 = baseline_scores.get("lc_regional_f1")
+        best_ct_regional_f1 = baseline_scores.get("ct_regional_f1")
+        best_loss = baseline_scores.get("val_loss")
+        best_model_dict = deepcopy(model.state_dict())
+
+        _floor = {
+            "lc_f1": best_lc_f1,
+            "ct_f1": best_ct_f1,
+            "mean_f1": best_mean_f1,
+            "regional_mean_f1": best_regional_mean_f1,
+            "lc_regional_f1": best_lc_regional_f1,
+            "ct_regional_f1": best_ct_regional_f1,
+            "val_loss": best_loss,
+        }.get(_effective_metric)
+
+        if _floor is None:
+            logger.warning(
+                f"Baseline floor requested but no pre-training value for "
+                f"checkpoint_metric='{_effective_metric}'; model selection is "
+                "unfloored and epoch 1 will be checkpointed unconditionally."
+            )
+        else:
+            logger.info("=" * 66)
+            logger.info(
+                f"Model selection floored at the pre-training baseline: "
+                f"{_effective_metric}={_floor:.4f}. Training must beat this to "
+                "produce a checkpoint; otherwise the warm-start weights are kept."
+            )
+            logger.info("=" * 66)
+
+        # Persist the warm start immediately so a checkpoint always exists on
+        # disk even if no epoch ever improves on it.
+        _save_best(0, model, best_loss if best_loss is not None else float("nan"))
 
     for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
         model.train()
@@ -2737,6 +2799,28 @@ def run_finetuning(
                 best_regional_mean_f1 is None
                 or cur_regional_mean_f1 - best_regional_mean_f1 > _MIN_DELTA
             )
+        elif _effective_metric == "lc_regional_f1":
+            # Single-task regional metric: the right choice for a head-only run,
+            # where the frozen task's regional F1 is a constant every epoch and
+            # would otherwise halve the selection signal, and where the global
+            # macro F1 is blind to how the gain is distributed across regions.
+            _cur = (
+                cur_lc_regional_f1
+                if cur_lc_regional_f1 is not None
+                else max(0.0, cur_lc_f1)
+            )
+            loss_improved = (
+                best_lc_regional_f1 is None or _cur - best_lc_regional_f1 > _MIN_DELTA
+            )
+        elif _effective_metric == "ct_regional_f1":
+            _cur = (
+                cur_ct_regional_f1
+                if cur_ct_regional_f1 is not None
+                else max(0.0, cur_ct_f1)
+            )
+            loss_improved = (
+                best_ct_regional_f1 is None or _cur - best_ct_regional_f1 > _MIN_DELTA
+            )
         else:
             loss_improved = (
                 best_loss is None or best_loss - current_val_loss > _MIN_DELTA
@@ -2748,6 +2832,10 @@ def run_finetuning(
             best_ct_f1 = cur_ct_f1
             best_mean_f1 = cur_mean_f1
             best_regional_mean_f1 = cur_regional_mean_f1
+            if cur_lc_regional_f1 is not None:
+                best_lc_regional_f1 = cur_lc_regional_f1
+            if cur_ct_regional_f1 is not None:
+                best_ct_regional_f1 = cur_ct_regional_f1
             epochs_since_improvement = 0
             if _effective_metric == "lc_f1":
                 logger.info(
@@ -2780,6 +2868,19 @@ def run_finetuning(
                     f"{cur_regional_mean_f1:.4f} (lc={_lc_reg_str}, ct={_ct_reg_str}, "
                     f"val_loss={current_val_loss:.4f})"
                 )
+            elif _effective_metric in ("lc_regional_f1", "ct_regional_f1"):
+                _task = "LC" if _effective_metric == "lc_regional_f1" else "CT"
+                _cur_reg = (
+                    best_lc_regional_f1
+                    if _effective_metric == "lc_regional_f1"
+                    else best_ct_regional_f1
+                )
+                _glob = cur_lc_f1 if _effective_metric == "lc_regional_f1" else cur_ct_f1
+                logger.info(
+                    f"Epoch {epoch + 1}: val {_task} regional F1 improved to "
+                    f"{_cur_reg:.4f} (global macro F1={_glob:.4f}, "
+                    f"val_loss={current_val_loss:.4f})"
+                )
             else:
                 logger.info(
                     f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
@@ -2799,6 +2900,7 @@ def run_finetuning(
             # otherwise the final load_state_dict() restores the *last* epoch,
             # not the best one, and final metrics diverge from the saved .pt.
             best_model_dict = deepcopy(_ckpt_model.state_dict())
+            improved_over_baseline = True
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
@@ -2860,6 +2962,18 @@ def run_finetuning(
                 if best_regional_mean_f1 is not None
                 else "n/a"
             )
+        elif _effective_metric == "lc_regional_f1":
+            _best_str = (
+                f"{best_lc_regional_f1:.3f} (lc_regional_f1)"
+                if best_lc_regional_f1 is not None
+                else "n/a"
+            )
+        elif _effective_metric == "ct_regional_f1":
+            _best_str = (
+                f"{best_ct_regional_f1:.3f} (ct_regional_f1)"
+                if best_ct_regional_f1 is not None
+                else "n/a"
+            )
         else:
             _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"
         description = (
@@ -2884,9 +2998,22 @@ def run_finetuning(
 
     assert best_model_dict is not None
 
-    _restore_label = (
-        f"EMA model (alpha={model_ema_alpha})" if model_ema_alpha > 0.0 else "raw model"
-    )
+    if baseline_scores and not improved_over_baseline:
+        logger.warning("=" * 66)
+        logger.warning(
+            "NO EPOCH BEAT THE PRE-TRAINING BASELINE: returning the warm-start "
+            "weights unchanged. Training did not help under this configuration -- "
+            "check the balancing / augmentation / learning-rate settings before "
+            "reading anything into the final metrics."
+        )
+        logger.warning("=" * 66)
+        _restore_label = "warm-start (pre-training)"
+    else:
+        _restore_label = (
+            f"EMA model (alpha={model_ema_alpha})"
+            if model_ema_alpha > 0.0
+            else "raw model"
+        )
     logger.info(f"Restoring best {_restore_label} weights into model before returning.")
     model.load_state_dict(best_model_dict)
     model.eval()
