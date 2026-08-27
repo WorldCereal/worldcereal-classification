@@ -26,7 +26,7 @@ which returns a TemporalContext object with the start and end dates of the seaso
 import datetime
 import json
 import math
-from typing import Callable, Literal, Optional, Tuple
+from typing import Callable, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -77,17 +77,12 @@ def _snap_coordinate_to_lookup_grid(
 
 
 def resolve_cropcalendar_columns(
-    season_id: str, parameter: Literal["doy", "dekad"]
+    season_id: str,
 ) -> Tuple[str, str]:
     """Resolve season identifier and parameter to SOS/EOS parquet columns."""
 
-    if parameter not in {"doy", "dekad"}:
-        raise ValueError(
-            f"parameter must be one of ('doy', 'dekad'), got '{parameter}'"
-        )
-
     try:
-        sos_doy_col, eos_doy_col = cropcalendars.SEASONALITY_COLUMN_MAP[season_id]
+        sos_dekad_col, eos_dekad_col = cropcalendars.SEASONALITY_COLUMN_MAP[season_id]
     except KeyError as exc:
         raise ValueError(
             f"Season '{season_id}' is not available in the seasonality lookup. "
@@ -95,8 +90,8 @@ def resolve_cropcalendar_columns(
         ) from exc
 
     return (
-        sos_doy_col.replace("_doy", f"_{parameter}"),
-        eos_doy_col.replace("_doy", f"_{parameter}"),
+        sos_dekad_col,
+        eos_dekad_col,
     )
 
 
@@ -133,16 +128,15 @@ def _extent_to_wgs84_bounds(extent: BoundingBoxExtent) -> Tuple[float, float, fl
     return min(lons), min(lats), max(lons), max(lats)
 
 
-def _fetch_cropcalendar_point(
+def fetch_cropcalendar_dekad_point(
     season_id: str,
     lat: float,
     lon: float,
-    parameter: Literal["doy", "dekad"] = "doy",
     *,
     fallback_to_nearest: bool = True,
     max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
 ) -> Tuple[int, int]:
-    """Fetch (SOS, EOS) values for one point from the global parquet lookup.
+    """Fetch (SOS, EOS) dekad values for one point from the global parquet lookup.
 
     The input point is snapped to the lookup's 0.5 deg grid centers before querying.
     If the snapped cell is missing and ``fallback_to_nearest`` is enabled, the
@@ -154,8 +148,6 @@ def _fetch_cropcalendar_point(
         Season identifier (e.g. ``tc-s1``, ``tc-s2``, ``tc-annual``).
     lat, lon : float
         Input point coordinates.
-    parameter : {"doy", "dekad"}, default "doy"
-        Which crop-calendar representation to fetch.
     fallback_to_nearest : bool, default True
         Whether to use the nearest available lookup cell when the snapped cell
         is not present in the table.
@@ -169,7 +161,7 @@ def _fetch_cropcalendar_point(
             "max_fallback_distance_degrees must be a finite non-negative value"
         )
 
-    sos_col, eos_col = resolve_cropcalendar_columns(season_id, parameter)
+    sos_col, eos_col = resolve_cropcalendar_columns(season_id)
 
     table = ensure_seasonality_lookup_table()
     if sos_col not in table.columns or eos_col not in table.columns:
@@ -224,68 +216,12 @@ def _fetch_cropcalendar_point(
     if sos_value <= 0 or eos_value <= 0:
         logger.warning(
             "Seasonality lookup returned nodata values for "
-            f"season '{season_id}' and parameter '{parameter}'."
+            f"season '{season_id}'."
         )
         raise ValueError(
             "Seasonality lookup returned nodata values for "
-            f"season '{season_id}' and parameter '{parameter}'."
+            f"season '{season_id}'."
         )
-
-    return sos_value, eos_value
-
-
-def fetch_cropcalendar_doy_point(
-    season_id: str,
-    lat: float,
-    lon: float,
-    *,
-    fallback_to_nearest: bool = True,
-    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
-) -> Tuple[int, int]:
-    """Fetch (SOS, EOS) DOY values for one point from the global parquet lookup."""
-
-    sos_value, eos_value = _fetch_cropcalendar_point(
-        season_id=season_id,
-        lat=lat,
-        lon=lon,
-        parameter="doy",
-        fallback_to_nearest=fallback_to_nearest,
-        max_fallback_distance_degrees=max_fallback_distance_degrees,
-    )
-
-    if (sos_value > 366 or eos_value > 366):
-        logger.warning(
-            "Seasonality lookup returned invalid DOY values for "
-            f"season '{season_id}': SOS={sos_value}, EOS={eos_value}. "
-            "Valid DOY range is 1-366."
-        )
-        raise ValueError(
-            "Seasonality lookup returned invalid DOY values for "
-            f"season '{season_id}': SOS={sos_value}, EOS={eos_value}. "
-            "Valid DOY range is 1-366."
-        )
-    
-    return sos_value, eos_value
-
-
-def fetch_cropcalendar_dekad_point(
-    season_id: str,
-    lat: float,
-    lon: float,
-    *,
-    fallback_to_nearest: bool = True,
-    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
-) -> Tuple[int, int]:
-    """Fetch (SOS, EOS) dekad values for one point from the global parquet lookup."""
-
-    sos_value, eos_value = _fetch_cropcalendar_point(
-        season_id=season_id,
-        lat=lat,
-        lon=lon,
-        parameter="dekad",
-        fallback_to_nearest=fallback_to_nearest,
-        max_fallback_distance_degrees=max_fallback_distance_degrees,
-    )
 
     if sos_value > 108 or eos_value > 108:
         logger.warning(
@@ -300,6 +236,101 @@ def fetch_cropcalendar_dekad_point(
         )
 
     return sos_value, eos_value
+
+
+def fetch_cropcalendar_dekad_points_batch(
+    season_id: str,
+    lats: np.ndarray,
+    lons: np.ndarray,
+    *,
+    max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized counterpart of `fetch_cropcalendar_dekad_point` for many points.
+
+    Every point is snapped to the lookup grid and, when the snapped cell is
+    missing, resolved via nearest-cell fallback (mirroring the per-point
+    fallback of `fetch_cropcalendar_dekad_point`, but batched across all
+    input points at once for speed).
+
+    Parameters
+    ----------
+    season_id : str
+        Season identifier (e.g. ``tc-s1``, ``tc-s2``, ``tc-annual``).
+    lats, lons : np.ndarray
+        Input point coordinates.
+    max_fallback_distance_degrees : float, default 5.0
+        Maximum Euclidean distance in latitude/longitude degrees between a
+        snapped coordinate and its fallback lookup cell.
+
+    Returns
+    -------
+    sos, eos : np.ndarray (int64)
+        SOS/EOS dekad values, one per input point. Entries where `invalid`
+        is True hold a placeholder value (1) and must not be used directly.
+    invalid : np.ndarray (bool)
+        True where the lookup returned nodata, an out-of-range dekad, or (when
+        no lookup cell was within `max_fallback_distance_degrees`) no usable
+        fallback was found.
+    """
+    sos_col, eos_col = resolve_cropcalendar_columns(season_id)
+    table = ensure_seasonality_lookup_table()
+    if sos_col not in table.columns or eos_col not in table.columns:
+        raise ValueError(
+            f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
+            "but they are not present in the seasonality lookup parquet."
+        )
+
+    lat_arr = np.asarray(lats, dtype=np.float64)
+    lon_arr = np.asarray(lons, dtype=np.float64)
+    lat_c = (
+        np.floor(np.clip(lat_arr, *cropcalendars.SEASONALITY_LAT_RANGE) * 2.0) / 2.0
+    ) + 0.25
+    lon_c = (
+        np.floor(np.clip(lon_arr, *cropcalendars.SEASONALITY_LON_RANGE) * 2.0) / 2.0
+    ) + 0.25
+
+    key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
+    joined = table.reindex(key_index)
+
+    missing = joined[sos_col].isna().to_numpy() | joined[eos_col].isna().to_numpy()
+    if missing.any():
+        lat_vals = table.index.get_level_values("lat").to_numpy()
+        lon_vals = table.index.get_level_values("lon").to_numpy()
+        joined = joined.reset_index(drop=True)
+        missing_pos = np.flatnonzero(missing)
+        missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
+        for cell_lat, cell_lon in missing_cells:
+            distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
+            best_idx = int(distances.argmin())
+            fallback_distance = math.sqrt(float(distances[best_idx]))
+            cell_mask = missing & (lat_c == cell_lat) & (lon_c == cell_lon)
+            if fallback_distance > max_fallback_distance_degrees:
+                logger.error(
+                    "Nearest seasonality lookup cell is too far from snapped "
+                    f"lat/lon ({cell_lat}, {cell_lon}): distance is "
+                    f"{fallback_distance:.3f} degrees, maximum allowed is "
+                    f"{max_fallback_distance_degrees:.3f} degrees."
+                )
+                continue
+            logger.error(
+                f"Seasonality lookup missing ({cell_lat}, {cell_lon}); using "
+                f"nearest cell ({lat_vals[best_idx]}, {lon_vals[best_idx]})."
+            )
+            joined.iloc[np.flatnonzero(cell_mask)] = table.iloc[best_idx]
+
+    sos = joined[sos_col].to_numpy(dtype=np.float64)
+    eos = joined[eos_col].to_numpy(dtype=np.float64)
+    invalid = (
+        ~np.isfinite(sos)
+        | ~np.isfinite(eos)
+        | (sos <= 0)
+        | (eos <= 0)
+        | (sos > 108)
+        | (eos > 108)
+    )
+    sos_i = np.where(invalid, 1, sos).astype(np.int64)
+    eos_i = np.where(invalid, 1, eos).astype(np.int64)
+    return sos_i, eos_i, invalid
 
 
 def fetch_cropcalendar_dekad_extent(
@@ -335,7 +366,7 @@ def _collect_cropcalendar_dekad_extent_values(
     west, south, east, north = _extent_to_wgs84_bounds(extent)
     table = ensure_seasonality_lookup_table()
 
-    sos_col, eos_col = resolve_cropcalendar_columns(season_id, "dekad")
+    sos_col, eos_col = resolve_cropcalendar_columns(season_id)
     if sos_col not in table.columns or eos_col not in table.columns:
         raise ValueError(
             f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
@@ -580,95 +611,58 @@ def enrich_production_grid_from_crop_calendars(
     return result
 
 
-def season_doys_to_dates_refyear(sos: int, eos: int, ref_year: int):
-    """Funtion to transform SOS and EOS from DOY
-    to exact dates, making use of the reference year
-    in which EOS should be located.
-
-    Args:
-        sos (int): DOY from SOS
-        eos (int): DOY from EOS
-        ref_year (int): ref year to match
-
-    Returns:
-        tuple: (start_date, end_date)
-    """
-
-    # We can derive the end date from ref_year and EOS
-    end_date = datetime.datetime(ref_year, 1, 1) + pd.Timedelta(days=eos)
-
-    if sos < eos:
-        """
-        Straightforward case where entire season
-        is in calendar year
-        """
-        seasonduration = eos - sos
-
-    else:
-        """
-        Nasty case where we cross a calendar year.
-        """
-
-        # Correct DOY for the year crossing
-        eos += 365
-        seasonduration = eos - sos
-
-    # Now we can compute start date from end date and
-    # season duration
-    start_date = end_date - pd.Timedelta(days=seasonduration)
-
-    return start_date, end_date
-
-
 def season_dekad_to_date(
-    dekad: int, target_year: int = 2000, mode: Optional[Literal["first", "last"]] = None
-) -> datetime.date:
-    """Convert dekad (1-108) to date in a 3-year window around target_year.
-    Attention: 
-    this function always returns first day of the month (first mode) or 
-    last day of the month (last mode) for the dekad."""
+    dekad: Union[int, np.ndarray],
+    target_year: Union[int, np.ndarray] = 2000,
+    mode: Optional[Literal["first", "last"]] = None,
+) -> Union[datetime.date, np.ndarray]:
+    """Convert dekad (1-108) to date(s) in a 3-year window around target_year.
 
-    def dekad_to_month_day(dekad_value):
-        month = (dekad_value - 1) // 3 + 1
-        dekad_in_month = (dekad_value - 1) % 3 + 1
-        return month, dekad_in_month
+    Accepts either scalars (returns a single `datetime.date`) or numpy arrays
+    (returns an array of `datetime64[D]`), so the same implementation serves
+    both per-sample and vectorized/batched code paths.
 
-    if dekad > 36:
-        year_offset = (dekad - 1) // 36
-        year_adjusted = (target_year - 1) + year_offset
-        dekad_adjusted = dekad - year_offset * 36
-    else:
-        year_adjusted = target_year - 1
-        dekad_adjusted = dekad
-
-    month, dk = dekad_to_month_day(dekad_adjusted)
-
-    if mode == "first":
-        day = 1
-        if dk == 3:
-            if month == 12:
-                month = 1
-                year_adjusted += 1
-            else:
-                month += 1
-    elif mode == "last":
-        if dk == 1:
-            if month == 1:
-                month = 12
-                year_adjusted -= 1
-            else:
-                month -= 1
-
-        if month == 2:
-            if (year_adjusted % 4 == 0 and year_adjusted % 100 != 0) or (year_adjusted % 400 == 0):
-                day = 29
-            else:
-                day = 28
-        elif month in [4, 6, 9, 11]:
-            day = 30
-        else:
-            day = 31
-    else:
+    Attention: this function always returns the first day of the month
+    (``mode="first"``) or the last day of the month (``mode="last"``) for the
+    dekad.
+    """
+    if mode not in ("first", "last"):
         raise ValueError("mode must be 'first' or 'last'")
 
-    return datetime.date(year_adjusted, month, day)
+    is_scalar = np.isscalar(dekad) and np.isscalar(target_year)
+    dekad_arr = np.atleast_1d(np.asarray(dekad, dtype=np.int64))
+    year_arr = np.atleast_1d(np.asarray(target_year, dtype=np.int64))
+
+    over36 = dekad_arr > 36
+    year_offset = np.where(over36, (dekad_arr - 1) // 36, 0)
+    year_adj = (year_arr - 1) + year_offset
+    dekad_adj = np.where(over36, dekad_arr - year_offset * 36, dekad_arr)
+    month = (dekad_adj - 1) // 3 + 1
+    dk = (dekad_adj - 1) % 3 + 1
+
+    if mode == "first":
+        is_third = dk == 3
+        is_dec = is_third & (month == 12)
+        month = np.where(is_third, np.where(month == 12, 1, month + 1), month)
+        year_adj = np.where(is_dec, year_adj + 1, year_adj)
+        day = np.ones_like(month)
+    else:  # mode == "last"
+        is_first = dk == 1
+        is_jan = is_first & (month == 1)
+        month = np.where(is_first, np.where(month == 1, 12, month - 1), month)
+        year_adj = np.where(is_jan, year_adj - 1, year_adj)
+        leap = ((year_adj % 4 == 0) & (year_adj % 100 != 0)) | (year_adj % 400 == 0)
+        days_in_month = np.array(
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        )[month - 1]
+        day = np.where((month == 2) & leap, 29, days_in_month)
+
+    year_epoch = (year_adj - 1970).astype("datetime64[Y]")
+    month_date = year_epoch.astype("datetime64[M]") + (month - 1).astype(
+        "timedelta64[M]"
+    )
+    dates = month_date.astype("datetime64[D]") + (day - 1).astype("timedelta64[D]")
+
+    if is_scalar:
+        return dates[0].item()
+    return dates
