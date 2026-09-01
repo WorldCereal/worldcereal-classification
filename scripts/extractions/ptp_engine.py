@@ -760,7 +760,7 @@ def load_host_points(host_ref_id: str) -> gpd.GeoDataFrame:
 def _assemble_s1_only(host_ref_id: str, records: List[dict], sid_axis: dict,
                       out_path: Optional[Path]) -> pd.DataFrame:
     """Long-format frame with only the S1 columns + s1_orbit (S1 refresh)."""
-    cols = {"sample_id": [], "timestamp": [], "S1-SIGMA0-VH": [],
+    cols: Dict[str, List[Any]] = {"sample_id": [], "timestamp": [], "S1-SIGMA0-VH": [],
             "S1-SIGMA0-VV": [], "s1_orbit": [], "tile": []}
     for rec in records:
         months = [tuple(m) for m in sid_axis[rec["sample_id"]][0]]

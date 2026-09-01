@@ -94,7 +94,10 @@ _TO_LL = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True).transfor
 def _tile_epsg(tile: Optional[str], zone: Optional[str]) -> Optional[int]:
     """EPSG of a patch from its S2 tile id (31TDJ -> 32631, 33KXA -> 32733)."""
     try:
-        z = int(zone) if zone not in (None, "") else int(str(tile)[:2])
+        if zone is not None and zone != "":
+            z = int(zone)
+        else:
+            z = int(str(tile)[:2])
     except (TypeError, ValueError):
         return None
     band = str(tile)[2].upper() if tile and len(str(tile)) >= 3 else "N"
