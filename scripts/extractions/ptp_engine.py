@@ -37,7 +37,11 @@ validated recipe:
 Pixel selection is deterministic geometry: the point's coordinates plus the
 patch's own georeferencing identify the containing pixel with certainty. 
 DEFAULT_CONVENTIONS below records the frozen SEMANTIC/ENCODING decisions of 
-the recipe (interpolation modes, the aux-at-S2-pixel-centre rule, float32 S1 arithmetic). 
+the recipe (interpolation modes, the aux-at-S2-pixel-centre rule, float32 S1 cell
+reads). NOTE: the S1 *arithmetic* was float32 to mirror openEO; it is now done in
+float64 (see _s1_monthly) because it is measurably more accurate at the point and
+because float32 vector math is not reproducible across CPU generations. S1 DNs may
+therefore differ by +-1 from pre-2026-08-20 outputs and from openEO.
 They were established once by empirical calibration against openEO ground truth 
 (bit-exact on 1,188 samples / 3 hosts, then 59 hosts) and subsequently confirmed line-by-line in
 the openEO backend source.
@@ -127,7 +131,30 @@ DEFAULT_CONVENTIONS = {
     "meteo": "covering_cell",       # vs "bilinear"
     "slope": "bilinear_floor",      # vs "nearest"
     "elevation": "bilinear_floor",  # vs "nearest"
+    # S2 cloud masking. Two methods, matching patch_to_point.py's
+    # --optical-mask-method exactly (see optimized_mask_precomputed /
+    # optimized_mask_raw_scl_values in patch_to_point_worldcereal.py):
+    #   "dilated" -> drop obs where S2-L2A-SCL_DILATED_MASK == 1. The
+    #       precomputed band has already had a large EROSION/DILATION applied,
+    #       so pixels merely NEAR cloud/shadow are masked as well. Production
+    #       default; this is what the whole openEO-era store used.
+    #   "raw_scl" -> drop obs whose raw S2-L2A-SCL class is in
+    #       SCL_REJECT_CLASSES. No erosion/dilation, so ONLY pixels actually
+    #       classified as bad are dropped. Strictly less aggressive: more
+    #       observations survive per month (denser composites, fewer NODATA
+    #       months) at the price of some cloud-edge contamination.
+    "s2_mask": "dilated",           # vs "raw_scl"
 }
+
+# Raw-SCL invalid classes, verbatim from optimized_mask_raw_scl_values:
+#   0 no data | 1 saturated/defective | 3 cloud shadow |
+#   8 medium-probability cloud | 9 high-probability cloud |
+#   10 thin cirrus | 11 snow/ice
+# Everything else (4 vegetation, 5 bare, 6 water, 7 unclassified, 2 dark
+# area, 12 ...) is kept.
+SCL_REJECT_CLASSES = frozenset({0, 1, 3, 8, 9, 10, 11})
+SCL_RAW_BAND = "S2-L2A-SCL"
+SCL_DILATED_BAND = "S2-L2A-SCL_DILATED_MASK"
 # Derived from --merged-dir in main(): <merged-dir>/_local_extractor_conventions.json
 CONVENTIONS_FILE: Optional[Path] = None
 
@@ -223,11 +250,22 @@ def _month_key(t: np.datetime64) -> Tuple[int, int]:
 def composite_s2(
     patch: dict, row: int, col: int, months: List[Tuple[int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
+    s2_mask: str = "dilated",
 ) -> np.ndarray:
-    """(10, n_months) uint16: masked per-month median per band, floor-cast."""
+    """(10, n_months) uint16: masked per-month median per band, floor-cast.
+
+    `s2_mask` selects the cloud-masking method — "dilated" (the precomputed
+    erosion/dilation band, production) or "raw_scl" (raw SCL classes, no
+    erosion/dilation). See DEFAULT_CONVENTIONS["s2_mask"]."""
     times = patch["times"]
     sel = (times >= t_start) & (times < t_end_excl)
-    mask = patch["bands"]["S2-L2A-SCL_DILATED_MASK"][:, row, col]
+    if s2_mask == "raw_scl":
+        scl = patch["bands"][SCL_RAW_BAND][:, row, col]
+        # bad[ti] is True where the observation must be dropped, so the
+        # `mask[ti] != 1` test below reads identically for both methods.
+        mask = np.isin(scl, list(SCL_REJECT_CLASSES)).astype(np.uint8)
+    else:
+        mask = patch["bands"][SCL_DILATED_BAND][:, row, col]
     out = np.full((len(S2_BANDS), len(months)), NODATA, dtype=np.uint16)
     mkeys = [_month_key(t) for t in times]
     for bi, band in enumerate(S2_BANDS):
@@ -296,10 +334,6 @@ def composite_s1(
     for bi, band in enumerate(S1_BANDS):
         if band not in s1["bands"]:
             continue
-        # float32 throughout: the backend (geotrellis) decompresses into
-        # Float32 cells, so exact-integer roundtrips land on x.0000 in f32
-        # where float64 gives x - 1e-13 and floors one DN lower. Verified on
-        # single-obs months (stored == raw DN).
         series = s1["bands"][band][:, row, col].astype(np.float32)
         for mi, month in enumerate(months):
             dns = np.array([
@@ -309,13 +343,15 @@ def composite_s1(
             ], dtype=np.float32)
             if len(dns) == 0:
                 continue
-            power = np.float32(10.0) ** (
-                (np.float32(20.0) * np.log10(dns) - np.float32(83.0))
-                / np.float32(10.0))
+            # Transcendentals in float64, rounded back to float32 after each
+            # step. More accurate and reproducible across machines
+            power = np.float32(
+                10.0 ** ((20.0 * np.log10(dns.astype(np.float64)) - 83.0)
+                         / 10.0))
             mean_power = np.float32(power.mean())
-            dn = np.float32(10.0) ** (
-                (np.float32(10.0) * np.log10(mean_power) + np.float32(83.0))
-                / np.float32(20.0))
+            dn = np.float32(
+                10.0 ** ((10.0 * np.log10(np.float64(mean_power)) + 83.0)
+                         / 20.0))
             out[bi, mi] = np.uint16(np.clip(np.floor(dn), 1, 65534))
     return out
 
@@ -339,7 +375,9 @@ def process_patch(task: dict) -> List[dict]:
     try:
         s2_patch = _read_patch(
             task["s2_path"],
-            [] if s1_only else S2_BANDS + ["S2-L2A-SCL_DILATED_MASK"]
+            [] if s1_only else S2_BANDS + [
+                SCL_RAW_BAND if conv.get("s2_mask") == "raw_scl"
+                else SCL_DILATED_BAND]
         )
     except OSError as exc:
         # Corrupt/truncated NetCDF on disk. Without S2 there is nothing to
@@ -388,7 +426,8 @@ def process_patch(task: dict) -> List[dict]:
             rec["s2"] = None
         elif 0 <= row < len(s2_patch["y"]) and 0 <= col < len(s2_patch["x"]):
             rec["s2"] = composite_s2(s2_patch, row, col, months,
-                                     t_start, t_end_excl)
+                                     t_start, t_end_excl,
+                                     s2_mask=conv.get("s2_mask", "dilated"))
         else:
             rec["s2"] = np.full((len(S2_BANDS), len(months)), NODATA, np.uint16)
 

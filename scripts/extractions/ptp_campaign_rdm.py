@@ -54,10 +54,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 from loguru import logger
-import numpy as np
 from pyproj import Transformer
 from shapely import make_valid
 from shapely import wkb as shapely_wkb
@@ -210,8 +210,14 @@ def _place_points(
         stats["centroid_dropped"] += int((~sel & ~inside_poly & covered).sum())
         stats["outside_patches"] += int((~sel & inside_poly & covered).sum())
     out = gdf.loc[sel].copy()
-    out["geometry"] = gpd.GeoSeries([geoms[i] for i in np.where(sel)[0]],
-                                    index=out.index, crs="EPSG:4326")
+    kept = gpd.GeoSeries([geoms[i] for i in np.where(sel)[0]],
+                         index=out.index, crs="EPSG:4326")
+    # Quantise to 1e-11 deg (~1 um). otherwise-identical runs emit
+    # lat/lon differing in the last bit depending on CPU's FMA support.
+    out["geometry"] = gpd.GeoSeries(
+        gpd.points_from_xy(np.round(kept.x.to_numpy(), 11),
+                           np.round(kept.y.to_numpy(), 11), crs=4326),
+        index=out.index, crs="EPSG:4326")
     out["point_kind"] = kinds[sel]
     return out
 
@@ -675,6 +681,15 @@ def main() -> None:
     ap.add_argument("--agera5-cache", type=Path, default=None,
                     help="cache dir for AGERA5 monthly composites "
                          "(default: <out-dir>/_agera5_cache)")
+    ap.add_argument("--s2-mask", choices=["dilated", "raw_scl"], default=None,
+                    help="S2 cloud masking. 'dilated' drops obs where the "
+                         "precomputed S2-L2A-SCL_DILATED_MASK == 1 (that band "
+                         "has a large erosion/dilation applied, so pixels NEAR "
+                         "cloud are masked too) — the openEO-era default. "
+                         "'raw_scl' drops obs whose raw S2-L2A-SCL class is in "
+                         "{0,1,3,8,9,10,11}, no erosion/dilation: less "
+                         "aggressive, denser composites. Mirrors "
+                         "patch_to_point.py --optical-mask-method.")
     ap.add_argument("--conventions", type=Path, default=None,
                     help="JSON conventions file (default: engine built-ins, "
                          "i.e. the validated locked conventions)")
@@ -756,6 +771,9 @@ def main() -> None:
     if args.conventions and Path(args.conventions).exists():
         conventions = json.loads(Path(args.conventions).read_text())
         logger.info(f"Loaded conventions from {args.conventions}")
+    if args.s2_mask:
+        conventions = {**conventions, "s2_mask": args.s2_mask}
+        logger.info(f"S2 cloud mask: {args.s2_mask}")
 
     refs = (args.ref_ids if args.ref_ids else
             [line.strip() for line in
