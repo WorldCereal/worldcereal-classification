@@ -32,7 +32,6 @@ from worldcereal.utils.refdata import (
     DATA_DIR,
     get_class_mappings,
     map_classes,
-    split_df,
 )
 from worldcereal.utils.timeseries import process_parquet
 
@@ -264,6 +263,63 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
     return collated
 
 
+def _parent_sample_ids(sample_ids: pd.Series) -> pd.Series:
+    """Return the original polygon ID for each sample, including child points."""
+    return sample_ids.astype("string").str.replace(r"_child\d+$", "", regex=True)
+
+
+def _grouped_train_test_split(
+    df: pd.DataFrame,
+    *,
+    test_size: float,
+    seed: int,
+    stratify_label: Optional[str] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split rows while keeping all children of a sample in one partition."""
+    if "sample_id" not in df.columns:
+        raise ValueError("Grouped splitting requires a 'sample_id' column.")
+
+    parent_ids = _parent_sample_ids(df["sample_id"])
+    grouped = df.assign(_parent_sample_id=parent_ids).groupby(
+        "_parent_sample_id", sort=False
+    )
+    group_df = grouped.first()
+    if stratify_label is not None:
+        inconsistent_labels = grouped[stratify_label].nunique(dropna=False)
+        if (inconsistent_labels > 1).any():
+            invalid_parents = inconsistent_labels[
+                inconsistent_labels > 1
+            ].index.tolist()
+            raise ValueError(
+                f"Parent samples have inconsistent '{stratify_label}' labels: "
+                f"{invalid_parents}"
+            )
+
+    stratify = group_df[stratify_label] if stratify_label is not None else None
+    train_groups, test_groups = train_test_split(
+        group_df,
+        test_size=test_size,
+        random_state=seed,
+        stratify=stratify,
+    )
+    train_mask = parent_ids.isin(train_groups.index)
+    test_mask = parent_ids.isin(test_groups.index)
+    return df[train_mask].copy(), df[test_mask].copy()
+
+
+def _split_by_parent_sample_ids(
+    df: pd.DataFrame, selected_sample_ids: Sequence[str]
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split by sample IDs, treating child IDs as their parent IDs."""
+    if "sample_id" not in df.columns:
+        raise ValueError("Grouped splitting requires a 'sample_id' column.")
+
+    selected_parents = set(_parent_sample_ids(pd.Series(selected_sample_ids)))
+    parent_ids = _parent_sample_ids(df["sample_id"])
+    is_selected = parent_ids.isin(selected_parents)
+    return df[~is_selected].copy(), df[is_selected].copy()
+
+
 def train_val_test_split(
     df: pd.DataFrame,
     split_column: str = "split",
@@ -294,17 +350,17 @@ def train_val_test_split(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
-        trn_val_df, tst_df = train_test_split(
+        trn_val_df, tst_df = _grouped_train_test_split(
             df,
             test_size=test_size,
-            random_state=seed,
-            stratify=df[stratify_label],
+            seed=seed,
+            stratify_label=stratify_label,
         )
-        trn_df, val_df = train_test_split(
+        trn_df, val_df = _grouped_train_test_split(
             trn_val_df,
             test_size=val_size / (1.0 - test_size),
-            random_state=seed,
-            stratify=trn_val_df[stratify_label],
+            seed=seed,
+            stratify_label=stratify_label,
         )
         logger.info(
             f"Data split: train={len(trn_df)}, val={len(val_df)}, test={len(tst_df)}"
@@ -378,9 +434,28 @@ def spatial_train_val_test_split(
             df, min_samples=min_samples_per_class, class_column=stratify_label
         )
 
-    # Create spatial bins
-    lat_array = df["lat"].to_numpy(dtype=np.float64)
-    lon_array = df["lon"].to_numpy(dtype=np.float64)
+    # Create one spatial representative per parent so children cannot be
+    # assigned to different bins and therefore different splits.
+    if "sample_id" not in df.columns:
+        raise ValueError("Spatial splitting requires a 'sample_id' column")
+    parent_ids = _parent_sample_ids(df["sample_id"])
+    grouped = df.assign(_parent_sample_id=parent_ids).groupby(
+        "_parent_sample_id", sort=False
+    )
+    group_df = grouped.first()
+    if stratify_label and stratify_label in group_df.columns:
+        inconsistent_labels = grouped[stratify_label].nunique(dropna=False)
+        if (inconsistent_labels > 1).any():
+            invalid_parents = inconsistent_labels[
+                inconsistent_labels > 1
+            ].index.tolist()
+            raise ValueError(
+                f"Parent samples have inconsistent '{stratify_label}' labels: "
+                f"{invalid_parents}"
+            )
+
+    lat_array = group_df["lat"].to_numpy(dtype=np.float64)
+    lon_array = group_df["lon"].to_numpy(dtype=np.float64)
 
     if np.isnan(lat_array).any() or np.isnan(lon_array).any():
         raise ValueError(
@@ -403,14 +478,12 @@ def spatial_train_val_test_split(
         f"(median={int(np.median(bin_counts))})"
     )
 
-    # For stratified bin assignment, compute class distribution per bin
+    # For stratified bin assignment, compute the majority class per bin.
     if stratify_label and stratify_label in df.columns:
-        # Create a mapping of bin -> majority class
         bin_classes = {}
         for bin_id in unique_bins:
-            bin_samples = df[spatial_bins == bin_id]
-            # Use majority class in the bin as the bin's "class"
-            majority_class = bin_samples[stratify_label].mode()[0]
+            bin_samples = group_df[spatial_bins == bin_id]
+            majority_class = group_df.loc[bin_samples.index, stratify_label].mode()[0]
             bin_classes[bin_id] = majority_class
 
         # Group bins by their majority class
@@ -424,21 +497,21 @@ def spatial_train_val_test_split(
 
         # Assign bins to splits in a class-balanced way
         rng = np.random.RandomState(seed)
-        train_bins_list = []
-        val_bins_list = []
-        test_bins_list = []
+        train_bins_list: List[Any] = []
+        val_bins_list: List[Any] = []
+        test_bins_list: List[Any] = []
 
         for cls, cls_bins in class_bins.items():
-            cls_bins = np.array(cls_bins)
-            rng.shuffle(cls_bins)
+            class_bin_array = np.array(cls_bins)
+            rng.shuffle(class_bin_array)
 
-            n_cls_bins = len(cls_bins)
+            n_cls_bins = len(class_bin_array)
             n_cls_test = max(1, int(n_cls_bins * test_size))
             n_cls_val = max(1, int(n_cls_bins * val_size))
 
-            test_bins_list.extend(cls_bins[:n_cls_test])
-            val_bins_list.extend(cls_bins[n_cls_test : n_cls_test + n_cls_val])
-            train_bins_list.extend(cls_bins[n_cls_test + n_cls_val :])
+            test_bins_list.extend(class_bin_array[:n_cls_test])
+            val_bins_list.extend(class_bin_array[n_cls_test : n_cls_test + n_cls_val])
+            train_bins_list.extend(class_bin_array[n_cls_test + n_cls_val :])
 
         test_bins = set(test_bins_list)
         val_bins = set(val_bins_list)
@@ -464,13 +537,13 @@ def spatial_train_val_test_split(
         train_bins = set(shuffled_bins[n_test + n_val :])
 
     # Assign samples to splits based on their bin
-    train_mask = np.isin(spatial_bins, list(train_bins))
-    val_mask = np.isin(spatial_bins, list(val_bins))
-    test_mask = np.isin(spatial_bins, list(test_bins))
+    train_groups = group_df.index[np.isin(spatial_bins, list(train_bins))]
+    val_groups = group_df.index[np.isin(spatial_bins, list(val_bins))]
+    test_groups = group_df.index[np.isin(spatial_bins, list(test_bins))]
 
-    trn_df = df[train_mask].copy()
-    val_df = df[val_mask].copy()
-    tst_df = df[test_mask].copy()
+    trn_df = df[parent_ids.isin(train_groups)].copy()
+    val_df = df[parent_ids.isin(val_groups)].copy()
+    tst_df = df[parent_ids.isin(test_groups)].copy()
 
     logger.info(
         f"Spatial split complete: train={len(trn_df)} ({len(train_bins)} bins), "
@@ -605,13 +678,14 @@ def dataset_to_embeddings(
                     weights = weights[valid]
                     time_embeddings = time_embeddings[valid]
 
-                encodings = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
-                    dim=-2
-                ) / torch.clamp(weights, min=1e-6)
-                encodings = encodings.cpu().numpy()
+                pooled_embeddings = (
+                    season_mask_float.unsqueeze(-1) * time_embeddings
+                ).sum(dim=-2) / torch.clamp(weights, min=1e-6)
             else:
                 # Global pooling: simple mean over time dimension
-                encodings = time_embeddings.mean(dim=-2).cpu().numpy()
+                pooled_embeddings = time_embeddings.mean(dim=-2)
+
+            encodings = pooled_embeddings.cpu().numpy()
 
         # Build attributes dataframe
         attrs_frame = {
@@ -1331,15 +1405,15 @@ def get_training_dfs_from_parquet(
             f"Controlled `train/val` vs `test` split based on: {test_samples_file}"
         )
         test_samples_df = pd.read_csv(test_samples_file)
-        trainval_df, test_df = split_df(
-            df, val_sample_ids=test_samples_df.sample_id.tolist()
+        trainval_df, test_df = _split_by_parent_sample_ids(
+            df, test_samples_df.sample_id.tolist()
         )
     else:
         logger.info("Random `train/val` vs `test` split ...")
         # train_df, test_df = split_df(df, val_size=0.2)
         # TO DO: add possibility of per-class stratification to original split_df function
-        trainval_df, test_df = train_test_split(
-            df, test_size=0.2, random_state=42, stratify=df["finetune_class"]
+        trainval_df, test_df = _grouped_train_test_split(
+            df, test_size=0.2, seed=42, stratify_label="finetune_class"
         )
 
     # train_df, val_df = split_df(train_df, val_size=0.2)
@@ -1349,16 +1423,16 @@ def get_training_dfs_from_parquet(
     if val_samples_file is not None:
         logger.info(f"Controlled `train` vs `val` split based on: {val_samples_file}")
         val_samples_df = pd.read_csv(val_samples_file)
-        train_df, val_df = split_df(
-            trainval_df, val_sample_ids=val_samples_df.sample_id.tolist()
+        train_df, val_df = _split_by_parent_sample_ids(
+            trainval_df, val_samples_df.sample_id.tolist()
         )
     else:
         logger.info("Random `train` vs `val` split ...")
-        train_df, val_df = train_test_split(
+        train_df, val_df = _grouped_train_test_split(
             trainval_df,
             test_size=0.2,
-            random_state=42,
-            stratify=trainval_df["finetune_class"],
+            seed=42,
+            stratify_label="finetune_class",
         )
 
     if test_samples_file:
