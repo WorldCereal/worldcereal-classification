@@ -497,21 +497,21 @@ def spatial_train_val_test_split(
 
         # Assign bins to splits in a class-balanced way
         rng = np.random.RandomState(seed)
-        train_bins_list = []
-        val_bins_list = []
-        test_bins_list = []
+        train_bins_list: List[Any] = []
+        val_bins_list: List[Any] = []
+        test_bins_list: List[Any] = []
 
         for cls, cls_bins in class_bins.items():
-            cls_bins = np.array(cls_bins)
-            rng.shuffle(cls_bins)
+            class_bin_array = np.array(cls_bins)
+            rng.shuffle(class_bin_array)
 
-            n_cls_bins = len(cls_bins)
+            n_cls_bins = len(class_bin_array)
             n_cls_test = max(1, int(n_cls_bins * test_size))
             n_cls_val = max(1, int(n_cls_bins * val_size))
 
-            test_bins_list.extend(cls_bins[:n_cls_test])
-            val_bins_list.extend(cls_bins[n_cls_test : n_cls_test + n_cls_val])
-            train_bins_list.extend(cls_bins[n_cls_test + n_cls_val :])
+            test_bins_list.extend(class_bin_array[:n_cls_test])
+            val_bins_list.extend(class_bin_array[n_cls_test : n_cls_test + n_cls_val])
+            train_bins_list.extend(class_bin_array[n_cls_test + n_cls_val :])
 
         test_bins = set(test_bins_list)
         val_bins = set(val_bins_list)
@@ -678,13 +678,14 @@ def dataset_to_embeddings(
                     weights = weights[valid]
                     time_embeddings = time_embeddings[valid]
 
-                encodings = (season_mask_float.unsqueeze(-1) * time_embeddings).sum(
-                    dim=-2
-                ) / torch.clamp(weights, min=1e-6)
-                encodings = encodings.cpu().numpy()
+                pooled_embeddings = (
+                    season_mask_float.unsqueeze(-1) * time_embeddings
+                ).sum(dim=-2) / torch.clamp(weights, min=1e-6)
             else:
                 # Global pooling: simple mean over time dimension
-                encodings = time_embeddings.mean(dim=-2).cpu().numpy()
+                pooled_embeddings = time_embeddings.mean(dim=-2)
+
+            encodings = pooled_embeddings.cpu().numpy()
 
         # Build attributes dataframe
         attrs_frame = {
