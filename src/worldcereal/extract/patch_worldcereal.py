@@ -39,8 +39,8 @@ from worldcereal.utils.geoloader import load_reproject
 
 from worldcereal.extract.utils import (  # isort: skip
     pipeline_log,  # isort: skip
-    upload_geoparquet_s3,  # isort: skip
-    S2_GRID,  # isort: skip
+    upload_geoparquet_artifact,  # isort: skip
+    get_s2_grid,  # isort: skip
 )
 
 
@@ -162,8 +162,8 @@ def create_job_patch_worldcereal(
         return gdf
 
     geometry_df = _to_gdf(geometry)
-    spatial_extent_url = upload_geoparquet_s3(
-        provider, geometry_df, row.name, collection="WORLDCEREAL"
+    spatial_extent_url = upload_geoparquet_artifact(
+        geometry_df, row.name, collection="WORLDCEREAL", backend=provider
     )
 
     # Backend name and fetching type
@@ -548,7 +548,8 @@ def generate_output_path_patch_worldcereal(
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
     s2_tile_id = row.s2_tile
-    epsg = S2_GRID[S2_GRID.tile == s2_tile_id].iloc[0].epsg
+    s2_grid = get_s2_grid()
+    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
     return (
         root_folder
