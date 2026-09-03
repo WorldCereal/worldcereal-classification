@@ -39,7 +39,7 @@ from worldcereal.utils.geoloader import load_reproject
 
 from worldcereal.extract.utils import (  # isort: skip
     pipeline_log,  # isort: skip
-    upload_geoparquet_s3,  # isort: skip
+    upload_geoparquet_artifact,  # isort: skip
     S2_GRID,  # isort: skip
 )
 
@@ -162,8 +162,8 @@ def create_job_patch_worldcereal(
         return gdf
 
     geometry_df = _to_gdf(geometry)
-    spatial_extent_url = upload_geoparquet_s3(
-        provider, geometry_df, row.name, collection="WORLDCEREAL"
+    spatial_extent_url = upload_geoparquet_artifact(
+        geometry_df, row.name, collection="WORLDCEREAL", backend=provider
     )
 
     # Backend name and fetching type

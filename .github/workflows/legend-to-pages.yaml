@@ -37,7 +37,7 @@ jobs:
           cp -rv pages/. site/
           # Download legend CSV at build time to avoid CORS issues when served from Pages
           curl -fsSL \
-            "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/legend/WorldCereal_LC_CT_legend_latest.csv" \
+            "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/WorldCereal_LC_CT_legend_latest.csv" \
             -o site/legend/legend.csv
 
       - name: Setup Pages

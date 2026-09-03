@@ -174,7 +174,10 @@ def main(
     if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
-            ref_id, ground_truth_file, only_flagged_samples
+            ref_id,
+            connection,
+            ground_truth_file,
+            only_flagged_samples,
         )
         job_db.initialize_from_df(job_df)
 
