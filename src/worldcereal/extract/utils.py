@@ -1,6 +1,7 @@
 """Common utilities used by extraction scripts."""
 
 import logging
+from functools import lru_cache
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
 
@@ -38,7 +39,10 @@ class ManagerLoggerFilter(logging.Filter):
 stream_handler.addFilter(ManagerLoggerFilter())
 
 
-S2_GRID = load_s2_grid()
+@lru_cache(maxsize=1)
+def get_s2_grid() -> gpd.GeoDataFrame:
+    """Load and cache the S2 grid when an extraction workflow needs it."""
+    return load_s2_grid()
 
 
 def buffer_geometry(

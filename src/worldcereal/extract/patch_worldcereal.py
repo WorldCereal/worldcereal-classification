@@ -40,7 +40,7 @@ from worldcereal.utils.geoloader import load_reproject
 from worldcereal.extract.utils import (  # isort: skip
     pipeline_log,  # isort: skip
     upload_geoparquet_artifact,  # isort: skip
-    S2_GRID,  # isort: skip
+    get_s2_grid,  # isort: skip
 )
 
 
@@ -548,7 +548,8 @@ def generate_output_path_patch_worldcereal(
     sample_id = asset_id.replace(".nc", "").replace("openEO_", "")
 
     s2_tile_id = row.s2_tile
-    epsg = S2_GRID[S2_GRID.tile == s2_tile_id].iloc[0].epsg
+    s2_grid = get_s2_grid()
+    epsg = s2_grid[s2_grid.tile == s2_tile_id].iloc[0].epsg
 
     return (
         root_folder

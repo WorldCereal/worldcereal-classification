@@ -19,7 +19,7 @@ from pandas.core.dtypes.dtypes import CategoricalDtype
 from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
-from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifact
+from worldcereal.extract.utils import get_s2_grid, upload_geoparquet_artifact
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
@@ -404,7 +404,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
 
         gdf = gpd.sjoin(
             gdf.set_geometry("centroid"),
-            S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
+            get_s2_grid()[["tile", "geometry"]].to_crs(epsg=3857),
             predicate="intersects",
         ).drop(columns=["index_right", "centroid"])
         gdf = gdf.set_geometry("geometry").to_crs(original_crs)
