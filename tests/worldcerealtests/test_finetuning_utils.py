@@ -479,13 +479,9 @@ class TestEvaluateFinetunedModel(unittest.TestCase):
             from prometheo.models import Presto
             from prometheo.utils import device
 
-            # This is a minimal model that can be used for testing
-            # It will return random outputs but that's fine for testing the evaluation flow
-            self.model = Presto(
-                pretrained_model_path="https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt",
-                num_outputs=1,
-                regression=False,
-            )
+            # Use a locally initialized model; these tests cover evaluation flow,
+            # not pretrained checkpoint compatibility.
+            self.model = Presto(num_outputs=1, regression=False)
 
             # explicit is better than implicit
             self.model.to(device)
