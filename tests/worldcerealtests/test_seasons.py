@@ -48,63 +48,50 @@ def test_snap_coordinate_to_lookup_grid_clamps_and_snaps():
 
 
 @pytest.mark.parametrize(
-	("season", "parameter", "expected"),
+	("season", "expected"),
 	[
-		("tc-s1", "doy", ("s1_sos_doy", "s1_eos_doy")),
-		("tc-s2", "dekad", ("s2_sos_dekad", "s2_eos_dekad")),
-		("tc-annual", "doy", ("annual_sos_doy", "annual_eos_doy")),
+		("tc-s1", ("s1_sos_dekad", "s1_eos_dekad")),
+		("tc-s2", ("s2_sos_dekad", "s2_eos_dekad")),
+		("tc-annual", ("annual_sos_dekad", "annual_eos_dekad")),
 	],
 )
-def test_resolve_cropcalendar_columns(season, parameter, expected):
-	assert seasons.resolve_cropcalendar_columns(season, parameter) == expected
+def test_resolve_cropcalendar_columns(season, expected):
+	assert seasons.resolve_cropcalendar_columns(season) == expected
 
 
 def test_resolve_cropcalendar_columns_rejects_unknown_values():
-	with pytest.raises(ValueError, match="parameter"):
-		seasons.resolve_cropcalendar_columns("tc-s1", "month")
 	with pytest.raises(ValueError, match="not available"):
-		seasons.resolve_cropcalendar_columns("tc-unknown", "doy")
+		seasons.resolve_cropcalendar_columns("tc-unknown")
 
 
 def test_fetch_cropcalendar_points_uses_snapped_cell(patched_lookup):
-	assert seasons.fetch_cropcalendar_doy_point("tc-s1", 10.4, 20.4) == (100, 200)
 	assert seasons.fetch_cropcalendar_dekad_point("tc-s2", 10.4, 20.4) == (75, 105)
 
 
 def test_fetch_cropcalendar_point_falls_back_to_nearest_cell(patched_lookup, caplog):
-	result = seasons.fetch_cropcalendar_doy_point("tc-s1", 12, 22)
-
-	assert result == (110, 210)
+	result = seasons.fetch_cropcalendar_dekad_point("tc-s1", 12, 22)
+	assert result == (33, 63)
 
 
 def test_fetch_cropcalendar_point_can_disable_nearest_fallback(patched_lookup):
 	with pytest.raises(ValueError, match="No seasonality record"):
-		seasons.fetch_cropcalendar_doy_point(
+		seasons.fetch_cropcalendar_dekad_point(
 			"tc-s1", 12, 22, fallback_to_nearest=False
 		)
 
 
 def test_fetch_cropcalendar_point_rejects_distant_nearest_cell(patched_lookup):
 	with pytest.raises(ValueError, match="too far"):
-		seasons.fetch_cropcalendar_doy_point(
+		seasons.fetch_cropcalendar_dekad_point(
 			"tc-s1", 12, 22, max_fallback_distance_degrees=1.0
 		)
 
 
-@pytest.mark.parametrize(
-	("function", "column", "invalid_value", "limit"),
-	[
-		(seasons.fetch_cropcalendar_doy_point, "s1_sos_doy", 367, "366"),
-		(seasons.fetch_cropcalendar_dekad_point, "s1_sos_dekad", 109, "108"),
-	],
-)
-def test_fetch_cropcalendar_point_rejects_invalid_values(
-	patched_lookup, function, column, invalid_value, limit
-):
-	patched_lookup.loc[(10.25, 20.25), column] = invalid_value
+def test_fetch_cropcalendar_point_rejects_invalid_values(patched_lookup):
+	patched_lookup.loc[(10.25, 20.25), "s1_sos_dekad"] = 109
 
-	with pytest.raises(ValueError, match=f"Valid .* range is 1-{limit}"):
-		function("tc-s1", 10.4, 20.4)
+	with pytest.raises(ValueError, match="Valid .* range is 1-108"):
+		seasons.fetch_cropcalendar_dekad_point("tc-s1", 10.4, 20.4)
 
 
 def test_fetch_cropcalendar_dekad_extent_returns_medians_and_values(patched_lookup):
@@ -170,20 +157,6 @@ def test_season_dekad_to_date_handles_leap_year_and_invalid_mode():
 	).date()
 	with pytest.raises(ValueError, match="mode"):
 		seasons.season_dekad_to_date(1, mode="middle")
-
-
-@pytest.mark.parametrize(
-	("sos", "eos", "expected_start", "expected_end"),
-	[
-		(100, 200, "2020-04-10", "2020-07-19"),
-		(300, 100, "2019-10-28", "2020-04-10"),
-	],
-)
-def test_season_doys_to_dates_refyear(sos, eos, expected_start, expected_end):
-	start, end = seasons.season_doys_to_dates_refyear(sos, eos, 2020)
-
-	assert start.strftime("%Y-%m-%d") == expected_start
-	assert end.strftime("%Y-%m-%d") == expected_end
 
 
 def test_row_spatial_extent_supports_bbox_schema():

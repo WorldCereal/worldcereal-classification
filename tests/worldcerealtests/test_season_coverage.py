@@ -545,15 +545,15 @@ class TestSeasonContextForYearCrossing:
     Jun-2017–Jan-2018 instead of Jun-2018–Jan-2019.
     """
 
-    # tc-s2 approximate DOYs for southern Chile (year-crossing: SOS > EOS)
-    _SOS_DOY = 156  # ≈ Jun 5
-    _EOS_DOY = 25  # ≈ Jan 25
+    # tc-s2 approximate dekads for southern Chile (year-crossing: SOS > EOS)
+    _SOS_DEKAD = 16  # ≈ Jun 1
+    _EOS_DEKAD = 39  # ≈ Jan 31 of the following year
 
     def _make_lookup_df(self):
         """Minimal seasonality lookup DataFrame for a single cell."""
         lat, lon = -35.0, -71.0  # southern Chile
         return pd.DataFrame(
-            {"s2_sos_doy": [self._SOS_DOY], "s2_eos_doy": [self._EOS_DOY]},
+            {"s2_sos_dekad": [self._SOS_DEKAD], "s2_eos_dekad": [self._EOS_DEKAD]},
             index=pd.MultiIndex.from_tuples([(lat, lon)], names=["lat", "lon"]),
         )
 
@@ -569,8 +569,8 @@ class TestSeasonContextForYearCrossing:
 
         with (
             mock.patch(
-                f"{_datasets_module.__name__}.fetch_cropcalendar_doy_point",
-                return_value=(self._SOS_DOY, self._EOS_DOY),
+                f"{_datasets_module.__name__}.fetch_cropcalendar_dekad_point",
+                return_value=(self._SOS_DEKAD, self._EOS_DEKAD),
             ),
         ):
             return ds._season_context_for(

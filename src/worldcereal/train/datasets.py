@@ -29,16 +29,10 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal.data.cropcalendars import (
-    SEASONALITY_LAT_RANGE,
-    SEASONALITY_LON_RANGE,
-    SEASONALITY_LOOKUP_COLUMNS,
-)
 from worldcereal.seasons import (
-    ensure_seasonality_lookup_table,
-    fetch_cropcalendar_doy_point,
-    resolve_cropcalendar_columns,
-    season_doys_to_dates_refyear,
+    fetch_cropcalendar_dekad_point,
+    fetch_cropcalendar_dekad_points_batch,
+    season_dekad_to_date,
 )
 from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
@@ -171,6 +165,7 @@ def _timestamps_to_datetime_array(timestamps: np.ndarray) -> np.ndarray:
 def _default_season_mask(num_timesteps: int, num_seasons: int) -> np.ndarray:
     num_seasons = max(1, num_seasons)
     return np.ones((num_seasons, num_timesteps), dtype=bool)
+
 
 
 def _resolve_season_engine(
@@ -1903,7 +1898,7 @@ class WorldCerealDataset(Dataset):
         """Fetch (start, end) dates for a season/grid cell from the lookup."""
 
         try:
-            sos_doy, eos_doy = fetch_cropcalendar_doy_point(
+            sos_dekad, eos_dekad = fetch_cropcalendar_dekad_point(
                 season_id=season_id,
                 lat=lat,
                 lon=lon,
@@ -1914,21 +1909,38 @@ class WorldCerealDataset(Dataset):
                 f"{exc} (sample_id={sample_id}, season={season_id})"
             ) from exc
 
-        # For year-crossing seasons (SOS DOY > EOS DOY), season_doys_to_dates_refyear
-        # places the EOS in ref_year. When target_year is derived from label_datetime.year,
-        # this is only correct if the label falls early in the year (before/at EOS DOY).
-        # If the label falls later (after EOS DOY), the relevant season instance ends in
-        # year+1, so we must increment ref_year accordingly.
-        ref_year = year
-        if sos_doy > eos_doy and label_datetime is not None:
-            label_doy = pd.Timestamp(label_datetime).day_of_year
-            if label_doy > eos_doy:
-                ref_year = year + 1
+        # Convert the start and end dekads to actual dates
+        candidate_years = [year - 1, year, year +1]
+        start_dates = [season_dekad_to_date(sos_dekad, target_year=yr, mode="first") for yr in candidate_years]
+        end_dates = [season_dekad_to_date(eos_dekad, target_year=yr, mode="last") for yr in candidate_years]
+    
+        # Select the start and end dates for the season that best matches the label_datetime
+        ## If there is no label_datetime, default to the current year's season
+        ## If there is a label_datetime, we prefer the season that encompasses it
+        ## If no season encompasses the label_datetime, select the closest one
+        if label_datetime is not None:
+            for start_date, end_date in zip(start_dates, end_dates):
+                # Look for encompassing season
+                if start_date <= label_datetime <= end_date:
+                    start_date_fin = start_date
+                    end_date_fin = end_date
+                    break
+            else:
+                # Default to the year for which the distance to the label_datetime is minimal
+                label_diffs_start = [abs((label_datetime - sd).days) for sd in start_dates]
+                label_diffs_end = [abs((label_datetime - ed).days) for ed in end_dates]
+                label_diffs = [min(s, e) for s, e in zip(label_diffs_start, label_diffs_end)]
+                min_diff_idx = label_diffs.index(min(label_diffs))
+                start_date_fin = start_dates[min_diff_idx]
+                end_date_fin = end_dates[min_diff_idx]
+        else:
+            # default to the current year if no label_datetime is provided
+            start_date_fin = start_dates[1]  
+            end_date_fin = end_dates[1]
 
-        start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, ref_year)
         return (
-            np.datetime64(start_dt, "D"),
-            np.datetime64(end_dt, "D"),
+            np.datetime64(start_date_fin, "D"),
+            np.datetime64(end_date_fin, "D"),
         )
 
 
@@ -2479,66 +2491,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         """Precompute per-row, per-season calendar windows (month numbers)."""
         n_rows = len(df)
         seasons = tuple(self._season_ids)
-        for season in seasons:
-            try:
-                resolve_cropcalendar_columns(season, "doy")
-            except ValueError as exc:
-                logger.warning(
-                    f"Fast batched fetching disabled: season {season!r} is not "
-                    f"available in the seasonality lookup ({exc}); using "
-                    "per-sample loading."
-                )
-                return None
 
-        table = ensure_seasonality_lookup_table()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
-        lat_c = (
-            np.floor(
-                np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0
-            )
-            / 2.0
-        ) + 0.25
-        lon_c = (
-            np.floor(
-                np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0
-            )
-            / 2.0
-        ) + 0.25
-
-        key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
-        joined = table.reindex(key_index)
-
-        # Nearest-cell fallback for grid cells absent from the lookup (mirrors
-        # the per-sample KeyError fallback, logged once per unique cell).
-        missing_rows = joined[
-            list(SEASONALITY_LOOKUP_COLUMNS)
-        ].isna().all(axis=1)
-        if missing_rows.to_numpy().any():
-            lat_vals = table.index.get_level_values("lat").to_numpy()
-            lon_vals = table.index.get_level_values("lon").to_numpy()
-            missing_pos = np.flatnonzero(missing_rows.to_numpy())
-            missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
-            cell_to_row = {}
-            for cell_lat, cell_lon in missing_cells:
-                distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
-                best_idx = int(distances.argmin())
-                cell_to_row[(cell_lat, cell_lon)] = best_idx
-                logger.error(
-                    f"Seasonality lookup missing ({cell_lat}, {cell_lon}); using "
-                    f"nearest cell ({lat_vals[best_idx]}, {lon_vals[best_idx]})."
-                )
-            joined = joined.reset_index(drop=True)
-            for i in missing_pos:
-                joined.iloc[i] = table.iloc[
-                    cell_to_row[(float(lat_c[i]), float(lon_c[i]))]
-                ]
-
         label_days = label_dt.to_numpy().astype("datetime64[D]")
         label_month_num = label_days.astype("datetime64[M]").astype(np.int64)
         label_year = label_days.astype("datetime64[Y]").astype(np.int64) + 1970
-        year_start = label_days.astype("datetime64[Y]").astype("datetime64[D]")
-        label_doy = (label_days - year_start).astype(np.int64) + 1
 
         num_seasons = len(seasons)
         season_start_m = np.zeros((n_rows, num_seasons), dtype=np.int64)
@@ -2548,35 +2506,55 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_in_raw = np.zeros((n_rows, num_seasons), dtype=bool)
 
         for s_idx, season in enumerate(seasons):
-            sos_col, eos_col = resolve_cropcalendar_columns(
-                season, "doy"
-            )
-            if sos_col not in joined.columns or eos_col not in joined.columns:
+            try:
+                sos_i, eos_i, invalid = fetch_cropcalendar_dekad_points_batch(
+                    season, lat, lon
+                )
+            except ValueError as exc:
                 logger.warning(
-                    f"Fast batched fetching disabled: seasonality lookup lacks "
-                    f"columns for season {season!r}; using per-sample loading."
+                    f"Fast batched fetching disabled: season {season!r} is not "
+                    f"available in the seasonality lookup ({exc}); using "
+                    "per-sample loading."
                 )
                 return None
-            sos = joined[sos_col].to_numpy(dtype=np.float64)
-            eos = joined[eos_col].to_numpy(dtype=np.float64)
-            invalid = ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
-            sos_i = np.where(invalid, 1, sos).astype(np.int64)
-            eos_i = np.where(invalid, 1, eos).astype(np.int64)
 
-            # For year-crossing seasons, shift ref year when the label falls
-            # after EOS (mirrors _season_context_for).
-            ref_year = label_year + ((sos_i > eos_i) & (label_doy > eos_i)).astype(
-                np.int64
-            )
+            # Mirrors _season_context_for: evaluate the season window for the
+            # three candidate ref years around the label year, prefer the
+            # window that encompasses the label, else fall back to the
+            # nearest one.
+            candidate_years = [label_year - 1, label_year, label_year + 1]
+            start_candidates = [
+                season_dekad_to_date(sos_i, cy, mode="first") for cy in candidate_years
+            ]
+            end_candidates = [
+                season_dekad_to_date(eos_i, cy, mode="last") for cy in candidate_years
+            ]
 
-            # season_doys_to_dates_refyear, vectorized:
-            #   end = Jan 1 of ref_year + eos days; start = end - duration
-            ref_year_start = (
-                (ref_year - 1970).astype("datetime64[Y]").astype("datetime64[D]")
+            encompasses = [
+                (start_candidates[i] <= label_days) & (label_days <= end_candidates[i])
+                for i in range(3)
+            ]
+            selected_idx = np.select(encompasses, [0, 1, 2], default=-1)
+
+            diffs = np.stack(
+                [
+                    np.minimum(
+                        np.abs(
+                            (label_days - start_candidates[i]).astype(np.int64)
+                        ),
+                        np.abs((label_days - end_candidates[i]).astype(np.int64)),
+                    )
+                    for i in range(3)
+                ],
+                axis=0,
             )
-            end_date = ref_year_start + eos_i.astype("timedelta64[D]")
-            duration = np.where(sos_i < eos_i, eos_i - sos_i, eos_i + 365 - sos_i)
-            start_date = end_date - duration.astype("timedelta64[D]")
+            fallback_idx = np.argmin(diffs, axis=0)
+            final_idx = np.where(selected_idx >= 0, selected_idx, fallback_idx)
+
+            start_stack = np.stack(start_candidates, axis=0)
+            end_stack = np.stack(end_candidates, axis=0)
+            start_date = np.take_along_axis(start_stack, final_idx[None, :], axis=0)[0]
+            end_date = np.take_along_axis(end_stack, final_idx[None, :], axis=0)[0]
 
             start_m = start_date.astype("datetime64[M]").astype(np.int64)
             end_m = end_date.astype("datetime64[M]").astype(np.int64)
