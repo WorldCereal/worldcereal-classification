@@ -26,6 +26,11 @@ SHAREPOINT_FILE_URL = (
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
+def parent_sample_ids(sample_ids: pd.Series) -> pd.Series:
+    """Return original polygon IDs for samples, including child points."""
+    return sample_ids.astype("string").str.replace(r"_child\d+$", "", regex=True)
+
+
 def get_class_mappings(
     source: Union[Literal["sharepoint", "local"], str, Path] = "local",
 ) -> Dict:
@@ -1023,9 +1028,7 @@ def split_df(
     if "sample_id" not in df.columns:
         raise ValueError("Splitting requires a 'sample_id' column.")
 
-    parent_ids = (
-        df["sample_id"].astype("string").str.replace(r"_child\d+$", "", regex=True)
-    )
+    parent_ids = parent_sample_ids(df["sample_id"])
 
     if val_size is not None:
         assert (
@@ -1045,11 +1048,7 @@ def split_df(
         return df[is_train], df[is_val]
     if val_sample_ids is not None:
         assert (val_countries_iso3 is None) and (val_years is None)
-        val_parent_ids = set(
-            pd.Series(val_sample_ids, dtype="string").str.replace(
-                r"_child\d+$", "", regex=True
-            )
-        )
+        val_parent_ids = set(parent_sample_ids(pd.Series(val_sample_ids)))
         is_val = parent_ids.isin(val_parent_ids)
         is_train = ~is_val
     elif val_countries_iso3 is not None:
@@ -1061,11 +1060,7 @@ def split_df(
             )
         if train_only_samples is not None:
             is_val = df.iso3.isin(val_countries_iso3)
-            train_only_parents = set(
-                pd.Series(train_only_samples, dtype="string").str.replace(
-                    r"_child\d+$", "", regex=True
-                )
-            )
+            train_only_parents = set(parent_sample_ids(pd.Series(train_only_samples)))
             is_val &= ~parent_ids.isin(train_only_parents)
         else:
             is_val = df.iso3.isin(val_countries_iso3)
@@ -1075,11 +1070,7 @@ def split_df(
         df["end_date_ts"] = pd.to_datetime(df.end_date)
         if train_only_samples is not None:
             is_val = df.end_date_ts.dt.year.isin(val_years)
-            train_only_parents = set(
-                pd.Series(train_only_samples, dtype="string").str.replace(
-                    r"_child\d+$", "", regex=True
-                )
-            )
+            train_only_parents = set(parent_sample_ids(pd.Series(train_only_samples)))
             is_val &= ~parent_ids.isin(train_only_parents)
         else:
             is_val = df.end_date_ts.dt.year.isin(val_years)

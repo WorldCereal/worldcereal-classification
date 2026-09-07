@@ -32,6 +32,7 @@ from worldcereal.utils.refdata import (
     DATA_DIR,
     get_class_mappings,
     map_classes,
+    parent_sample_ids,
 )
 from worldcereal.utils.timeseries import process_parquet
 
@@ -263,23 +264,14 @@ def _collate_attrs(attrs_list: Sequence[dict]) -> dict:
     return collated
 
 
-def _parent_sample_ids(sample_ids: pd.Series) -> pd.Series:
-    """Return the original polygon ID for each sample, including child points."""
-    return sample_ids.astype("string").str.replace(r"_child\d+$", "", regex=True)
-
-
-def _grouped_train_test_split(
-    df: pd.DataFrame,
-    *,
-    test_size: float,
-    seed: int,
-    stratify_label: Optional[str] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Split rows while keeping all children of a sample in one partition."""
+def _parent_groups(
+    df: pd.DataFrame, stratify_label: Optional[str] = None
+) -> Tuple[pd.Series, pd.DataFrame]:
+    """Build one representative row per parent and validate its label."""
     if "sample_id" not in df.columns:
         raise ValueError("Grouped splitting requires a 'sample_id' column.")
 
-    parent_ids = _parent_sample_ids(df["sample_id"])
+    parent_ids = parent_sample_ids(df["sample_id"])
     grouped = df.assign(_parent_sample_id=parent_ids).groupby(
         "_parent_sample_id", sort=False
     )
@@ -294,6 +286,19 @@ def _grouped_train_test_split(
                 f"Parent samples have inconsistent '{stratify_label}' labels: "
                 f"{invalid_parents}"
             )
+
+    return parent_ids, group_df
+
+
+def _grouped_train_test_split(
+    df: pd.DataFrame,
+    *,
+    test_size: float,
+    seed: int,
+    stratify_label: Optional[str] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split rows while keeping all children of a sample in one partition."""
+    parent_ids, group_df = _parent_groups(df, stratify_label)
 
     stratify = group_df[stratify_label] if stratify_label is not None else None
     train_groups, test_groups = train_test_split(
@@ -314,8 +319,8 @@ def _split_by_parent_sample_ids(
     if "sample_id" not in df.columns:
         raise ValueError("Grouped splitting requires a 'sample_id' column.")
 
-    selected_parents = set(_parent_sample_ids(pd.Series(selected_sample_ids)))
-    parent_ids = _parent_sample_ids(df["sample_id"])
+    selected_parents = set(parent_sample_ids(pd.Series(selected_sample_ids)))
+    parent_ids = parent_sample_ids(df["sample_id"])
     is_selected = parent_ids.isin(selected_parents)
     return df[~is_selected].copy(), df[is_selected].copy()
 
@@ -436,23 +441,9 @@ def spatial_train_val_test_split(
 
     # Create one spatial representative per parent so children cannot be
     # assigned to different bins and therefore different splits.
-    if "sample_id" not in df.columns:
-        raise ValueError("Spatial splitting requires a 'sample_id' column")
-    parent_ids = _parent_sample_ids(df["sample_id"])
-    grouped = df.assign(_parent_sample_id=parent_ids).groupby(
-        "_parent_sample_id", sort=False
+    parent_ids, group_df = _parent_groups(
+        df, stratify_label if stratify_label in df.columns else None
     )
-    group_df = grouped.first()
-    if stratify_label and stratify_label in group_df.columns:
-        inconsistent_labels = grouped[stratify_label].nunique(dropna=False)
-        if (inconsistent_labels > 1).any():
-            invalid_parents = inconsistent_labels[
-                inconsistent_labels > 1
-            ].index.tolist()
-            raise ValueError(
-                f"Parent samples have inconsistent '{stratify_label}' labels: "
-                f"{invalid_parents}"
-            )
 
     lat_array = group_df["lat"].to_numpy(dtype=np.float64)
     lon_array = group_df["lon"].to_numpy(dtype=np.float64)
