@@ -16,6 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
+from worldcereal.utils.legend import CROP_LEGEND_URL
 from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
@@ -82,14 +83,7 @@ def get_legend() -> pd.DataFrame:
         the latest parsed version of the WorldCereal legend
     """
 
-    artifactory_base_url = (
-        "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
-    )
-    crop_legend_url = (
-        artifactory_base_url + "legend/WorldCereal_LC_CT_legend_latest.csv"
-    )
-
-    crop_legend = pd.read_csv(crop_legend_url, header=0, sep=";")
+    crop_legend = pd.read_csv(CROP_LEGEND_URL, header=0, sep=";")
     crop_legend["ewoc_code"] = crop_legend["ewoc_code"].str.replace("-", "").astype(int)
     crop_legend = crop_legend.ffill(axis=1)
 
@@ -344,7 +338,6 @@ def query_public_extractions(
     # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
     # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
     # temporary_cropland is defined based on WorldCereal legend
-    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
@@ -508,7 +501,6 @@ def query_private_extractions(
     # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
     # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
     # temporary_cropland is defined based on WorldCereal legend
-    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         prefix = "WHERE" if bbox_poly is None else "AND"

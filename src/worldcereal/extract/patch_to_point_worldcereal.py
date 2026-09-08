@@ -19,7 +19,7 @@ from pandas.core.dtypes.dtypes import CategoricalDtype
 from shapely.geometry import MultiPolygon, shape
 
 from worldcereal.extract.point_worldcereal import REQUIRED_ATTRIBUTES
-from worldcereal.extract.utils import S2_GRID, upload_geoparquet_artifactory
+from worldcereal.extract.utils import get_s2_grid, upload_geoparquet_artifact
 from worldcereal.rdm_api import RdmInteraction
 from worldcereal.rdm_api.rdm_interaction import RDM_DEFAULT_COLUMNS
 from worldcereal.utils.refdata import gdf_to_points
@@ -236,7 +236,10 @@ def generate_output_path_patch_to_point_worldcereal(
 
 
 def create_job_dataframe_patch_to_point_worldcereal(
-    ref_id, ground_truth_file=None, only_flagged_samples: bool = False
+    ref_id,
+    connection: openeo.Connection,
+    ground_truth_file=None,
+    only_flagged_samples: bool = False,
 ):
     """
     Create a job dataframe for patch-to-point extractions.
@@ -249,6 +252,8 @@ def create_job_dataframe_patch_to_point_worldcereal(
     ----------
     ref_id : str
         Reference ID for the extraction.
+    connection : openeo.Connection
+        Authenticated openEO connection used to upload temporary artifacts.
     ground_truth_file : str, optional
         Path to a ground truth file. If not provided, the function queries RDM for ground truth.
     only_flagged_samples : bool, optional
@@ -399,7 +404,7 @@ def create_job_dataframe_patch_to_point_worldcereal(
 
         gdf = gpd.sjoin(
             gdf.set_geometry("centroid"),
-            S2_GRID[["tile", "geometry"]].to_crs(epsg=3857),
+            get_s2_grid()[["tile", "geometry"]].to_crs(epsg=3857),
             predicate="intersects",
         ).drop(columns=["index_right", "centroid"])
         gdf = gdf.set_geometry("geometry").to_crs(original_crs)
@@ -417,10 +422,10 @@ def create_job_dataframe_patch_to_point_worldcereal(
         # Reset index for certain openEO compatibility
         gdf = gdf.reset_index(drop=True)
 
-        # Upload the geoparquet file to Artifactory
-        logger.info("Deploying geoparquet file to Artifactory ...")
-        # url = upload_geoparquet_s3("cdse", gdf, ref_id, collection=f"{row.epsg}")
-        url = upload_geoparquet_artifactory(gdf, ref_id, collection=f"{row.epsg}")
+        logger.info("Deploying GeoParquet through openEO artifact storage ...")
+        url = upload_geoparquet_artifact(
+            gdf, ref_id, collection=f"{row.epsg}", connection=connection
+        )
 
         # Get sample points from RDM
         job_df.loc[ix, "geometry_url"] = url
@@ -552,9 +557,9 @@ def post_job_action_point_worldcereal(parquet_file):
         gdf = gdf[gdf["sample_id"].isin(valid_sample_ids)]
 
     # Do some checks and perform corrections
-    assert (
-        len(gdf["ref_id"].unique()) == 1
-    ), f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
+    assert len(gdf["ref_id"].unique()) == 1, (
+        f"There are multiple ref_ids in the dataframe: {gdf['ref_id'].unique()}"
+    )
     ref_id = gdf["ref_id"].iloc[0]
     year = int(ref_id.split("_")[0])
     gdf["year"] = year
@@ -603,7 +608,13 @@ def worldcereal_preprocessed_inputs_from_patches(
             temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
             bands=["S1-SIGMA0-VH", "S1-SIGMA0-VV"],
         )
-        s1_raw.result_node().update_arguments(featureflags={"allow_empty_cube": True, "post_query_property_filtering": False, "use_raw_asset_href": True})
+        s1_raw.result_node().update_arguments(
+            featureflags={
+                "allow_empty_cube": True,
+                "post_query_property_filtering": False,
+                "use_raw_asset_href": True,
+            }
+        )
         s1 = decompress_backscatter_uint16(backend_context=None, cube=s1_raw)
         s1 = mean_compositing(s1, period=period)
         s1 = compress_backscatter_uint16(backend_context=None, cube=s1)
@@ -616,7 +627,12 @@ def worldcereal_preprocessed_inputs_from_patches(
         temporal_extent=[temporal_extent.start_date, temporal_extent.end_date],
         bands=S2_BANDS,
     )
-    s2_raw.result_node().update_arguments(featureflags={"post_query_property_filtering": False, "use_raw_asset_href": True})
+    s2_raw.result_node().update_arguments(
+        featureflags={
+            "post_query_property_filtering": False,
+            "use_raw_asset_href": True,
+        }
+    )
     s2_raw = s2_raw.filter_bands(S2_BANDS_SELECTED)
 
     def optimized_mask_precomputed(input: ProcessBuilder):
