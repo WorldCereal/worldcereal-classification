@@ -1,4 +1,3 @@
-import os
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -9,36 +8,25 @@ import pandas as pd
 import requests
 from loguru import logger
 
-ARTIFACTORY_BASE_URL = (
-    "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
+CROP_LEGEND_URL = (
+    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
+    "WorldCereal_LC_CT_legend_latest.csv"
+)
+IRR_LEGEND_URL = (
+    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
+    "WorldCereal_IRR_legend_latest.csv"
 )
 
-CROP_LEGEND_URL = ARTIFACTORY_BASE_URL + "legend/WorldCereal_LC_CT_legend_latest.csv"
-IRR_LEGEND_URL = ARTIFACTORY_BASE_URL + "legend/WorldCereal_IRR_legend_latest.csv"
+
+_LEGEND_UPLOAD_REMOVED_MESSAGE = (
+    "Authenticated legend management has been removed. Publish legend files "
+    "manually to the public object storage location instead."
+)
 
 
 def _get_artifactory_credentials():
-    """Get credentials for upload and delete operations on Artifactory.
-    Returns
-    -------
-    tuple (str, str)
-        Tuple containing the Artifactory username and password.
-    Raises
-    ------
-    ValueError
-        if ARTIFACTORY_USERNAME or ARTIFACTORY_PASSWORD are not set as environment variables.
-    """
-
-    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
-    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
-
-    if not artifactory_username or not artifactory_password:
-        raise ValueError(
-            "Artifactory credentials not found. "
-            "Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD environment variables."
-        )
-
-    return artifactory_username, artifactory_password
+    """Deprecated compatibility stub for removed credential handling."""
+    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 def _run_request(method: str, url: str, **kwargs) -> requests.Response:
@@ -82,86 +70,19 @@ def _run_request(method: str, url: str, **kwargs) -> requests.Response:
 
 
 def _upload_file(srcpath, dstpath, username, password, retries=3, wait=2):
-    """Upload a file to Artifactory.
-    Parameters
-    ----------
-    srcpath : Path
-        Path to csv file that needs to be uploaded to Artifactory.
-    dstpath : str
-        Full link to the target location in Artifactory.
-    username : str
-        Artifactory username.
-    password : str
-        Artifactory password.
-    retries : int, optional
-        Number of retries, by default 3
-    wait : int, optional
-        Seconds to wait in between retries, by default 2
-    Returns
-    -------
-    str
-        Full link to the target location in Artifactory.
-
-    """
-    url = dstpath
-    with open(srcpath, "rb") as f:
-        file_content = f.read()  # Read the file content as binary
-        headers = {
-            "Content-Type": "application/octet-stream",  # Set the appropriate content type
-        }
-        response = _run_request(
-            "PUT",
-            url,
-            data=file_content,  # Send raw file content in the request body
-            headers=headers,
-            auth=(username, password),
-            logging_msg=f"Uploading `{srcpath}` to `{dstpath}`",
-            retries=retries,
-            wait=wait,
-        )
-    return response.json()["downloadUri"]
+    """Deprecated compatibility stub for removed authenticated uploads."""
+    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 def upload_legend(srcpath: Path, date: str) -> str:
-    """Upload a CSV file containing the WorldCereal land cover/crop type legend to Artifactory.
-    Parameters
-    ----------
-    srcpath : Path
-        Path to csv file that needs to be uploaded to Artifactory.
-    date : str
-        Date tag to be added to the filename. Should be in format YYYYMMDD.
-    Returns
-    -------
-    str
-        artifactory download link
-    Raises
-    ------
-    FileNotFoundError
-        if srcpath does not exist
-    """
-    if not srcpath.is_file():
-        raise FileNotFoundError(f"Required file `{srcpath}` not found.")
-
-    # Get Artifactory credentials
-    artifactory_username, artifactory_password = _get_artifactory_credentials()
-
-    # We  upload the file with a specific date tag and also with a "latest" tag
-    dstpaths = [f"{ARTIFACTORY_BASE_URL}legend/WorldCereal_LC_CT_legend_{date}.csv"]
-    dstpaths.append(CROP_LEGEND_URL)
-
-    for dstpath in dstpaths:
-        artifactory_link = _upload_file(
-            srcpath, dstpath, artifactory_username, artifactory_password
-        )
-
-    # Return the download link of latest uploaded file
-    return artifactory_link
+    """Deprecated compatibility stub for removed authenticated uploads."""
+    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 @lru_cache(maxsize=2)
 def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.DataFrame:
     """Get the latest version of the WorldCereal land cover/crop type or irrigation legend
-    from artifactory.
+    from public object storage.
 
     Parameters
     ----------
@@ -181,7 +102,7 @@ def get_legend(topic: Literal["landcover", "irrigation"] = "landcover") -> pd.Da
 
     Notes
     -----
-    This function is cached using lru_cache to avoid repeated downloads from Artifactory.
+    This function is cached using lru_cache to avoid repeated downloads.
     """
 
     if topic == "landcover":
@@ -206,7 +127,7 @@ def download_legend(
     retries=3,
     wait=2,
 ) -> Path:
-    """Download the latest version of the WorldCereal legend from Artifactory.
+    """Download the latest version of the WorldCereal legend.
     Parameters
     ----------
     dstpath : Path
@@ -225,7 +146,7 @@ def download_legend(
     Raises
     ------
     FileNotFoundError
-        Raises if no legend files are found in Artifactory.
+        Raises if the requested legend cannot be downloaded.
     ValueError
         if topic got an invalid value
     """
@@ -257,27 +178,8 @@ def download_legend(
 
 
 def delete_legend_file(srcpath: str, retries=3, wait=2):
-    """Delete a legend file from Artifactory.
-    Parameters
-    ----------
-    srcpath : str
-        Path to the legend file in Artifactory.
-    retries : int, optional
-        Number of retries, by default 3
-    wait : int, optional
-        Seconds to wait in between retries, by default 2
-    """
-    # Get Artifactory credentials
-    artifactory_username, artifactory_password = _get_artifactory_credentials()
-
-    _run_request(
-        "DELETE",
-        srcpath,
-        auth=(artifactory_username, artifactory_password),
-        logging_msg=f"Deleting legend file: {srcpath}",
-        retries=retries,
-        wait=wait,
-    )
+    """Deprecated compatibility stub for removed authenticated deletion."""
+    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 def translate_ewoc_codes(
