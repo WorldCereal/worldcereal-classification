@@ -10,13 +10,108 @@ from worldcereal.train.data import (
     compute_embeddings_from_splits,
     dataset_to_embeddings,
     get_training_dfs_from_parquet,
+    spatial_train_val_test_split,
     train_val_test_split,
 )
 from worldcereal.train.datasets import WorldCerealTrainingDataset
 from worldcereal.train.downstream import TorchTrainer
-from worldcereal.utils.refdata import get_class_mappings
+from worldcereal.utils.refdata import get_class_mappings, split_df
 
 LANDCOVER_KEY = "LANDCOVER10"
+
+
+def _assert_parent_groups_are_disjoint(splits):
+    parent_sets = [
+        set(split["sample_id"].str.replace(r"_child\d+$", "", regex=True))
+        for split in splits
+    ]
+    assert parent_sets[0].isdisjoint(parent_sets[1])
+    assert parent_sets[0].isdisjoint(parent_sets[2])
+    assert parent_sets[1].isdisjoint(parent_sets[2])
+
+
+def test_train_val_test_split_keeps_child_samples_together():
+    rows = []
+    for parent_index in range(20):
+        class_name = "class_a" if parent_index % 2 else "class_b"
+        rows.extend(
+            [
+                {"sample_id": f"parent_{parent_index}", "finetune_class": class_name},
+                {
+                    "sample_id": f"parent_{parent_index}_child1",
+                    "finetune_class": class_name,
+                },
+            ]
+        )
+    df = pd.DataFrame(rows)
+
+    splits = train_val_test_split(
+        df,
+        split_column="missing_split",
+        val_size=0.2,
+        test_size=0.2,
+        min_samples_per_class=2,
+    )
+
+    _assert_parent_groups_are_disjoint(splits)
+    assert sum(len(split) for split in splits) == len(df)
+
+
+def test_spatial_train_val_test_split_keeps_child_samples_together():
+    rows = []
+    for parent_index in range(20):
+        class_name = "class_a" if parent_index % 2 else "class_b"
+        latitude = 10.0 + parent_index * 0.5
+        rows.extend(
+            [
+                {
+                    "sample_id": f"parent_{parent_index}",
+                    "finetune_class": class_name,
+                    "lat": latitude,
+                    "lon": 0.0,
+                },
+                {
+                    "sample_id": f"parent_{parent_index}_child1",
+                    "finetune_class": class_name,
+                    "lat": latitude,
+                    "lon": 0.3,
+                },
+            ]
+        )
+    df = pd.DataFrame(rows)
+
+    splits = spatial_train_val_test_split(
+        df,
+        split_column="missing_split",
+        val_size=0.2,
+        test_size=0.2,
+        bin_size_degrees=0.25,
+        min_samples_per_class=2,
+    )
+
+    _assert_parent_groups_are_disjoint(splits)
+    assert sum(len(split) for split in splits) == len(df)
+
+
+def test_legacy_split_df_keeps_child_samples_together():
+    df = pd.DataFrame(
+        {
+            "sample_id": [
+                "parent_0",
+                "parent_0_child1",
+                "parent_1",
+                "parent_1_child1",
+                "parent_2",
+                "parent_3",
+            ],
+            "end_date": ["2020-01-01"] * 6,
+        }
+    )
+
+    train_df, val_df = split_df(df, val_size=0.5)
+
+    _assert_parent_groups_are_disjoint((train_df, val_df, df.iloc[0:0]))
+    assert len(train_df) + len(val_df) == len(df)
 
 
 def test_worldcerealtraindataset(WorldCerealExtractionsDF):
