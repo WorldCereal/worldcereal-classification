@@ -170,7 +170,8 @@ class _MemoryTrace:
                 {
                     "stage": f"{prev['label']} -> {cur['label']}",
                     "duration_s": float(cur["elapsed_s"]) - float(prev["elapsed_s"]),
-                    "traced_delta_mb": float(cur["current_mb"]) - float(prev["current_mb"]),
+                    "traced_delta_mb": float(cur["current_mb"])
+                    - float(prev["current_mb"]),
                     "peak_mb": float(cur["peak_mb"]),
                     "rss_delta_mb": rss_delta,
                 }
@@ -179,7 +180,9 @@ class _MemoryTrace:
         total_duration = float(self._records[-1]["elapsed_s"])
         max_peak = max(float(row["peak_mb"]) for row in stage_rows)
 
-        slowest = sorted(stage_rows, key=lambda r: r["duration_s"], reverse=True)[:top_n]
+        slowest = sorted(stage_rows, key=lambda r: r["duration_s"], reverse=True)[
+            :top_n
+        ]
         memory_heavy = sorted(
             stage_rows, key=lambda r: r["traced_delta_mb"], reverse=True
         )[:top_n]
@@ -198,7 +201,9 @@ class _MemoryTrace:
         lines.append("[profile] largest traced memory increases:")
         for idx, row in enumerate(memory_heavy, start=1):
             rss_delta = row.get("rss_delta_mb")
-            rss_text = f" | rss_delta={rss_delta:+.2f}MB" if rss_delta is not None else ""
+            rss_text = (
+                f" | rss_delta={rss_delta:+.2f}MB" if rss_delta is not None else ""
+            )
             lines.append(
                 f"[profile]   {idx}. {row['stage']} | traced_delta={row['traced_delta_mb']:+.2f}MB | "
                 f"duration={row['duration_s']:.3f}s | peak={row['peak_mb']:.2f}MB{rss_text}"
@@ -381,8 +386,7 @@ class DataPreprocessor:
 
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Validate S1 bands; keep compressed uint16 DN values untouched.
-        """
+        """Validate S1 bands; keep compressed uint16 DN values untouched."""
         band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
         present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
         if not present_idx:
@@ -390,9 +394,7 @@ class DataPreprocessor:
         data = arr.isel(bands=present_idx).values
         valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(
-                data[valid_mask].astype(np.float32)
-            )
+            DataPreprocessor._validate_s1_data(data[valid_mask].astype(np.float32))
         return arr
 
     @staticmethod
@@ -1145,7 +1147,9 @@ class SeasonalInferenceEngine:
         self._memory_logging = bool(memory_logging)
         self._memory_logging_verbose = bool(memory_logging_verbose)
         self._memory_report_top_n = max(1, int(memory_report_top_n))
-        self._export_embeddings_enabled = False  # Will be set to True if export_embeddings is used
+        self._export_embeddings_enabled = (
+            False  # Will be set to True if export_embeddings is used
+        )
         from worldcereal.train import GLOBAL_SEASON_IDS
 
         if not self._croptype_enabled:
@@ -1222,9 +1226,7 @@ class SeasonalInferenceEngine:
                 coords=predictor_cube.coords,
             )
 
-            predictors = generate_predictor(
-                predictor_cube, epsg
-            )
+            predictors = generate_predictor(predictor_cube, epsg)
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
             num_timesteps = getattr(predictors, "T", None)
@@ -1297,7 +1299,9 @@ class SeasonalInferenceEngine:
 
     def _get_disabled_modalities(self) -> Dict[str, bool]:
         """Return a mapping of modality name -> disabled flag from run_config args."""
-        run_config = getattr(self.bundle.base_artifact, "run_config", None)
+        bundle = getattr(self, "bundle", None)
+        artifact = getattr(bundle, "base_artifact", None)
+        run_config = getattr(artifact, "run_config", None)
         if not isinstance(run_config, Mapping):
             return {}
         args = run_config.get("args")
@@ -1324,7 +1328,8 @@ class SeasonalInferenceEngine:
 
         # Guard: refuse to mask everything
         surviving = {
-            b for name, bands in modality_bands.items()
+            b
+            for name, bands in modality_bands.items()
             if not disabled.get(name, False)
             for b in bands
         } & present
@@ -1340,7 +1345,9 @@ class SeasonalInferenceEngine:
             targets = bands & present
             if not targets:
                 continue
-            logger.info(f"Masking modality '{modality}' bands to NODATA: {sorted(targets)}")
+            logger.info(
+                f"Masking modality '{modality}' bands to NODATA: {sorted(targets)}"
+            )
             for band in targets:
                 idx = list(result.bands.values).index(band)
                 result.values[idx, :, :, :] = NODATA_VALUE
@@ -1578,9 +1585,7 @@ class SeasonalInferenceEngine:
                 or processed_batches % log_every == 0
                 or (estimated_batches and processed_batches == estimated_batches)
             ):
-                memory_trace.checkpoint(
-                    f"run_batches:after_batch_{processed_batches}"
-                )
+                memory_trace.checkpoint(f"run_batches:after_batch_{processed_batches}")
 
         logger.info(
             f"Finished running {processed_batches} predictor batches (landcover={len(landcover_logits)}, "
@@ -2162,9 +2167,11 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
 
 def _emit_multiclass_landcover() -> bool:
     """Env switch (not a job parameter) gating the multiclass landcover bands."""
-    return os.environ.get(
-        "WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0"
-    ).lower() in ("1", "true", "yes")
+    return os.environ.get("WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
