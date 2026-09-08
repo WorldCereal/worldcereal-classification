@@ -297,3 +297,178 @@ def test_s2_cloud_timestep_full_dropout():
     ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
     sample = ds[0]
     assert np.all(sample.s2 == NODATAVALUE), "S2 per-timestep full dropout failed"
+
+
+def test_s2_full_dropout():
+    # s2_full_dropout_prob=1.0 wipes S2 without touching the other sensors.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(enable=True, s2_full_dropout_prob=1.0)
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.s2 == NODATAVALUE), "S2 full dropout failed"
+    assert (sample.s1 != NODATAVALUE).any(), "S1 must be untouched"
+    assert (sample.meteo != NODATAVALUE).any(), "Meteo must be untouched"
+
+
+def test_meteo_full_dropout():
+    num_timesteps = 6
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(enable=True, meteo_full_dropout_prob=1.0)
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    sample = ds[0]
+    assert np.all(sample.meteo == NODATAVALUE), "Meteo full dropout failed"
+    assert (sample.s2 != NODATAVALUE).any(), "S2 must be untouched"
+
+
+def test_s2_full_dropout_overrides_cloud_paths():
+    # The full-sensor draw must win over the (weaker) per-timestep cloud draw.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s2_full_dropout_prob=1.0,
+        s2_cloud_timestep_prob=0.1,
+        s2_cloud_block_prob=0.1,
+        s2_cloud_block_min=1,
+        s2_cloud_block_max=3,
+        seed=11,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    for _ in range(50):
+        assert np.all(ds[0].s2 == NODATAVALUE), "S2 full dropout must win"
+
+
+def _wipe_s2_only(df, row_idx, timesteps):
+    for t in timesteps:
+        for col in [
+            f"OPTICAL-B02-ts{t}-10m",
+            f"OPTICAL-B03-ts{t}-10m",
+            f"OPTICAL-B04-ts{t}-10m",
+            f"OPTICAL-B05-ts{t}-20m",
+            f"OPTICAL-B06-ts{t}-20m",
+            f"OPTICAL-B07-ts{t}-20m",
+            f"OPTICAL-B08-ts{t}-10m",
+            f"OPTICAL-B8A-ts{t}-20m",
+            f"OPTICAL-B11-ts{t}-20m",
+            f"OPTICAL-B12-ts{t}-20m",
+        ]:
+            df.loc[row_idx, col] = NODATAVALUE
+
+
+def test_token_guard_keeps_a_token_when_s1_disabled_and_s2_missing():
+    # --disable_s1 on a sample whose S2 is entirely absent: the S1/S2 guard
+    # cannot repair that, so the token guard must keep meteo or DEM alive —
+    # otherwise the encoder sees an all-masked attention row and returns a
+    # degenerate (input-independent) embedding.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    _wipe_s2_only(df, 0, range(num_timesteps))
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        meteo_full_dropout_prob=0.9,
+        meteo_timestep_dropout_prob=0.9,
+        dem_dropout_prob=0.9,
+        seed=3,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    restored_meteo = 0
+    for _ in range(300):
+        sample = ds[0]
+        meteo_ok = _valid_timesteps(sample.meteo).any()
+        dem_ok = (sample.dem != NODATAVALUE).any()
+        assert meteo_ok or dem_ok, "Sample left without a single encoder token"
+        restored_meteo += bool(meteo_ok)
+    assert restored_meteo > 0, "Meteo should be the preferred rescue"
+
+
+def test_token_guard_restores_dem_when_meteo_is_disabled():
+    # Meteo intentionally disabled (prob 1.0) must never be revived; DEM is
+    # then the only token source left for an S1-disabled, S2-missing sample.
+    num_timesteps = 8
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    _wipe_s2_only(df, 0, range(num_timesteps))
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        meteo_full_dropout_prob=1.0,
+        dem_dropout_prob=0.9,
+        seed=5,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    for _ in range(200):
+        sample = ds[0]
+        assert np.all(sample.meteo == NODATAVALUE), "Disabled meteo must stay masked"
+        assert (sample.dem != NODATAVALUE).any(), "DEM should have been restored"
+
+
+def test_token_guard_never_leaves_a_sample_empty_statistically():
+    # Aggressive all-sensor config: every draw must leave at least one token.
+    num_timesteps = 12
+    df = _make_dummy_df(num_timesteps, nrows=1)
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=0.5,
+        s1_timestep_dropout_prob=0.9,
+        s2_full_dropout_prob=0.5,
+        s2_cloud_timestep_prob=0.9,
+        s2_cloud_block_prob=0.5,
+        s2_cloud_block_min=1,
+        s2_cloud_block_max=12,
+        meteo_full_dropout_prob=0.5,
+        meteo_timestep_dropout_prob=0.9,
+        dem_dropout_prob=0.5,
+        seed=321,
+    )
+    ds = WorldCerealDataset(df, num_timesteps=num_timesteps, masking_config=cfg)
+    for _ in range(500):
+        sample = ds[0]
+        tokens = (
+            _valid_timesteps(sample.s1).any()
+            or _valid_timesteps(sample.s2).any()
+            or _valid_timesteps(sample.meteo).any()
+            or (sample.dem != NODATAVALUE).any()
+        )
+        assert tokens, "Sample left without a single encoder token"
+
+
+def test_validate_rejects_s1_and_s2_full_dropout():
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        s2_full_dropout_prob=1.0,
+    )
+    with pytest.raises(ValueError, match="cannot both be 1.0"):
+        cfg.validate(num_timesteps=12)
+
+
+def test_validate_rejects_disabling_every_token_source():
+    # S1 + meteo + DEM off leaves S2-less samples with nothing to encode.
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0,
+        meteo_full_dropout_prob=1.0,
+        dem_dropout_prob=1.0,
+    )
+    with pytest.raises(ValueError, match="no encoder tokens"):
+        cfg.validate(num_timesteps=12)
+
+    cfg = SensorMaskingConfig(
+        enable=True,
+        s2_full_dropout_prob=1.0,
+        meteo_timestep_dropout_prob=1.0,
+        dem_dropout_prob=1.0,
+    )
+    with pytest.raises(ValueError, match="no encoder tokens"):
+        cfg.validate(num_timesteps=12)
+
+
+def test_validate_rejects_out_of_range_new_probs():
+    for kwargs in (
+        {"s2_full_dropout_prob": 1.5},
+        {"meteo_full_dropout_prob": -0.1},
+    ):
+        cfg = SensorMaskingConfig(enable=True, **kwargs)
+        with pytest.raises(ValueError, match="must be in \\[0,1\\]"):
+            cfg.validate(num_timesteps=12)
