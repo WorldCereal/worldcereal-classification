@@ -49,7 +49,7 @@ dependencies = [
   "numpy>=2.4.0",
   "openeo>=0.47.0",
   "prometheo @ git+https://github.com/WorldCereal/prometheo.git@v0.1.5",
-  "openeo-gfmap @ git+https://github.com/Open-EO/openeo-gfmap.git@maintenance/0.4.x",
+  "openeo-gfmap @ git+https://github.com/Open-EO/openeo-gfmap.git@v0.4.9",
   "pyarrow",
   "pydantic==2.8.0",
   "rioxarray>=0.13.0",
