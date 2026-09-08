@@ -647,3 +647,52 @@ def test_prepare_array_preserves_b8a_band_when_disabled():
     # Check B8A band is NOT masked (values preserved as ~100.0)
     b8a_idx = list(result.bands.values).index("B8A")
     assert np.all(result.values[b8a_idx] > 50.0)  # Values should be preserved
+
+
+def test_mask_disabled_modalities_uses_model_run_config():
+    bands = ["B2", "VV", "temperature_2m"]
+    data = np.ones((len(bands), 1, 2, 2), dtype=np.float32)
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_s1": True, "disable_meteo": False}}
+        )
+    )
+
+    result = engine._mask_disabled_modalities(arr)
+
+    assert np.all(result.sel(bands="VV") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 1.0)
+    assert np.all(result.sel(bands="temperature_2m") == 1.0)
+
+
+def test_mask_disabled_modalities_rejects_masking_all_present_modalities():
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": ["B2"], "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={
+                "args": {
+                    "disable_s1": True,
+                    "disable_s2": True,
+                    "disable_meteo": True,
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="disables all modalities"):
+        engine._mask_disabled_modalities(arr)

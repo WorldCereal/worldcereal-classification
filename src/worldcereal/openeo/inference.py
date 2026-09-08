@@ -252,6 +252,11 @@ S1_INPUT_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH"]
 NODATA_VALUE = 65535
 NOCROP_VALUE = 254
 
+# Renamed band sets per modality (after GFMAP_BAND_MAPPING is applied)
+_S1_BANDS = {"VH", "VV"}
+_S2_BANDS = {"B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"}
+_METEO_BANDS = {"temperature_2m", "total_precipitation"}
+
 POSTPROCESSING_EXCLUDED_VALUES = [NOCROP_VALUE, 255, 65535]
 POSTPROCESSING_NODATA = 255
 DEFAULT_POSTPROCESS_METHOD = "majority_vote"
@@ -1290,6 +1295,57 @@ class SeasonalInferenceEngine:
         except AttributeError:
             return None
 
+    def _get_disabled_modalities(self) -> Dict[str, bool]:
+        """Return a mapping of modality name -> disabled flag from run_config args."""
+        run_config = getattr(self.bundle.base_artifact, "run_config", None)
+        if not isinstance(run_config, Mapping):
+            return {}
+        args = run_config.get("args")
+        if not isinstance(args, Mapping):
+            return {}
+        return {
+            "s1": bool(args.get("disable_s1", False)),
+            "s2": bool(args.get("disable_s2", False)),
+            "meteo": bool(args.get("disable_meteo", False)),
+        }
+
+    def _mask_disabled_modalities(self, arr: xr.DataArray) -> xr.DataArray:
+        """Set all bands of disabled modalities to NODATA_VALUE."""
+        disabled = self._get_disabled_modalities()
+        if not any(disabled.values()):
+            return arr
+
+        modality_bands = {
+            "s1": _S1_BANDS,
+            "s2": _S2_BANDS,
+            "meteo": _METEO_BANDS,
+        }
+        present = set(arr.bands.values)
+
+        # Guard: refuse to mask everything
+        surviving = {
+            b for name, bands in modality_bands.items()
+            if not disabled.get(name, False)
+            for b in bands
+        } & present
+        if not surviving:
+            raise ValueError(
+                "run_config disables all modalities; at least one must remain active."
+            )
+
+        result = arr.copy()
+        for modality, bands in modality_bands.items():
+            if not disabled.get(modality, False):
+                continue
+            targets = bands & present
+            if not targets:
+                continue
+            logger.info(f"Masking modality '{modality}' bands to NODATA: {sorted(targets)}")
+            for band in targets:
+                idx = list(result.bands.values).index(band)
+                result.values[idx, :, :, :] = NODATA_VALUE
+        return result
+
     def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
         if "bands" not in arr.dims:
             raise ValueError("Input DataArray must expose a 'bands' dimension")
@@ -1299,6 +1355,9 @@ class SeasonalInferenceEngine:
             GFMAP_BAND_MAPPING.get(str(b), str(b)) for b in reordered.bands.values
         ]
         reordered = reordered.assign_coords(bands=renamed_bands)
+
+        # Mask modalities disabled in run_config["args"]
+        reordered = self._mask_disabled_modalities(reordered)
 
         # Mask B8A band if requested
         if self._mask_b8a and "B8A" in reordered.bands.values:
