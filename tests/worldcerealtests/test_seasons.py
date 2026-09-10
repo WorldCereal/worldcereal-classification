@@ -311,10 +311,10 @@ def test_clip_season_windows_to_period_clips_and_drops():
 			{"tc-s1": ["2024-03-01", "2024-08-31"], "tc-s2": ["2024-09-01", "2025-02-28"]},
 			("2024-03-01", "2025-02-28"),
 		),
-		# Shorter union: padded symmetrically, odd month goes to the end.
+		# Shorter union: ends with the latest season and extends backwards.
 		(
 			{"tc-s1": ["2024-04-01", "2024-10-31"]},
-			("2024-02-01", "2025-01-31"),
+			("2023-11-01", "2024-10-31"),
 		),
 		# Single season already longer than 12 months: trimmed symmetrically.
 		(

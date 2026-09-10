@@ -783,10 +783,10 @@ def consolidate_processing_period(
     month, the consolidation is done on whole months, which makes the resulting
     period exactly `period_months` long by construction.
 
-    When the union is shorter than `period_months`, it is padded symmetrically
-    (any odd month goes to the end). When it is longer, it is trimmed
-    symmetrically and a warning is raised, since at least one season will then
-    only be partially covered.
+    When the union is shorter than `period_months`, the period ends at the end
+    of the latest season and is extended backwards to the required length. When
+    it is longer, it is trimmed symmetrically and a warning is raised, since at
+    least one season will then only be partially covered.
 
     Args:
         season_windows: mapping of season id to a ``(start_date, end_date)`` pair
@@ -816,7 +816,7 @@ def consolidate_processing_period(
         )
         first_month += (span - period_months) // 2
     elif span < period_months:
-        first_month -= (period_months - span) // 2
+        first_month = last_month - period_months + 1
     last_month = first_month + period_months - 1
 
     return TemporalContext(
