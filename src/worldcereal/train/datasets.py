@@ -892,29 +892,17 @@ class SensorMaskingConfig:
     Probabilities are applied independently per sample. Values are in [0,1].
     Set config to None or enabled=False to disable masking.
 
-    Every sensor has a *full* dropout knob (whole sensor gone for the sample,
-    simulating a prolonged outage or an unsupported input) and, where it makes
-    sense, a *per-timestep* knob (sporadic acquisition gaps, clouds, ...).
-    Setting a full dropout probability to 1.0 is how a sensor is switched off
-    for an entire training run (``--disable_s1`` and friends).
+    Each sensor has a *full* dropout knob (whole sensor gone) and, where it
+    applies, a *per-timestep* knob. A full dropout probability of 1.0 switches
+    the sensor off for the whole run (``--disable_s1`` and friends).
 
-    Invariants enforced while masking (see
-    :meth:`WorldCerealDataset._rescue_fully_masked_sample`):
-
-    1. S1 and S2 are never both left fully masked-or-missing.
-    2. A sample never ends up with *every* encoder token masked. Presto builds
-       tokens from S1, S2, meteo and DEM only (the lat/lon token can itself be
-       dropped via ``latlon_dropout``), so a sample with all four gone has a
-       fully masked attention row. Its embedding is then a constant that is
-       identical for every such sample and carries no information about the
-       input, yet still contributes to the loss and its gradients. On torch
-       versions or attention backends that do not special-case a fully masked
-       softmax it is NaN instead, which poisons the whole batch.
-
-    When an invariant would be violated, one synthetically masked timestep is
-    restored — preferring S2, then S1, then meteo, then DEM — and never for a
-    sensor whose full elimination is intentional (its full-dropout probability,
-    or for S2/meteo the equivalent per-timestep probability, is 1.0).
+    Two invariants are enforced (see
+    :meth:`WorldCerealDataset._rescue_fully_masked_sample`): S1 and S2 are never
+    both fully masked-or-missing, and a sample never loses every encoder token.
+    Presto builds tokens from S1, S2, meteo and DEM only, so a sample with all
+    four gone yields a degenerate embedding. On violation one masked timestep is
+    restored, preferring S2, then S1, then meteo, then DEM, and never for a
+    sensor whose elimination is intentional.
 
     Attributes
     ----------
@@ -958,15 +946,9 @@ class SensorMaskingConfig:
     dem_dropout_prob: float = 0.0
     seed: Optional[int] = None
 
-    # ------------------------------------------------------------------
-    # "Is this sensor switched off for the whole run?" helpers.
-    #
-    # These drive the rescue logic: a sensor that the user deliberately
-    # eliminated must never be revived to satisfy an invariant. Note that
-    # ``s1_timestep_dropout_prob`` of 1.0 is deliberately *not* treated as
-    # intentional: the per-timestep knob models acquisition gaps, and
-    # ``--disable_s1`` sets ``s1_full_dropout_prob`` instead.
-    # ------------------------------------------------------------------
+    # Used by the rescue logic: a deliberately eliminated sensor is never
+    # revived. ``s1_timestep_dropout_prob`` of 1.0 does not count, since that
+    # knob models acquisition gaps and --disable_s1 sets the full knob instead.
     @property
     def s1_disabled(self) -> bool:
         """True when S1 is eliminated for every sample."""
@@ -1597,25 +1579,12 @@ class WorldCerealDataset(Dataset):
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
         """Repair dropout masks that would leave a sample unusable.
 
-        Two invariants are enforced, in order:
-
-        1. **S1/S2 guard.** If the drawn masks, combined with gaps already
-           present in the data, would leave neither S1 nor S2 with a single
-           valid timestep, one synthetically dropped timestep is restored. S2
-           is restored in preference to S1 because the dominant violating path
-           is the explicit full-S1-dropout draw, whose semantics should stay
-           intact.
-        2. **Token guard.** When invariant 1 cannot be repaired (both sensors
-           are intentionally disabled or genuinely absent from the data), the
-           sample must still carry at least one encoder token, otherwise its
-           attention row is entirely masked and the resulting embedding is
-           degenerate (a constant, or NaN depending on the attention backend).
-           Presto derives tokens from S1, S2, meteo and DEM only, so meteo is
-           restored next, then DEM.
-
-        A sensor whose full elimination is intentional (dropout probability of
-        1.0, e.g. the ``--disable_s1``/``--disable_s2``/``--disable_meteo``/
-        ``--disable_dem`` experiments) is never restored.
+        Two guards, in order. The S1/S2 guard restores one dropped timestep if
+        neither sensor would keep a valid one, preferring S2 because the usual
+        violating path is the explicit full-S1-dropout draw. The token guard
+        then applies when that cannot be repaired: the sample must keep at least
+        one encoder token, so meteo is restored next, then DEM. A sensor whose
+        elimination is intentional (probability 1.0) is never restored.
         """
         cfg: SensorMaskingConfig = self.masking_config  # type: ignore[assignment]
         s1_gone = bool((s1_drop | s1_missing).all())
@@ -2869,10 +2838,9 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                     "restorable timestep; the joint S1/S2 guard cannot be "
                     "enforced for it",
                 )
-                # S1 and S2 are gone for good for this row: make sure at
-                # least one encoder token (meteo or DEM) survives, otherwise
-                # the attention row is fully masked and the embedding is
-                # degenerate (see _rescue_fully_masked_sample).
+                # S1 and S2 gone for good: keep one meteo or DEM token alive,
+                # else the attention row is fully masked (see
+                # _rescue_fully_masked_sample).
                 if not (meteo_drop[i] | meteo_missing[i]).all() or not (
                     dem_drop[i] or dem_missing[i]
                 ):
