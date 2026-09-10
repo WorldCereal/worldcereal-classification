@@ -538,6 +538,7 @@ def fetch_cropcalendar_dekads_extent(
         )
         for sid, (sos_col, eos_col) in columns.items()
     }
+    # Note that here, we are only retaining rows where all requested seasons have valid dekad values.
     retained, row_mask = _jointly_valid_seasons(list(season_ids), valid_masks)
     if not retained or row_mask is None:
         raise ValueError(
