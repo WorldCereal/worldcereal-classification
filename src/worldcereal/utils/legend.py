@@ -9,10 +9,10 @@ import requests
 from loguru import logger
 
 CROP_LEGEND_URL = (
-    "https://auxdata.terrascope.be/worldcereal/WorldCereal_LC_CT_legend_latest.csv"
+    "https://auxdata.terrascope.be/worldcereal/legend/WorldCereal_LC_CT_legend_latest.csv"
 )
 IRR_LEGEND_URL = (
-    "https://auxdata.terrascope.be/worldcereal/WorldCereal_IRR_legend_latest.csv"
+    "https://auxdata.terrascope.be/worldcereal/legend/WorldCereal_IRR_legend_latest.csv"
 )
 
 
