@@ -1081,7 +1081,9 @@ def _sensors_disabled_by_masking(masking: Mapping[str, Any]) -> Dict[str, bool]:
             return 0.0
         return float(value) if isinstance(value, (int, float)) else 0.0
 
-    off["s1"] = prob("s1_full_dropout_prob") >= 1.0
+    off["s1"] = (
+        prob("s1_full_dropout_prob") >= 1.0 or prob("s1_timestep_dropout_prob") >= 1.0
+    )
     off["s2"] = (
         prob("s2_full_dropout_prob") >= 1.0 or prob("s2_cloud_timestep_prob") >= 1.0
     )
