@@ -16,17 +16,6 @@ IRR_LEGEND_URL = (
 )
 
 
-_LEGEND_UPLOAD_REMOVED_MESSAGE = (
-    "Authenticated legend management has been removed. Publish legend files "
-    "manually to the public object storage location instead."
-)
-
-
-def _get_artifactory_credentials():
-    """Deprecated compatibility stub for removed credential handling."""
-    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
-
-
 def _run_request(method: str, url: str, **kwargs) -> requests.Response:
     """Run an HTTP request with retries and return the response.
     Parameters
@@ -65,16 +54,6 @@ def _run_request(method: str, url: str, **kwargs) -> requests.Response:
                 logger.error(f"Failed to execute request: {url}")
                 raise
     raise RuntimeError(f"Failed to execute request: {url}")
-
-
-def _upload_file(srcpath, dstpath, username, password, retries=3, wait=2):
-    """Deprecated compatibility stub for removed authenticated uploads."""
-    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
-
-
-def upload_legend(srcpath: Path, date: str) -> str:
-    """Deprecated compatibility stub for removed authenticated uploads."""
-    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 @lru_cache(maxsize=2)
@@ -173,11 +152,6 @@ def download_legend(
         f.write(response.content)
 
     return download_file
-
-
-def delete_legend_file(srcpath: str, retries=3, wait=2):
-    """Deprecated compatibility stub for removed authenticated deletion."""
-    raise RuntimeError(_LEGEND_UPLOAD_REMOVED_MESSAGE)
 
 
 def translate_ewoc_codes(
