@@ -9,12 +9,10 @@ import requests
 from loguru import logger
 
 CROP_LEGEND_URL = (
-    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
-    "WorldCereal_LC_CT_legend_latest.csv"
+    "https://auxdata.terrascope.be/worldcereal/WorldCereal_LC_CT_legend_latest.csv"
 )
 IRR_LEGEND_URL = (
-    "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/"
-    "WorldCereal_IRR_legend_latest.csv"
+    "https://auxdata.terrascope.be/worldcereal/WorldCereal_IRR_legend_latest.csv"
 )
 
 
