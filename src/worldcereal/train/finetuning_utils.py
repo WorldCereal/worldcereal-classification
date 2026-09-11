@@ -1241,6 +1241,39 @@ class SeasonalMultiTaskLoss(nn.Module):
         return loss
 
 
+def _mirror_eliminated_sensors(
+    train_config: SensorMaskingConfig,
+) -> Optional[SensorMaskingConfig]:
+    """Derive the evaluation masking implied by a training config.
+
+    Only whole-sensor elimination carries over, so a model trained without a
+    sensor is scored without it too. The stochastic knobs stay a training-time
+    augmentation: a validation set masked differently on every epoch would make
+    the checkpoint metric noisy and the selected checkpoint arbitrary.
+
+    Returns None when the training config eliminates no sensor, i.e. when there
+    is nothing to mirror.
+    """
+    if not train_config.enable:
+        return None
+    if not any(
+        (
+            train_config.s1_disabled,
+            train_config.s2_disabled,
+            train_config.meteo_disabled,
+            train_config.dem_disabled,
+        )
+    ):
+        return None
+    return SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0 if train_config.s1_disabled else 0.0,
+        s2_full_dropout_prob=1.0 if train_config.s2_disabled else 0.0,
+        meteo_full_dropout_prob=1.0 if train_config.meteo_disabled else 0.0,
+        dem_dropout_prob=1.0 if train_config.dem_disabled else 0.0,
+    )
+
+
 def prepare_training_datasets(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -1253,7 +1286,8 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    masking_config: Optional[SensorMaskingConfig] = None,
+    train_masking_config: Optional[SensorMaskingConfig] = None,
+    eval_masking_config: Optional[SensorMaskingConfig] = None,
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
@@ -1294,8 +1328,15 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_config : Optional[SensorMaskingConfig], default=None
-        Configuration for sensor masking during training and validation.
+    train_masking_config : Optional[SensorMaskingConfig], default=None
+        Configuration for sensor masking applied to the **training** split.
+    eval_masking_config : Optional[SensorMaskingConfig], default=None
+        Configuration for sensor masking applied to the **validation and test**
+        splits. When omitted it is derived from ``train_masking_config``, which
+        mirrors whole-sensor elimination only, so a model trained without a
+        sensor is scored without it. Pass it explicitly to eliminate further
+        sensors at evaluation time; values should then be exactly 0.0 or 1.0,
+        since stochastic dropout belongs in ``train_masking_config`` only.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
@@ -1332,6 +1373,12 @@ def prepare_training_datasets(
     Tuple[InSeasonLabelledDataset, InSeasonLabelledDataset, InSeasonLabelledDataset]
         Tuple containing training, validation, and test datasets.
     """
+    # A caller that disables a sensor for training must not be scored with it.
+    # Deriving this here rather than in each training script means no caller can
+    # forget it; passing eval_masking_config explicitly still overrides.
+    if eval_masking_config is None and train_masking_config is not None:
+        eval_masking_config = _mirror_eliminated_sensors(train_masking_config)
+
     train_ds = WorldCerealLabelledDataset(
         train_df,
         num_timesteps=num_timesteps,
@@ -1342,7 +1389,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        masking_config=masking_config,
+        masking_config=train_masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
@@ -1361,7 +1408,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
-        masking_config=None,  # No masking for validation
+        masking_config=eval_masking_config,  # Only sensor-disable mirroring
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
         min_season_coverage=eval_min_season_coverage,
@@ -1380,7 +1427,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
-        masking_config=None,  # No masking for testing
+        masking_config=eval_masking_config,  # Only sensor-disable mirroring
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
         min_season_coverage=eval_min_season_coverage,

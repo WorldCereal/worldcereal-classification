@@ -892,11 +892,21 @@ class SensorMaskingConfig:
     Probabilities are applied independently per sample. Values are in [0,1].
     Set config to None or enabled=False to disable masking.
 
-    Invariant: masking never leaves a sample with S1 and S2 both fully
-    masked-or-missing. If the drawn masks (combined with gaps already present
-    in the data) would wipe both sensors, one synthetically masked timestep is
-    restored — preferring S2, and never a sensor whose full elimination is
-    intentional (s1_full_dropout_prob or s2_cloud_timestep_prob of 1.0).
+    Each sensor has a *full* dropout knob (whole sensor gone) and, where it
+    applies, a *per-timestep* knob. A full dropout probability of 1.0 switches
+    the sensor off for the whole run (``--disable_s1`` and friends).
+
+    A sensor counts as *intentionally eliminated* when its full-dropout knob
+    or its per-timestep knob is 1.0 (``dem_dropout_prob`` for DEM). Such a
+    sensor is never revived by the guards.
+
+    Two invariants are enforced (see
+    :meth:`WorldCerealDataset._rescue_fully_masked_sample`): S1 and S2 are never
+    both fully masked-or-missing, and a sample never loses every encoder token.
+    The encoder builds tokens from S1, S2, meteo and DEM only, so a sample with
+    all four gone yields a degenerate embedding. On violation one masked
+    timestep is restored, preferring S2, then S1, then meteo, then DEM, and
+    never for a sensor whose elimination is intentional.
 
     Attributes
     ----------
@@ -906,6 +916,9 @@ class SensorMaskingConfig:
         Probability that all S1 timesteps (VV & VH) are missing (e.g. prolonged platform outage).
     s1_timestep_dropout_prob: float
         Probability applied per timestep to drop S1 values (sporadic acquisition gaps).
+    s2_full_dropout_prob: float
+        Probability that all S2 timesteps (all optical bands) are missing, on top of
+        the per-timestep cloud paths (e.g. a scene never revisited cloud-free).
     s2_cloud_timestep_prob: float
         Probability applied per timestep to cloud-mask S2 (all optical bands) individually.
     s2_cloud_block_prob: float
@@ -914,6 +927,8 @@ class SensorMaskingConfig:
         Minimum length of the contiguous S2 cloud block.
     s2_cloud_block_max: int
         Maximum length of the contiguous S2 cloud block.
+    meteo_full_dropout_prob: float
+        Probability that all meteo timesteps are missing (e.g. AGERA5 unavailable).
     meteo_timestep_dropout_prob: float
         Probability applied per timestep to mask meteorological data.
     dem_dropout_prob: float
@@ -925,13 +940,42 @@ class SensorMaskingConfig:
     enable: bool = False
     s1_full_dropout_prob: float = 0.0
     s1_timestep_dropout_prob: float = 0.0
+    s2_full_dropout_prob: float = 0.0
     s2_cloud_timestep_prob: float = 0.0
     s2_cloud_block_prob: float = 0.0
     s2_cloud_block_min: int = 2
     s2_cloud_block_max: int = 5
+    meteo_full_dropout_prob: float = 0.0
     meteo_timestep_dropout_prob: float = 0.0
     dem_dropout_prob: float = 0.0
     seed: Optional[int] = None
+
+    # Used by the rescue logic: a deliberately eliminated sensor is never revived.
+    @property
+    def s1_disabled(self) -> bool:
+        """True when S1 is eliminated for every sample."""
+        return (
+            self.s1_full_dropout_prob >= 1.0
+            or self.s1_timestep_dropout_prob >= 1.0
+        )
+
+    @property
+    def s2_disabled(self) -> bool:
+        """True when S2 is eliminated for every sample."""
+        return self.s2_full_dropout_prob >= 1.0 or self.s2_cloud_timestep_prob >= 1.0
+
+    @property
+    def meteo_disabled(self) -> bool:
+        """True when meteo is eliminated for every sample."""
+        return (
+            self.meteo_full_dropout_prob >= 1.0
+            or self.meteo_timestep_dropout_prob >= 1.0
+        )
+
+    @property
+    def dem_disabled(self) -> bool:
+        """True when DEM is eliminated for every sample."""
+        return self.dem_dropout_prob >= 1.0
 
     def validate(self, num_timesteps: int):
         if self.s2_cloud_block_min > self.s2_cloud_block_max:
@@ -940,16 +984,29 @@ class SensorMaskingConfig:
             )
         if self.s2_cloud_block_max > num_timesteps:
             raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
-        if self.s1_full_dropout_prob >= 1.0 and self.s2_cloud_timestep_prob >= 1.0:
+        if self.s1_disabled and self.s2_disabled:
+            culprits = [
+                f"{name}={getattr(self, name)}"
+                for name in (
+                    "s1_full_dropout_prob",
+                    "s1_timestep_dropout_prob",
+                    "s2_full_dropout_prob",
+                    "s2_cloud_timestep_prob",
+                )
+                if getattr(self, name) >= 1.0
+            ]
             raise ValueError(
-                "s1_full_dropout_prob and s2_cloud_timestep_prob cannot both be 1.0: "
-                "every sample would end up with S1 and S2 fully masked"
+                f"S1 and S2 are both eliminated ({', '.join(culprits)}): every "
+                "sample would end up with S1 and S2 fully masked. Disabling all "
+                "but one of S1/S2 is supported; disabling both is not."
             )
         for name in [
             "s1_full_dropout_prob",
             "s1_timestep_dropout_prob",
+            "s2_full_dropout_prob",
             "s2_cloud_timestep_prob",
             "s2_cloud_block_prob",
+            "meteo_full_dropout_prob",
             "meteo_timestep_dropout_prob",
             "dem_dropout_prob",
         ]:
@@ -1060,6 +1117,9 @@ class WorldCerealDataset(Dataset):
             )
 
         self.remove_samples_without_s1_s2 = remove_samples_without_s1_s2
+
+        # Throttling counters for the sensor-masking guard warnings.
+        self._masking_guard_warnings: Dict[str, int] = {}
 
         masking_enabled = False
         if self.masking_config:
@@ -1430,13 +1490,15 @@ class WorldCerealDataset(Dataset):
         2. Per-timestep S1 dropout.
         3. S2 contiguous cloud block.
         4. Per-timestep S2 cloud dropout.
-        5. Joint S1/S2 guard: if S1 and S2 would both end up fully
-           masked-or-missing, one synthetically masked timestep is restored.
-        6. Per-timestep meteo dropout.
+        5. Full S2 dropout (overrides the block/timestep draws).
+        6. Full meteo dropout, else per-timestep meteo dropout.
         7. DEM dropout.
+        8. Token guard: if the draws would leave S1 and S2 both fully
+           masked-or-missing, or would leave the sample without a single
+           encoder token, one synthetically masked timestep is restored.
 
-        The S1 and S2 dropouts are drawn as boolean masks first so the joint
-        guard can repair them before any values are overwritten.
+        All dropouts are drawn as boolean masks first so the guard can repair
+        them before any values are overwritten.
         """
         # Guard: if masking_config is None (should not happen when enable checked)
         if self.masking_config is None:
@@ -1447,6 +1509,8 @@ class WorldCerealDataset(Dataset):
         # Timesteps already missing in the input data (all bands NODATAVALUE)
         s1_missing = np.all(s1[0, 0] == NODATAVALUE, axis=-1)
         s2_missing = np.all(s2[0, 0] == NODATAVALUE, axis=-1)
+        meteo_missing = np.all(meteo[0, 0] == NODATAVALUE, axis=-1)
+        dem_missing = bool(np.all(dem == NODATAVALUE))
 
         # 1. Full S1 dropout / 2. per-timestep S1 dropout
         s1_drop = np.zeros(T, dtype=bool)
@@ -1468,76 +1532,120 @@ class WorldCerealDataset(Dataset):
                 s2_drop[start : start + block_len] = True
         if cfg.s2_cloud_timestep_prob > 0:
             s2_drop |= np.random.rand(T) < cfg.s2_cloud_timestep_prob
+        # 5. Full S2 dropout (whole-sensor outage, on top of the cloud paths)
+        if cfg.s2_full_dropout_prob > 0 and np.random.rand() < cfg.s2_full_dropout_prob:
+            s2_drop[:] = True
 
-        # 5. Joint S1/S2 guard
-        s1_drop, s2_drop = self._rescue_joint_s1_s2_wipe(
-            s1_drop, s2_drop, s1_missing, s2_missing
+        # 6. Full meteo dropout / per-timestep meteo dropout
+        meteo_drop = np.zeros(T, dtype=bool)
+        if (
+            cfg.meteo_full_dropout_prob > 0
+            and np.random.rand() < cfg.meteo_full_dropout_prob
+        ):
+            meteo_drop[:] = True
+        elif cfg.meteo_timestep_dropout_prob > 0:
+            meteo_drop = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
+
+        # 7. DEM dropout
+        dem_drop = cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob
+
+        # 8. Token guard (repairs the masks before anything is written)
+        s1_drop, s2_drop, meteo_drop, dem_drop = self._rescue_fully_masked_sample(
+            s1_drop,
+            s2_drop,
+            meteo_drop,
+            dem_drop,
+            s1_missing,
+            s2_missing,
+            meteo_missing,
+            dem_missing,
         )
 
         if s1_drop.any():
             s1[..., s1_drop, :] = NODATAVALUE
         if s2_drop.any():
             s2[..., s2_drop, :] = NODATAVALUE
-
-        # 6. Meteo per-timestep dropout
-        if cfg.meteo_timestep_dropout_prob > 0:
-            meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
-            if meteo_mask.any():
-                meteo[..., meteo_mask, :] = NODATAVALUE
-                # logger.debug(
-                #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
-                # )
-
-        # 7. DEM dropout
-        if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
+        if meteo_drop.any():
+            meteo[..., meteo_drop, :] = NODATAVALUE
+        if dem_drop:
             dem[:] = NODATAVALUE
-            # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
 
-    def _rescue_joint_s1_s2_wipe(
+    def _rescue_fully_masked_sample(
         self,
         s1_drop: np.ndarray,
         s2_drop: np.ndarray,
+        meteo_drop: np.ndarray,
+        dem_drop: bool,
         s1_missing: np.ndarray,
         s2_missing: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Ensure S1 and S2 never end up both fully masked-or-missing.
+        meteo_missing: np.ndarray,
+        dem_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+        """Repair dropout masks that would leave a sample unusable.
 
-        If the drawn dropout masks, combined with gaps already present in the
-        data, would leave neither sensor with a single valid timestep, one
-        synthetically dropped timestep is restored. S2 is restored in
-        preference to S1 because the dominant violating path is the explicit
-        full-S1-dropout draw, whose semantics should stay intact. A sensor
-        whose full elimination is intentional (dropout probability of 1.0,
-        e.g. disable_s1/disable_s2 experiments) is never restored.
+        Two guards, in order. The S1/S2 guard restores one dropped timestep if
+        neither sensor would keep a valid one, preferring S2 because the usual
+        violating path is the explicit full-S1-dropout draw. The token guard
+        then applies when that cannot be repaired: the sample must keep at least
+        one encoder token, so meteo is restored next, then DEM. A sensor whose
+        elimination is intentional (probability 1.0) is never restored.
         """
         cfg: SensorMaskingConfig = self.masking_config  # type: ignore[assignment]
-        if not (s1_drop | s1_missing).all() or not (s2_drop | s2_missing).all():
-            return s1_drop, s2_drop
+        s1_gone = bool((s1_drop | s1_missing).all())
+        s2_gone = bool((s2_drop | s2_missing).all())
+        if not s1_gone or not s2_gone:
+            return s1_drop, s2_drop, meteo_drop, dem_drop
 
+        # --- invariant 1: keep at least one S1 or S2 timestep alive ---------
         candidates = [
-            (
-                s2_drop,
-                np.flatnonzero(s2_drop & ~s2_missing),
-                cfg.s2_cloud_timestep_prob >= 1.0,
-            ),
-            (
-                s1_drop,
-                np.flatnonzero(s1_drop & ~s1_missing),
-                cfg.s1_full_dropout_prob >= 1.0,
-            ),
+            (s2_drop, np.flatnonzero(s2_drop & ~s2_missing), cfg.s2_disabled),
+            (s1_drop, np.flatnonzero(s1_drop & ~s1_missing), cfg.s1_disabled),
         ]
         for drop, restorable, intentional in candidates:
             if restorable.size and not intentional:
                 drop[np.random.choice(restorable)] = False
-                return s1_drop, s2_drop
+                return s1_drop, s2_drop, meteo_drop, dem_drop
 
-        logger.warning(
+        self._warn_masking_guard(
+            "no_s1_s2",
             "Sample has S1 and S2 fully masked-or-missing and no restorable "
-            "timesteps; the joint S1/S2 guard cannot be enforced for this sample."
+            "timestep; the joint S1/S2 guard cannot be enforced for it",
         )
-        return s1_drop, s2_drop
+
+        # --- invariant 2: keep at least one encoder token alive -------------
+        meteo_gone = bool((meteo_drop | meteo_missing).all())
+        dem_gone = dem_drop or dem_missing
+        if not meteo_gone or not dem_gone:
+            return s1_drop, s2_drop, meteo_drop, dem_drop
+
+        meteo_restorable = np.flatnonzero(meteo_drop & ~meteo_missing)
+        if meteo_restorable.size and not cfg.meteo_disabled:
+            meteo_drop[np.random.choice(meteo_restorable)] = False
+            return s1_drop, s2_drop, meteo_drop, dem_drop
+        if dem_drop and not dem_missing and not cfg.dem_disabled:
+            return s1_drop, s2_drop, meteo_drop, False
+
+        self._warn_masking_guard(
+            "no_tokens",
+            "Sample has S1, S2, meteo and DEM all masked-or-missing and no "
+            "restorable timestep; it carries no encoder token and its "
+            "embedding will be degenerate",
+        )
+        return s1_drop, s2_drop, meteo_drop, dem_drop
+
+    def _warn_masking_guard(self, kind: str, message: str) -> None:
+        """Warn (throttled) that a masking invariant could not be repaired.
+
+        Emitting one line per sample would flood the logs of a global run, so
+        only the first occurrence of each *kind* and every 1000th afterwards
+        are reported.
+        """
+        n = self._masking_guard_warnings.get(kind, 0) + 1
+        self._masking_guard_warnings[kind] = n
+        if n == 1 or n % 1000 == 0:
+            logger.warning(f"{message} (occurrence {n} for this dataset).")
 
     def _build_sample_attrs(
         self,
@@ -2675,6 +2783,8 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             cfg = self.masking_config
             s1_missing = np.all(s1_win == NODATAVALUE, axis=-1)
             s2_missing = np.all(s2_win == NODATAVALUE, axis=-1)
+            meteo_missing = np.all(meteo_win == NODATAVALUE, axis=-1)
+            dem_missing = np.all(c["dem"][rows] == NODATAVALUE, axis=-1)
 
             s1_full_drop = rng.random(B) < cfg.s1_full_dropout_prob
             if cfg.s1_timestep_dropout_prob > 0:
@@ -2700,38 +2810,67 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 s2_drop |= block_mask & has_block[:, None]
             if cfg.s2_cloud_timestep_prob > 0:
                 s2_drop |= rng.random((B, T)) < cfg.s2_cloud_timestep_prob
+            if cfg.s2_full_dropout_prob > 0:
+                s2_drop[rng.random(B) < cfg.s2_full_dropout_prob] = True
 
-            # Joint S1/S2 guard (rare; per-row like _rescue_joint_s1_s2_wipe)
+            if cfg.meteo_timestep_dropout_prob > 0:
+                meteo_drop = rng.random((B, T)) < cfg.meteo_timestep_dropout_prob
+            else:
+                meteo_drop = np.zeros((B, T), dtype=bool)
+            if cfg.meteo_full_dropout_prob > 0:
+                meteo_drop[rng.random(B) < cfg.meteo_full_dropout_prob] = True
+
+            if cfg.dem_dropout_prob > 0:
+                dem_drop = rng.random(B) < cfg.dem_dropout_prob
+            else:
+                dem_drop = np.zeros(B, dtype=bool)
+
+            # Masking guards (rare; per-row like _rescue_fully_masked_sample)
             violated = ((s1_drop | s1_missing).all(axis=1)) & (
                 (s2_drop | s2_missing).all(axis=1)
             )
             for i in np.flatnonzero(violated):
                 restorable = np.flatnonzero(s2_drop[i] & ~s2_missing[i])
-                if restorable.size and cfg.s2_cloud_timestep_prob < 1.0:
+                if restorable.size and not cfg.s2_disabled:
                     s2_drop[i, int(rng.choice(restorable))] = False
                     continue
                 restorable = np.flatnonzero(s1_drop[i] & ~s1_missing[i])
-                if restorable.size and cfg.s1_full_dropout_prob < 1.0:
+                if restorable.size and not cfg.s1_disabled:
                     s1_drop[i, int(rng.choice(restorable))] = False
                     continue
-                logger.warning(
+                self._warn_masking_guard(
+                    "no_s1_s2",
                     "Sample has S1 and S2 fully masked-or-missing and no "
-                    "restorable timesteps; the joint S1/S2 guard cannot be "
-                    "enforced for this sample."
+                    "restorable timestep; the joint S1/S2 guard cannot be "
+                    "enforced for it",
+                )
+                # S1 and S2 gone for good: keep one meteo or DEM token alive,
+                # else the attention row is fully masked (see
+                # _rescue_fully_masked_sample).
+                if not (meteo_drop[i] | meteo_missing[i]).all() or not (
+                    dem_drop[i] or dem_missing[i]
+                ):
+                    continue
+                restorable = np.flatnonzero(meteo_drop[i] & ~meteo_missing[i])
+                if restorable.size and not cfg.meteo_disabled:
+                    meteo_drop[i, int(rng.choice(restorable))] = False
+                    continue
+                if dem_drop[i] and not dem_missing[i] and not cfg.dem_disabled:
+                    dem_drop[i] = False
+                    continue
+                self._warn_masking_guard(
+                    "no_tokens",
+                    "Sample has S1, S2, meteo and DEM all masked-or-missing "
+                    "and no restorable timestep; it carries no encoder token "
+                    "and its embedding will be degenerate",
                 )
 
             s1_view = s1_full[:, 0, 0]
             s2_view = s2_full[:, 0, 0]
             s1_view[s1_drop] = NODATAVALUE
             s2_view[s2_drop] = NODATAVALUE
-
-            if cfg.meteo_timestep_dropout_prob > 0:
-                meteo_mask = rng.random((B, T)) < cfg.meteo_timestep_dropout_prob
-                meteo_full[:, 0, 0][meteo_mask] = NODATAVALUE
-
-            if cfg.dem_dropout_prob > 0:
-                dem_drop = rng.random(B) < cfg.dem_dropout_prob
-                dem_full[dem_drop] = NODATAVALUE
+            meteo_full[:, 0, 0][meteo_drop] = NODATAVALUE
+            dem_full[dem_drop] = NODATAVALUE
 
         # ---- timestamps ------------------------------------------------------
         month_num = c["start_month_num"][rows][:, None] + tidx  # (B, T)
