@@ -261,6 +261,9 @@ NOCROP_VALUE = 254
 _S1_BANDS = {"VH", "VV"}
 _S2_BANDS = {"B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"}
 _METEO_BANDS = {"temperature_2m", "total_precipitation"}
+# DEM arrives as "elevation" (renamed in the openEO graph) or "COP-DEM"
+# (unrenamed fallback); "slope" is added later by add_slope_band.
+_DEM_BANDS = {"elevation", "slope", "COP-DEM"}
 
 POSTPROCESSING_EXCLUDED_VALUES = [NOCROP_VALUE, 255, 65535]
 POSTPROCESSING_NODATA = 255
@@ -1061,6 +1064,35 @@ def get_expected_timesteps_from_artifact(
 # ---------------------------------------------------------------------------
 
 
+def _sensors_disabled_by_masking(masking: Mapping[str, Any]) -> Dict[str, bool]:
+    """Derive which sensors a resolved SensorMaskingConfig eliminates entirely.
+
+    Mirrors the ``*_disabled`` properties of ``SensorMaskingConfig``. Returns
+    all-False when masking was recorded but never applied.
+    """
+    off = {"s1": False, "s2": False, "meteo": False, "dem": False}
+    if not masking.get("enable", False):
+        return off
+
+    def prob(name: str) -> float:
+        value = masking.get(name, 0.0)
+        # bool subclasses int, so `true` would read as 1.0 and blank a sensor.
+        if isinstance(value, bool):
+            return 0.0
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    off["s1"] = prob("s1_full_dropout_prob") >= 1.0
+    off["s2"] = (
+        prob("s2_full_dropout_prob") >= 1.0 or prob("s2_cloud_timestep_prob") >= 1.0
+    )
+    off["meteo"] = (
+        prob("meteo_full_dropout_prob") >= 1.0
+        or prob("meteo_timestep_dropout_prob") >= 1.0
+    )
+    off["dem"] = prob("dem_dropout_prob") >= 1.0
+    return off
+
+
 class SeasonalInferenceEngine:
     """High-level orchestrator that runs seasonal inference on xarray cubes."""
 
@@ -1298,20 +1330,42 @@ class SeasonalInferenceEngine:
             return None
 
     def _get_disabled_modalities(self) -> Dict[str, bool]:
-        """Return a mapping of modality name -> disabled flag from run_config args."""
+        """Return a mapping of modality name -> disabled flag from run_config.
+
+        Two sources are ORed. The ``--disable_*`` flags in ``run_config.args``
+        keep older models working, and the resolved probabilities in
+        ``run_config.dataset.train_masking`` are needed because the masking
+        overrides can eliminate a sensor without the flag ever being set. An
+        absent source contributes nothing.
+        """
+        disabled = {"s1": False, "s2": False, "meteo": False, "dem": False}
         bundle = getattr(self, "bundle", None)
         artifact = getattr(bundle, "base_artifact", None)
         run_config = getattr(artifact, "run_config", None)
         if not isinstance(run_config, Mapping):
-            return {}
+            return disabled
+
         args = run_config.get("args")
-        if not isinstance(args, Mapping):
-            return {}
-        return {
-            "s1": bool(args.get("disable_s1", False)),
-            "s2": bool(args.get("disable_s2", False)),
-            "meteo": bool(args.get("disable_meteo", False)),
-        }
+        if isinstance(args, Mapping):
+            for sensor in disabled:
+                disabled[sensor] = bool(args.get(f"disable_{sensor}", False))
+
+        dataset_cfg = run_config.get("dataset")
+        masking = None
+        if isinstance(dataset_cfg, Mapping):
+            # "train_masking" is the current key; "masking" is the pre-rename
+            # one still present in older run_configs.
+            masking = dataset_cfg.get("train_masking") or dataset_cfg.get("masking")
+        if isinstance(masking, Mapping):
+            for sensor, off in _sensors_disabled_by_masking(masking).items():
+                if off and not disabled[sensor]:
+                    logger.info(
+                        f"{sensor.upper()} was eliminated during training via the "
+                        f"masking configuration (probability 1.0) without a "
+                        f"disable_{sensor} flag; mirroring it at inference."
+                    )
+                disabled[sensor] = disabled[sensor] or off
+        return disabled
 
     def _mask_disabled_modalities(self, arr: xr.DataArray) -> xr.DataArray:
         """Set all bands of disabled modalities to NODATA_VALUE."""
@@ -1319,28 +1373,28 @@ class SeasonalInferenceEngine:
         if not any(disabled.values()):
             return arr
 
+        # Training rejects a config that eliminates S1 and S2 together
+        # (SensorMaskingConfig.validate), so a model claiming both is malformed.
+        if disabled["s1"] and disabled["s2"]:
+            raise ValueError(
+                "run_config eliminates both S1 and S2; training forbids that "
+                "combination, so this model artifact is inconsistent."
+            )
+
         modality_bands = {
             "s1": _S1_BANDS,
             "s2": _S2_BANDS,
             "meteo": _METEO_BANDS,
+            "dem": _DEM_BANDS,
         }
         present = set(arr.bands.values)
-
-        # Guard: refuse to mask everything
-        surviving = {
-            b
-            for name, bands in modality_bands.items()
-            if not disabled.get(name, False)
-            for b in bands
-        } & present
-        if not surviving:
-            raise ValueError(
-                "run_config disables all modalities; at least one must remain active."
-            )
+        # Index the band axis by name rather than assuming it comes first.
+        band_axis = arr.dims.index("bands")
+        band_order = list(arr.bands.values)
 
         result = arr.copy()
         for modality, bands in modality_bands.items():
-            if not disabled.get(modality, False):
+            if not disabled[modality]:
                 continue
             targets = bands & present
             if not targets:
@@ -1349,8 +1403,9 @@ class SeasonalInferenceEngine:
                 f"Masking modality '{modality}' bands to NODATA: {sorted(targets)}"
             )
             for band in targets:
-                idx = list(result.bands.values).index(band)
-                result.values[idx, :, :, :] = NODATA_VALUE
+                index: List[Any] = [slice(None)] * result.values.ndim
+                index[band_axis] = band_order.index(band)
+                result.values[tuple(index)] = NODATA_VALUE
         return result
 
     def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
@@ -1363,7 +1418,7 @@ class SeasonalInferenceEngine:
         ]
         reordered = reordered.assign_coords(bands=renamed_bands)
 
-        # Mask modalities disabled in run_config["args"]
+        # Mirror the sensors the model was trained without.
         reordered = self._mask_disabled_modalities(reordered)
 
         # Mask B8A band if requested
@@ -1375,7 +1430,11 @@ class SeasonalInferenceEngine:
             reordered.values[b8a_idx, :, :, :] = NODATA_VALUE
 
         reordered = reordered.transpose("bands", "t", "x", "y")
-        reordered = DataPreprocessor.add_slope_band(reordered, epsg)
+        if not self._get_disabled_modalities()["dem"]:
+            # Skipped for a DEM-disabled model: elevation is already masked, so
+            # slope would be derived from NODATA and come out as garbage. An
+            # absent band reaches the predictor as NODATA anyway.
+            reordered = DataPreprocessor.add_slope_band(reordered, epsg)
         return reordered.fillna(NODATA_VALUE).astype(np.float32)
 
     def _resolve_season_masks(
