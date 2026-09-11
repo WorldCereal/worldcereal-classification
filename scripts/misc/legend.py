@@ -35,6 +35,7 @@ from pathlib import Path
 from worldcereal.utils.legend import download_legend
 
 if __name__ == "__main__":
-    destination = Path("/vitodata/worldcereal/data/legend/")
+    # Download legend to current folder for testing purposes
+    destination = Path(".")
     download_legend(destination, topic="landcover")
     download_legend(destination, topic="irrigation")
