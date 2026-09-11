@@ -896,9 +896,9 @@ class SensorMaskingConfig:
     applies, a *per-timestep* knob. A full dropout probability of 1.0 switches
     the sensor off for the whole run (``--disable_s1`` and friends).
 
-    A sensor counts as *intentionally eliminated* only when its full-dropout
-    knob is 1.0 (``dem_dropout_prob`` for DEM), or, for S2 and meteo, the
-    equivalent per-timestep knob. Such a sensor is never revived by the guards.
+    A sensor counts as *intentionally eliminated* when its full-dropout knob
+    or its per-timestep knob is 1.0 (``dem_dropout_prob`` for DEM). Such a
+    sensor is never revived by the guards.
 
     Two invariants are enforced (see
     :meth:`WorldCerealDataset._rescue_fully_masked_sample`): S1 and S2 are never
@@ -950,13 +950,14 @@ class SensorMaskingConfig:
     dem_dropout_prob: float = 0.0
     seed: Optional[int] = None
 
-    # Used by the rescue logic: a deliberately eliminated sensor is never
-    # revived. ``s1_timestep_dropout_prob`` of 1.0 does not count, since that
-    # knob models acquisition gaps and --disable_s1 sets the full knob instead.
+    # Used by the rescue logic: a deliberately eliminated sensor is never revived.
     @property
     def s1_disabled(self) -> bool:
         """True when S1 is eliminated for every sample."""
-        return self.s1_full_dropout_prob >= 1.0
+        return (
+            self.s1_full_dropout_prob >= 1.0
+            or self.s1_timestep_dropout_prob >= 1.0
+        )
 
     @property
     def s2_disabled(self) -> bool:
@@ -988,6 +989,7 @@ class SensorMaskingConfig:
                 f"{name}={getattr(self, name)}"
                 for name in (
                     "s1_full_dropout_prob",
+                    "s1_timestep_dropout_prob",
                     "s2_full_dropout_prob",
                     "s2_cloud_timestep_prob",
                 )

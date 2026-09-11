@@ -132,13 +132,13 @@ def test_joint_guard_restores_s2_when_s1_disabled():
 
 
 def test_joint_guard_restores_s1_when_s2_disabled():
-    # S2 intentionally fully masked; per-timestep S1 dropout at 1.0 would wipe
-    # S1 too, so the guard must restore exactly one S1 timestep.
+    # S2 intentionally fully masked and S1 wiped by a stochastic draw, so the
+    # guard must restore exactly one S1 timestep.
     num_timesteps = 8
     df = _make_dummy_df(num_timesteps, nrows=1)
     cfg = SensorMaskingConfig(
         enable=True,
-        s1_timestep_dropout_prob=1.0,
+        s1_full_dropout_prob=0.999,
         s2_cloud_timestep_prob=1.0,
         seed=0,
     )
