@@ -472,6 +472,68 @@ def test_create_inference_process_graph_croptype_merged_products():
     assert _single_filter_bands_arg(results[3]) == ["global_embedding:scale"]
 
 
+def test_create_inference_process_graph_default_does_not_skip_sensor_inputs():
+    """UDP generation relies on this default: the model can still be swapped
+    at runtime via a process parameter, so the graph must always load every
+    sensor, regardless of what any concrete model's run_config says."""
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+        )
+
+        mock_load_artifact.assert_not_called()
+        assert mock_inputs.call_args.kwargs["disable_s1"] is False
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+
+
+def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_load_artifact.return_value = MagicMock(run_config={"args": {"disable_s1": True}})
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+            skip_disabled_sensor_inputs=True,
+        )
+
+        assert mock_inputs.call_args.kwargs["disable_s1"] is True
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+
+
 def test_create_inputs_job_logic(tmp_path: Path):
     """Test the job manager inputs job builder without backend calls."""
     utm_geom = box(500000, 0, 501000, 1000)

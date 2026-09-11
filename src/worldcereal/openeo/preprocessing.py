@@ -480,6 +480,8 @@ def worldcereal_preprocessed_inputs(
     spatial_extent: Union[GeoJSON, BoundingBoxExtent, str],
     temporal_extent: TemporalContext,
     fetch_type: Optional[FetchType] = FetchType.TILE,
+    disable_s1: bool = False,
+    disable_s2: bool = False,
     disable_meteo: bool = False,
     validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
@@ -502,52 +504,68 @@ def worldcereal_preprocessed_inputs(
         "dekad",
     ], 'Compositing window must be either "month" or "dekad"'
 
-    # Extraction of S2 from GFMAP
-    s2_data = raw_datacube_S2(
-        connection=connection,
-        backend_context=backend_context,
-        temporal_extent=temporal_extent,
-        bands=WORLDCEREAL_S2_BANDS,
-        fetch_type=fetch_type,
-        filter_tile=s2_tile,
-        distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
-        additional_masks_flag=False,
-        apply_mask_flag=True,
-        tile_size=tile_size,
-        target_epsg=target_epsg,
-        optical_mask_method=optical_mask_method,
-    )
-
-    s2_data = median_compositing(s2_data, period=compositing_window)
-
-    # Cast to uint16
-    s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
-
-    # Extraction of the S1 data
-    # Decides on the orbit direction from the maximum overlapping area of
-    # available products.
-    if s1_orbit_state is None and backend_context.backend in [
-        Backend.CDSE,
-        Backend.CDSE_STAGING,
-        Backend.FED,
-    ]:
-        s1_orbit_state = select_best_s1_orbit_direction(
-            backend_context, spatial_extent, temporal_extent
+    if disable_s1 and disable_s2:
+        # Both cannot be skipped: one of them is needed as the spatial
+        # reference grid onto which DEM/meteo are resampled.
+        raise ValueError(
+            "Cannot disable both S1 and S2 inputs at the same time: at least "
+            "one of them must remain enabled to load worldcereal inputs."
         )
-    s1_data = raw_datacube_S1(
-        connection=connection,
-        backend_context=backend_context,
-        temporal_extent=temporal_extent,
-        bands=WORLDCEREAL_S1_BANDS,
-        fetch_type=fetch_type,
-        target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
-        orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
-        tile_size=tile_size,
-        target_epsg=target_epsg,
-    )
 
-    s1_data = mean_compositing(s1_data, period=compositing_window)
-    s1_data = compress_backscatter_uint16(backend_context, s1_data)
+    s2_data = None
+    if not disable_s2:
+        # Extraction of S2 from GFMAP
+        s2_data = raw_datacube_S2(
+            connection=connection,
+            backend_context=backend_context,
+            temporal_extent=temporal_extent,
+            bands=WORLDCEREAL_S2_BANDS,
+            fetch_type=fetch_type,
+            filter_tile=s2_tile,
+            distance_to_cloud_flag=False if fetch_type == FetchType.POINT else True,
+            additional_masks_flag=False,
+            apply_mask_flag=True,
+            tile_size=tile_size,
+            target_epsg=target_epsg,
+            optical_mask_method=optical_mask_method,
+        )
+
+        s2_data = median_compositing(s2_data, period=compositing_window)
+
+        # Cast to uint16
+        s2_data = s2_data.linear_scale_range(0, 65534, 0, 65534)
+
+    s1_data = None
+    if not disable_s1:
+        # Extraction of the S1 data
+        # Decides on the orbit direction from the maximum overlapping area of
+        # available products.
+        if s1_orbit_state is None and backend_context.backend in [
+            Backend.CDSE,
+            Backend.CDSE_STAGING,
+            Backend.FED,
+        ]:
+            s1_orbit_state = select_best_s1_orbit_direction(
+                backend_context, spatial_extent, temporal_extent
+            )
+        s1_data = raw_datacube_S1(
+            connection=connection,
+            backend_context=backend_context,
+            temporal_extent=temporal_extent,
+            bands=WORLDCEREAL_S1_BANDS,
+            fetch_type=fetch_type,
+            target_resolution=20.0,  # Compute the backscatter at 20m resolution, then upsample nearest neighbor when merging cubes
+            orbit_direction=s1_orbit_state,  # If None, make the query on the catalogue for the best orbit
+            tile_size=tile_size,
+            target_epsg=target_epsg,
+        )
+
+        s1_data = mean_compositing(s1_data, period=compositing_window)
+        s1_data = compress_backscatter_uint16(backend_context, s1_data)
+
+    # Grid onto which DEM/meteo are resampled: prefer S2 (matches historical
+    # behaviour), falling back to S1 when S2 is disabled.
+    reference_data = s2_data if s2_data is not None else s1_data
 
     dem_data = raw_datacube_DEM(
         connection=connection,
@@ -557,15 +575,18 @@ def worldcereal_preprocessed_inputs(
         target_epsg=target_epsg,
     )
 
-    # Explicitly resample DEM with bilinear interpolation and based on S2 grid
-    # note: we use s2_data here as base to avoid issues at the edges because source
-    # data is not in UTM projection.
-    dem_data = dem_data.resample_cube_spatial(s2_data, method="bilinear")
+    # Explicitly resample DEM with bilinear interpolation and based on the
+    # reference grid; note: we avoid the source native projection to sidestep
+    # issues at the edges because source data is not in UTM projection.
+    dem_data = dem_data.resample_cube_spatial(reference_data, method="bilinear")
 
     # Cast DEM to UINT16
     dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
 
-    data = s2_data.merge_cubes(s1_data)
+    if s2_data is not None and s1_data is not None:
+        data = s2_data.merge_cubes(s1_data)
+    else:
+        data = reference_data
     data = data.merge_cubes(dem_data)
 
     if not disable_meteo:
@@ -575,10 +596,9 @@ def worldcereal_preprocessed_inputs(
             compositing_window=compositing_window,
         )
 
-        # Explicitly resample meteo with bilinear interpolation and based on S2 grid
-        # note: we use s2_data here as base to avoid issues at the edges because source
-        # data is not in UTM projection.
-        meteo_data = meteo_data.resample_cube_spatial(s2_data, method="bilinear")
+        # Explicitly resample meteo with bilinear interpolation and based on
+        # the reference grid.
+        meteo_data = meteo_data.resample_cube_spatial(reference_data, method="bilinear")
 
         data = data.merge_cubes(meteo_data)
 

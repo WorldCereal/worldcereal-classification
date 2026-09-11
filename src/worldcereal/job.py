@@ -354,6 +354,29 @@ def _get_artifact_manifest(source: str) -> ManifestDict:
     return deepcopy(artifact.manifest)
 
 
+@lru_cache(maxsize=8)
+def _get_artifact_run_config(source: str) -> Optional[ManifestDict]:
+    artifact = load_model_artifact(source)
+    return deepcopy(artifact.run_config) if artifact.run_config else None
+
+
+def _get_disabled_modalities(seasonal_model_zip: str) -> Dict[str, bool]:
+    """Read sensor-disable flags from the seasonal model's training run_config.
+
+    Mirrors `SeasonalInferenceEngine._get_disabled_modalities` in
+    `worldcereal.openeo.inference`, but is used here at process-graph build
+    time so disabled sensors can be skipped when loading inputs, rather than
+    loaded and masked afterwards.
+    """
+    run_config = _get_artifact_run_config(seasonal_model_zip) or {}
+    args = run_config.get("args", {})
+    return {
+        "s1": bool(args.get("disable_s1", False)),
+        "s2": bool(args.get("disable_s2", False)),
+        "meteo": bool(args.get("disable_meteo", False)),
+    }
+
+
 def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
     heads = manifest.get("heads", [])
     for head in heads:
@@ -414,6 +437,7 @@ def create_inference_process_graph(
     optical_mask_method: Literal[
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
+    skip_disabled_sensor_inputs: bool = False,
 ) -> List[openeo.DataCube]:
     """Wrapper function that creates the inference openEO process graph.
 
@@ -452,6 +476,14 @@ def create_inference_process_graph(
     connection: Optional[openeo.Connection] = None,
         Optional OpenEO connection to use. If not provided, a new connection
         will be created based on the backend_context.
+    skip_disabled_sensor_inputs: bool
+        When True, sensors (S1/S2/meteo) that the resolved seasonal model was
+        trained without are skipped at input-loading time instead of being
+        loaded and masked afterwards. Only safe when `seasonal_model_zip` is
+        resolved to a concrete value for this specific graph (e.g. from the
+        job manager); leave False when generating a UDP where the model can
+        still be swapped at runtime via a process parameter, since the graph
+        structure is fixed once generated. Defaults to False.
 
     Returns
     -------
@@ -473,6 +505,25 @@ def create_inference_process_graph(
     if out_format not in ["GTiff", "NetCDF"]:
         raise ValueError(f"Format {format} not supported.")
 
+    config_overrides = _workflow_sections_from_config(workflow_config)
+    workflow_context = _build_workflow_context(
+        preset=seasonal_preset,
+        temporal_extent=temporal_extent,
+        override_blocks=(config_overrides,),
+        row=row,
+    )
+
+    # Only skip loading disabled-sensor inputs when the model is resolved to a
+    # concrete value for this graph (e.g. job manager). Not safe for UDP
+    # generation, where seasonal_model_zip may still be swapped at runtime via
+    # a process parameter after the graph structure is already fixed.
+    disabled_modalities = {"s1": False, "s2": False, "meteo": False}
+    if skip_disabled_sensor_inputs:
+        seasonal_model_zip = str(
+            workflow_context["workflow_config"]["model"]["seasonal_model_zip"]
+        )
+        disabled_modalities = _get_disabled_modalities(seasonal_model_zip)
+
     inputs = _get_preprocessed_inputs(
         spatial_extent=spatial_extent,
         temporal_extent=temporal_extent,
@@ -483,14 +534,9 @@ def create_inference_process_graph(
         optical_mask_method=optical_mask_method,
         compositing_window=compositing_window,
         connection=connection,
-    )
-
-    config_overrides = _workflow_sections_from_config(workflow_config)
-    workflow_context = _build_workflow_context(
-        preset=seasonal_preset,
-        temporal_extent=temporal_extent,
-        override_blocks=(config_overrides,),
-        row=row,
+        disable_s1=disabled_modalities["s1"],
+        disable_s2=disabled_modalities["s2"],
+        disable_meteo=disabled_modalities["meteo"],
     )
 
     # Construct the feature extraction and model inference pipeline
@@ -691,6 +737,9 @@ def _get_preprocessed_inputs(
         "mask_scl_dilation", "mask_scl_raw_values"
     ] = "mask_scl_dilation",
     connection: Optional[openeo.Connection] = None,
+    disable_s1: bool = False,
+    disable_s2: bool = False,
+    disable_meteo: bool = False,
 ) -> openeo.DataCube:
     if connection is None:
         connection = BACKEND_CONNECTIONS[backend_context.backend]()
@@ -705,6 +754,9 @@ def _get_preprocessed_inputs(
         target_epsg=target_epsg,
         compositing_window=compositing_window,
         optical_mask_method=optical_mask_method,
+        disable_s1=disable_s1,
+        disable_s2=disable_s2,
+        disable_meteo=disable_meteo,
     )
 
     return inputs.filter_bbox(dict(spatial_extent))
