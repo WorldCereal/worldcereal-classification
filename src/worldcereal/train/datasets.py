@@ -896,13 +896,17 @@ class SensorMaskingConfig:
     applies, a *per-timestep* knob. A full dropout probability of 1.0 switches
     the sensor off for the whole run (``--disable_s1`` and friends).
 
+    A sensor counts as *intentionally eliminated* only when its full-dropout
+    knob is 1.0 (``dem_dropout_prob`` for DEM), or, for S2 and meteo, the
+    equivalent per-timestep knob. Such a sensor is never revived by the guards.
+
     Two invariants are enforced (see
     :meth:`WorldCerealDataset._rescue_fully_masked_sample`): S1 and S2 are never
     both fully masked-or-missing, and a sample never loses every encoder token.
-    Presto builds tokens from S1, S2, meteo and DEM only, so a sample with all
-    four gone yields a degenerate embedding. On violation one masked timestep is
-    restored, preferring S2, then S1, then meteo, then DEM, and never for a
-    sensor whose elimination is intentional.
+    The encoder builds tokens from S1, S2, meteo and DEM only, so a sample with
+    all four gone yields a degenerate embedding. On violation one masked
+    timestep is restored, preferring S2, then S1, then meteo, then DEM, and
+    never for a sensor whose elimination is intentional.
 
     Attributes
     ----------
@@ -980,19 +984,19 @@ class SensorMaskingConfig:
         if self.s2_cloud_block_max > num_timesteps:
             raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
         if self.s1_disabled and self.s2_disabled:
+            culprits = [
+                f"{name}={getattr(self, name)}"
+                for name in (
+                    "s1_full_dropout_prob",
+                    "s2_full_dropout_prob",
+                    "s2_cloud_timestep_prob",
+                )
+                if getattr(self, name) >= 1.0
+            ]
             raise ValueError(
-                "S1 and S2 dropout probabilities cannot both be 1.0: "
-                "every sample would end up with S1 and S2 fully masked"
-            )
-        if self.s1_disabled and self.meteo_disabled and self.dem_disabled:
-            raise ValueError(
-                "S1, meteo and DEM cannot all be disabled: samples without S2 "
-                "data would carry no encoder tokens at all"
-            )
-        if self.s2_disabled and self.meteo_disabled and self.dem_disabled:
-            raise ValueError(
-                "S2, meteo and DEM cannot all be disabled: samples without S1 "
-                "data would carry no encoder tokens at all"
+                f"S1 and S2 are both eliminated ({', '.join(culprits)}): every "
+                "sample would end up with S1 and S2 fully masked. Disabling all "
+                "but one of S1/S2 is supported; disabling both is not."
             )
         for name in [
             "s1_full_dropout_prob",

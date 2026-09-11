@@ -1098,6 +1098,26 @@ class TestPrepareTrainingDatasetsMasking(unittest.TestCase):
         self.assertIs(val_ds.masking_config, cfg)
         self.assertIs(test_ds.masking_config, cfg)
 
+    def test_eval_mirrors_disabled_sensors_without_being_asked(self):
+        """A caller that disables a sensor must not have to remember the eval side.
+
+        Only whole-sensor elimination is mirrored; the stochastic knobs stay
+        training-only so the checkpoint metric is not noisy.
+        """
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=1.0,  # eliminated -> must mirror
+            s2_cloud_block_prob=0.15,  # stochastic -> must not mirror
+        )
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False, train_masking_config=cfg
+        )
+        self.assertIs(train_ds.masking_config, cfg)
+        for ds in (val_ds, test_ds):
+            self.assertIsNotNone(ds.masking_config)
+            self.assertEqual(ds.masking_config.s1_full_dropout_prob, 1.0)
+            self.assertEqual(ds.masking_config.s2_cloud_block_prob, 0.0)
+
     def test_both_configs_are_not_crossed(self):
         train_cfg = SensorMaskingConfig(enable=True, s1_full_dropout_prob=0.3)
         eval_cfg = SensorMaskingConfig(enable=True, dem_dropout_prob=1.0)

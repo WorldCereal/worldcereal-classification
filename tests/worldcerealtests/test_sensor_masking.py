@@ -278,7 +278,7 @@ def test_validate_rejects_double_disable():
         s1_full_dropout_prob=1.0,
         s2_cloud_timestep_prob=1.0,
     )
-    with pytest.raises(ValueError, match="cannot both be 1.0"):
+    with pytest.raises(ValueError, match="both eliminated"):
         cfg.validate(num_timesteps=12)
 
 
@@ -439,29 +439,29 @@ def test_validate_rejects_s1_and_s2_full_dropout():
         s1_full_dropout_prob=1.0,
         s2_full_dropout_prob=1.0,
     )
-    with pytest.raises(ValueError, match="cannot both be 1.0"):
+    with pytest.raises(ValueError, match="both eliminated"):
         cfg.validate(num_timesteps=12)
 
 
-def test_validate_rejects_disabling_every_token_source():
-    # S1 + meteo + DEM off leaves S2-less samples with nothing to encode.
-    cfg = SensorMaskingConfig(
+def test_single_sensor_models_are_allowed():
+    """S2-only and S1-only are legitimate setups and must not be rejected.
+
+    Only disabling *both* S1 and S2 is refused; leaving one of them as the sole
+    input is a normal way to train.
+    """
+    SensorMaskingConfig(
         enable=True,
         s1_full_dropout_prob=1.0,
         meteo_full_dropout_prob=1.0,
         dem_dropout_prob=1.0,
-    )
-    with pytest.raises(ValueError, match="no encoder tokens"):
-        cfg.validate(num_timesteps=12)
+    ).validate(num_timesteps=12)  # S2-only
 
-    cfg = SensorMaskingConfig(
+    SensorMaskingConfig(
         enable=True,
         s2_full_dropout_prob=1.0,
         meteo_timestep_dropout_prob=1.0,
         dem_dropout_prob=1.0,
-    )
-    with pytest.raises(ValueError, match="no encoder tokens"):
-        cfg.validate(num_timesteps=12)
+    ).validate(num_timesteps=12)  # S1-only
 
 
 def test_validate_rejects_out_of_range_new_probs():
