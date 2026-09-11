@@ -19,10 +19,14 @@ legend.
 
 from pathlib import Path
 
-from worldcereal.utils.legend import download_legend
+from worldcereal.utils.legend import download_legend, get_legend
 
 if __name__ == "__main__":
     # Download legend to current folder for testing purposes
     destination = Path(".")
     download_legend(destination, topic="landcover")
     download_legend(destination, topic="irrigation")
+
+    # Read legend for testing purposes
+    legend = get_legend(topic="landcover")
+    print(legend.head())
