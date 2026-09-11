@@ -1253,7 +1253,7 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    masking_config: Optional[SensorMaskingConfig] = None,
+    train_masking_config: Optional[SensorMaskingConfig] = None,
     eval_masking_config: Optional[SensorMaskingConfig] = None,
     label_jitter=0,
     label_window=0,
@@ -1295,14 +1295,14 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_config : Optional[SensorMaskingConfig], default=None
+    train_masking_config : Optional[SensorMaskingConfig], default=None
         Configuration for sensor masking applied to the **training** split.
     eval_masking_config : Optional[SensorMaskingConfig], default=None
         Configuration for sensor masking applied to the **validation and test**
         splits. Defaults to None (no masking at evaluation time). Set this to
         mirror deterministic sensor-disable flags (probabilities of exactly 0.0
         or 1.0) so a model trained without a sensor is also scored without it;
-        stochastic dropout belongs in ``masking_config`` only.
+        stochastic dropout belongs in ``train_masking_config`` only.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
@@ -1349,7 +1349,7 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        masking_config=masking_config,
+        masking_config=train_masking_config,
         label_jitter=label_jitter,
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
