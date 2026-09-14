@@ -437,8 +437,8 @@ class ClassSelectionWidget:
             "padding:6px 8px;border-radius:4px;color:#4b5563;font-size:13px;"
             "line-height:1.4;overflow-wrap:anywhere;margin:6px 0 8px 0'>"
             "Every source class starts <b>not selected</b>.<br>"
-            "Select source classes on the left and choose an action on the right to move them to the final class selection.<br>"
-            "You can see the selected classes on the bottom and have the option to edit them as needed there.<br>"
+            "Select individual classes (checkboxes) or class groups (buttons) on the left and choose an action on the right to move them to the final selection.<br>"
+            "You can see the final classes on the bottom and have the option to edit them as needed there.<br>"
             "Use the <i>Not selected</i> section in the Final classes overview for bulk actions, including merging everything "
             "you haven't touched into one final class."
             "</div>"
@@ -667,7 +667,7 @@ class ClassSelectionWidget:
                     "<div class='wc-section-title'>Source classes</div>"
                     "<div style='font-size:12px;color:#666;margin-bottom:6px'>"
                     "Browse the available classes below. Select the class(es) you want to group/remove.<br>"
-                    "Alternatively, click a group such as <i>cereals</i> to use it as a shortcut."
+                    "Alternatively, click a group (button) such as <i>cereals</i> to use it as a shortcut."
                     "</div>"
                 ),
                 self.search,
