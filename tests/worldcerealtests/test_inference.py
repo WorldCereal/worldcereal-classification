@@ -647,3 +647,125 @@ def test_prepare_array_preserves_b8a_band_when_disabled():
     # Check B8A band is NOT masked (values preserved as ~100.0)
     b8a_idx = list(result.bands.values).index("B8A")
     assert np.all(result.values[b8a_idx] > 50.0)  # Values should be preserved
+
+
+def test_mask_disabled_modalities_uses_model_run_config():
+    bands = ["B2", "VV", "temperature_2m"]
+    data = np.ones((len(bands), 1, 2, 2), dtype=np.float32)
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_s1": True, "disable_meteo": False}}
+        )
+    )
+
+    result = engine._mask_disabled_modalities(arr)
+
+    assert np.all(result.sel(bands="VV") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 1.0)
+    assert np.all(result.sel(bands="temperature_2m") == 1.0)
+
+
+def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": ["B2"], "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={
+                "args": {
+                    "disable_s1": True,
+                    "disable_s2": True,
+                    "disable_meteo": True,
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="eliminates both S1 and S2"):
+        engine._mask_disabled_modalities(arr)
+
+
+def test_mask_disabled_modalities_reads_resolved_masking_config():
+    """A sensor eliminated through the masking config, with no flag set."""
+    bands = ["B2", "VV"]
+    arr = xr.DataArray(
+        np.ones((len(bands), 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+
+    for key in ("train_masking", "masking"):  # current and pre-rename spelling
+        engine.bundle = SimpleNamespace(
+            base_artifact=SimpleNamespace(
+                run_config={
+                    "args": {},
+                    "dataset": {key: {"enable": True, "s2_full_dropout_prob": 1.0}},
+                }
+            )
+        )
+        result = engine._mask_disabled_modalities(arr)
+        assert np.all(result.sel(bands="B2") == inference.NODATA_VALUE)
+        assert np.all(result.sel(bands="VV") == 1.0)
+
+
+def test_prepare_array_blanks_dem_without_deriving_slope():
+    """DEM disabled: elevation is blanked and slope is never derived from it."""
+    bands = ["B2", "COP-DEM"]
+    arr = xr.DataArray(
+        np.full((len(bands), 2, 2, 2), 100.0, dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 10], "x": [0, 10]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = False
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_dem": True}})
+    )
+
+    result = engine._prepare_array(arr, epsg=32631)
+
+    # An absent slope band reaches the predictor as NODATA, same as a masked one.
+    assert "slope" not in result.bands.values
+    assert np.all(result.sel(bands="COP-DEM") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 100.0)
+
+
+def test_prepare_array_masks_slope_supplied_with_the_cube():
+    """On CDSE slope arrives pre-loaded, so it must be masked rather than skipped."""
+    bands = ["B2", "elevation", "slope"]
+    arr = xr.DataArray(
+        np.full((len(bands), 2, 2, 2), 100.0, dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 10], "x": [0, 10]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = False
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_dem": True}})
+    )
+
+    result = engine._prepare_array(arr, epsg=32631)
+
+    assert np.all(result.sel(bands="slope") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="elevation") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 100.0)
