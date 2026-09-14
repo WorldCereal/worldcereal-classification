@@ -191,7 +191,7 @@ def raw_datacube_S2(
     # Extract the SCL collection only
     scl_cube_properties = {"eo:cloud_cover": lambda val: val <= 95.0}
     if filter_tile:
-        scl_cube_properties["tileId"] = lambda val: val == filter_tile
+        scl_cube_properties["grid:code"] = lambda val: val == filter_tile
 
     # Create the job to extract S2
     extraction_parameters: dict[str, Any] = {
@@ -258,7 +258,7 @@ def raw_datacube_S2(
         extraction_parameters["pre_merge"] = additional_masks
 
     if filter_tile:
-        extraction_parameters["load_collection"]["tileId"] = (
+        extraction_parameters["load_collection"]["grid:code"] = (
             lambda val: val == filter_tile
         )
 
