@@ -2664,6 +2664,121 @@ class TestFastSlowPathEquivalence(unittest.TestCase):
                     f"Trial {trial} idx {idx}: both S1 and S2 fully masked in slow path",
                 )
 
+    def test_masking_fast_path_never_leaves_a_sample_without_tokens(self):
+        """Token guard: no sample may end up with S1, S2, meteo and DEM gone.
+
+        Presto builds tokens from those four sensors only, so an all-masked
+        sample yields a fully masked attention row and a degenerate,
+        input-independent embedding.
+        """
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=0.5,
+            s1_timestep_dropout_prob=0.9,
+            s2_full_dropout_prob=0.5,
+            s2_cloud_timestep_prob=0.9,
+            s2_cloud_block_prob=0.5,
+            s2_cloud_block_min=1,
+            s2_cloud_block_max=self.NUM_TS,
+            meteo_full_dropout_prob=0.5,
+            meteo_timestep_dropout_prob=0.9,
+            dem_dropout_prob=0.5,
+            seed=17,
+        )
+        ds = self._make_ds(augment=False, masking_config=cfg)
+        self.assertIsNotNone(ds._batch_cache)
+
+        indices = list(range(self.NUM_SAMPLES))
+        for trial in range(16):
+            np.random.seed(trial)
+            fast_preds, _ = ds.__getitems__(indices)
+            s1 = self._np(fast_preds.s1[:, 0, 0])
+            s2 = self._np(fast_preds.s2[:, 0, 0])
+            meteo = self._np(fast_preds.meteo[:, 0, 0])
+            dem = self._np(fast_preds.dem[:, 0, 0])
+            empty = (
+                np.all(s1 == NODATAVALUE, axis=(1, 2))
+                & np.all(s2 == NODATAVALUE, axis=(1, 2))
+                & np.all(meteo == NODATAVALUE, axis=(1, 2))
+                & np.all(dem == NODATAVALUE, axis=1)
+            )
+            self.assertFalse(
+                empty.any(),
+                f"Trial {trial}: {empty.sum()} sample(s) carry no encoder token",
+            )
+
+    def test_masking_fast_path_token_guard_when_s1_disabled_and_s2_missing(self):
+        """Fast-path tier-2 guard: S1 disabled + S2 absent must still leave a token."""
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        df = self.df.copy()
+        for ts in range(self.NUM_AVAIL):
+            for tmpl in [
+                "OPTICAL-B02-ts{}-10m",
+                "OPTICAL-B03-ts{}-10m",
+                "OPTICAL-B04-ts{}-10m",
+                "OPTICAL-B08-ts{}-10m",
+                "OPTICAL-B05-ts{}-20m",
+                "OPTICAL-B06-ts{}-20m",
+                "OPTICAL-B07-ts{}-20m",
+                "OPTICAL-B8A-ts{}-20m",
+                "OPTICAL-B11-ts{}-20m",
+                "OPTICAL-B12-ts{}-20m",
+            ]:
+                df[tmpl.format(ts)] = float(NODATAVALUE)
+
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=1.0,
+            meteo_full_dropout_prob=0.9,
+            meteo_timestep_dropout_prob=0.9,
+            dem_dropout_prob=0.9,
+            seed=23,
+        )
+        ds = WorldCerealLabelledDataset(
+            df,
+            task_type="binary",
+            num_outputs=1,
+            num_timesteps=self.NUM_TS,
+            timestep_freq="month",
+            season_calendar_mode="off",
+            augment=False,
+            masking_config=cfg,
+        )
+        self.assertIsNotNone(ds._batch_cache)
+
+        indices = list(range(self.NUM_SAMPLES))
+        for trial in range(16):
+            np.random.seed(trial)
+            fast_preds, _ = ds.__getitems__(indices)
+            meteo = self._np(fast_preds.meteo[:, 0, 0])
+            dem = self._np(fast_preds.dem[:, 0, 0])
+            empty = np.all(meteo == NODATAVALUE, axis=(1, 2)) & np.all(
+                dem == NODATAVALUE, axis=1
+            )
+            self.assertFalse(
+                empty.any(),
+                f"Trial {trial}: {empty.sum()} sample(s) carry no encoder token",
+            )
+
+    def test_masking_fast_path_full_dropouts(self):
+        """s2_full/meteo_full dropout at 1.0 must wipe the sensor in the fast path."""
+        from worldcereal.train.datasets import SensorMaskingConfig
+
+        cfg = SensorMaskingConfig(
+            enable=True, s2_full_dropout_prob=1.0, meteo_full_dropout_prob=1.0, seed=3
+        )
+        ds = self._make_ds(augment=False, masking_config=cfg)
+        self.assertIsNotNone(ds._batch_cache)
+
+        fast_preds, _ = ds.__getitems__(list(range(self.NUM_SAMPLES)))
+        self.assertTrue(np.all(self._np(fast_preds.s2) == NODATAVALUE))
+        self.assertTrue(np.all(self._np(fast_preds.meteo) == NODATAVALUE))
+        # S1 is the only remaining sensor and must be untouched.
+        self.assertTrue((self._np(fast_preds.s1) != NODATAVALUE).any())
+
     # ------------------------------------------------------------------
     # 6. Fast-path disabled gracefully for unsupported configs
     # ------------------------------------------------------------------

@@ -170,7 +170,8 @@ class _MemoryTrace:
                 {
                     "stage": f"{prev['label']} -> {cur['label']}",
                     "duration_s": float(cur["elapsed_s"]) - float(prev["elapsed_s"]),
-                    "traced_delta_mb": float(cur["current_mb"]) - float(prev["current_mb"]),
+                    "traced_delta_mb": float(cur["current_mb"])
+                    - float(prev["current_mb"]),
                     "peak_mb": float(cur["peak_mb"]),
                     "rss_delta_mb": rss_delta,
                 }
@@ -179,7 +180,9 @@ class _MemoryTrace:
         total_duration = float(self._records[-1]["elapsed_s"])
         max_peak = max(float(row["peak_mb"]) for row in stage_rows)
 
-        slowest = sorted(stage_rows, key=lambda r: r["duration_s"], reverse=True)[:top_n]
+        slowest = sorted(stage_rows, key=lambda r: r["duration_s"], reverse=True)[
+            :top_n
+        ]
         memory_heavy = sorted(
             stage_rows, key=lambda r: r["traced_delta_mb"], reverse=True
         )[:top_n]
@@ -198,7 +201,9 @@ class _MemoryTrace:
         lines.append("[profile] largest traced memory increases:")
         for idx, row in enumerate(memory_heavy, start=1):
             rss_delta = row.get("rss_delta_mb")
-            rss_text = f" | rss_delta={rss_delta:+.2f}MB" if rss_delta is not None else ""
+            rss_text = (
+                f" | rss_delta={rss_delta:+.2f}MB" if rss_delta is not None else ""
+            )
             lines.append(
                 f"[profile]   {idx}. {row['stage']} | traced_delta={row['traced_delta_mb']:+.2f}MB | "
                 f"duration={row['duration_s']:.3f}s | peak={row['peak_mb']:.2f}MB{rss_text}"
@@ -251,6 +256,14 @@ GFMAP_BAND_MAPPING = {
 S1_INPUT_BANDS = ["S1-SIGMA0-VV", "S1-SIGMA0-VH"]
 NODATA_VALUE = 65535
 NOCROP_VALUE = 254
+
+# Renamed band sets per modality (after GFMAP_BAND_MAPPING is applied)
+_S1_BANDS = {"VH", "VV"}
+_S2_BANDS = {"B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B11", "B12"}
+_METEO_BANDS = {"temperature_2m", "total_precipitation"}
+# DEM arrives as "elevation" (renamed in the openEO graph) or "COP-DEM"
+# (unrenamed fallback); "slope" is added later by add_slope_band.
+_DEM_BANDS = {"elevation", "slope", "COP-DEM"}
 
 POSTPROCESSING_EXCLUDED_VALUES = [NOCROP_VALUE, 255, 65535]
 POSTPROCESSING_NODATA = 255
@@ -376,8 +389,7 @@ class DataPreprocessor:
 
     @staticmethod
     def validate_s1_backscatter(arr: xr.DataArray) -> xr.DataArray:
-        """Validate S1 bands; keep compressed uint16 DN values untouched.
-        """
+        """Validate S1 bands; keep compressed uint16 DN values untouched."""
         band_names = [str(b) for b in np.asarray(arr.coords["bands"].values)]
         present_idx = [band_names.index(b) for b in S1_INPUT_BANDS if b in band_names]
         if not present_idx:
@@ -385,9 +397,7 @@ class DataPreprocessor:
         data = arr.isel(bands=present_idx).values
         valid_mask = data != NODATA_VALUE
         if np.any(valid_mask):
-            DataPreprocessor._validate_s1_data(
-                data[valid_mask].astype(np.float32)
-            )
+            DataPreprocessor._validate_s1_data(data[valid_mask].astype(np.float32))
         return arr
 
     @staticmethod
@@ -1054,6 +1064,37 @@ def get_expected_timesteps_from_artifact(
 # ---------------------------------------------------------------------------
 
 
+def _sensors_disabled_by_masking(masking: Mapping[str, Any]) -> Dict[str, bool]:
+    """Derive which sensors a resolved SensorMaskingConfig eliminates entirely.
+
+    Mirrors the ``*_disabled`` properties of ``SensorMaskingConfig``. Returns
+    all-False when masking was recorded but never applied.
+    """
+    off = {"s1": False, "s2": False, "meteo": False, "dem": False}
+    if not masking.get("enable", False):
+        return off
+
+    def prob(name: str) -> float:
+        value = masking.get(name, 0.0)
+        # bool subclasses int, so `true` would read as 1.0 and blank a sensor.
+        if isinstance(value, bool):
+            return 0.0
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    off["s1"] = (
+        prob("s1_full_dropout_prob") >= 1.0 or prob("s1_timestep_dropout_prob") >= 1.0
+    )
+    off["s2"] = (
+        prob("s2_full_dropout_prob") >= 1.0 or prob("s2_cloud_timestep_prob") >= 1.0
+    )
+    off["meteo"] = (
+        prob("meteo_full_dropout_prob") >= 1.0
+        or prob("meteo_timestep_dropout_prob") >= 1.0
+    )
+    off["dem"] = prob("dem_dropout_prob") >= 1.0
+    return off
+
+
 class SeasonalInferenceEngine:
     """High-level orchestrator that runs seasonal inference on xarray cubes."""
 
@@ -1140,7 +1181,9 @@ class SeasonalInferenceEngine:
         self._memory_logging = bool(memory_logging)
         self._memory_logging_verbose = bool(memory_logging_verbose)
         self._memory_report_top_n = max(1, int(memory_report_top_n))
-        self._export_embeddings_enabled = False  # Will be set to True if export_embeddings is used
+        self._export_embeddings_enabled = (
+            False  # Will be set to True if export_embeddings is used
+        )
         from worldcereal.train import GLOBAL_SEASON_IDS
 
         if not self._croptype_enabled:
@@ -1217,9 +1260,7 @@ class SeasonalInferenceEngine:
                 coords=predictor_cube.coords,
             )
 
-            predictors = generate_predictor(
-                predictor_cube, epsg
-            )
+            predictors = generate_predictor(predictor_cube, epsg)
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
             num_timesteps = getattr(predictors, "T", None)
@@ -1290,6 +1331,85 @@ class SeasonalInferenceEngine:
         except AttributeError:
             return None
 
+    def _get_disabled_modalities(self) -> Dict[str, bool]:
+        """Return a mapping of modality name -> disabled flag from run_config.
+
+        Two sources are ORed. The ``--disable_*`` flags in ``run_config.args``
+        keep older models working, and the resolved probabilities in
+        ``run_config.dataset.train_masking`` are needed because the masking
+        overrides can eliminate a sensor without the flag ever being set. An
+        absent source contributes nothing.
+        """
+        disabled = {"s1": False, "s2": False, "meteo": False, "dem": False}
+        bundle = getattr(self, "bundle", None)
+        artifact = getattr(bundle, "base_artifact", None)
+        run_config = getattr(artifact, "run_config", None)
+        if not isinstance(run_config, Mapping):
+            return disabled
+
+        args = run_config.get("args")
+        if isinstance(args, Mapping):
+            for sensor in disabled:
+                disabled[sensor] = bool(args.get(f"disable_{sensor}", False))
+
+        dataset_cfg = run_config.get("dataset")
+        masking = None
+        if isinstance(dataset_cfg, Mapping):
+            # "train_masking" is the current key; "masking" is the pre-rename
+            # one still present in older run_configs.
+            masking = dataset_cfg.get("train_masking") or dataset_cfg.get("masking")
+        if isinstance(masking, Mapping):
+            for sensor, off in _sensors_disabled_by_masking(masking).items():
+                if off and not disabled[sensor]:
+                    logger.info(
+                        f"{sensor.upper()} was eliminated during training via the "
+                        f"masking configuration (probability 1.0) without a "
+                        f"disable_{sensor} flag; mirroring it at inference."
+                    )
+                disabled[sensor] = disabled[sensor] or off
+        return disabled
+
+    def _mask_disabled_modalities(self, arr: xr.DataArray) -> xr.DataArray:
+        """Set all bands of disabled modalities to NODATA_VALUE."""
+        disabled = self._get_disabled_modalities()
+        if not any(disabled.values()):
+            return arr
+
+        # Training rejects a config that eliminates S1 and S2 together
+        # (SensorMaskingConfig.validate), so a model claiming both is malformed.
+        if disabled["s1"] and disabled["s2"]:
+            raise ValueError(
+                "run_config eliminates both S1 and S2; training forbids that "
+                "combination, so this model artifact is inconsistent."
+            )
+
+        modality_bands = {
+            "s1": _S1_BANDS,
+            "s2": _S2_BANDS,
+            "meteo": _METEO_BANDS,
+            "dem": _DEM_BANDS,
+        }
+        present = set(arr.bands.values)
+        # Index the band axis by name rather than assuming it comes first.
+        band_axis = arr.dims.index("bands")
+        band_order = list(arr.bands.values)
+
+        result = arr.copy()
+        for modality, bands in modality_bands.items():
+            if not disabled[modality]:
+                continue
+            targets = bands & present
+            if not targets:
+                continue
+            logger.info(
+                f"Masking modality '{modality}' bands to NODATA: {sorted(targets)}"
+            )
+            for band in targets:
+                index: List[Any] = [slice(None)] * result.values.ndim
+                index[band_axis] = band_order.index(band)
+                result.values[tuple(index)] = NODATA_VALUE
+        return result
+
     def _prepare_array(self, arr: xr.DataArray, epsg: int) -> xr.DataArray:
         if "bands" not in arr.dims:
             raise ValueError("Input DataArray must expose a 'bands' dimension")
@@ -1300,6 +1420,9 @@ class SeasonalInferenceEngine:
         ]
         reordered = reordered.assign_coords(bands=renamed_bands)
 
+        # Mirror the sensors the model was trained without.
+        reordered = self._mask_disabled_modalities(reordered)
+
         # Mask B8A band if requested
         if self._mask_b8a and "B8A" in reordered.bands.values:
             logger.info(
@@ -1309,7 +1432,11 @@ class SeasonalInferenceEngine:
             reordered.values[b8a_idx, :, :, :] = NODATA_VALUE
 
         reordered = reordered.transpose("bands", "t", "x", "y")
-        reordered = DataPreprocessor.add_slope_band(reordered, epsg)
+        if not self._get_disabled_modalities()["dem"]:
+            # Skipped for a DEM-disabled model: elevation is already masked, so
+            # slope would be derived from NODATA and come out as garbage. An
+            # absent band reaches the predictor as NODATA anyway.
+            reordered = DataPreprocessor.add_slope_band(reordered, epsg)
         return reordered.fillna(NODATA_VALUE).astype(np.float32)
 
     def _resolve_season_masks(
@@ -1519,9 +1646,7 @@ class SeasonalInferenceEngine:
                 or processed_batches % log_every == 0
                 or (estimated_batches and processed_batches == estimated_batches)
             ):
-                memory_trace.checkpoint(
-                    f"run_batches:after_batch_{processed_batches}"
-                )
+                memory_trace.checkpoint(f"run_batches:after_batch_{processed_batches}")
 
         logger.info(
             f"Finished running {processed_batches} predictor batches (landcover={len(landcover_logits)}, "
@@ -2103,9 +2228,11 @@ def _normalize_udf_season_masks(value: Any) -> Optional[np.ndarray]:
 
 def _emit_multiclass_landcover() -> bool:
     """Env switch (not a job parameter) gating the multiclass landcover bands."""
-    return os.environ.get(
-        "WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0"
-    ).lower() in ("1", "true", "yes")
+    return os.environ.get("WORLDCEREAL_EMIT_MULTICLASS_LANDCOVER", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
