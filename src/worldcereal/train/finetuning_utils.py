@@ -2368,18 +2368,9 @@ def run_finetuning(
                 param.requires_grad = False
                 logger.info(f"Freezing layer: {name}")
 
-    # ------------------------------------------------------------------
-    # Baseline floor for model selection.
-    #
-    # Without this, every ``best_*`` tracker starts at None, so epoch 1
-    # *always* counts as an improvement and is always checkpointed -- even
-    # when it is far worse than the weights we started from. For a warm-started
-    # head-only run (frozen encoder, head loaded from a converged checkpoint)
-    # that means the run can only ever ship a degraded head: the pre-training
-    # state is never a candidate. Seeding the trackers with the pre-training
-    # validation scores makes the warm start compete like any other epoch, so
-    # the returned model is guaranteed to be no worse than the input.
-    # ------------------------------------------------------------------
+    # Floor model selection at the pre-training scores. Otherwise every best_*
+    # tracker starts at None, epoch 1 is always checkpointed however bad it is,
+    # and a warm-started head-only run can only ever ship a degraded head.
     if baseline_scores:
         best_lc_f1 = baseline_scores.get("lc_f1")
         best_ct_f1 = baseline_scores.get("ct_f1")
@@ -2415,8 +2406,7 @@ def run_finetuning(
             )
             logger.info("=" * 66)
 
-        # Persist the warm start immediately so a checkpoint always exists on
-        # disk even if no epoch ever improves on it.
+        # Persist the warm start so a checkpoint exists even if nothing improves.
         _save_best(0, model, best_loss if best_loss is not None else float("nan"))
 
     for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
@@ -2847,10 +2837,8 @@ def run_finetuning(
                 or cur_regional_mean_f1 - best_regional_mean_f1 > _MIN_DELTA
             )
         elif _effective_metric == "lc_regional_f1":
-            # Single-task regional metric: the right choice for a head-only run,
-            # where the frozen task's regional F1 is a constant every epoch and
-            # would otherwise halve the selection signal, and where the global
-            # macro F1 is blind to how the gain is distributed across regions.
+            # Single-task regional metric: in a head-only run the frozen task's
+            # regional F1 is constant and would halve the selection signal.
             _cur = (
                 cur_lc_regional_f1
                 if cur_lc_regional_f1 is not None
