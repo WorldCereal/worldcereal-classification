@@ -84,6 +84,8 @@ class ClassSelectionWidget:
         DataFrame with an ``ewoc_code`` column. Sample counts are derived from it.
     ewoc_codes : iterable of int, optional
         Explicit classes to show when no sample dataframe is supplied.
+        When both ``sample_df`` and ``ewoc_codes`` are omitted, the full
+        WorldCereal legend (via ``get_legend()``) is used instead.
     count_threshold : int, default 0
         Hide source classes with fewer samples than this threshold.
     labels : dict[int, str], optional
@@ -114,8 +116,6 @@ class ClassSelectionWidget:
         legend: Optional[pd.DataFrame] = None,
         display_ui: bool = True,
     ):
-        if sample_df is None and ewoc_codes is None:
-            raise ValueError("Provide sample_df or ewoc_codes.")
         if sample_df is not None and "ewoc_code" not in sample_df.columns:
             raise ValueError("sample_df must contain an 'ewoc_code' column.")
 
@@ -127,6 +127,15 @@ class ClassSelectionWidget:
             for k, path in (hierarchy_paths or {}).items()
         }
         self._legend = legend.copy() if legend is not None else self._load_legend()
+
+        if sample_df is None and ewoc_codes is None:
+            # No explicit filter: fall back to the full WorldCereal legend so
+            # e.g. "no crop-only filtering" still yields a usable widget.
+            if self._legend is None:
+                raise ValueError(
+                    "Provide sample_df or ewoc_codes, or ensure get_legend() is available."
+                )
+            ewoc_codes = list(self._legend.index)
 
         self.sources = self._build_source_classes(sample_df, ewoc_codes)
         if not self.sources:
