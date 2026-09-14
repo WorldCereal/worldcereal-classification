@@ -483,6 +483,7 @@ def worldcereal_preprocessed_inputs(
     disable_s1: bool = False,
     disable_s2: bool = False,
     disable_meteo: bool = False,
+    disable_dem: bool = False,
     validate_temporal_context: bool = True,
     s1_orbit_state: Optional[str] = None,
     tile_size: Optional[int] = None,
@@ -567,27 +568,28 @@ def worldcereal_preprocessed_inputs(
     # behaviour), falling back to S1 when S2 is disabled.
     reference_data = s2_data if s2_data is not None else s1_data
 
-    dem_data = raw_datacube_DEM(
-        connection=connection,
-        backend_context=backend_context,
-        fetch_type=fetch_type,
-        dem_collection=dem_collection,
-        target_epsg=target_epsg,
-    )
-
-    # Explicitly resample DEM with bilinear interpolation and based on the
-    # reference grid; note: we avoid the source native projection to sidestep
-    # issues at the edges because source data is not in UTM projection.
-    dem_data = dem_data.resample_cube_spatial(reference_data, method="bilinear")
-
-    # Cast DEM to UINT16
-    dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
-
     if s2_data is not None and s1_data is not None:
         data = s2_data.merge_cubes(s1_data)
     else:
         data = reference_data
-    data = data.merge_cubes(dem_data)
+
+    if not disable_dem:
+        dem_data = raw_datacube_DEM(
+            connection=connection,
+            backend_context=backend_context,
+            fetch_type=fetch_type,
+            dem_collection=dem_collection,
+            target_epsg=target_epsg,
+        )
+
+        # Explicitly resample DEM with bilinear interpolation and based on the
+        # reference grid; note: we avoid the source native projection to sidestep
+        # issues at the edges because source data is not in UTM projection.
+        dem_data = dem_data.resample_cube_spatial(reference_data, method="bilinear")
+
+        # Cast DEM to UINT16
+        dem_data = dem_data.linear_scale_range(0, 65534, 0, 65534)
+        data = data.merge_cubes(dem_data)
 
     if not disable_meteo:
         meteo_data = precomposited_datacube_METEO(

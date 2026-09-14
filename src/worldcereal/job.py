@@ -31,6 +31,7 @@ from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from worldcereal.openeo.inference import (
     _merge_workflow_sections,
     _select_workflow_preset,
+    _sensors_disabled_by_masking,
 )
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
@@ -369,12 +370,24 @@ def _get_disabled_modalities(seasonal_model_zip: str) -> Dict[str, bool]:
     loaded and masked afterwards.
     """
     run_config = _get_artifact_run_config(seasonal_model_zip) or {}
-    args = run_config.get("args", {})
-    return {
-        "s1": bool(args.get("disable_s1", False)),
-        "s2": bool(args.get("disable_s2", False)),
-        "meteo": bool(args.get("disable_meteo", False)),
-    }
+    disabled = {"s1": False, "s2": False, "meteo": False, "dem": False}
+    if not isinstance(run_config, Mapping):
+        return disabled
+
+    args = run_config.get("args")
+    if isinstance(args, Mapping):
+        for sensor in disabled:
+            disabled[sensor] = bool(args.get(f"disable_{sensor}", False))
+
+    dataset_cfg = run_config.get("dataset")
+    masking = None
+    if isinstance(dataset_cfg, Mapping):
+        masking = dataset_cfg.get("train_masking") or dataset_cfg.get("masking")
+    if isinstance(masking, Mapping):
+        for sensor, is_disabled in _sensors_disabled_by_masking(masking).items():
+            disabled[sensor] = disabled[sensor] or is_disabled
+
+    return disabled
 
 
 def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
@@ -481,7 +494,7 @@ def create_inference_process_graph(
         Optional OpenEO connection to use. If not provided, a new connection
         will be created based on the backend_context.
     skip_disabled_sensor_inputs: bool
-        When True, sensors (S1/S2/meteo) that the resolved seasonal model was
+        When True, modalities (S1/S2/meteo/DEM) that the resolved seasonal model was
         trained without are skipped at input-loading time instead of being
         loaded and masked afterwards. Only safe when `seasonal_model_zip` is
         resolved to a concrete value for this specific graph (e.g. from the
@@ -521,7 +534,7 @@ def create_inference_process_graph(
     # concrete value for this graph (e.g. job manager). Not safe for UDP
     # generation, where seasonal_model_zip may still be swapped at runtime via
     # a process parameter after the graph structure is already fixed.
-    disabled_modalities = {"s1": False, "s2": False, "meteo": False}
+    disabled_modalities = {"s1": False, "s2": False, "meteo": False, "dem": False}
     if skip_disabled_sensor_inputs:
         seasonal_model_zip = str(
             workflow_context["workflow_config"]["model"]["seasonal_model_zip"]
@@ -542,6 +555,7 @@ def create_inference_process_graph(
         disable_s1=disabled_modalities["s1"],
         disable_s2=disabled_modalities["s2"],
         disable_meteo=disabled_modalities["meteo"],
+        disable_dem=disabled_modalities["dem"],
     )
 
     # Construct the feature extraction and model inference pipeline
@@ -746,6 +760,7 @@ def _get_preprocessed_inputs(
     disable_s1: bool = False,
     disable_s2: bool = False,
     disable_meteo: bool = False,
+    disable_dem: bool = False,
 ) -> openeo.DataCube:
     if connection is None:
         connection = BACKEND_CONNECTIONS[backend_context.backend]()
@@ -764,6 +779,7 @@ def _get_preprocessed_inputs(
         disable_s1=disable_s1,
         disable_s2=disable_s2,
         disable_meteo=disable_meteo,
+        disable_dem=disable_dem,
     )
 
     return inputs.filter_bbox(dict(spatial_extent))

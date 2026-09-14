@@ -16,6 +16,7 @@ from worldcereal.job import (
     DEFAULT_SEASONAL_WORKFLOW_PRESET,
     WorldCerealProductType,
     WorldCerealTask,
+    _get_disabled_modalities,
     create_inference_process_graph,
 )
 from worldcereal.jobmanager import WorldCerealJobManager
@@ -500,6 +501,7 @@ def test_create_inference_process_graph_default_does_not_skip_sensor_inputs():
         assert mock_inputs.call_args.kwargs["disable_s1"] is False
         assert mock_inputs.call_args.kwargs["disable_s2"] is False
         assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
 
 
 def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
@@ -518,7 +520,9 @@ def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
         patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
     ):
         mock_inputs.return_value = _dummy_input_cube()
-        mock_load_artifact.return_value = MagicMock(run_config={"args": {"disable_s1": True}})
+        mock_load_artifact.return_value = MagicMock(
+            run_config={"args": {"disable_s1": True}}
+        )
         mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
 
         create_inference_process_graph(
@@ -532,6 +536,34 @@ def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
         assert mock_inputs.call_args.kwargs["disable_s1"] is True
         assert mock_inputs.call_args.kwargs["disable_s2"] is False
         assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
+
+
+def test_get_disabled_modalities_includes_training_masking_and_dem():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    with patch("worldcereal.job.load_model_artifact") as mock_load_artifact:
+        mock_load_artifact.return_value = MagicMock(
+            run_config={
+                "args": {"disable_meteo": True},
+                "dataset": {
+                    "train_masking": {
+                        "enable": True,
+                        "s1_timestep_dropout_prob": 1.0,
+                        "dem_dropout_prob": 1.0,
+                    }
+                },
+            }
+        )
+
+        assert _get_disabled_modalities("model.zip") == {
+            "s1": True,
+            "s2": False,
+            "meteo": True,
+            "dem": True,
+        }
 
 
 def test_create_inputs_job_logic(tmp_path: Path):
