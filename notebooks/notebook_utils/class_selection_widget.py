@@ -673,7 +673,10 @@ class ClassSelectionWidget:
         source_panel.add_class("wc-section-source")
 
         selection_panel = widgets.VBox(
-            [
+            [   
+                widgets.HTML(
+                                "<div class='wc-section-title'>Selection</div>"
+                            ),
                 self.source_selection_status,
             ],
             layout=widgets.Layout(
@@ -825,12 +828,10 @@ class ClassSelectionWidget:
     def _format_source_assignment(self, code: int) -> str:
         source = self._source_lookup[code]
         group = self.assignments[code]
-        count_text = (
-            f"{source.count:,}" if self.sample_df is not None else "-"
-        )
+        count_part = f"  ({source.count:,})" if self.sample_df is not None else ""
         if group == EXCLUDED:
-            return f"{source.label}  ({count_text})  · not selected"
-        return f"{source.label}  ({count_text})  → {group}"
+            return f"{source.label}{count_part}  · not selected"
+        return f"{source.label}{count_part}  → {group}"
 
     def _make_source_checkbox(self, code: int) -> widgets.Checkbox:
         checkbox = widgets.Checkbox(
@@ -1051,31 +1052,37 @@ class ClassSelectionWidget:
         lookup = self._source_lookup
 
         if selected:
-            sample_count = sum(lookup[code].count for code in selected)
             labels = [lookup[code].label for code in selected]
             preview = ", ".join(escape(label) for label in labels[:4])
             if len(labels) > 4:
                 preview += f", +{len(labels) - 4} more"
+            header = (
+                f"<b>{len(selected)} source class"
+                f"{'es' if len(selected) != 1 else ''}</b> selected"
+            )
+            if self.sample_df is not None:
+                sample_count = sum(lookup[code].count for code in selected)
+                header += f" <span style='color:#666'>· {sample_count:,} samples</span>"
             self.source_selection_status.value = (
-                f"<div style='font-size:13px'><b>{len(selected)} source "
-                f"class{'es' if len(selected) != 1 else ''}</b> selected "
-                f"<span style='color:#666'>· {sample_count:,} samples</span><br>"
+                f"<div style='font-size:13px'>{header}<br>"
                 f"<span style='font-size:12px;color:#666'>{preview}</span></div>"
             )
             return
 
         if self._active_branch_label and self._active_branch_codes:
             codes = [code for code in self._active_branch_codes if code in self.assignments]
-            sample_count = sum(lookup[code].count for code in codes)
             labels = [lookup[code].label for code in codes]
             preview = ", ".join(escape(label) for label in labels[:4])
             if len(labels) > 4:
                 preview += f", +{len(labels) - 4} more"
+            count_line = f"{len(codes)} source class{'es' if len(codes) != 1 else ''}"
+            if self.sample_df is not None:
+                sample_count = sum(lookup[code].count for code in codes)
+                count_line += f" · {sample_count:,} samples"
             self.source_selection_status.value = (
                 f"<div style='font-size:13px'><b>Group: "
                 f"{escape(self._active_branch_label)}</b><br>"
-                f"<span style='font-size:12px;color:#666'>{len(codes)} source "
-                f"class{'es' if len(codes) != 1 else ''} · {sample_count:,} samples</span><br>"
+                f"<span style='font-size:12px;color:#666'>{count_line}</span><br>"
                 f"<span style='font-size:12px;color:#666'>{preview}</span></div>"
             )
             return
@@ -1367,15 +1374,16 @@ class ClassSelectionWidget:
             members,
             key=lambda c: tuple(part.casefold() for part in lookup[c].hierarchy_path),
         )
-        sample_count = sum(lookup[code].count for code in members)
         expanded = group in self._expanded_group_names
+
+        count_desc = f"{len(members)} source class{'es' if len(members) != 1 else ''}"
+        if self.sample_df is not None:
+            sample_count = sum(lookup[code].count for code in members)
+            count_desc += f"   ·   {sample_count:,} samples"
 
         header = widgets.ToggleButton(
             value=expanded,
-            description=(
-                f"{group}   ·   {len(members)} source class"
-                f"{'es' if len(members) != 1 else ''}   ·   {sample_count:,} samples"
-            ),
+            description=f"{group}   ·   {count_desc}",
             icon="chevron-down" if expanded else "chevron-right",
             layout=widgets.Layout(width="100%", max_width="100%", overflow="hidden"),
         )
@@ -1383,7 +1391,12 @@ class ClassSelectionWidget:
 
         member_select = widgets.SelectMultiple(
             options=[
-                (f"{lookup[code].label} ({lookup[code].count:,})", code)
+                (
+                    f"{lookup[code].label} ({lookup[code].count:,})"
+                    if self.sample_df is not None
+                    else lookup[code].label,
+                    code,
+                )
                 for code in members
             ],
             rows=min(max(len(members), 2), 6),
@@ -1517,11 +1530,13 @@ class ClassSelectionWidget:
     def _build_not_selected_section(self, codes: Sequence[int]) -> widgets.Widget:
         """Build the "Not selected" section with bulk actions for it."""
         lookup = self._source_lookup
-        sample_count = sum(lookup[code].count for code in codes)
+        count_text = f"{len(codes)} source class{'es' if len(codes) != 1 else ''}"
+        if self.sample_df is not None:
+            sample_count = sum(lookup[code].count for code in codes)
+            count_text += f" &middot; {sample_count:,} samples"
         header = widgets.HTML(
             "<div style='font-size:13px;font-weight:700;color:#92400e;margin:2px 0 4px 0'>"
-            f"Not selected &middot; {len(codes)} source class"
-            f"{'es' if len(codes) != 1 else ''} &middot; {sample_count:,} samples"
+            f"Not selected &middot; {count_text}"
             "</div>"
         )
         return widgets.VBox(
@@ -1548,11 +1563,13 @@ class ClassSelectionWidget:
         lookup = self._source_lookup
         group_set = set(groups)
         codes = [code for code, group in self.assignments.items() if group in group_set]
-        sample_count = sum(lookup[code].count for code in codes)
+        count_text = f"{len(groups)} final class{'es' if len(groups) != 1 else ''}"
+        if self.sample_df is not None:
+            sample_count = sum(lookup[code].count for code in codes)
+            count_text += f" &middot; {sample_count:,} samples"
         return widgets.HTML(
             "<div style='font-size:13px;font-weight:700;color:#166534;margin:2px 0 4px 0'>"
-            f"Selected classes &middot; {len(groups)} final class"
-            f"{'es' if len(groups) != 1 else ''} &middot; {sample_count:,} samples"
+            f"Selected classes &middot; {count_text}"
             "</div>"
         )
 
@@ -1708,12 +1725,12 @@ class ClassSelectionWidget:
             return
         for code in valid_codes:
             self.assignments[code] = label
-        sample_count = sum(self._source_lookup[code].count for code in valid_codes)
         self._clear_selected_after_action()
-        self._set_message(
-            f"Created final class '{label}' from {len(valid_codes)} source "
-            f"classes ({sample_count:,} samples)."
-        )
+        message = f"Created final class '{label}' from {len(valid_codes)} source classes"
+        if self.sample_df is not None:
+            sample_count = sum(self._source_lookup[code].count for code in valid_codes)
+            message += f" ({sample_count:,} samples)"
+        self._set_message(f"{message}.")
         self._refresh_all()
 
     def _on_apply(self, _=None) -> None:
