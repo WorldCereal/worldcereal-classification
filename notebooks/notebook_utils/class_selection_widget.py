@@ -427,7 +427,7 @@ class ClassSelectionWidget:
         )
 
         intro_title = widgets.HTML(
-            "<div style='margin:0 0 4px 0;padding:10px 12px;border-left:4px solid #4f6f52;background:#f7faf7'>"
+            "<div style='box-sizing:border-box;width:100%;margin:0 0 4px 0;padding:10px 12px;border-left:4px solid #4f6f52;background:#f7faf7'>"
             "<b>Class selection tool</b>"
             "</div>"
         )
@@ -455,7 +455,10 @@ class ClassSelectionWidget:
             intro_info.layout.display = "block" if change["new"] else "none"
 
         intro_toggle.observe(_toggle_intro, names="value")
-        intro = widgets.VBox([intro_title, intro_toggle, intro_info])
+        intro = widgets.VBox(
+            [intro_title, intro_toggle, intro_info],
+            layout=widgets.Layout(width="100%", align_items="flex-start"),
+        )
 
         self.search = widgets.Text(
             placeholder="Search source classes...",

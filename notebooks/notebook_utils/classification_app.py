@@ -783,7 +783,10 @@ class WorldCerealClassificationApp:
                 crop_only_explanation,
                 crop_only_checkbox,
                 crop_types_explanation,
-                widgets.HBox([select_crops_button]),
+                widgets.HBox(
+                    [select_crops_button],
+                    layout=widgets.Layout(justify_content="flex-start"),
+                ),
                 class_selection_widget_status,
                 class_selection_widget_container,
                 widgets.HTML("<b>5) Start your search for reference data!</b>"),
