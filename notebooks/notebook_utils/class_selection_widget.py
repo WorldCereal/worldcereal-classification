@@ -325,7 +325,7 @@ class ClassSelectionWidget:
             .wc-class-selection-widget select,
             .wc-class-selection-widget input { max-width: 100%; }
             .wc-class-selection-widget .wc-source-scroll {
-                overflow-x: hidden !important;
+                overflow-x: auto !important;
                 overflow-y: scroll !important;
                 display: flex !important;
                 flex-direction: column !important;
@@ -335,11 +335,23 @@ class ClassSelectionWidget:
                 flex: 0 0 auto !important;
                 flex-shrink: 0 !important;
             }
+            /* Let long source rows grow past the box width instead of wrapping,
+               so a horizontal scrollbar appears only when it's actually needed. */
+            .wc-class-selection-widget .wc-source-scroll .widget-vbox,
+            .wc-class-selection-widget .wc-source-scroll .widget-hbox,
+            .wc-class-selection-widget .wc-source-scroll .jupyter-widgets {
+                min-width: 100% !important;
+                width: max-content !important;
+                max-width: none !important;
+            }
+            .wc-class-selection-widget .wc-source-scroll .widget-label {
+                white-space: nowrap !important;
+                overflow-wrap: normal !important;
+            }
             .wc-class-selection-widget .wc-groups-scroll {
                 overflow-x: hidden !important;
                 overflow-y: auto !important;
             }
-            .wc-class-selection-widget .wc-source-scroll > .widget-vbox,
             .wc-class-selection-widget .wc-groups-scroll > .widget-vbox { max-width: 100% !important; }
 
             /* Make the legend hierarchy visually legible without making leaf classes noisy. */
@@ -408,10 +420,10 @@ class ClassSelectionWidget:
             "background:#f6f7f9;border:1px solid #e3e6ea;border-left:4px solid #c7cdd4;"
             "padding:6px 8px;border-radius:4px;color:#4b5563;font-size:13px;"
             "line-height:1.4;overflow-wrap:anywhere;margin:6px 0 8px 0'>"
-            "Every source class starts <b>not selected</b>. Select source classes on the left to keep them "
-            "individually, combine them into a final class, or leave them out.<br>"
-            "You can see the selected classes on the right and have the option to edit them as needed there.<br>"
-            "Use the <i>Not selected</i> section on the right for bulk actions, including merging everything "
+            "Every source class starts <b>not selected</b>.<br>"
+            "Select source classes on the left and choose an action on the right to move them to the final class selection.<br>"
+            "You can see the selected classes on the bottom and have the option to edit them as needed there.<br>"
+            "Use the <i>Not selected</i> section in the Final classes overview for bulk actions, including merging everything "
             "you haven't touched into one final class."
             "</div>"
         )
@@ -478,7 +490,7 @@ class ClassSelectionWidget:
                 height="280px",
                 min_height="280px",
                 max_height="280px",
-                overflow="hidden auto",
+                overflow="auto auto",
                 border="1px solid #d1d5db",
                 padding="6px 8px",
                 min_width="0",
@@ -676,8 +688,8 @@ class ClassSelectionWidget:
         actions_panel.add_class("wc-section-card")
         actions_panel.add_class("wc-section-actions")
 
-        left_column = widgets.VBox(
-            [source_panel, selection_panel, actions_panel],
+        side_column = widgets.VBox(
+            [selection_panel, actions_panel],
             layout=widgets.Layout(
                 width="100%",
                 min_width="0",
@@ -686,6 +698,17 @@ class ClassSelectionWidget:
                 gap="10px",
                 display="flex",
                 flex_direction="column",
+            ),
+        )
+
+        top_row = widgets.GridBox(
+            [source_panel, side_column],
+            layout=widgets.Layout(
+                width="100%",
+                grid_template_columns="minmax(0, 62%) minmax(0, 38%)",
+                grid_gap="14px",
+                align_items="flex-start",
+                overflow="visible",
             ),
         )
 
@@ -706,14 +729,14 @@ class ClassSelectionWidget:
         final_groups_panel.add_class("wc-section-card")
         final_groups_panel.add_class("wc-section-final")
 
-        comparison_section = widgets.GridBox(
-            [left_column, final_groups_panel],
+        comparison_section = widgets.VBox(
+            [top_row, final_groups_panel],
             layout=widgets.Layout(
                 width="100%",
-                grid_template_columns="minmax(0, 42%) minmax(0, 58%)",
-                grid_gap="14px",
-                align_items="flex-start",
+                min_width="0",
                 overflow="visible",
+                align_items="stretch",
+                gap="14px",
             ),
         )
 
