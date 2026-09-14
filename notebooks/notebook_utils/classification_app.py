@@ -613,7 +613,9 @@ class WorldCerealClassificationApp:
         )
 
         class_selection_widget = None
-        class_selection_widget_container = widgets.VBox()
+        class_selection_widget_container = widgets.VBox(
+            layout=widgets.Layout(width="100%", max_width="100%")
+        )
         class_selection_widget_status = widgets.HTML(value="")
 
         run_query_button = widgets.Button(
@@ -2299,7 +2301,9 @@ class WorldCerealClassificationApp:
             icon="check",
             layout=widgets.Layout(width="240px", height="48px"),
         )
-        class_selection_widget_container = widgets.VBox()
+        class_selection_widget_container = widgets.VBox(
+            layout=widgets.Layout(width="100%", max_width="100%")
+        )
         croptype_output = widgets.Output(
             layout=widgets.Layout(
                 width="100%",
