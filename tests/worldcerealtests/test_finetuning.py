@@ -49,7 +49,6 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
             / "month"
         )
         self.parquet_files = list(self.data_path.rglob("*.geoparquet"))
-        self.pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
 
     def _build_and_run_training(
         self, task_type, num_outputs, train_ds, val_ds, output_dir
@@ -62,7 +61,6 @@ class TestFinetunePrestoEndToEnd(unittest.TestCase):
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
             regression=False,
-            pretrained_model_path=self.pretrained_model_path,
         ).to(device)
 
         if task_type == "multiclass":
@@ -185,7 +183,6 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
             / "dekad"
         )
         self.parquet_files = list(self.data_path.rglob("*.geoparquet"))
-        self.pretrained_model_path = "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/models/PhaseII/presto-ss-wc_longparquet_random-window-cut_no-time-token_epoch96.pt"
         self.timestep_freq = "dekad"
 
     def _build_and_run_training(
@@ -199,7 +196,6 @@ class TestFinetunePrestoEndToEndDekad(unittest.TestCase):
         model = PretrainedPrestoWrapper(
             num_outputs=num_outputs,
             regression=False,
-            pretrained_model_path=self.pretrained_model_path,
         ).to(device)
 
         if task_type == "multiclass":

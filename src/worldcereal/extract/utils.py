@@ -1,17 +1,20 @@
 """Common utilities used by extraction scripts."""
 
 import logging
-import os
+from functools import lru_cache
 from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING
 
 import geojson
 import geopandas as gpd
 import pandas as pd
-import requests
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from shapely import Point
 
 from worldcereal.utils.upload import OpenEOArtifactHelper
+
+if TYPE_CHECKING:
+    from openeo.rest.connection import Connection
 
 # Logger used for the pipeline
 pipeline_log = logging.getLogger("extraction_pipeline")
@@ -36,7 +39,10 @@ class ManagerLoggerFilter(logging.Filter):
 stream_handler.addFilter(ManagerLoggerFilter())
 
 
-S2_GRID = load_s2_grid()
+@lru_cache(maxsize=1)
+def get_s2_grid() -> gpd.GeoDataFrame:
+    """Load and cache the S2 grid when an extraction workflow needs it."""
+    return load_s2_grid()
 
 
 def buffer_geometry(
@@ -54,9 +60,7 @@ def buffer_geometry(
     # Perform the buffering operation
     gdf["geometry"] = gdf.centroid.apply(
         lambda point: Point(round(point.x / 20.0) * 20.0, round(point.y / 20.0) * 20.0)
-    ).buffer(
-        distance=distance_m, cap_style=3
-    )  # Square buffer
+    ).buffer(distance=distance_m, cap_style=3)  # Square buffer
 
     return gdf
 
@@ -74,61 +78,34 @@ def filter_extract_true(
     )
 
 
-def upload_geoparquet_s3(
-    backend: str, gdf: gpd.GeoDataFrame, name: str, collection: str = ""
+def upload_geoparquet_artifact(
+    gdf: gpd.GeoDataFrame,
+    name: str,
+    collection: str = "",
+    *,
+    backend: str | None = None,
+    connection: "Connection | None" = None,
 ) -> str:
-    """Upload the given GeoDataFrame to s3 and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
+    """Upload a GeoDataFrame using openEO authentication and return its URL.
+
+    Exactly one of ``backend`` or an authenticated ``connection`` must be
+    provided. The returned presigned URL remains accessible to the batch job.
     """
-    # Save the dataframe as geoparquet to upload it to artifactory
+    if (backend is None) == (connection is None):
+        raise ValueError("Provide exactly one of 'backend' or 'connection'.")
+
     temporary_file = NamedTemporaryFile()
     gdf.to_parquet(temporary_file.name)
 
     targetpath = f"openeogfmap_dataframe_{collection}_{name}.parquet"
 
-    artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
+    if connection is not None:
+        artifact_helper = OpenEOArtifactHelper.from_openeo_connection(connection)
+    else:
+        assert backend is not None
+        artifact_helper = OpenEOArtifactHelper.from_openeo_backend(backend)
     normal_s3_uri = artifact_helper.upload_file(targetpath, temporary_file.name)
-    presigned_uri = artifact_helper.get_presigned_url(normal_s3_uri)
-
-    return presigned_uri
-
-
-def upload_geoparquet_artifactory(
-    gdf: gpd.GeoDataFrame, name: str, collection: str = ""
-) -> str:
-    """Upload the given GeoDataFrame to artifactory and return the URL of the
-    uploaded file. Necessary as a workaround for Polygon sampling in OpenEO
-    using custom CRS.
-    """
-    # Save the dataframe as geoparquet to upload it to artifactory
-    temporary_file = NamedTemporaryFile()
-    gdf.to_parquet(temporary_file.name)
-
-    artifactory_username = os.getenv("ARTIFACTORY_USERNAME")
-    artifactory_password = os.getenv("ARTIFACTORY_PASSWORD")
-
-    if not artifactory_username or not artifactory_password:
-        raise ValueError(
-            "Artifactory credentials not found. Please set ARTIFACTORY_USERNAME and ARTIFACTORY_PASSWORD."
-        )
-
-    headers = {"Content-Type": "application/octet-stream"}
-
-    upload_url = f"https://artifactory.vgt.vito.be/artifactory/auxdata-public/gfmap-temp/openeogfmap_dataframe_{collection}_{name}.parquet"
-
-    with open(temporary_file.name, "rb") as f:
-        response = requests.put(
-            upload_url,
-            headers=headers,
-            data=f,
-            auth=(artifactory_username, artifactory_password),
-            timeout=180,
-        )
-
-    response.raise_for_status()
-
-    return upload_url
+    return artifact_helper.get_presigned_url(normal_s3_uri)
 
 
 def get_job_nb_polygons(row: pd.Series) -> int:
