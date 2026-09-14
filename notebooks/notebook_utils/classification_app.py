@@ -598,10 +598,8 @@ class WorldCerealClassificationApp:
 
         crop_types_explanation = self._info_callout(
             "Optionally, select specific land cover/crop types to limit your query.<br>"
-            "Clicking the button below will open a crop type selection dialog, which takes a while to load.<br>"
-            "Check all crops you want to include in your query.<br>"
-            "Make use of the Expand buttons to dive into the crop type hierarchy for more detailed selection.<br>"
-            "When you are done selecting, click the green Apply button.<br><br>"
+            "Clicking the button below will open a class selection dialog.<br>"
+            "Make sure to add all your classes of interest to the Final class list before proceeding.<br>"
             "When you skip this step, all crop types will be considered.<br>"
         )
 
