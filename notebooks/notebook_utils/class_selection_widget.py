@@ -360,6 +360,13 @@ class ClassSelectionWidget:
             .wc-class-selection-widget .wc-groups-scroll {
                 overflow-x: hidden !important;
                 overflow-y: auto !important;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+            }
+            .wc-class-selection-widget .wc-groups-scroll > * {
+                flex: 0 0 auto !important;
+                flex-shrink: 0 !important;
             }
             .wc-class-selection-widget .wc-groups-scroll > .widget-vbox { max-width: 100% !important; }
 
