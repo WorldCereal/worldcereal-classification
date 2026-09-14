@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import ipywidgets as widgets
 import pandas as pd
@@ -862,6 +862,7 @@ class ClassSelectionWidget:
         node: dict,
         children_box: widgets.VBox,
         force_expanded: bool,
+        on_first_expand: Optional[Callable[[], None]] = None,
     ) -> widgets.ToggleButton:
         source_count = len(node["descendant_codes"])
         sample_count = node["sample_count"]
@@ -898,6 +899,8 @@ class ClassSelectionWidget:
             is_open = bool(change["new"])
             if is_open:
                 self._expanded_paths.add(current_path)
+                if on_first_expand is not None:
+                    on_first_expand()
             else:
                 self._expanded_paths.discard(current_path)
             toggle.icon = "chevron-down" if is_open else "chevron-right"
@@ -940,26 +943,12 @@ class ClassSelectionWidget:
         visible_codes: set[int],
         search_active: bool,
     ) -> Optional[widgets.Widget]:
+        # descendant_codes/sample_count are pre-aggregated on the tree, so we can
+        # decide visibility and the checkbox-collapse shortcut without touching
+        # (let alone building widgets for) any collapsed descendant branch.
         subtree_visible = node["descendant_codes"] & visible_codes
         if not subtree_visible:
             return None
-
-        child_widgets: List[widgets.Widget] = []
-        for code in node["source_codes"]:
-            if code in visible_codes:
-                child_widgets.append(self._make_source_checkbox(code))
-
-        for child_label, child_node in node["children"].items():
-            child_path = (*path, child_label)
-            rendered = self._render_tree_node(
-                child_label,
-                child_node,
-                child_path,
-                visible_codes,
-                search_active,
-            )
-            if rendered is not None:
-                child_widgets.append(rendered)
 
         direct_visible = [c for c in node["source_codes"] if c in visible_codes]
         has_visible_children = any(
@@ -967,11 +956,11 @@ class ClassSelectionWidget:
             for child in node["children"].values()
         )
         if direct_visible and not has_visible_children and len(direct_visible) == 1:
-            return child_widgets[0]
+            return self._make_source_checkbox(direct_visible[0])
 
         indent_px = 26
         children_box = widgets.VBox(
-            child_widgets,
+            [],
             layout=widgets.Layout(
                 width=f"calc(100% - {indent_px}px)",
                 margin=f"3px 0 4px {indent_px}px",
@@ -981,12 +970,45 @@ class ClassSelectionWidget:
             ),
         )
         children_box.add_class("wc-tree-children")
+
+        # Building all descendant checkboxes/toggles up front does not scale to
+        # the full legend. Only build a branch's children the first time it is
+        # actually expanded (either already-expanded, forced by search, or on
+        # first click of its toggle).
+        built = False
+
+        def build_children() -> None:
+            nonlocal built
+            if built:
+                return
+            built = True
+            child_widgets: List[widgets.Widget] = []
+            for code in node["source_codes"]:
+                if code in visible_codes:
+                    child_widgets.append(self._make_source_checkbox(code))
+            for child_label, child_node in node["children"].items():
+                rendered = self._render_tree_node(
+                    child_label,
+                    child_node,
+                    (*path, child_label),
+                    visible_codes,
+                    search_active,
+                )
+                if rendered is not None:
+                    child_widgets.append(rendered)
+            children_box.children = child_widgets
+
+        expanded = search_active or path in self._expanded_paths
+        if expanded:
+            build_children()
+
         toggle = self._make_branch_toggle(
             path=path,
             label=label,
             node=node,
             children_box=children_box,
             force_expanded=search_active,
+            on_first_expand=build_children,
         )
         return widgets.VBox(
             [toggle, children_box],
