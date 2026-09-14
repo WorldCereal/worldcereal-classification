@@ -90,6 +90,8 @@ class WorldCerealClassificationApp:
 
         """
         self.workflow_mode = "full"
+        self.excluded_modalities: List[str] = []
+        self.training_has_compatible_landcover_head = True
         self._nav_buttons: List[Dict[str, widgets.Button]] = []
 
         # Tab 1 variables
@@ -370,6 +372,30 @@ class WorldCerealClassificationApp:
         workflow_mode_radio.layout = widgets.Layout(width="100%")
         workflow_mode_radio.style = {"description_width": "90px"}
 
+        modality_select = widgets.SelectMultiple(
+            options=[
+                ("Sentinel-1", "s1"),
+                ("Sentinel-2", "s2"),
+                ("Meteorological data", "meteo"),
+                ("DEM and slope", "dem"),
+            ],
+            value=(),
+            description="Exclude:",
+            layout=widgets.Layout(width="420px", height="120px"),
+        )
+        modality_message = widgets.HTML()
+        training_setup = widgets.VBox(
+            [
+                widgets.HTML("<h3>Training model setup</h3>"),
+                widgets.HTML(
+                    "Choose inputs to leave out of the trained model. "
+                ),
+                modality_select,
+                modality_message,
+            ]
+        )
+        training_setup.layout.display = "none"
+
         select_button = widgets.Button(
             description="Launch application",
             button_style="primary",
@@ -379,16 +405,20 @@ class WorldCerealClassificationApp:
 
         self.tab0_widgets = {
             "workflow_mode_radio": workflow_mode_radio,
+            "modality_select": modality_select,
+            "modality_message": modality_message,
+            "training_setup": training_setup,
             "select_button": select_button,
         }
 
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
+        modality_select.observe(self._on_excluded_modalities_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
         children = [header]
         if warning_box is not None:
             children.append(warning_box)
-        children.extend([workflow_mode_radio, widgets.HBox([select_button])])
+        children.extend([workflow_mode_radio, training_setup, widgets.HBox([select_button])])
 
         return widgets.VBox(children)
 
@@ -430,6 +460,61 @@ class WorldCerealClassificationApp:
     def _on_workflow_mode_change(self, change):
         """Handle workflow mode selection changes."""
         self.workflow_mode = change["new"]
+        if self.workflow_mode != "full":
+            self.excluded_modalities = []
+            modality_select = self.tab0_widgets.get("modality_select")
+            if modality_select is not None and modality_select.value:
+                modality_select.value = ()
+        self._update_training_setup_state()
+
+    def _on_excluded_modalities_change(self, change):
+        self.excluded_modalities = list(change["new"])
+        self._update_training_setup_state()
+
+    def _update_training_setup_state(self):
+        """Update training-only modality controls and extraction guidance."""
+        setup = self.tab0_widgets.get("training_setup")
+        if setup is not None:
+            setup.layout.display = "block" if self.workflow_mode == "full" else "none"
+
+        if self.workflow_mode != "full":
+            return
+
+        message = self.tab0_widgets.get("modality_message")
+        has_exclusions = bool(self.excluded_modalities)
+        try:
+            supported = self._get_supported_product_types()
+            self.training_has_compatible_landcover_head = "cropland" in supported
+        except Exception:
+            self.training_has_compatible_landcover_head = False
+
+        if has_exclusions or not self.training_has_compatible_landcover_head:
+            if message is not None:
+                message.value = (
+                    "<div style='color:#8a3b12; background:#fff4e5; padding:8px; "
+                    "border-left:4px solid #f0a04b;'>"
+                    "The default cropland mask will not be available for this training "
+                    "configuration. We advise to include non-crop and permanent-crop classes in a 'no-crop' class so your "
+                    "model can distinguish cropland from non-cropland areas.</div>"
+                )
+            crop_only = self.tab1_widgets.get("crop_only_checkbox")
+            if crop_only is not None:
+                crop_only.value = False
+                crop_only.disabled = True
+        else:
+            if message is not None:
+                message.value = ""
+            crop_only = self.tab1_widgets.get("crop_only_checkbox")
+            if crop_only is not None:
+                crop_only.disabled = False
+
+        if message is not None and {"s1", "s2"}.issubset(self.excluded_modalities):
+            message.value = (
+                "<div style='color:#8a1c1c; background:#fdecec; padding:8px; "
+                "border-left:4px solid #c0392b;'>"
+                "Sentinel-1 and Sentinel-2 cannot both be excluded. Keep at least "
+                "one optical or radar modality for training your model.</div>"
+            )
 
     def _on_workflow_mode_select(self, button):
         """Apply workflow choice and launch the application."""
@@ -446,6 +531,7 @@ class WorldCerealClassificationApp:
         else:
             mode_label = "Full workflow"
         print(f"Mode '{mode_label}' selected. Launching the application...")
+        self._update_training_setup_state()
         self._update_tab2_state()
         self._update_tab3_state()
         self._update_tab4_state()
@@ -3255,6 +3341,7 @@ class WorldCerealClassificationApp:
                     df,
                     season_id=self.season_id,
                     mask_on_training=mask_on_training,
+                    excluded_modalities=self.excluded_modalities,
                     repeats=repeats,
                     augment=augment,
                     min_season_coverage=min_season_coverage,
@@ -3580,6 +3667,7 @@ class WorldCerealClassificationApp:
                     weight_decay=weight_decay,
                     use_balancing=use_balancing,
                     num_workers=0,
+                    excluded_modalities=self.excluded_modalities,
                     presto_model_path=presto_model_path,
                     presto_model_fingerprint=presto_model_fingerprint,
                 )
@@ -4522,6 +4610,16 @@ class WorldCerealClassificationApp:
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
+        active_exclusions = (
+            self.excluded_modalities if self.workflow_mode == "full" else []
+        )
+        if active_exclusions:
+            mask_cropland = False
+            with log_out:
+                print(
+                    "Cropland masking disabled because the trained model excludes "
+                    f"these modalities: {', '.join(active_exclusions)}."
+                )
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 20
         )
@@ -4659,6 +4757,7 @@ class WorldCerealClassificationApp:
             landcover_head=landcover_head_zip,
             croptype_head=croptype_head_zip,
             presto_model=presto_model_path,
+            excluded_modalities=active_exclusions,
         )
 
         # Save all production settings so the run can be resumed with identical
@@ -5298,6 +5397,15 @@ class WorldCerealClassificationApp:
         season_retrieve_info = self.tab8_widgets.get("season_retrieve_info")
         season_retrieve_button = self.tab8_widgets.get("season_retrieve_button")
         season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
+        mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
+
+        active_exclusions = (
+            self.excluded_modalities if self.workflow_mode == "full" else []
+        )
+        if mask_cropland_checkbox is not None:
+            mask_cropland_checkbox.disabled = bool(active_exclusions)
+            if active_exclusions:
+                mask_cropland_checkbox.value = False
 
         if product_type_dropdown is not None:
             if self.workflow_mode == "apply-default-model":
@@ -5524,6 +5632,7 @@ class WorldCerealClassificationApp:
         landcover_head: Optional[str],
         croptype_head: Optional[str],
         presto_model: Optional[str] = None,
+        excluded_modalities: Optional[List[str]] = None,
     ) -> None:
         """Save model metadata to *output_dir* and copy any local model files.
 
@@ -5553,6 +5662,7 @@ class WorldCerealClassificationApp:
             "landcover_head": _resolve(landcover_head),
             "croptype_head": _resolve(croptype_head),
             "presto_model": _resolve(presto_model),
+            "excluded_modalities": sorted(excluded_modalities or []),
         }
         with open(output_dir / "model_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
@@ -5596,6 +5706,7 @@ class WorldCerealClassificationApp:
         self.tab8_seasonal_model_url = metadata.get("seasonal_model")
         self.tab8_landcover_head_url = metadata.get("landcover_head")
         self.tab8_croptype_head_url = metadata.get("croptype_head")
+        self.excluded_modalities = list(metadata.get("excluded_modalities") or [])
         presto_model = metadata.get("presto_model")
         if presto_model is not None and self.presto_model_package is not None:
             # restore whichever key is appropriate based on whether it's a URL or a path
