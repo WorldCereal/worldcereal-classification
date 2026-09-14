@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 from worldcereal.train import OUTLIER_COLUMNS
 from worldcereal.train.data import get_training_dfs_from_parquet
 from worldcereal.train.datasets import (
+    SensorMaskingConfig,
     WorldCerealLabelledDataset,  # MaskingMode,; MaskingStrategy,
 )
 from worldcereal.train.finetuning_utils import (
@@ -1056,3 +1057,76 @@ class TestSeasonalLossTwoSeasonPartialCoverage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPrepareTrainingDatasetsMasking(unittest.TestCase):
+    """Verify that prepare_training_datasets routes the two masking configs.
+
+    The training split must receive train_masking_config; validation and test
+    must receive eval_masking_config, never the training one. Crossing them
+    would score a model on a masking distribution it was never trained for,
+    and no metric would reveal it.
+    """
+
+    def _tiny_dfs(self):
+        df = pd.DataFrame({"dummy_col": range(4)})
+        return df.copy(), df.copy(), df.copy()
+
+    def test_no_masking_by_default(self):
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False
+        )
+        self.assertIsNone(train_ds.masking_config)
+        self.assertIsNone(val_ds.masking_config)
+        self.assertIsNone(test_ds.masking_config)
+
+    def test_train_config_reaches_train_split_only(self):
+        cfg = SensorMaskingConfig(enable=True, s1_full_dropout_prob=0.3)
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False, train_masking_config=cfg
+        )
+        self.assertIs(train_ds.masking_config, cfg)
+        self.assertIsNone(val_ds.masking_config)
+        self.assertIsNone(test_ds.masking_config)
+
+    def test_eval_config_reaches_eval_splits_only(self):
+        cfg = SensorMaskingConfig(enable=True, dem_dropout_prob=1.0)
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False, eval_masking_config=cfg
+        )
+        self.assertIsNone(train_ds.masking_config)
+        self.assertIs(val_ds.masking_config, cfg)
+        self.assertIs(test_ds.masking_config, cfg)
+
+    def test_eval_mirrors_disabled_sensors_without_being_asked(self):
+        """A caller that disables a sensor must not have to remember the eval side.
+
+        Only whole-sensor elimination is mirrored; the stochastic knobs stay
+        training-only so the checkpoint metric is not noisy.
+        """
+        cfg = SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=1.0,  # eliminated -> must mirror
+            s2_cloud_block_prob=0.15,  # stochastic -> must not mirror
+        )
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False, train_masking_config=cfg
+        )
+        self.assertIs(train_ds.masking_config, cfg)
+        for ds in (val_ds, test_ds):
+            self.assertIsNotNone(ds.masking_config)
+            self.assertEqual(ds.masking_config.s1_full_dropout_prob, 1.0)
+            self.assertEqual(ds.masking_config.s2_cloud_block_prob, 0.0)
+
+    def test_both_configs_are_not_crossed(self):
+        train_cfg = SensorMaskingConfig(enable=True, s1_full_dropout_prob=0.3)
+        eval_cfg = SensorMaskingConfig(enable=True, dem_dropout_prob=1.0)
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(),
+            emit_label_tensor=False,
+            train_masking_config=train_cfg,
+            eval_masking_config=eval_cfg,
+        )
+        self.assertIs(train_ds.masking_config, train_cfg)
+        self.assertIs(val_ds.masking_config, eval_cfg)
+        self.assertIs(test_ds.masking_config, eval_cfg)
