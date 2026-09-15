@@ -32,12 +32,12 @@ import numpy as np
 import pandas as pd
 from IPython.display import HTML, display
 from notebook_utils.auth_utils import trigger_cdse_authentication
+from notebook_utils.class_selection_widget import ClassSelectionWidget
 from notebook_utils.classifier import (
     align_extractions_to_season,
     compute_seasonal_presto_embeddings,
     train_seasonal_torch_head,
 )
-from notebook_utils.croptypepicker import CropTypePicker, apply_croptypepicker_to_df
 from notebook_utils.dateslider import date_slider, season_slider
 from notebook_utils.extractions import (
     get_band_statistics,
@@ -61,7 +61,6 @@ from worldcereal.parameters import WorldCerealProductType
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
     get_legend,
-    translate_ewoc_codes,
 )
 from worldcereal.utils.map import ui_map
 from worldcereal.utils.upload import OpenEOArtifactHelper
@@ -685,10 +684,8 @@ class WorldCerealClassificationApp:
 
         crop_types_explanation = self._info_callout(
             "Optionally, select specific land cover/crop types to limit your query.<br>"
-            "Clicking the button below will open a crop type selection dialog, which takes a while to load.<br>"
-            "Check all crops you want to include in your query.<br>"
-            "Make use of the Expand buttons to dive into the crop type hierarchy for more detailed selection.<br>"
-            "When you are done selecting, click the green Apply button.<br><br>"
+            "Clicking the button below will open a class selection dialog.<br>"
+            "Make sure to add all your classes of interest to the Final class list before proceeding.<br>"
             "When you skip this step, all crop types will be considered.<br>"
         )
 
@@ -699,9 +696,11 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="160px"),
         )
 
-        croptype_picker = None
-        croptype_picker_container = widgets.VBox()
-        croptype_picker_status = widgets.HTML(value="")
+        class_selection_widget = None
+        class_selection_widget_container = widgets.VBox(
+            layout=widgets.Layout(width="100%", max_width="100%")
+        )
+        class_selection_widget_status = widgets.HTML(value="")
 
         run_query_button = widgets.Button(
             description="Run Query",
@@ -806,9 +805,9 @@ class WorldCerealClassificationApp:
             "private_path_button": private_path_button,
             "ref_ids_input": ref_ids_input,
             "select_crops_button": select_crops_button,
-            "croptype_picker": croptype_picker,
-            "croptype_picker_container": croptype_picker_container,
-            "croptype_picker_status": croptype_picker_status,
+            "class_selection_widget": class_selection_widget,
+            "class_selection_widget_container": class_selection_widget_container,
+            "class_selection_widget_status": class_selection_widget_status,
             "crop_only_checkbox": crop_only_checkbox,
             "run_query_button": run_query_button,
             "query_output": query_output,
@@ -870,9 +869,12 @@ class WorldCerealClassificationApp:
                 crop_only_explanation,
                 crop_only_checkbox,
                 crop_types_explanation,
-                widgets.HBox([select_crops_button]),
-                croptype_picker_status,
-                croptype_picker_container,
+                widgets.HBox(
+                    [select_crops_button],
+                    layout=widgets.Layout(justify_content="flex-start"),
+                ),
+                class_selection_widget_status,
+                class_selection_widget_container,
                 widgets.HTML("<b>5) Start your search for reference data!</b>"),
                 widgets.HBox([run_query_button]),
                 widgets.HTML("<h3 style='margin: 10px 0;'>Query results</h3>"),
@@ -909,48 +911,46 @@ class WorldCerealClassificationApp:
         codes = list(legend.index.astype(str))
         return [np.int64(code) for code in codes if code.startswith("11")]
 
-    def _build_croptype_picker(self, crop_only: bool) -> CropTypePicker:
-        """Create a CropTypePicker with optional crop-only filtering."""
+    def _build_class_selection_widget(self, crop_only: bool) -> ClassSelectionWidget:
+        """Create a ClassSelectionWidget with optional crop-only filtering."""
         ewoc_codes = self._get_crop_only_codes() if crop_only else None
-        return CropTypePicker(
+        return ClassSelectionWidget(
             ewoc_codes=ewoc_codes,
-            expand=False,
             display_ui=False,
-            selection_modes=["Include"],
         )
 
     def _on_crop_only_toggle(self, change):
-        """Rebuild the crop type picker when crop-only selection changes."""
+        """Rebuild the class selection widget when crop-only selection changes."""
         crop_only = change["new"]
-        crop_picker = self.tab1_widgets.get("croptype_picker")
-        if crop_picker is None:
+        selector = self.tab1_widgets.get("class_selection_widget")
+        if selector is None:
             return
-        status = self.tab1_widgets.get("croptype_picker_status")
+        status = self.tab1_widgets.get("class_selection_widget_status")
         if status is not None:
-            status.value = "<i>Loading crop type picker, this can take a moment...</i>"
-        picker_container = self.tab1_widgets.get("croptype_picker_container")
-        if picker_container is not None:
-            picker_container.children = []
-        crop_picker = self._build_croptype_picker(crop_only=crop_only)
-        self.tab1_widgets["croptype_picker"] = crop_picker
-        if picker_container is not None:
-            picker_container.children = [crop_picker.widget]
+            status.value = "<i>Loading class selection widget, this can take a moment...</i>"
+        selection_container = self.tab1_widgets.get("class_selection_widget_container")
+        if selection_container is not None:
+            selection_container.children = []
+        selector = self._build_class_selection_widget(crop_only=crop_only)
+        self.tab1_widgets["class_selection_widget"] = selector
+        if selection_container is not None:
+            selection_container.children = [selector.widget]
         if status is not None:
             status.value = ""
 
     def _on_select_crops_click(self, button):
-        """Initialize and show the crop type picker on demand."""
+        """Initialize and show the class selection widget on demand."""
         crop_only = self.tab1_widgets["crop_only_checkbox"].value
-        status = self.tab1_widgets.get("croptype_picker_status")
+        status = self.tab1_widgets.get("class_selection_widget_status")
         if status is not None:
-            status.value = "<i>Loading crop type picker...</i>"
-        picker_container = self.tab1_widgets.get("croptype_picker_container")
-        if picker_container is not None:
-            picker_container.children = []
-        crop_picker = self._build_croptype_picker(crop_only=crop_only)
-        self.tab1_widgets["croptype_picker"] = crop_picker
-        if picker_container is not None:
-            picker_container.children = [crop_picker.widget]
+            status.value = "<i>Loading class selection widget...</i>"
+        selection_container = self.tab1_widgets.get("class_selection_widget_container")
+        if selection_container is not None:
+            selection_container.children = []
+        selector = self._build_class_selection_widget(crop_only=crop_only)
+        self.tab1_widgets["class_selection_widget"] = selector
+        if selection_container is not None:
+            selection_container.children = [selector.widget]
         if status is not None:
             status.value = ""
 
@@ -1017,12 +1017,12 @@ class WorldCerealClassificationApp:
 
         ref_ids = self._parse_list_input(self.tab1_widgets["ref_ids_input"].value)
         crop_types = None
-        croptype_picker = self.tab1_widgets.get("croptype_picker")
-        if croptype_picker is not None:
+        class_selection_widget = self.tab1_widgets.get("class_selection_widget")
+        if class_selection_widget is not None:
             try:
-                croptype_picker.apply_selection()
-                if not croptype_picker.croptypes.empty:
-                    crop_types = croptype_picker.croptypes.index.tolist()
+                class_selection_widget.apply_selection()
+                if not class_selection_widget.croptypes.empty:
+                    crop_types = class_selection_widget.croptypes.index.tolist()
             except Exception:
                 crop_types = None
         filter_cropland = self.tab1_widgets["crop_only_checkbox"].value
@@ -2309,10 +2309,10 @@ class WorldCerealClassificationApp:
         self._update_tab4_state()
 
     def _on_tab4_select_crops(self, _=None):
-        """Initialize and display crop type picker for filtered samples."""
+        """Initialize and display the class selection widget for filtered samples."""
         df = self.tab3_df
         output = self.tab4_widgets["croptype_output"]
-        picker_container = self.tab4_widgets["croptype_picker_container"]
+        selection_container = self.tab4_widgets["class_selection_widget_container"]
 
         with output:
             output.clear_output()
@@ -2322,18 +2322,16 @@ class WorldCerealClassificationApp:
             if df.empty:
                 print("No samples available for crop selection.")
                 return
-        crop_picker = CropTypePicker(
+        selector = ClassSelectionWidget(
             sample_df=df,
-            expand=False,
             display_ui=False,
-            selection_modes=["Include", "Drop"],
         )
-        self.tab4_widgets["croptype_picker"] = crop_picker
-        picker_container.children = [crop_picker.widget]
+        self.tab4_widgets["class_selection_widget"] = selector
+        selection_container.children = [selector.widget]
 
     def _on_tab4_apply_crops(self, _=None):
         """Apply crop selection to the aligned samples."""
-        picker = self.tab4_widgets.get("croptype_picker")
+        selector = self.tab4_widgets.get("class_selection_widget")
         output = self.tab4_widgets["croptype_output"]
         df = self.tab3_df
 
@@ -2342,12 +2340,11 @@ class WorldCerealClassificationApp:
             if df is None:
                 print("Tab 3 output not available. Complete Tab 3 first.")
                 return
-            if picker is None or df.empty:
+            if selector is None or df.empty:
                 print("No crop selection to apply.")
                 return
             try:
-                picker.apply_selection()
-                filtered = apply_croptypepicker_to_df(df, picker)
+                filtered = selector.apply_to_df(df)
                 self.tab4_df = filtered
                 self.tab4_confirmed = False
                 print(f"Crop selection applied. Remaining samples: {len(filtered)}.")
@@ -2355,7 +2352,6 @@ class WorldCerealClassificationApp:
                 print(f"Failed to apply crop selection: {exc}")
                 return
         self._render_tab4_summary(output=output, clear_output=False)
-        self._render_tab4_other_summary()
         self._update_tab5_state()
 
     # =========================================================================
@@ -2363,9 +2359,9 @@ class WorldCerealClassificationApp:
     # =========================================================================
 
     def _build_tab4_crop_selection(self) -> widgets.VBox:
-        """Build Tab 4: Land cover/crop type selection and training class composition."""
+        """Build Tab 4: Land cover/crop type selection and final class definition."""
         header = widgets.HTML(
-            value="<h2>Land Cover/Crop Type Selection & Training Class Composition</h2>"
+            value="<h2>Land Cover/Crop Type Selection & Final Classes</h2>"
         )
 
         status_message = widgets.HTML(
@@ -2373,108 +2369,29 @@ class WorldCerealClassificationApp:
         )
 
         croptype_message = widgets.HTML(
-            value="<i>Select the land cover or crop types to include or exclude from the training data.</i>"
+            value="<i>Select and combine source classes into the final class list. Classes that remain unselected are left out of the dataframe.</i>"
         )
         croptype_info = self._info_callout(
-            "Use the crop type picker to define which classes participate in training.<br><br>"
-            "<b>Include vs Drop modes</b><br>"
-            "   - <b>Include</b>: selects classes to keep for training. You must select at least one class in this mode.<br>"
-            "   - <b>Drop</b>: removes classes from training. Dropped classes are excluded unless they are already covered by an included higher-level group (included parents take precedence and disable their descendants).<br><br>"
-            "<b>Hierarchy selection</b><br>"
-            'Selecting a higher-level category automatically groups all its descendant classes under one training label. This is a quick way to create broader classes (e.g., selecting "cereals" groups all cereal subclasses).<br><br>'
+            "Use the widget below to define the final class list for the workflow.<br><br>"
             "<b>Apply is required</b><br>"
-            "After making your selections, click <b>Apply</b> in the picker to lock them in.<br><br>"
-            "<b>Apply crop selection</b><br>"
-            "Once you are satisfied with the selected and excluded classes, apply your selection to the dataset using the <b>Apply crop selection</b> button.<br><br>"
-            "Samples that are <i>not included</i> and also <i>not explicitly dropped</i> are assigned to the <b>other</b> class during training."
+            "Make sure to confirm your final classes by pressing <b>Apply class selection</b>."
         )
         select_crops_button = widgets.Button(
             button_style="primary",
             icon="list",
-            description="Open crop type picker",
+            description="Open class selection widget",
             layout=widgets.Layout(width="240px"),
         )
         apply_crops_button = widgets.Button(
-            description="Apply crop selection",
+            description="Apply class selection",
             button_style="success",
             icon="check",
             layout=widgets.Layout(width="240px", height="48px"),
         )
-        croptype_picker_container = widgets.VBox()
+        class_selection_widget_container = widgets.VBox(
+            layout=widgets.Layout(width="100%", max_width="100%")
+        )
         croptype_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="100px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
-
-        other_class_message = widgets.HTML(
-            value="<i>Inspect the composition of the 'other' class and optionally remove specific crop types from it.</i>"
-        )
-        other_class_info = self._info_callout(
-            "Samples that do not belong to any of the selected training classes in the previous step have been assigned to the 'other' class.<br><br>"
-            "However, having a very heterogeneous 'other' class can negatively impact classifier performance.<br>"
-            "Particularly when some classes in 'other' are very similar to your selected training classes, it can be beneficial to remove them from the training data entirely.<br><br>"
-        )
-        other_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="100px",
-                border="1px solid #ccc",
-                padding="10px",
-                overflow_x="auto",
-            )
-        )
-        drop_classes_select = widgets.SelectMultiple(
-            options=[],
-            description="Drop classes:",
-            layout=widgets.Layout(width="70%", height="140px"),
-        )
-        drop_classes_button = widgets.Button(
-            description="Drop selected classes",
-            button_style="danger",
-            icon="trash",
-            layout=widgets.Layout(width="220px"),
-        )
-        drop_classes_output = widgets.Output(
-            layout=widgets.Layout(
-                width="100%",
-                min_height="80px",
-                border="1px solid #ccc",
-                padding="10px",
-            )
-        )
-
-        combine_class_message = widgets.HTML(
-            value="<i>Optional possibility to group classes into a new class.</i>"
-        )
-        combine_class_info = self._info_callout(
-            "Having too many and highly similar training classes can complicate the learning task for your classifier.<br><br>"
-            "In this step you can combine multiple classes into a new class to simplify your training labels.<br><br>"
-            "To do so, provide a name for the new class and list the classes you want to combine (comma-separated).<br><br>"
-        )
-        combine_label_input = widgets.Text(
-            value="",
-            description="New class:",
-            placeholder="e.g., cereals",
-            layout=widgets.Layout(width="60%"),
-        )
-        combine_classes_input = widgets.Text(
-            value="",
-            description="Classes to combine:",
-            placeholder="comma-separated class labels",
-            style={"description_width": "140px"},
-            layout=widgets.Layout(width="80%"),
-        )
-        combine_button = widgets.Button(
-            description="Combine classes",
-            button_style="primary",
-            icon="compress",
-            layout=widgets.Layout(width="180px"),
-        )
-        combine_output = widgets.Output(
             layout=widgets.Layout(
                 width="100%",
                 min_height="100px",
@@ -2593,17 +2510,9 @@ class WorldCerealClassificationApp:
             "load_aligned_output": load_aligned_output,
             "select_crops_button": select_crops_button,
             "apply_crops_button": apply_crops_button,
-            "croptype_picker_container": croptype_picker_container,
+            "class_selection_widget_container": class_selection_widget_container,
             "croptype_output": croptype_output,
-            "croptype_picker": None,
-            "other_output": other_output,
-            "drop_classes_select": drop_classes_select,
-            "drop_classes_button": drop_classes_button,
-            "drop_classes_output": drop_classes_output,
-            "combine_label_input": combine_label_input,
-            "combine_classes_input": combine_classes_input,
-            "combine_button": combine_button,
-            "combine_output": combine_output,
+            "class_selection_widget": None,
             "subsample_text": subsample_text,
             "subsample_class_input": subsample_class_input,
             "subsample_button": subsample_button,
@@ -2615,8 +2524,6 @@ class WorldCerealClassificationApp:
 
         select_crops_button.on_click(self._on_tab4_select_crops)
         apply_crops_button.on_click(self._on_tab4_apply_crops)
-        drop_classes_button.on_click(self._on_tab4_drop_classes)
-        combine_button.on_click(self._on_tab4_combine_classes)
         subsample_button.on_click(self._on_tab4_subsample_classes)
         confirm_classes_button.on_click(self._on_tab4_confirm_classes)
         reset_classes_button.on_click(self._on_tab4_reset_classes)
@@ -2634,33 +2541,19 @@ class WorldCerealClassificationApp:
                     [select_crops_button],
                     layout=widgets.Layout(justify_content="flex-start"),
                 ),
-                croptype_picker_container,
+                class_selection_widget_container,
                 widgets.HBox(
                     [apply_crops_button],
                     layout=widgets.Layout(justify_content="flex-start"),
                 ),
                 croptype_output,
-                widgets.HTML("<h3>2) Inspection of the 'other' class</h3>"),
-                other_class_message,
-                other_class_info,
-                other_output,
-                drop_classes_select,
-                widgets.HBox([drop_classes_button]),
-                drop_classes_output,
-                widgets.HTML("<h3>3) Combine classes</h3>"),
-                combine_class_message,
-                combine_class_info,
-                combine_label_input,
-                combine_classes_input,
-                widgets.HBox([combine_button]),
-                combine_output,
-                widgets.HTML("<h3>4) Subsample classes</h3>"),
+                widgets.HTML("<h3>2) Subsample classes</h3>"),
                 subsample_message,
                 subsample_info,
                 widgets.HBox([subsample_class_input, subsample_text]),
                 widgets.HBox([subsample_button]),
                 subsample_output,
-                widgets.HTML("<h3>5) Confirm training classes</h3>"),
+                widgets.HTML("<h3>3) Confirm training classes</h3>"),
                 confirm_message,
                 widgets.HBox([confirm_classes_button, reset_classes_button]),
                 final_output,
@@ -2988,7 +2881,6 @@ class WorldCerealClassificationApp:
     ) -> None:
         """Render the downstream class summary into the Tab 4 output."""
         df = self._get_tab4_working_df()
-        drop_select = self.tab4_widgets.get("drop_classes_select")
         output = output or self.tab4_widgets.get("croptype_output")
         if output is None:
             return
@@ -3015,49 +2907,6 @@ class WorldCerealClassificationApp:
                 )
             )
 
-        if drop_select is not None:
-            other_class = self._get_other_class_composition()
-            options = []
-            if other_class is not None and not other_class.empty:
-                options = [
-                    f"{row['label_full']} ({row['ewoc_code']})"
-                    for _, row in other_class.iterrows()
-                ]
-            drop_select.options = options
-
-    def _get_other_class_composition(self) -> Optional[pd.DataFrame]:
-        """Get the composition of the 'other' class if available."""
-        df = self._get_tab4_working_df()
-        if df is None or df.empty:
-            return None
-        if "downstream_class" not in df.columns or "ewoc_code" not in df.columns:
-            return None
-        other_df = df.loc[df["downstream_class"] == "other"]
-        if other_df.empty:
-            return None
-        other_count = other_df["ewoc_code"].value_counts()
-        count_name = other_count.name or "count"
-        other_count = other_count.rename(count_name)
-        other_labels = translate_ewoc_codes(other_count.index.tolist())
-        display_df = other_count.to_frame().merge(
-            other_labels, left_index=True, right_index=True
-        )
-        display_df["ewoc_code"] = display_df.index
-        return display_df
-
-    def _render_tab4_other_summary(self) -> None:
-        """Render detailed composition of the 'other' class."""
-        output = self.tab4_widgets.get("other_output")
-        if output is None:
-            return
-
-        with output:
-            output.clear_output()
-            other_class = self._get_other_class_composition()
-            if other_class is None or other_class.empty:
-                print("No samples in 'other' class found.")
-                return
-            display(other_class)
 
     def _on_tab4_confirm_classes(self, _=None) -> None:
         """Confirm training classes before moving to Tab 5."""
@@ -3109,30 +2958,14 @@ class WorldCerealClassificationApp:
         self.tab4_df = None
         self.tab4_confirmed = False
 
-        self.tab4_widgets["croptype_picker"] = None
-        picker_container = self.tab4_widgets.get("croptype_picker_container")
-        if picker_container is not None:
-            picker_container.children = []
-
-        drop_select = self.tab4_widgets.get("drop_classes_select")
-        if drop_select is not None:
-            drop_select.options = []
+        self.tab4_widgets["class_selection_widget"] = None
+        selection_container = self.tab4_widgets.get("class_selection_widget_container")
+        if selection_container is not None:
+            selection_container.children = []
 
         output = self.tab4_widgets.get("croptype_output")
         if output is not None:
             output.clear_output()
-
-        other_output = self.tab4_widgets.get("other_output")
-        if other_output is not None:
-            other_output.clear_output()
-
-        drop_classes_output = self.tab4_widgets.get("drop_classes_output")
-        if drop_classes_output is not None:
-            drop_classes_output.clear_output()
-
-        combine_output = self.tab4_widgets.get("combine_output")
-        if combine_output is not None:
-            combine_output.clear_output()
 
         subsample_output = self.tab4_widgets.get("subsample_output")
         if subsample_output is not None:
@@ -3143,70 +2976,6 @@ class WorldCerealClassificationApp:
             output.clear_output()
             print("Training classes reset. Start again by applying crop selection.")
 
-        self._update_tab5_state()
-
-    def _on_tab4_drop_classes(self, _=None):
-        df = self._get_tab4_working_df()
-        output = self.tab4_widgets.get("drop_classes_output")
-        to_drop = list(self.tab4_widgets["drop_classes_select"].value)
-
-        with output:
-            output.clear_output()
-            if df is None or df.empty:
-                print("No training samples available. Apply crop selection first.")
-                return
-            if "downstream_class" not in df.columns:
-                print("No downstream_class column found. Apply crop selection first.")
-                return
-            if not to_drop:
-                print("No classes selected for removal.")
-                return
-            # Retrieve ewoc_codes to be dropped
-            codes_to_drop = []
-            for value in to_drop:
-                code_str = value.split("(")[-1].strip(")")
-                try:
-                    codes_to_drop.append(int(code_str))
-                except ValueError:
-                    continue
-            if not codes_to_drop:
-                print("No valid EWOC codes parsed from selection.")
-                return
-            df = df.loc[~df["ewoc_code"].isin(codes_to_drop)]
-            self._set_tab4_working_df(df)
-            self.tab4_confirmed = False
-            print(f"Dropped {len(to_drop)} class(es). Remaining samples: {len(df)}")
-        self._render_tab4_summary(output=output, clear_output=False)
-        self._render_tab4_other_summary()
-        self._update_tab5_state()
-
-    def _on_tab4_combine_classes(self, _=None):
-        df = self._get_tab4_working_df()
-        output = self.tab4_widgets["combine_output"]
-        new_label = self.tab4_widgets["combine_label_input"].value.strip()
-        classes_str = self.tab4_widgets["combine_classes_input"].value
-
-        with output:
-            output.clear_output()
-            if df is None or df.empty:
-                print("No samples available. Apply crop selection first.")
-                return
-            if "downstream_class" not in df.columns:
-                print("No downstream_class column found. Apply crop selection first.")
-                return
-            if not new_label:
-                print("Provide a target class name.")
-                return
-            classes = [c.strip() for c in classes_str.split(",") if c.strip()]
-            if not classes:
-                print("Provide classes to combine.")
-                return
-            df = df.copy()
-            df.loc[df["downstream_class"].isin(classes), "downstream_class"] = new_label
-            self._set_tab4_working_df(df)
-            self.tab4_confirmed = False
-            print(f"Combined {len(classes)} class(es) into '{new_label}'.")
-        self._render_tab4_summary(output=output, clear_output=False)
         self._update_tab5_state()
 
     def _on_tab4_subsample_classes(self, _=None):
