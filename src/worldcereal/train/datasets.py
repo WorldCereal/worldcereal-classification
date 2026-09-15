@@ -1227,7 +1227,7 @@ class WorldCerealDataset(Dataset):
             )
         else:
             logger.warning(
-                f"{num_bad}/{len(self)} sample(s) have no S1 and no S2 data in any "
+                f"{num_bad}/{len(self.dataframe)} sample(s) have no S1 and no S2 data in any "
                 "admissible timestep window; the joint S1/S2 masking guard cannot "
                 "restore data for these. Consider removing them with "
                 "remove_samples_without_s1_s2=True."
