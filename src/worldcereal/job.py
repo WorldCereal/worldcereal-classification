@@ -291,7 +291,14 @@ def _finalize_season_requirements(
     temporal_extent: TemporalContext,
 ) -> None:
     season_cfg = workflow_cfg.setdefault("season", {})
-    season_ids = [str(season_id) for season_id in season_cfg.get("season_ids", [])]
+    raw_ids = season_cfg.get("season_ids")
+    if raw_ids is None:
+        # Not configured: defer to the runtime default (GLOBAL_SEASON_IDS),
+        # mirroring `_resolve_effective_season_ids`.
+        season_cfg.setdefault("season_windows", None)
+        return
+
+    season_ids = [str(season_id) for season_id in raw_ids]
     if not season_ids:
         raise ValueError(
             "Seasonal workflow configuration requires at least one season identifier."
