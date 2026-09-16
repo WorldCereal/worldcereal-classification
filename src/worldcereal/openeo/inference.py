@@ -1223,6 +1223,7 @@ class SeasonalInferenceEngine:
         season_ids: Optional[Sequence[str]] = None,
         export_embeddings: bool = False,
         export_ndvi: bool = False,
+        disable_latlon: Optional[bool] = None,
     ) -> xr.Dataset:
         # Gate embedding collection based on whether they will be exported.
         self._export_embeddings_enabled = export_embeddings
@@ -1263,7 +1264,7 @@ class SeasonalInferenceEngine:
             predictors = generate_predictor(
                 predictor_cube,
                 epsg,
-                disable_latlon=self._get_disabled_modalities()["latlon"],
+                disable_latlon=self._resolve_disable_latlon(disable_latlon),
             )
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
@@ -1378,6 +1379,15 @@ class SeasonalInferenceEngine:
                     )
                 disabled[sensor] = disabled[sensor] or off
         return disabled
+
+    def _resolve_disable_latlon(self, override: Optional[bool]) -> bool:
+        """Resolve a one-way inference-time lat/lon disable override.
+
+        An inference request may disable lat/lon for a model that normally uses
+        it, but may not enable lat/lon for a model trained without it.
+        """
+        configured = self._get_disabled_modalities()["latlon"]
+        return configured or override is True
 
     def _mask_disabled_modalities(self, arr: xr.DataArray) -> xr.DataArray:
         """Set all bands of disabled modalities to NODATA_VALUE."""

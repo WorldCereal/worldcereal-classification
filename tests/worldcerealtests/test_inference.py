@@ -692,6 +692,28 @@ def test_get_disabled_modalities_reads_disable_latlon():
     assert disabled["s1"] is False
 
 
+@pytest.mark.parametrize(
+    ("configured", "override", "expected"),
+    [
+        (True, None, True),
+        (False, None, False),
+        (False, True, True),
+        (True, False, True),
+    ],
+)
+def test_resolve_disable_latlon_override(configured, override, expected):
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_latlon": configured}}
+        )
+    )
+
+    assert engine._resolve_disable_latlon(override) is expected
+
+
 def test_generate_predictor_can_disable_latlon():
     from worldcereal.train.predictors import generate_predictor
 
