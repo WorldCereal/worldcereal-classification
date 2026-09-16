@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -777,6 +777,33 @@ def test_mask_disabled_modalities_reads_resolved_masking_config():
         result = engine._mask_disabled_modalities(arr)
         assert np.all(result.sel(bands="B2") == inference.NODATA_VALUE)
         assert np.all(result.sel(bands="VV") == 1.0)
+
+
+def test_latlon_disabled_model_passes_no_latlon_to_the_backbone():
+    """The encoder's latlon_dropout only acts in training, so validation needs this."""
+    from prometheo.predictors import Predictors
+
+    from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
+
+    seen = []
+
+    class _Backbone:
+        encoder = None
+
+        def __call__(self, predictors, eval_pooling=None):
+            seen.append(predictors.latlon)
+            return torch.zeros(1, 2, 4)
+
+    model = WorldCerealSeasonalModel(
+        backbone=cast(Any, _Backbone()),
+        head=cast(Any, lambda embeddings, masks: embeddings),
+        disable_latlon=True,
+    )
+    model(
+        Predictors(latlon=torch.ones(1, 1, 1, 2)),
+        attrs={"season_masks": torch.ones(1, 1, 2, dtype=torch.bool)},
+    )
+    assert seen == [None]
 
 
 def test_prepare_array_blanks_dem_without_deriving_slope():

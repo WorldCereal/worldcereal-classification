@@ -298,18 +298,23 @@ class WorldCerealSeasonalModel(nn.Module):
         head: SeasonalFinetuningHead,
         *,
         season_mask_key: str = "season_masks",
+        disable_latlon: bool = False,
     ) -> None:
         super().__init__()
         self.backbone = backbone
         self.head = head
         self.season_mask_key = season_mask_key
         self.encoder = backbone.encoder
+        # Encoder latlon_dropout only acts in training mode; this covers validation and test.
+        self.disable_latlon = disable_latlon
 
     def forward(
         self, predictors: Predictors, attrs: Optional[dict] = None
     ) -> SeasonalHeadOutput:
         if attrs is None or self.season_mask_key not in attrs:
             raise ValueError("Seasonal model expects attrs to contain 'season_masks'.")
+        if self.disable_latlon:
+            predictors = predictors._replace(latlon=None)
 
         # Extract time embeddings from Presto
         time_embeddings = self.backbone(predictors, eval_pooling=PoolingMethods.TIME)
