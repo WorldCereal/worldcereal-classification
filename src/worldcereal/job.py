@@ -25,6 +25,7 @@ from typing import (
 import numpy as np
 import openeo
 import pandas as pd
+from loguru import logger
 from openeo_gfmap import Backend, BackendContext, BoundingBoxExtent, TemporalContext
 from openeo_gfmap.backend import BACKEND_CONNECTIONS
 
@@ -397,6 +398,54 @@ def _get_disabled_modalities(seasonal_model_zip: str) -> Dict[str, bool]:
     return disabled
 
 
+def _validate_head_sensor_pairing(model_cfg: Mapping[str, Any]) -> None:
+    """Ensure a head's recorded excluded modalities are disabled in its paired
+    seasonal model, so a head never silently runs on inputs it wasn't trained on.
+
+    Each downstream head's `config.json` records `excluded_modalities` it was
+    trained with (see `TorchTrainer`). This cross-checks that against the
+    `seasonal_model_zip`'s actual disabled sensors (same heuristic used by
+    `skip_disabled_sensor_inputs`), regardless of how the head/model pairing
+    was assembled (fresh training, a reloaded archive, or a resumed run).
+    """
+    seasonal_model_zip = model_cfg.get("seasonal_model_zip")
+    head_zips = {
+        key: model_cfg.get(key)
+        for key in ("landcover_head_zip", "croptype_head_zip")
+    }
+    if not seasonal_model_zip or not any(head_zips.values()):
+        # Nothing to cross-check; avoids touching the model artifact at all
+        # (e.g. UDP generation, where no concrete head is resolved yet).
+        return
+    disabled = _get_disabled_modalities(str(seasonal_model_zip))
+
+    for head_key, head_zip in head_zips.items():
+        if not head_zip:
+            continue
+        try:
+            head_manifest = _get_artifact_manifest(str(head_zip))
+        except Exception as exc:
+            logger.warning(
+                f"Could not inspect {head_key} manifest for sensor-pairing "
+                f"validation: {exc}"
+            )
+            continue
+        required = {
+            str(modality).lower()
+            for modality in (head_manifest.get("excluded_modalities") or [])
+        }
+        missing = {modality for modality in required if not disabled.get(modality, False)}
+        if missing:
+            raise ValueError(
+                f"{head_key} '{head_zip}' was trained with "
+                f"{', '.join(sorted(missing))} excluded, but the paired "
+                f"seasonal_model_zip '{seasonal_model_zip}' does not disable "
+                "those sensors. Deploy the seasonal model suite derived "
+                "alongside this head (see `create_masked_seasonal_artifact`), "
+                "or retrain the head without excluded modalities."
+            )
+
+
 def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
     heads = manifest.get("heads", [])
     for head in heads:
@@ -536,6 +585,7 @@ def create_inference_process_graph(
         override_blocks=(config_overrides,),
         row=row,
     )
+    _validate_head_sensor_pairing(workflow_context["workflow_config"]["model"])
 
     # Only skip loading disabled-sensor inputs when the model is resolved to a
     # concrete value for this graph (e.g. job manager). Not safe for UDP
