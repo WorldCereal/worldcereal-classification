@@ -753,32 +753,6 @@ def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():
         engine._mask_disabled_modalities(arr)
 
 
-def test_mask_disabled_modalities_reads_resolved_masking_config():
-    """A sensor eliminated through the masking config, with no flag set."""
-    bands = ["B2", "VV"]
-    arr = xr.DataArray(
-        np.ones((len(bands), 1, 2, 2), dtype=np.float32),
-        dims=("bands", "t", "y", "x"),
-        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
-    )
-    engine = inference.SeasonalInferenceEngine.__new__(
-        inference.SeasonalInferenceEngine
-    )
-
-    for key in ("train_masking", "masking"):  # current and pre-rename spelling
-        engine.bundle = SimpleNamespace(
-            base_artifact=SimpleNamespace(
-                run_config={
-                    "args": {},
-                    "dataset": {key: {"enable": True, "s2_full_dropout_prob": 1.0}},
-                }
-            )
-        )
-        result = engine._mask_disabled_modalities(arr)
-        assert np.all(result.sel(bands="B2") == inference.NODATA_VALUE)
-        assert np.all(result.sel(bands="VV") == 1.0)
-
-
 def test_latlon_disabled_model_passes_no_latlon_to_the_backbone():
     """The encoder's latlon_dropout only acts in training, so validation needs this."""
     from prometheo.predictors import Predictors

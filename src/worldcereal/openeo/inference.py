@@ -1064,37 +1064,6 @@ def get_expected_timesteps_from_artifact(
 # ---------------------------------------------------------------------------
 
 
-def _sensors_disabled_by_masking(masking: Mapping[str, Any]) -> Dict[str, bool]:
-    """Derive which sensors a resolved SensorMaskingConfig eliminates entirely.
-
-    Mirrors the ``*_disabled`` properties of ``SensorMaskingConfig``. Returns
-    all-False when masking was recorded but never applied.
-    """
-    off = {"s1": False, "s2": False, "meteo": False, "dem": False}
-    if not masking.get("enable", False):
-        return off
-
-    def prob(name: str) -> float:
-        value = masking.get(name, 0.0)
-        # bool subclasses int, so `true` would read as 1.0 and blank a sensor.
-        if isinstance(value, bool):
-            return 0.0
-        return float(value) if isinstance(value, (int, float)) else 0.0
-
-    off["s1"] = (
-        prob("s1_full_dropout_prob") >= 1.0 or prob("s1_timestep_dropout_prob") >= 1.0
-    )
-    off["s2"] = (
-        prob("s2_full_dropout_prob") >= 1.0 or prob("s2_cloud_timestep_prob") >= 1.0
-    )
-    off["meteo"] = (
-        prob("meteo_full_dropout_prob") >= 1.0
-        or prob("meteo_timestep_dropout_prob") >= 1.0
-    )
-    off["dem"] = prob("dem_dropout_prob") >= 1.0
-    return off
-
-
 class SeasonalInferenceEngine:
     """High-level orchestrator that runs seasonal inference on xarray cubes."""
 
@@ -1339,11 +1308,9 @@ class SeasonalInferenceEngine:
     def _get_disabled_modalities(self) -> Dict[str, bool]:
         """Return a mapping of modality name -> disabled flag from run_config.
 
-        Two sources are ORed. The ``--disable_*`` flags in ``run_config.args``
-        keep older models working, and the resolved probabilities in
-        ``run_config.dataset.train_masking`` are needed because the masking
-        overrides can eliminate a sensor without the flag ever being set. An
-        absent source contributes nothing.
+        Only the ``--disable_*`` flags in ``run_config.args`` are read. Training
+        switches a flag on whenever a masking probability of 1.0 or more removes
+        that input, so the flags alone describe what the model never saw.
         """
         disabled = {
             "s1": False,
@@ -1362,22 +1329,6 @@ class SeasonalInferenceEngine:
         if isinstance(args, Mapping):
             for sensor in disabled:
                 disabled[sensor] = bool(args.get(f"disable_{sensor}", False))
-
-        dataset_cfg = run_config.get("dataset")
-        masking = None
-        if isinstance(dataset_cfg, Mapping):
-            # "train_masking" is the current key; "masking" is the pre-rename
-            # one still present in older run_configs.
-            masking = dataset_cfg.get("train_masking") or dataset_cfg.get("masking")
-        if isinstance(masking, Mapping):
-            for sensor, off in _sensors_disabled_by_masking(masking).items():
-                if off and not disabled[sensor]:
-                    logger.info(
-                        f"{sensor.upper()} was eliminated during training via the "
-                        f"masking configuration (probability 1.0) without a "
-                        f"disable_{sensor} flag; mirroring it at inference."
-                    )
-                disabled[sensor] = disabled[sensor] or off
         return disabled
 
     def _resolve_disable_latlon(self, override: Optional[bool]) -> bool:
