@@ -73,7 +73,12 @@ def _dummy_probability_arr() -> xr.DataArray:
     return xr.DataArray(
         np.zeros((1, 1, 2, 2), dtype=np.float32),
         dims=("bands", "t", "x", "y"),
-        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+        coords={
+            "bands": ["B2"],
+            "t": np.array(["2024-01-01"], dtype="datetime64[D]"),
+            "x": [0, 1],
+            "y": [0, 1],
+        },
     )
 
 
@@ -671,6 +676,34 @@ def test_mask_disabled_modalities_uses_model_run_config():
     assert np.all(result.sel(bands="VV") == inference.NODATA_VALUE)
     assert np.all(result.sel(bands="B2") == 1.0)
     assert np.all(result.sel(bands="temperature_2m") == 1.0)
+
+
+def test_get_disabled_modalities_reads_disable_latlon():
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_latlon": True}})
+    )
+
+    disabled = engine._get_disabled_modalities()
+
+    assert disabled["latlon"] is True
+    assert disabled["s1"] is False
+
+
+def test_generate_predictor_can_disable_latlon():
+    from worldcereal.train.predictors import generate_predictor
+
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "x", "y"),
+        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+    )
+
+    predictors = generate_predictor(arr, epsg=4326, disable_latlon=True)
+
+    assert predictors.latlon is None
 
 
 def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():

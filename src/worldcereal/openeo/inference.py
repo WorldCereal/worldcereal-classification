@@ -1260,7 +1260,11 @@ class SeasonalInferenceEngine:
                 coords=predictor_cube.coords,
             )
 
-            predictors = generate_predictor(predictor_cube, epsg)
+            predictors = generate_predictor(
+                predictor_cube,
+                epsg,
+                disable_latlon=self._get_disabled_modalities()["latlon"],
+            )
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
             num_timesteps = getattr(predictors, "T", None)
@@ -1340,7 +1344,13 @@ class SeasonalInferenceEngine:
         overrides can eliminate a sensor without the flag ever being set. An
         absent source contributes nothing.
         """
-        disabled = {"s1": False, "s2": False, "meteo": False, "dem": False}
+        disabled = {
+            "s1": False,
+            "s2": False,
+            "meteo": False,
+            "dem": False,
+            "latlon": False,
+        }
         bundle = getattr(self, "bundle", None)
         artifact = getattr(bundle, "base_artifact", None)
         run_config = getattr(artifact, "run_config", None)
