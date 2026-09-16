@@ -21,6 +21,7 @@ import platform
 import re
 import shutil
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -116,6 +117,9 @@ class WorldCerealClassificationApp:
         self.embeddings_df_path: Optional[Path] = None
         self.head_output_path: Optional[Path] = None
         self.head_package_path: Optional[Path] = None
+        # Seasonal model suite derived from the base backbone when the head
+        # was trained with sensors excluded (see `_update_training_setup_state`).
+        self.derived_seasonal_model_path: Optional[Path] = None
 
         # Final outputs per tab that need to be stored for use in later tabs
         self.tab2_df: Optional[pd.DataFrame] = None
@@ -123,7 +127,8 @@ class WorldCerealClassificationApp:
         self.tab4_df: Optional[pd.DataFrame] = None
         self.tab4_confirmed = False
         self.tab5_df: Optional[pd.DataFrame] = None
-        self.tab7_model_url: Optional[str] = None
+        self.tab7_head_url: Optional[str] = None
+        self.tab7_seasonal_model_url: Optional[str] = None
         self.tab8_processing_period: Optional[TemporalContext] = None
         self.tab8_season_window: Optional[TemporalContext] = None
         self.tab8_results: Optional[Path] = None
@@ -3458,6 +3463,42 @@ class WorldCerealClassificationApp:
                             f"Warning: head archive {package_name} not found in output directory, something went wrong!"
                         )
                     print(f"Torch head archive ready at: {self.head_package_path}")
+
+                    self.derived_seasonal_model_path = None
+                    if self.excluded_modalities:
+                        try:
+                            from worldcereal.openeo.parameters import (
+                                DEFAULT_SEASONAL_MODEL_URL,
+                            )
+                            from worldcereal.utils.models import (
+                                create_masked_seasonal_artifact,
+                            )
+
+                            base_seasonal_model = (
+                                self.presto_model_package.get("seasonal_model_path")
+                                if self.presto_model_package
+                                else None
+                            ) or DEFAULT_SEASONAL_MODEL_URL
+                            self.derived_seasonal_model_path = (
+                                create_masked_seasonal_artifact(
+                                    base_seasonal_model,
+                                    self.excluded_modalities,
+                                    output_dir=self.head_output_path,
+                                    output_name=f"{model_name}_seasonal-suite",
+                                )
+                            )
+                            print(
+                                "Derived seasonal model suite (with "
+                                f"{', '.join(self.excluded_modalities)} disabled and "
+                                "the embedded landcover head removed) ready at: "
+                                f"{self.derived_seasonal_model_path}"
+                            )
+                        except Exception as exc:
+                            print(
+                                "Warning: failed to derive a seasonal model suite "
+                                f"matching the excluded modalities: {exc}"
+                            )
+
                     self._update_tab7_state()
                 else:
                     print(
@@ -3641,6 +3682,53 @@ class WorldCerealClassificationApp:
                 return
             self.head_package_path = path
             self.head_output_path = path.parent
+            # A manually loaded archive isn't tied to the exclusions used to
+            # derive any previously trained head's seasonal model suite; recover
+            # them from the archive's own config.json instead (see TorchTrainer).
+            self.derived_seasonal_model_path = None
+            self.excluded_modalities = []
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    head_config = json.loads(zf.read("config.json"))
+                self.excluded_modalities = sorted(
+                    head_config.get("excluded_modalities") or []
+                )
+            except Exception as exc:
+                print(f"Warning: could not read config.json from archive: {exc}")
+
+            if self.excluded_modalities:
+                print(
+                    "This head was trained with "
+                    f"{', '.join(self.excluded_modalities)} excluded. Deriving a "
+                    "matching seasonal model suite..."
+                )
+                try:
+                    from worldcereal.openeo.parameters import (
+                        DEFAULT_SEASONAL_MODEL_URL,
+                    )
+                    from worldcereal.utils.models import (
+                        create_masked_seasonal_artifact,
+                    )
+
+                    base_seasonal_model = (
+                        self.presto_model_package.get("seasonal_model_path")
+                        if self.presto_model_package
+                        else None
+                    ) or DEFAULT_SEASONAL_MODEL_URL
+                    self.derived_seasonal_model_path = create_masked_seasonal_artifact(
+                        base_seasonal_model,
+                        self.excluded_modalities,
+                        output_dir=self.head_output_path,
+                        output_name=f"{path.stem}_seasonal-suite",
+                    )
+                    print(
+                        f"Derived seasonal model suite ready at: {self.derived_seasonal_model_path}"
+                    )
+                except Exception as exc:
+                    print(
+                        "Warning: failed to derive a seasonal model suite matching "
+                        f"the excluded modalities: {exc}"
+                    )
             filename = path.parent.stem
             self.season_id, self.season_window = self._parse_season_info_from_filename(
                 filename
@@ -3704,15 +3792,39 @@ class WorldCerealClassificationApp:
                 target_object_name, str(self.head_package_path)
             )
             model_url = artifact_helper.get_presigned_url(model_s3_uri)
+
+            self.tab7_seasonal_model_url = None
+            seasonal_s3_uri = None
+            if (
+                self.derived_seasonal_model_path is not None
+                and self.derived_seasonal_model_path.exists()
+            ):
+                seasonal_object_name = self.derived_seasonal_model_path.name
+                with report_output:
+                    print(
+                        f"Uploading derived seasonal model suite as {seasonal_object_name} ..."
+                    )
+                seasonal_s3_uri = artifact_helper.upload_file(
+                    seasonal_object_name, str(self.derived_seasonal_model_path)
+                )
+                self.tab7_seasonal_model_url = artifact_helper.get_presigned_url(
+                    seasonal_s3_uri
+                )
         except Exception as exc:
             with report_output:
                 print(f"Deployment failed: {exc}")
             return
 
         with report_output:
-            self.tab7_model_url = model_url
+            self.tab7_head_url = model_url
             print(f"S3 URI: {model_s3_uri}")
             print(f"Your torch head can be downloaded from: {model_url}")
+            if self.tab7_seasonal_model_url is not None:
+                print(f"Seasonal model suite S3 URI: {seasonal_s3_uri}")
+                print(
+                    "Your derived seasonal model suite (sensors disabled, landcover "
+                    f"head removed) can be downloaded from: {self.tab7_seasonal_model_url}"
+                )
             print(
                 "You can proceed to the next step to generate a map using your deployed model."
             )
@@ -4400,8 +4512,9 @@ class WorldCerealClassificationApp:
         self.tab8_product_type = product_type
 
         # model selection
-        # seasonal model taken from provided presto model package (if any)
-        custom_seasonal_model_url = (
+        # prefer the seasonal model suite derived to match this head's excluded
+        # modalities; fall back to a provided presto model package, else default
+        custom_seasonal_model_url = self.tab7_seasonal_model_url or (
             self.presto_model_package.get("seasonal_model_path")
             if self.presto_model_package
             else None
@@ -4419,15 +4532,27 @@ class WorldCerealClassificationApp:
             if product_type == "cropland":
                 # if cropland product only,
                 # we assume the user wants to use the custom trained model for cropland mapping
-                landcover_head_zip = self.tab7_model_url
+                landcover_head_zip = self.tab7_head_url
                 croptype_head_zip = None
                 enable_croptype_head = False
             else:
                 # if croptype product, we assume the user wants to use the custom trained model for crop type mapping
                 # and we use the seasonal model for landcover task
                 landcover_head_zip = custom_seasonal_model_url
-                croptype_head_zip = self.tab7_model_url
+                croptype_head_zip = self.tab7_head_url
                 enable_croptype_head = True
+                if self.tab7_seasonal_model_url is not None:
+                    # The derived seasonal suite has its embedded landcover head
+                    # removed (it was trained with the full sensor set), so it
+                    # cannot be reused as-is here.
+                    landcover_head_zip = None
+                    enable_cropland_head = False
+                    with log_out:
+                        print(
+                            "Cropland head disabled: the deployed seasonal model "
+                            "suite was derived for this croptype head's excluded "
+                            "modalities and has no compatible landcover head."
+                        )
         # save model URL's for later use
         self.tab8_seasonal_model_url = custom_seasonal_model_url
         self.tab8_landcover_head_url = landcover_head_zip
@@ -5118,6 +5243,18 @@ class WorldCerealClassificationApp:
                     with model_output:
                         model_output.clear_output()
                         print(f"Model archive: {self.head_package_path}")
+                        if (
+                            self.derived_seasonal_model_path is not None
+                            and self.derived_seasonal_model_path.exists()
+                        ):
+                            print(
+                                "Seasonal model suite (excluded modalities + "
+                                f"landcover head removed): {self.derived_seasonal_model_path}"
+                            )
+                            print(
+                                "Both archives will be uploaded and deployed "
+                                "separately when you click 'Deploy Model'."
+                            )
                 for widget in [load_title, load_input, load_button, load_output]:
                     if widget is not None:
                         widget.layout.display = "none"
@@ -5268,7 +5405,7 @@ class WorldCerealClassificationApp:
                 status_message.value = (
                     "<i>Ready to generate map with the default WorldCereal model.</i>"
                 )
-            elif self.tab7_model_url is not None:
+            elif self.tab7_head_url is not None:
                 status_message.value = (
                     "<i>Ready to generate map with a deployed model.</i>"
                 )
