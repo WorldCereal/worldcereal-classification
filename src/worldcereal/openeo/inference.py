@@ -644,8 +644,18 @@ class SeasonalModelBundle:
         self._cropland_head_enabled = enable_cropland_head
 
         heads = base_artifact.manifest.get("heads", [])
-        self.landcover_spec = _select_head_spec(heads, task="landcover")
-        self.croptype_spec = _select_head_spec(heads, task="croptype")
+        # Skip head-spec lookup for disabled heads; the manifest may not define
+        # a head that was intentionally removed (e.g. when training without S1).
+        self.landcover_spec: Optional[HeadSpec] = (
+            _select_head_spec(heads, task="landcover")
+            if self._cropland_head_enabled
+            else None
+        )
+        self.croptype_spec: Optional[HeadSpec] = (
+            _select_head_spec(heads, task="croptype")
+            if self._croptype_head_enabled
+            else None
+        )
         self.cropland_gate_classes: List[str] = []
         self._base_backbone_fingerprint = _backbone_fingerprint_from_artifact(
             base_artifact
@@ -697,10 +707,18 @@ class SeasonalModelBundle:
             crop_num_outputs=(
                 self.croptype_spec.num_classes if self._croptype_head_enabled else None
             ),
-            landcover_head_type=self.landcover_spec.head_type,
-            croptype_head_type=self.croptype_spec.head_type,
-            landcover_hidden_dim=self.landcover_spec.hidden_dim,
-            croptype_hidden_dim=self.croptype_spec.hidden_dim,
+            landcover_head_type=(
+                self.landcover_spec.head_type if self._cropland_head_enabled else "linear"
+            ),
+            croptype_head_type=(
+                self.croptype_spec.head_type if self._croptype_head_enabled else "linear"
+            ),
+            landcover_hidden_dim=(
+                self.landcover_spec.hidden_dim if self._cropland_head_enabled else 256
+            ),
+            croptype_hidden_dim=(
+                self.croptype_spec.hidden_dim if self._croptype_head_enabled else 256
+            ),
         )
         model = WorldCerealSeasonalModel(backbone=backbone, head=head)
 
@@ -840,9 +858,14 @@ class SeasonalModelBundle:
             logger.info("Cropland head disabled; cropland gating unavailable.")
             return
 
+        # landcover_spec is guaranteed set here since the cropland head is enabled,
+        # but croptype_spec may be None if the croptype head is disabled.
+        croptype_cropland_classes = (
+            self.croptype_spec.cropland_classes if self.croptype_spec else []
+        )
         self.cropland_gate_classes = list(
             self.landcover_spec.cropland_classes
-            or self.croptype_spec.cropland_classes
+            or croptype_cropland_classes
             or []
         )
         logger.info(
