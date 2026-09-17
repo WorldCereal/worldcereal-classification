@@ -1069,7 +1069,20 @@ class TestPrepareTrainingDatasetsMasking(unittest.TestCase):
     """
 
     def _tiny_dfs(self):
-        df = pd.DataFrame({"dummy_col": range(4)})
+        rows = []
+        for index in range(4):
+            row = {
+                "dummy_col": index,
+                "lat": 50.0 + index,
+                "lon": 4.0 + index,
+                "start_date": "2020-01-01",
+                "end_date": "2020-12-31",
+            }
+            for template in WorldCerealLabelledDataset.BAND_MAPPING:
+                for timestep in range(12):
+                    row[template.format(timestep)] = 1.0
+            rows.append(row)
+        df = pd.DataFrame(rows)
         return df.copy(), df.copy(), df.copy()
 
     def test_no_masking_by_default(self):
@@ -1138,3 +1151,8 @@ class TestPrepareTrainingDatasetsMasking(unittest.TestCase):
 
         for dataset in (train_ds, val_ds, test_ds):
             self.assertTrue(dataset.disable_latlon)
+            inputs = dataset.get_inputs(
+                dataset.dataframe.iloc[0].to_dict(),
+                list(range(dataset.num_timesteps)),
+            )
+            self.assertIsNone(Predictors(**inputs).latlon)
