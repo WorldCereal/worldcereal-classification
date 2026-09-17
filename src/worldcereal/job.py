@@ -446,6 +446,10 @@ def _validate_head_sensor_pairing(model_cfg: Mapping[str, Any]) -> None:
             )
 
 
+def _manifest_has_head(manifest: ManifestDict, task: str) -> bool:
+    return any(head.get("task") == task for head in manifest.get("heads", []))
+
+
 def _lut_from_manifest(manifest: ManifestDict, task: str) -> ClassLUT:
     heads = manifest.get("heads", [])
     for head in heads:
@@ -476,10 +480,16 @@ def resolve_workflow_luts(
         return base_manifest
 
     luts: Dict[str, ClassLUT] = {}
-    luts[WorldCerealProductType.CROPLAND.value] = _lut_from_manifest(
-        _manifest_for_source(model_cfg.get("landcover_head_zip")),
-        task="landcover",
-    )
+    landcover_manifest = _manifest_for_source(model_cfg.get("landcover_head_zip"))
+    if _manifest_has_head(landcover_manifest, task="landcover"):
+        luts[WorldCerealProductType.CROPLAND.value] = _lut_from_manifest(
+            landcover_manifest, task="landcover"
+        )
+    else:
+        # The cropland/landcover head may have been intentionally removed
+        # (e.g. when training a model with sensors disabled), in which case
+        # no cropland LUT is available.
+        logger.info("Manifest does not define a 'landcover' head; skipping cropland LUT.")
     if product_type == WorldCerealProductType.CROPTYPE:
         luts[WorldCerealProductType.CROPTYPE.value] = _lut_from_manifest(
             _manifest_for_source(model_cfg.get("croptype_head_zip")),

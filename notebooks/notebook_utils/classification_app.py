@@ -5630,7 +5630,7 @@ class WorldCerealClassificationApp:
         back to ``["cropland", "croptype"]`` if the manifest cannot be read,
         so the UI is never accidentally over-restricted.
         """
-        from worldcereal.job import _get_artifact_manifest
+        from worldcereal.job import _get_artifact_manifest, _manifest_has_head
         from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
         seasonal_url = (
@@ -5641,11 +5641,10 @@ class WorldCerealClassificationApp:
 
         try:
             manifest = _get_artifact_manifest(seasonal_url)
-            head_names = {h.get("name") for h in manifest.get("heads", [])}
             products: List[str] = []
-            if "landcover" in head_names:
+            if _manifest_has_head(manifest, task="landcover"):
                 products.append("cropland")
-            if "croptype" in head_names:
+            if _manifest_has_head(manifest, task="croptype"):
                 products.append("croptype")
             return products or ["cropland", "croptype"]
         except Exception:
