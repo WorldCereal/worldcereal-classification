@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -73,7 +73,12 @@ def _dummy_probability_arr() -> xr.DataArray:
     return xr.DataArray(
         np.zeros((1, 1, 2, 2), dtype=np.float32),
         dims=("bands", "t", "x", "y"),
-        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+        coords={
+            "bands": ["B2"],
+            "t": np.array(["2024-01-01"], dtype="datetime64[D]"),
+            "x": [0, 1],
+            "y": [0, 1],
+        },
     )
 
 
@@ -673,6 +678,56 @@ def test_mask_disabled_modalities_uses_model_run_config():
     assert np.all(result.sel(bands="temperature_2m") == 1.0)
 
 
+def test_get_disabled_modalities_reads_disable_latlon():
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_latlon": True}})
+    )
+
+    disabled = engine._get_disabled_modalities()
+
+    assert disabled["latlon"] is True
+    assert disabled["s1"] is False
+
+
+@pytest.mark.parametrize(
+    ("configured", "override", "expected"),
+    [
+        (True, None, True),
+        (False, None, False),
+        (False, True, True),
+        (True, False, True),
+    ],
+)
+def test_resolve_disable_latlon_override(configured, override, expected):
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_latlon": configured}}
+        )
+    )
+
+    assert engine._resolve_disable_latlon(override) is expected
+
+
+def test_generate_predictor_can_disable_latlon():
+    from worldcereal.train.predictors import generate_predictor
+
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "x", "y"),
+        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+    )
+
+    predictors = generate_predictor(arr, epsg=4326, disable_latlon=True)
+
+    assert predictors.latlon is None
+
+
 def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():
     arr = xr.DataArray(
         np.ones((1, 1, 2, 2), dtype=np.float32),
@@ -698,30 +753,31 @@ def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():
         engine._mask_disabled_modalities(arr)
 
 
-def test_mask_disabled_modalities_reads_resolved_masking_config():
-    """A sensor eliminated through the masking config, with no flag set."""
-    bands = ["B2", "VV"]
-    arr = xr.DataArray(
-        np.ones((len(bands), 1, 2, 2), dtype=np.float32),
-        dims=("bands", "t", "y", "x"),
-        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
-    )
-    engine = inference.SeasonalInferenceEngine.__new__(
-        inference.SeasonalInferenceEngine
-    )
+def test_latlon_disabled_model_passes_no_latlon_to_the_backbone():
+    """The encoder's latlon_dropout only acts in training, so validation needs this."""
+    from prometheo.predictors import Predictors
 
-    for key in ("train_masking", "masking"):  # current and pre-rename spelling
-        engine.bundle = SimpleNamespace(
-            base_artifact=SimpleNamespace(
-                run_config={
-                    "args": {},
-                    "dataset": {key: {"enable": True, "s2_full_dropout_prob": 1.0}},
-                }
-            )
-        )
-        result = engine._mask_disabled_modalities(arr)
-        assert np.all(result.sel(bands="B2") == inference.NODATA_VALUE)
-        assert np.all(result.sel(bands="VV") == 1.0)
+    from worldcereal.train.seasonal_head import WorldCerealSeasonalModel
+
+    seen = []
+
+    class _Backbone:
+        encoder = None
+
+        def __call__(self, predictors, eval_pooling=None):
+            seen.append(predictors.latlon)
+            return torch.zeros(1, 2, 4)
+
+    model = WorldCerealSeasonalModel(
+        backbone=cast(Any, _Backbone()),
+        head=cast(Any, lambda embeddings, masks: embeddings),
+        disable_latlon=True,
+    )
+    model(
+        Predictors(latlon=torch.ones(1, 1, 1, 2)),
+        attrs={"season_masks": torch.ones(1, 1, 2, dtype=torch.bool)},
+    )
+    assert seen == [None]
 
 
 def test_prepare_array_blanks_dem_without_deriving_slope():

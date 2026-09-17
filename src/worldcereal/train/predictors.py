@@ -22,13 +22,15 @@ from pyproj import Transformer
 from torch import nn
 
 
-def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
+def _predictor_from_xarray(
+    arr: xr.DataArray, epsg: int, disable_latlon: bool = False
+) -> Predictors:
     def _get_timestamps() -> np.ndarray:
         timestamps = arr.t.values
         years = timestamps.astype("datetime64[Y]").astype(int) + 1970
         months = timestamps.astype("datetime64[M]").astype(int) % 12 + 1
-        days = timestamps.astype("datetime64[D]").astype("datetime64[M]")
-        days = (timestamps - days).astype(int) + 1
+        month_starts = timestamps.astype("datetime64[M]").astype("datetime64[D]")
+        days = (timestamps.astype("datetime64[D]") - month_starts).astype(int) + 1
 
         components = np.stack([days, months, years], axis=1)
         return components[None, ...]  # Add batch dimension
@@ -88,21 +90,25 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
         elif band in DEM_BANDS:
             dem[..., DEM_BANDS.index(band)] = rearrange(values[0], "x y -> 1 y x")
 
-    transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
     x, y = np.meshgrid(arr.x, arr.y)
-    lon, lat = transformer.transform(x, y)
-    # np.meshgrid(x, y) yields (len(y), len(x)) grids, so the stacked array is
-    # (c, y, x). Moving channels last must NOT swap the spatial axes — the
-    # subsequent "(h w)" flatten has to match the (y, x) row-major order used
-    # for s1/s2/meteo above, otherwise every pixel is paired with the latlon
-    # of its transposed counterpart.
-    latlon = rearrange(np.stack([lat, lon]), "c h w -> h w c")
+    latlon = None
+    if not disable_latlon:
+        transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+        lon, lat = transformer.transform(x, y)
+        # np.meshgrid(x, y) yields (len(y), len(x)) grids, so the stacked array is
+        # (c, y, x). Moving channels last must NOT swap the spatial axes — the
+        # subsequent "(h w)" flatten has to match the (y, x) row-major order used
+        # for s1/s2/meteo above, otherwise every pixel is paired with the latlon
+        # of its transposed counterpart.
+        latlon = rearrange(np.stack([lat, lon]), "c h w -> h w c")
 
     predictors_dict: dict[str, Any] = {
         "s1": rearrange(s1, "1 h w t c -> (h w) 1 1 t c"),
         "s2": rearrange(s2, "1 h w t c -> (h w) 1 1 t c"),
         "meteo": rearrange(meteo, "1 h w t c -> (h w) 1 1 t c"),
-        "latlon": rearrange(latlon, "h w c -> (h w) 1 1 c"),
+        "latlon": (
+            rearrange(latlon, "h w c -> (h w) 1 1 c") if latlon is not None else None
+        ),
         "dem": rearrange(dem, "1 h w c -> (h w) 1 1 c"),
         "timestamps": repeat(_get_timestamps(), "1 t d -> b t d", b=x.size),
     }
@@ -110,9 +116,14 @@ def _predictor_from_xarray(arr: xr.DataArray, epsg: int) -> Predictors:
     return Predictors(**predictors_dict)
 
 
-def generate_predictor(x: Union[pd.DataFrame, xr.DataArray], epsg: int) -> Predictors:
+def generate_predictor(
+    x: Union[pd.DataFrame, xr.DataArray],
+    epsg: int,
+    *,
+    disable_latlon: bool = False,
+) -> Predictors:
     if isinstance(x, xr.DataArray):
-        return _predictor_from_xarray(x, epsg)
+        return _predictor_from_xarray(x, epsg, disable_latlon=disable_latlon)
     raise NotImplementedError("DataFrame inputs are not supported yet")
 
 

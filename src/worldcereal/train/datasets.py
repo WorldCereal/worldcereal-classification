@@ -1139,6 +1139,18 @@ class WorldCerealDataset(Dataset):
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
 
+        # A disabled sensor never reaches the model, so its data does not count
+        # when deciding whether a sample or window has usable S1/S2 data.
+        cfg = self.masking_config if masking_enabled else None
+        self._s1_counts = not (cfg is not None and cfg.s1_disabled)
+        self._s2_counts = not (cfg is not None and cfg.s2_disabled)
+        self._data_column_templates = [
+            t
+            for t in self.S1_S2_COLUMN_TEMPLATES
+            if (self._s1_counts or not t.startswith("SAR-"))
+            and (self._s2_counts or not t.startswith("OPTICAL-"))
+        ]
+
         if self.remove_samples_without_s1_s2 or masking_enabled:
             self._check_joint_s1_s2_availability()
 
@@ -1157,7 +1169,8 @@ class WorldCerealDataset(Dataset):
         timeseries yet still be unusable if none of it is reachable from
         `valid_position`. Since admissible windows slide by one timestep,
         their union is the contiguous range ``[first_min, first_max + T)``,
-        so checking that range for data is exact.
+        so checking that range for data is exact. A disabled sensor's data is
+        ignored, so an S1-disabled model only keeps samples with S2 data.
         """
         if (
             "available_timesteps" not in self.dataframe.columns
@@ -1179,7 +1192,7 @@ class WorldCerealDataset(Dataset):
         timestep_cols = [
             [
                 col
-                for template in self.S1_S2_COLUMN_TEMPLATES
+                for template in self._data_column_templates
                 if (col := template.format(t)) in self.dataframe.columns
             ]
             for t in range(max_ts)
@@ -1218,16 +1231,21 @@ class WorldCerealDataset(Dataset):
         num_bad = int(bad.sum())
         if not num_bad:
             return
+        counted = " or ".join(
+            name
+            for name, on in (("S1", self._s1_counts), ("S2", self._s2_counts))
+            if on
+        )
         if self.remove_samples_without_s1_s2:
             self.dataframe = self.dataframe.loc[~bad].reset_index(drop=True)
             logger.warning(
-                f"Removed {num_bad}/{len(bad)} sample(s) with no S1 and no S2 "
+                f"Removed {num_bad}/{len(bad)} sample(s) with no {counted} "
                 "data in any admissible timestep window "
                 "(remove_samples_without_s1_s2=True)."
             )
         else:
             logger.warning(
-                f"{num_bad}/{len(self.dataframe)} sample(s) have no S1 and no S2 data in any "
+                f"{num_bad}/{len(self.dataframe)} sample(s) have no {counted} data in any "
                 "admissible timestep window; the joint S1/S2 masking guard cannot "
                 "restore data for these. Consider removing them with "
                 "remove_samples_without_s1_s2=True."
@@ -1346,9 +1364,9 @@ class WorldCerealDataset(Dataset):
         return timestep_positions, valid_position
 
     def _window_has_s1_s2(self, row_d: Dict, timestep_positions: List[int]) -> bool:
-        """Whether any S1 or S2 band has data at any of the given timesteps."""
+        """Whether any enabled S1 or S2 band has data at any of the given timesteps."""
         for t in timestep_positions:
-            for template in self.S1_S2_COLUMN_TEMPLATES:
+            for template in self._data_column_templates:
                 value = row_d.get(template.format(t))
                 if value is not None and value != NODATAVALUE:
                     return True
@@ -2456,7 +2474,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         # Joint S1/S2 data presence per (row, timestep) — computed on raw
         # values, before the dB conversion below (the NODATAVALUE sentinel is
         # preserved by all transforms, so this matches _window_has_s1_s2).
-        presence = (s2 != NODATAVALUE).any(axis=-1) | (s1 != NODATAVALUE).any(axis=-1)
+        # A disabled sensor does not count, as in _window_has_s1_s2.
+        presence = np.zeros(s1.shape[:2], dtype=bool)
+        if self._s2_counts:
+            presence |= (s2 != NODATAVALUE).any(axis=-1)
+        if self._s1_counts:
+            presence |= (s1 != NODATAVALUE).any(axis=-1)
 
         # S1 dB conversion (valid positive values only, as in get_inputs)
         s1_valid = (s1 != NODATAVALUE) & (s1 > 0)
