@@ -56,6 +56,7 @@ run_model_inference = _predictor_utils.run_model_inference
 SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
 
+
 def _is_lc_only_dataset(ref_id: str) -> bool:
     """Return True for LC-only datasets whose ref_id ends in ``_100`` or ``_101``.
 
@@ -165,7 +166,6 @@ def _timestamps_to_datetime_array(timestamps: np.ndarray) -> np.ndarray:
 def _default_season_mask(num_timesteps: int, num_seasons: int) -> np.ndarray:
     num_seasons = max(1, num_seasons)
     return np.ones((num_seasons, num_timesteps), dtype=bool)
-
 
 
 def _resolve_season_engine(
@@ -631,13 +631,9 @@ def _get_per_bin_class_weights(
                 counts_override=smoothed_counts,
             )
         )
-        sample_mean = (
-            sum(
-                int(cnt) * bin_w_dict[str(lbl)]
-                for lbl, cnt in class_counts.items()
-            )
-            / float(class_counts.sum())
-        )
+        sample_mean = sum(
+            int(cnt) * bin_w_dict[str(lbl)] for lbl, cnt in class_counts.items()
+        ) / float(class_counts.sum())
         weights[mask] = np.array(
             [bin_w_dict[str(lbl)] / sample_mean for lbl in bin_labels],
             dtype=np.float64,
@@ -849,13 +845,10 @@ def _build_per_class_weight_grid(
                 counts_override=smoothed_counts,
             )
         )
-        sample_mean = (
-            sum(int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items())
-            / float(class_counts.sum())
-        )
-        bin_weights[(li, lo)] = {
-            cls: w / sample_mean for cls, w in wdict.items()
-        }
+        sample_mean = sum(
+            int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items()
+        ) / float(class_counts.sum())
+        bin_weights[(li, lo)] = {cls: w / sample_mean for cls, w in wdict.items()}
     n_total_bins = bin_groups.ngroups
     n_dense_bins = len(bin_weights)
 
@@ -954,10 +947,7 @@ class SensorMaskingConfig:
     @property
     def s1_disabled(self) -> bool:
         """True when S1 is eliminated for every sample."""
-        return (
-            self.s1_full_dropout_prob >= 1.0
-            or self.s1_timestep_dropout_prob >= 1.0
-        )
+        return self.s1_full_dropout_prob >= 1.0 or self.s1_timestep_dropout_prob >= 1.0
 
     @property
     def s2_disabled(self) -> bool:
@@ -1048,6 +1038,7 @@ class WorldCerealDataset(Dataset):
         num_outputs: Optional[int] = None,
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
+        disable_latlon: bool = False,
         min_season_coverage: float = 1.0,
         remove_samples_without_s1_s2: bool = False,
     ):
@@ -1071,6 +1062,9 @@ class WorldCerealDataset(Dataset):
             whether to augment the data, by default False
         masking_config : Optional[SensorMaskingConfig], optional
             configuration for sensor masking during training, by default None.
+        disable_latlon : bool, optional
+            Whether to omit latitude/longitude predictors for every sample,
+            by default False.
         min_season_coverage : float, optional
             Minimum fraction of a season's composite slots that must fall inside
             the selected timestep window for the season mask to be enabled.
@@ -1105,6 +1099,7 @@ class WorldCerealDataset(Dataset):
         self.is_ssl = task_type == "ssl"
         self.augment = augment
         self.masking_config = masking_config
+        self.disable_latlon = disable_latlon
         if not (0.0 < min_season_coverage <= 1.0):
             raise ValueError(
                 f"min_season_coverage must be in (0, 1]; got {min_season_coverage}"
@@ -1429,9 +1424,12 @@ class WorldCerealDataset(Dataset):
 
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
         # Get latlons which need to have spatial dims
-        latlon = np.reshape(
-            np.array([row_d["lat"], row_d["lon"]], dtype=np.float32), (1, 1, 2)
-        )
+        latlon = None
+        if not self.disable_latlon:
+            latlon = np.reshape(
+                np.array([row_d["lat"], row_d["lon"]], dtype=np.float32),
+                (1, 1, 2),
+            )
 
         # Get timestamps belonging to each timestep
         timestamps = self._get_timestamps(row_d, timestep_positions)
@@ -2036,10 +2034,16 @@ class WorldCerealDataset(Dataset):
             ) from exc
 
         # Convert the start and end dekads to actual dates
-        candidate_years = [year - 1, year, year +1]
-        start_dates = [season_dekad_to_date(sos_dekad, target_year=yr, mode="first") for yr in candidate_years]
-        end_dates = [season_dekad_to_date(eos_dekad, target_year=yr, mode="last") for yr in candidate_years]
-    
+        candidate_years = [year - 1, year, year + 1]
+        start_dates = [
+            season_dekad_to_date(sos_dekad, target_year=yr, mode="first")
+            for yr in candidate_years
+        ]
+        end_dates = [
+            season_dekad_to_date(eos_dekad, target_year=yr, mode="last")
+            for yr in candidate_years
+        ]
+
         # Select the start and end dates for the season that best matches the label_datetime
         ## If there is no label_datetime, default to the current year's season
         ## If there is a label_datetime, we prefer the season that encompasses it
@@ -2053,15 +2057,19 @@ class WorldCerealDataset(Dataset):
                     break
             else:
                 # Default to the year for which the distance to the label_datetime is minimal
-                label_diffs_start = [abs((label_datetime - sd).days) for sd in start_dates]
+                label_diffs_start = [
+                    abs((label_datetime - sd).days) for sd in start_dates
+                ]
                 label_diffs_end = [abs((label_datetime - ed).days) for ed in end_dates]
-                label_diffs = [min(s, e) for s, e in zip(label_diffs_start, label_diffs_end)]
+                label_diffs = [
+                    min(s, e) for s, e in zip(label_diffs_start, label_diffs_end)
+                ]
                 min_diff_idx = label_diffs.index(min(label_diffs))
                 start_date_fin = start_dates[min_diff_idx]
                 end_date_fin = end_dates[min_diff_idx]
         else:
             # default to the current year if no label_datetime is provided
-            start_date_fin = start_dates[1]  
+            start_date_fin = start_dates[1]
             end_date_fin = end_dates[1]
 
         return (
@@ -2507,13 +2515,15 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             if dst in DEM_BANDS:
                 dem[:, DEM_BANDS.index(dst)] = df[src].to_numpy(dtype=np.float32)
 
-        latlon = np.stack(
-            [
-                df["lat"].to_numpy(dtype=np.float32),
-                df["lon"].to_numpy(dtype=np.float32),
-            ],
-            axis=1,
-        )
+        latlon = None
+        if not self.disable_latlon:
+            latlon = np.stack(
+                [
+                    df["lat"].to_numpy(dtype=np.float32),
+                    df["lon"].to_numpy(dtype=np.float32),
+                ],
+                axis=1,
+            )
 
         # ---- timestamps --------------------------------------------------
         start_dates = pd.to_datetime(df["start_date"]).to_numpy()
@@ -2670,9 +2680,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             diffs = np.stack(
                 [
                     np.minimum(
-                        np.abs(
-                            (label_days - start_candidates[i]).astype(np.int64)
-                        ),
+                        np.abs((label_days - start_candidates[i]).astype(np.int64)),
                         np.abs((label_days - end_candidates[i]).astype(np.int64)),
                     )
                     for i in range(3)
@@ -2799,7 +2807,11 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         s1_full = s1_win.reshape(B, 1, 1, T, len(S1_BANDS)).copy()
         meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
         dem_full = c["dem"][rows].reshape(B, 1, 1, len(DEM_BANDS)).copy()
-        latlon_full = c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+        latlon_full = (
+            c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+            if c["latlon"] is not None
+            else None
+        )
 
         # ---- sensor masking (mirrors _apply_masking) ------------------------
         if self.masking_config and self.masking_config.enable:
@@ -3047,7 +3059,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             s2=torch.from_numpy(s2_full),
             meteo=torch.from_numpy(meteo_full),
             dem=torch.from_numpy(dem_full),
-            latlon=torch.from_numpy(latlon_full),
+            latlon=torch.from_numpy(latlon_full) if latlon_full is not None else None,
             timestamps=torch.from_numpy(timestamps),
             label=label_tensor,
         )
@@ -3666,6 +3678,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         num_outputs: Optional[int] = None,
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
+        disable_latlon: bool = False,
         repeats: int = 1,
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
@@ -3684,6 +3697,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             num_outputs=num_outputs,
             augment=augment,
             masking_config=masking_config,
+            disable_latlon=disable_latlon,
             min_season_coverage=min_season_coverage,
             remove_samples_without_s1_s2=remove_samples_without_s1_s2,
         )
