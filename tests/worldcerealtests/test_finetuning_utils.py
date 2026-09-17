@@ -1130,3 +1130,11 @@ class TestPrepareTrainingDatasetsMasking(unittest.TestCase):
         self.assertIs(train_ds.masking_config, train_cfg)
         self.assertIs(val_ds.masking_config, eval_cfg)
         self.assertIs(test_ds.masking_config, eval_cfg)
+
+    def test_disable_latlon_reaches_all_splits(self):
+        train_ds, val_ds, test_ds = prepare_training_datasets(
+            *self._tiny_dfs(), emit_label_tensor=False, disable_latlon=True
+        )
+
+        for dataset in (train_ds, val_ds, test_ds):
+            self.assertTrue(dataset.disable_latlon)
