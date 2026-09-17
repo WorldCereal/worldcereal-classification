@@ -16,6 +16,7 @@ from worldcereal.job import (
     DEFAULT_SEASONAL_WORKFLOW_PRESET,
     WorldCerealProductType,
     WorldCerealTask,
+    _get_disabled_modalities,
     create_inference_process_graph,
 )
 from worldcereal.jobmanager import WorldCerealJobManager
@@ -470,6 +471,96 @@ def test_create_inference_process_graph_croptype_merged_products():
     assert _single_filter_bands_arg(results[1]) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(results[2]) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(results[3]) == ["global_embedding:scale"]
+
+
+def test_create_inference_process_graph_default_does_not_skip_sensor_inputs():
+    """UDP generation relies on this default: the model can still be swapped
+    at runtime via a process parameter, so the graph must always load every
+    sensor, regardless of what any concrete model's run_config says."""
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+        )
+
+        mock_load_artifact.assert_not_called()
+        assert mock_inputs.call_args.kwargs["disable_s1"] is False
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
+
+
+def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_load_artifact.return_value = MagicMock(
+            run_config={"args": {"disable_s1": True}}
+        )
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+            skip_disabled_sensor_inputs=True,
+        )
+
+        assert mock_inputs.call_args.kwargs["disable_s1"] is True
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
+
+
+def test_get_disabled_modalities_reads_only_disable_flags():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    with patch("worldcereal.job.load_model_artifact") as mock_load_artifact:
+        mock_load_artifact.return_value = MagicMock(
+            run_config={
+                "args": {"disable_meteo": True, "disable_dem": True},
+                # Training turns a probability of 1.0 into its flag, so this is ignored.
+                "dataset": {
+                    "train_masking": {"enable": True, "s1_timestep_dropout_prob": 1.0}
+                },
+            }
+        )
+
+        assert _get_disabled_modalities("model.zip") == {
+            "s1": False,
+            "s2": False,
+            "meteo": True,
+            "dem": True,
+        }
 
 
 def test_create_inputs_job_logic(tmp_path: Path):
