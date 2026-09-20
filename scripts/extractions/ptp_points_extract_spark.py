@@ -1,37 +1,33 @@
 """Spark (mepsy) driver for ptp_points_extract.py — arbitrary point sources.
 
-Same relationship as ptp_campaign_rdm_spark.py has to ptp_campaign_rdm.py: the
-per-unit work is reused unchanged, only the fan-out changes. Outputs are
-therefore identical to a --local run.
+The same relationship ptp_campaign_rdm_spark.py has to ptp_campaign_rdm.py: the
+per-unit work is reused unchanged and only the fan-out differs, so outputs are
+identical to a --local run.
 
-Task unit = one (source_ref_id, host_ref_id) pair
--------------------------------------------------
-The RDM driver uses one task per ref because a ref's patches all live under its
-own directory. Here a single source ref can draw on dozens of hosts (a 375-point
-OSM-HARDNEG ref touched 17), and a single host can serve many source refs. Using
-the source ref as the task unit would serialise those hosts inside one executor
-and leave the cluster idle; using the PAIR lets every (source, host) combination
-run concurrently. Each task writes one part file; the driver concatenates parts
-per source ref at the end. That keeps executors free of cross-task coordination
-and makes the whole thing resume-safe: a part that exists is not recomputed.
+Task unit = one (source_ref_id, host_ref_id) pair. A single source ref can draw
+on dozens of hosts and a single host can serve many source refs, so taking the
+source ref as the task unit would serialise those hosts inside one executor.
+Each task writes one part file and the driver concatenates the parts per source
+ref at the end, which also makes the run resume-safe: an existing part is never
+recomputed.
 
-The assignment (point -> patch, over the WHOLE archive) happens once on the
-driver, not per task: it is a single STRtree join and shipping the result is far
+The assignment (point -> patch, over the whole archive) runs once on the driver
+rather than per task. It is a single STRtree join, and shipping the result is
 cheaper than making every executor read the 90 MB index.
 
-Usage
------
+Usage:
   python ptp_points_extract_spark.py \
       --points /path/points.geoparquet \
       --index  /vitodata/worldcereal/data/test_spark_runs/patches_index_extended.geoparquet \
       --out-dir /vitodata/worldcereal/data/POINTS_RUN \
       --executors 40 --executor-memory 6
 
-Prerequisites are the RDM driver's: executors must see the NFS mounts, and every
-path passed in must be NFS-visible (not $HOME).
+Prerequisites are the RDM driver's: executors must see the NFS mounts, and
+every path passed in must be NFS-visible (not $HOME).
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -39,8 +35,8 @@ from loguru import logger
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 _NFS_SCRIPT_DIR = Path(
-    "/data/users/Private/{user}/worldcereal-classification"
-    "/scripts/extractions")
+    f"/data/users/Private/{os.environ.get('USER', '')}"
+    "/worldcereal-classification/scripts/extractions")
 if not (SCRIPT_DIR / "ptp_engine.py").exists() \
         and (_NFS_SCRIPT_DIR / "ptp_engine.py").exists():
     SCRIPT_DIR = _NFS_SCRIPT_DIR
@@ -70,7 +66,6 @@ def run_pair_task(task: dict) -> dict:
             return {"tag": tag, "status": "SKIP"}
 
         import geopandas as _gpd
-
         import ptp_engine as _engine
         from ptp_engine import DEFAULT_CONVENTIONS as _CONV
         _CONV = {**_CONV, "s2_mask": task.get("s2_mask", "dilated"),
@@ -132,30 +127,23 @@ def main() -> None:
                          "'Python gets ~N-1 GB'")
     ap.add_argument("--driver-memory", type=int, default=12,
                     help="GB for the YARN AM. The driver holds the whole "
-                         "assignment (every point with its host patch) in "
-                         "memory before writing _assigned.geoparquet, so this "
-                         "scales with POINT COUNT, not executor count. 4 GB "
-                         "was killed at 4.6/4.5 GB on a 1.3M-point tier "
-                         "(exitCode -104), so the default is generous.")
+                         "assignment in memory before writing "
+                         "_assigned.geoparquet, so this scales with point "
+                         "count, not executor count.")
     ap.add_argument("--queue", type=str, default="default")
     ap.add_argument("--freq", choices=["month", "dekad"], default="month",
                     help="compositing period (patch_to_point.py --period): "
-                         "'month' (default) or 'dekad' (3 per month at days "
-                         "1/11/21). Must match the campaign run the output "
-                         "will sit alongside.")
+                         "'month' (default) or 'dekad'. Must match the "
+                         "campaign run the output will sit alongside.")
     ap.add_argument("--s2-mask", choices=["dilated", "raw_scl"],
                     default="dilated",
-                    help="S2 cloud masking: 'dilated' (precomputed "
-                         "erosion/dilation band, production) or 'raw_scl' "
-                         "(raw SCL classes {0,1,3,8,9,10,11}, no "
-                         "erosion/dilation). Must match the campaign run the "
-                         "output will sit alongside.")
+                    help="S2 cloud masking: 'dilated' (production) or "
+                         "'raw_scl'. Must match the campaign run the output "
+                         "will sit alongside.")
     ap.add_argument("--verify", type=int, default=0, metavar="N",
                     help="after merging each ref, classify N random points "
                          "against the openEO store and write "
-                         "_verify/<ref>.json (0 = off). Same verify_ref the "
-                         "RDM campaign driver uses, so the two stores are "
-                         "auditable the same way.")
+                         "_verify/<ref>.json (0 = off)")
     ap.add_argument("--verify-store", type=Path, default=None,
                     help="openEO store to verify against "
                          "(default: ptp_verify.STORE_DEFAULT)")
@@ -163,24 +151,19 @@ def main() -> None:
                     help="fraction of geometry-divergent samples tolerated "
                          "before a ref is marked divergent")
     ap.add_argument("--workers", type=int, default=2,
-                    help="extraction processes INSIDE one task. Each opens its "
-                         "own netCDF handles (netCDF4/HDF5 is not thread-safe, "
-                         "so these are processes, not threads). Keep "
+                    help="extraction processes inside one task (processes, "
+                         "not threads: netCDF4/HDF5 is not thread-safe). Keep "
                          "<= --executor-cores or they contend for one core.")
     ap.add_argument("--executor-cores", type=int, default=None,
-                    help="cores per executor (default: --workers). Until "
-                         "2026-08-21 this was never set, so YARN gave each "
-                         "executor 1 core while --workers 2 spawned 2 "
-                         "processes on it — permanently oversubscribed. "
-                         "Patch-open/decode is the bottleneck for these tasks, "
-                         "so real cores translate almost linearly into "
-                         "throughput on the patch-heavy high tier.")
+                    help="cores per executor (default: --workers). Leave it "
+                         "unset and YARN gives 1 core while --workers spawns "
+                         "N processes on it, permanently oversubscribed.")
     ap.add_argument("--agera5-cache", type=Path, default=None)
     ap.add_argument("--kinit-env", type=str,
-                    default="/home/{user}/Private/kinit.env")
+                    default=str(Path.home() / "Private" / "kinit.env"))
     ap.add_argument("--environment", type=str,
-                    default="hdfs:///user/{user}/environments/"
-                            "ptp_env_v3.tar.gz")
+                    default=f"hdfs:///user/{os.environ.get('USER', '')}"
+                            "/environments/ptp_env_v3.tar.gz")
     ap.add_argument("--no-temporal-check", action="store_true",
                     help="DANGEROUS: assign on space alone; see "
                          "ptp_points_extract.py --no-temporal-check")
@@ -204,14 +187,12 @@ def main() -> None:
     parts_dir.mkdir(exist_ok=True)
     agera5 = args.agera5_cache or args.out_dir / "_agera5_cache"
 
-    # Seed AGERA5 on the DRIVER before any executor starts — a cold shared
-    # cache otherwise has every executor fetch the same rasters at once and
-    # read each other's half-written files. See ptp_campaign_rdm_spark.
+    # Seed AGERA5 on the driver before any executor starts: on a cold shared
+    # cache they otherwise fetch the same rasters at once and read each
+    # other's half-written files. See ptp_campaign_rdm_spark.
     try:
-        # pandas, not geopandas: a column subset without the geometry
-        # column makes geopandas raise.
+        # pandas, not geopandas: a subset without the geometry column raises.
         import pandas as _pd
-
         from ptp_engine import seed_meteo_cache as _seed
         _ix = _pd.read_parquet(args.index, columns=["start_date", "end_date"])
         _seed(agera5, str(_ix.start_date.min()), str(_ix.end_date.max()),
@@ -309,16 +290,10 @@ def main() -> None:
                 extra_spark_confs={
                     "spark.task.maxFailures": "1",
                     "spark.stage.maxConsecutiveAttempts": "1",
-                    # This driver does the WHOLE point->patch assignment
-                    # (load ~8M points, read the 886k-patch index, spatial
-                    # join) BEFORE it ever creates the SparkContext. In YARN
-                    # cluster mode the ApplicationMaster waits
-                    # spark.yarn.am.waitTime for that context and then dies:
-                    #   TimeoutException: Futures timed out after [600000 ms]
-                    #   ApplicationMaster.runDriver -> exitCode 13
-                    # The 1.3M-point tier needs ~12 min of assignment, which
-                    # is longer than the 600 s default. Local runs never hit
-                    # this because the driver is not under the AM there.
+                    # The whole point->patch assignment runs before the
+                    # SparkContext exists, and in cluster mode the AM kills
+                    # the driver after spark.yarn.am.waitTime (600 s default,
+                    # ~12 min needed on the largest tier).
                     "spark.yarn.am.waitTime": "3600s",
                 })
             mep.foreach(run_pair_task, tasks)
@@ -347,10 +322,9 @@ def main() -> None:
         written += 1
         logger.success(f"{src_ref}: {len(out):,} rows -> {out_path}")
 
-        # Verification, same machinery and same _verify/ layout the RDM
-        # campaign driver uses, so both stores can be audited identically.
-        # Runs on the DRIVER after the merge (verify_ref needs the whole
-        # per-ref file, which only exists once the parts are concatenated).
+        # Same machinery and _verify/ layout as the RDM campaign driver.
+        # Runs on the driver after the merge, since verify_ref needs the
+        # whole per-ref file.
         if args.verify:
             try:
                 import json as _json
@@ -377,13 +351,11 @@ def main() -> None:
             except Exception as exc:   # never let a verify failure lose data
                 logger.warning(f"{src_ref}: verification errored ({exc})")
 
-    # Distinguish the two very different reasons a requested ref has no file:
-    #   * NOT ASSIGNABLE - not one of its points fell inside an in-year patch,
-    #     so there was never any work to do. Expected, not a failure.
-    #   * CRASHED - it had pairs to run but every part is missing, i.e. tasks
-    #     died. That is the only case worth a non-zero exit.
-    # Conflating them made healthy runs report FAILED (a tier that finished
-    # 313/313 refs still exited 1), which repeatedly cost time to re-diagnose.
+    # Two very different reasons a requested ref has no file:
+    #   NOT ASSIGNABLE - no point fell inside an in-year patch, so there was
+    #                    never any work to do. Expected, not a failure.
+    #   CRASHED        - it had pairs to run but every part is missing. The
+    #                    only case worth a non-zero exit.
     requested = set(ref_ids) if ref_ids else set(assigned.ref_id.unique())
     assignable = set(pairs.ref_id.unique())
     not_assignable = sorted(requested - assignable)

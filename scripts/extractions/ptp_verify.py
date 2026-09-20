@@ -2,8 +2,8 @@
 openEO-era store — every difference must be EXPLAINED, not just counted.
 
 The openEO-era store is wrong for ~50% of points, but wrong in a precisely
-characterised way (the neighbouring-pixel layout bug). 
-That makes it a usable reference: for a random sample of points 
+characterised way (the neighbouring-pixel layout bug).
+That makes it a usable reference: for a random sample of points
 we classify each band group as
 
   S2 : identical         — store matches our value bit-for-bit

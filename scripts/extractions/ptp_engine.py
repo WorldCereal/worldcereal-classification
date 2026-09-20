@@ -1,58 +1,28 @@
-"""ENGINE for local (openEO-free) patch-to-point extraction.
+"""Local (openEO-free) patch-to-point extraction engine.
 
-Campaign-agnostic core shared by all extraction campaigns: it turns
-(points assigned to patches) into validated time-series values. Campaign
-drivers own everything else — which points, mapped to which patches, written
-where:
-
-  * ptp_campaign_inpatch.py — in-patch hard negatives (host_sample_id
-    routing, h3 remap, rekey to our ref_ids). First user of this engine;
-    its point loader (`load_host_points`) is also still the default when
-    `extract_host(points=None)` — supply `points=` to bypass it.
-  * ptp_campaign_rdm.py — full-RDM reprocessing: points from the
-    harmonized RDM files, primaries at their own patch, collaterals assigned
-    via ref_catalog footprints.
-
-Patch discovery is pluggable too: `index_source="fs"` walks the extraction
-tree (original behaviour), "stac"/"auto" use ref_catalog.RefCatalog
-(seconds per ref instead of minutes).
+Campaign-agnostic core: turns points-assigned-to-patches into time-series
+values. Campaign drivers (ptp_campaign_inpatch.py, ptp_campaign_rdm.py) decide
+which points go to which patches, and where the output is written.
 
 Reads the S2/S1 patch NetCDFs directly from /data/worldcereal_data and
-reproduces the openEO patch-to-point output bit-for-bit, per the empirically
-validated recipe:
+reproduces the openEO patch-to-point output, per the calibrated recipe:
 
-  S2   : drop obs where SCL_DILATED_MASK == 1 or DN == 65535; per-calendar-month
+  S2   : drop obs where SCL_DILATED_MASK == 1 or DN == 65535; per-period
          MEDIAN per band; floor to uint16.
-  S1   : uint16 DN -> dB = 20*log10(DN) - 83 -> linear power; per-month MEAN in
-         the linear domain; DN = 10**((10*log10(mean)+83)/20); FLOOR (truncation);
-         clamp [1, 65534].
-  METEO: AGERA5 monthly composites (public CloudFerro S3, identical to the
-         collection openEO loads; local-daily fallback). Value of the covering
-         0.1-degree cell.
-  SLOPE: the exact Terrascope product openEO loads has LOCAL hrefs:
-         /data/worldcereal_data/AUXDATA/COP-DEM_GLO-30_SLOPE/S2grid_20m/slope_<TILE>.tif
-  ELEV : /data/MTDA/DEM/COPERNICUS-DEM-30 (bilinear at the S2 pixel centre,
-         matches the store within ~2 m).
+  S1   : DN -> dB = 20*log10(DN) - 83 -> linear power; per-period MEAN in the
+         linear domain; back to DN; floor; clamp [1, 65534].
+  METEO: AGERA5 composites (CloudFerro S3, local-daily fallback); value of the
+         covering 0.1-degree cell.
+  SLOPE: /data/worldcereal_data/AUXDATA/COP-DEM_GLO-30_SLOPE/S2grid_20m
+  ELEV : /data/MTDA/DEM/COPERNICUS-DEM-30, bilinear at the S2 pixel centre.
 
-Pixel selection is deterministic geometry: the point's coordinates plus the
-patch's own georeferencing identify the containing pixel with certainty. 
-DEFAULT_CONVENTIONS below records the frozen SEMANTIC/ENCODING decisions of 
-the recipe (interpolation modes, the aux-at-S2-pixel-centre rule, float32 S1 cell
-reads). NOTE: the S1 *arithmetic* was float32 to mirror openEO; it is now done in
-float64 (see _s1_monthly) because it is measurably more accurate at the point and
-because float32 vector math is not reproducible across CPU generations. S1 DNs may
-therefore differ by +-1 from pre-2026-08-20 outputs and from openEO.
-They were established once by empirical calibration against openEO ground truth 
-(bit-exact on 1,188 samples / 3 hosts, then 59 hosts) and subsequently confirmed line-by-line in
-the openEO backend source.
+This local route exists because openEO's aggregate_spatial returns a
+neighbouring pixel for ~48% of points (reported to openEO on 2026-08-13). It
+was validated bit-exact against openEO on 1,188 samples / 3 hosts. The S1
+arithmetic is now float64 rather than float32, so S1 DNs may differ by +-1
+from pre-2026-08-20 outputs and from openEO.
 
-Why local at all: this whole local route exist because openEO's aggregate_spatial 
-returns a NEIGHBOURING pixel (not the point's own) for ~48% of points. 
-The bug was reported to the openEO team on 2026-08-13; this route was validated against 
-openEO ground truth on 1188 samples across 3 hosts. And it's much faster.
-
-Output: the same host-keyed <host>_<run-suffix>.geoparquet the openEO route
-produced, into --merged-dir.
+Output: <host>_<run-suffix>.geoparquet in --merged-dir.
 """
 
 import argparse
@@ -61,12 +31,8 @@ import json
 import os
 import sys as _sys
 
-# The ptp_* modules and ref_catalog live as flat scripts in this directory
-# (not installed as a package). Drivers insert this dir on sys.path and
-# direct execution gets it automatically; this line covers the remaining
-# case — ptp_engine imported via an exotic mechanism (importlib-by-path,
-# notebooks) — so the lazy `from ref_catalog import ...` inside
-# extract_host always resolves for every user.
+# ptp_* and ref_catalog are flat scripts here, not an installed package, so
+# make this directory importable however ptp_engine itself was imported.
 _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -83,8 +49,7 @@ from loguru import logger
 from pyproj import CRS, Transformer
 
 # --- Paths ----------------------------------------------------------------
-# Stable Terrascope/project locations (defaults are correct on the Terrascope
-# clusters; overridable via the CLI flags of the same name).
+# Terrascope defaults; each is overridable via the CLI flag of the same name.
 
 S2_ROOT = Path("/data/worldcereal_data/EXTRACTIONS/SENTINEL_2")
 S1_ROOT = Path("/data/worldcereal_data/EXTRACTIONS/SENTINEL_1")
@@ -92,10 +57,12 @@ SLOPE_DIR = Path("/data/worldcereal_data/AUXDATA/COP-DEM_GLO-30_SLOPE/S2grid_20m
 DEM_DIR = Path("/data/MTDA/DEM/COPERNICUS-DEM-30")
 AGERA5_DAILY = Path("/data/MTDA/AgERA5")
 AGERA5_S3 = "https://s3.waw3-1.cloudferro.com/agera_monthly_v2/agera5_monthly_composite"
+# Dekadal composites: same bucket, different prefix, stamped with the dekad
+# start day (_YYYY-MM-01Z / -11Z / -21Z).
+AGERA5_S3_DEKAD = ("https://s3.waw3-1.cloudferro.com/agera_monthly_v2"
+                   "/agera5_dekadal_composite")
 
-# Campaign-specific locations: no baked-in defaults — main() fills these from
-# the CLI (--gt-dir, --merged-dir, --run-suffix, --agera5-cache,
-# --reference-dir) before any of the functions below run.
+# Campaign-specific locations: no defaults, main() fills these from the CLI.
 GT_DIR: Optional[Path] = None
 MERGED_DIR: Optional[Path] = None
 AGERA5_CACHE: Optional[Path] = None
@@ -107,51 +74,40 @@ S2_BANDS = [
 ]
 S1_BANDS = ["S1-SIGMA0-VH", "S1-SIGMA0-VV"]
 NODATA = 65535
-# Big ref_ids (ESP/POL/AUT: 200k+ samples -> millions of rows) might OOM'd a 15 GB
-# VM when the whole long-format frame plus its Arrow copy were materialized at
-# once. extract_host assembles and writes in blocks of at most this many rows:
-# peak memory is one block regardless of ref size. Small refs (the common
-# case) stay single-shot.
+# Max rows per assembled block. Big refs (200k+ samples) would otherwise
+# materialise the whole long frame plus its Arrow copy at once and OOM a 15 GB
+# VM; peak memory is now one block regardless of ref size.
 CHUNK_ROWS = 1_500_000
 
-# Frozen semantic/encoding decisions (see header). Row/col offsets are grid
-# steps relative to the nearest-pixel-centre match, keyed per case; all zero =
-# pure geometry.
+# Frozen semantic/encoding decisions. Row/col offsets are grid steps relative
+# to the nearest-pixel-centre match; all zero means pure geometry.
 DEFAULT_CONVENTIONS = {
     "s2": {"row_off": 0, "col_off": 0},
     "s1_same_crs": {"row_off": 0, "col_off": 0},
     "s1_cross_crs": {"row_off": 0, "col_off": 0},
-    # Meteo = value of the COVERING 0.1-deg cell. The openEO-era store is a
-    # MIXTURE (mostly covering-cell from the nearest-era graph; some
-    # near-cell-edge samples bilinear from the newer graph, 
-    # so no single choice matches it everywhere; covering_cell
-    # matches the dominant historical semantics and keeps "monthly total of
-    # the containing cell" interpretable. ptp_verify accepts either
-    # convention on the store side.
+    # Value of the covering 0.1-deg cell. The openEO-era store mixes this with
+    # bilinear near cell edges, so no single choice matches it everywhere;
+    # covering_cell matches the dominant historical semantics.
     "meteo": "covering_cell",       # vs "bilinear"
     "slope": "bilinear_floor",      # vs "nearest"
     "elevation": "bilinear_floor",  # vs "nearest"
-    # S2 cloud masking. Two methods, matching patch_to_point.py's
-    # --optical-mask-method exactly (see optimized_mask_precomputed /
-    # optimized_mask_raw_scl_values in patch_to_point_worldcereal.py):
-    #   "dilated" -> drop obs where S2-L2A-SCL_DILATED_MASK == 1. The
-    #       precomputed band has already had a large EROSION/DILATION applied,
-    #       so pixels merely NEAR cloud/shadow are masked as well. Production
-    #       default; this is what the whole openEO-era store used.
-    #   "raw_scl" -> drop obs whose raw S2-L2A-SCL class is in
-    #       SCL_REJECT_CLASSES. No erosion/dilation, so ONLY pixels actually
-    #       classified as bad are dropped. Strictly less aggressive: more
-    #       observations survive per month (denser composites, fewer NODATA
-    #       months) at the price of some cloud-edge contamination.
+    # S2 cloud masking, matching patch_to_point.py --optical-mask-method.
+    # "dilated" drops SCL_DILATED_MASK == 1 (erosion/dilation applied, so
+    # near-cloud pixels go too); "raw_scl" drops SCL_REJECT_CLASSES only.
     "s2_mask": "dilated",           # vs "raw_scl"
+    # Compositing period, matching patch_to_point.py --period. "month" is one
+    # composite per calendar month; "dekad" is three, at days 1/11/21, the
+    # third ragged. Only the axis changes, the per-period recipe is identical.
+    "freq": "month",                # vs "dekad"
 }
 
+# Period start days within a month. Periods are identified everywhere by the
+# triple (year, month, day); for "month" the day is always 1.
+PERIOD_DAYS = {"month": (1,), "dekad": (1, 11, 21)}
+
 # Raw-SCL invalid classes, verbatim from optimized_mask_raw_scl_values:
-#   0 no data | 1 saturated/defective | 3 cloud shadow |
-#   8 medium-probability cloud | 9 high-probability cloud |
-#   10 thin cirrus | 11 snow/ice
-# Everything else (4 vegetation, 5 bare, 6 water, 7 unclassified, 2 dark
-# area, 12 ...) is kept.
+# 0 nodata, 1 saturated/defective, 3 cloud shadow, 8/9 cloud, 10 cirrus,
+# 11 snow/ice. Everything else is kept.
 SCL_REJECT_CLASSES = frozenset({0, 1, 3, 8, 9, 10, 11})
 SCL_RAW_BAND = "S2-L2A-SCL"
 SCL_DILATED_BAND = "S2-L2A-SCL_DILATED_MASK"
@@ -242,32 +198,45 @@ def _longest_run(mask: np.ndarray) -> int:
 # --- Compositing (the exact openEO recipe) --------------------------------
 
 
+def _period_key(t: np.datetime64, freq: str = "month") -> Tuple[int, int, int]:
+    """The period an observation falls in, as (year, month, start_day).
+
+    "month" always yields day 1. "dekad" yields 1, 11 or 21 — days 1-10 to
+    dekad 1, 11-20 to dekad 2, 21-end to dekad 3 (the third is ragged, 8-11
+    days, exactly as openEO composites it).
+    """
+    ts = pd.Timestamp(t)
+    if freq == "dekad":
+        return ts.year, ts.month, 1 if ts.day < 11 else (11 if ts.day < 21 else 21)
+    return ts.year, ts.month, 1
+
+
 def _month_key(t: np.datetime64) -> Tuple[int, int]:
+    """Back-compat shim: the monthly (year, month) key."""
     ts = pd.Timestamp(t)
     return ts.year, ts.month
 
 
 def composite_s2(
-    patch: dict, row: int, col: int, months: List[Tuple[int, int]],
+    patch: dict, row: int, col: int, months: List[Tuple[int, int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
-    s2_mask: str = "dilated",
+    s2_mask: str = "dilated", freq: str = "month",
 ) -> np.ndarray:
-    """(10, n_months) uint16: masked per-month median per band, floor-cast.
+    """(10, n_periods) uint16: masked per-period median per band, floor-cast.
 
-    `s2_mask` selects the cloud-masking method — "dilated" (the precomputed
-    erosion/dilation band, production) or "raw_scl" (raw SCL classes, no
-    erosion/dilation). See DEFAULT_CONVENTIONS["s2_mask"]."""
+    `s2_mask` is "dilated" or "raw_scl"; see DEFAULT_CONVENTIONS["s2_mask"].
+    """
     times = patch["times"]
     sel = (times >= t_start) & (times < t_end_excl)
     if s2_mask == "raw_scl":
         scl = patch["bands"][SCL_RAW_BAND][:, row, col]
-        # bad[ti] is True where the observation must be dropped, so the
-        # `mask[ti] != 1` test below reads identically for both methods.
+        # 1 where the obs must be dropped, so the `mask[ti] != 1` test below
+        # reads identically for both methods.
         mask = np.isin(scl, list(SCL_REJECT_CLASSES)).astype(np.uint8)
     else:
         mask = patch["bands"][SCL_DILATED_BAND][:, row, col]
     out = np.full((len(S2_BANDS), len(months)), NODATA, dtype=np.uint16)
-    mkeys = [_month_key(t) for t in times]
+    mkeys = [_period_key(t, freq) for t in times]
     for bi, band in enumerate(S2_BANDS):
         series = patch["bands"][band][:, row, col]
         for mi, month in enumerate(months):
@@ -283,14 +252,13 @@ def composite_s2(
 
 
 def s1_month_index(
-    s1: dict, months: List[Tuple[int, int]],
+    s1: dict, months: List[Tuple[int, int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
+    freq: str = "month",
 ) -> np.ndarray:
     """Per time step: index into `months`, or -1 when out of window / month.
 
-    Computed once per patch (not per point) and consumed by
-    s1_nodata_months, which is called for every candidate orbit of every
-    point during orbit selection.
+    Computed once per patch and reused by s1_nodata_months for every point.
     """
     times = s1["times"]
     sel = (times >= t_start) & (times < t_end_excl)
@@ -298,18 +266,17 @@ def s1_month_index(
     out = np.full(len(times), -1, dtype=np.int64)
     for ti, t in enumerate(times):
         if sel[ti]:
-            out[ti] = midx.get(_month_key(t), -1)
+            out[ti] = midx.get(_period_key(t, freq), -1)
     return out
 
 
 def s1_nodata_months(
     s1: dict, row: int, col: int, month_index: np.ndarray, n_months: int,
 ) -> np.ndarray:
-    """Boolean per month: would composite_s1 leave BOTH bands at NODATA?
+    """Boolean per month: would composite_s1 leave both bands at NODATA?
 
-    Same rule as composite_s1 (an in-window observation whose DN is neither 0
-    nor NODATA), without the power/log arithmetic — so orbit selection is
-    cheap and only the winning orbit pays for the full composite.
+    Same rule as composite_s1 without the power/log arithmetic, so only the
+    winning orbit pays for the full composite.
     """
     has = np.zeros(n_months, dtype=bool)
     for band in S1_BANDS:
@@ -323,13 +290,14 @@ def s1_nodata_months(
 
 
 def composite_s1(
-    s1: dict, row: int, col: int, months: List[Tuple[int, int]],
+    s1: dict, row: int, col: int, months: List[Tuple[int, int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
+    freq: str = "month",
 ) -> np.ndarray:
-    """(2, n_months) uint16: linear-power monthly mean, recompressed, floored."""
+    """(2, n_periods) uint16: linear-power per-period mean, recompressed, floored."""
     times = s1["times"]
     sel = (times >= t_start) & (times < t_end_excl)
-    mkeys = [_month_key(t) for t in times]
+    mkeys = [_period_key(t, freq) for t in times]
     out = np.full((len(S1_BANDS), len(months)), NODATA, dtype=np.uint16)
     for bi, band in enumerate(S1_BANDS):
         if band not in s1["bands"]:
@@ -343,8 +311,8 @@ def composite_s1(
             ], dtype=np.float32)
             if len(dns) == 0:
                 continue
-            # Transcendentals in float64, rounded back to float32 after each
-            # step. More accurate and reproducible across machines
+            # Transcendentals in float64, rounded to float32 after each step:
+            # more accurate and reproducible across CPU generations.
             power = np.float32(
                 10.0 ** ((20.0 * np.log10(dns.astype(np.float64)) - 83.0)
                          / 10.0))
@@ -366,7 +334,8 @@ def process_patch(task: dict) -> List[dict]:
     as (sample_id, lon, lat), month axis, conventions) so no globals are shared.
     """
     conv = task["conventions"]
-    months: List[Tuple[int, int]] = [tuple(m) for m in task["months"]]
+    freq = conv.get("freq", "month")
+    months: List[Tuple[int, int, int]] = [tuple(m) for m in task["months"]]
     t_start = np.datetime64(task["t_start"])
     t_end_excl = np.datetime64(task["t_end_excl"])
     results = []
@@ -380,17 +349,15 @@ def process_patch(task: dict) -> List[dict]:
                 else SCL_DILATED_BAND]
         )
     except OSError as exc:
-        # Corrupt/truncated NetCDF on disk. Without S2 there is nothing to
-        # extract for these points — drop them (same net effect as openEO's
-        # all-nodata drop) instead of killing the whole host.
+        # Corrupt/truncated NetCDF: drop these points rather than kill the
+        # whole host (same net effect as openEO's all-nodata drop).
         logger.warning(f"S2 patch unreadable, dropping {len(task['points'])} "
                        f"point(s): {task['s2_path']} ({exc})")
         return []
     s2_crs = CRS.from_wkt(s2_patch["crs_wkt"])
     to_s2 = Transformer.from_crs("EPSG:4326", s2_crs, always_xy=True)
 
-    # S1: read every readable orbit patch, largest file first. The
-    # orbit is then chosen PER POINT on coverage — see the point loop.
+    # Read every readable orbit patch; the orbit is chosen per point below.
     cand = {o: p for o, p in task["s1_paths"].items() if p and Path(p).exists()}
     s1_patches: List[Tuple[str, dict]] = []
     s1_cases: Dict[str, str] = {}
@@ -407,16 +374,15 @@ def process_patch(task: dict) -> List[dict]:
         s1_patches.append((orbit, s1p))
         s1_cases[orbit] = "s1_same_crs" if s1_crs.equals(s2_crs) else "s1_cross_crs"
         s1_tf[orbit] = Transformer.from_crs(s2_crs, s1_crs, always_xy=True)
-        s1_midx[orbit] = s1_month_index(s1p, months, t_start, t_end_excl)
+        s1_midx[orbit] = s1_month_index(s1p, months, t_start, t_end_excl,
+                                        freq)
 
     for sample_id, lon, lat in task["points"]:
         px, py = to_s2.transform(lon, lat)
         col = _nearest_idx(s2_patch["x"], px) + conv["s2"]["col_off"]
         row = _nearest_idx(s2_patch["y"], py) + conv["s2"]["row_off"]
-        # aggregate_spatial reads the MERGED cube on the S2 10 m grid, so every
-        # non-S2 source must be evaluated at the centre of the point's S2
-        # pixel, not at the point itself. This is what makes the cross-CRS S1
-        # "sometimes +1 row" quirk deterministic.
+        # openEO reads the merged cube on the S2 10 m grid, so every non-S2
+        # source is evaluated at the centre of the point's S2 pixel.
         cx = float(s2_patch["x"][min(max(col, 0), len(s2_patch["x"]) - 1)])
         cy = float(s2_patch["y"][min(max(row, 0), len(s2_patch["y"]) - 1)])
         rec = {"sample_id": sample_id, "tile": task["tile"],
@@ -427,16 +393,14 @@ def process_patch(task: dict) -> List[dict]:
         elif 0 <= row < len(s2_patch["y"]) and 0 <= col < len(s2_patch["x"]):
             rec["s2"] = composite_s2(s2_patch, row, col, months,
                                      t_start, t_end_excl,
-                                     s2_mask=conv.get("s2_mask", "dilated"))
+                                     s2_mask=conv.get("s2_mask", "dilated"),
+                                     freq=freq)
         else:
             rec["s2"] = np.full((len(S2_BANDS), len(months)), NODATA, np.uint16)
 
-        # S1: coverage-aware orbit choice per point. Each readable
-        # orbit is composited at the point's S2 pixel centre; the orbit with
-        # the fewest NODATA months wins, then the shortest NODATA run, then
-        # the larger file (list order). Rationale: the openEO-era flow chose
-        # one orbit per job with a max-temporal-gap rule; the file-size proxy
-        # picked a denser orbit with a seasonal hole in ~20 refs.
+        # Coverage-aware orbit choice: fewest NODATA months wins, then
+        # shortest NODATA run, then larger file. A file-size-only proxy picked
+        # an orbit with a seasonal hole in ~20 refs.
         best = None
         for orbit, s1p in s1_patches:
             qx, qy = s1_tf[orbit].transform(cx, cy)
@@ -456,7 +420,7 @@ def process_patch(task: dict) -> List[dict]:
         else:
             _, orbit, case, s1p, s1_row, s1_col, inside = best
             rec["s1"] = (composite_s1(s1p, s1_row, s1_col, months,
-                                      t_start, t_end_excl) if inside
+                                      t_start, t_end_excl, freq) if inside
                          else np.full((2, len(months)), NODATA, np.uint16))
             rec["s1_orbit"], rec["s1_case"] = orbit, case
         results.append(rec)
@@ -467,15 +431,14 @@ def process_patch(task: dict) -> List[dict]:
 
 
 class MonthlyMeteo:
-    """AGERA5 monthly composites: S3-staged primary, local-daily fallback.
+    """AGERA5 composites: S3-staged primary, local-daily fallback.
 
-    In-season refs (patch windows extending past what AGERA5 covers yet)
-    get NODATA meteo for those months instead of a hard failure — but ONLY
-    for months beyond the daily archive's last complete month. A missing
-    month *behind* that horizon means archive corruption and still raises.
+    Months beyond the daily archive's last complete month yield NODATA rather
+    than failing; a month missing behind that horizon still raises.
     """
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Optional[Path] = None, freq: str = "month"):
+        self.freq = freq
         resolved = cache_dir if cache_dir is not None else AGERA5_CACHE
         if resolved is None:
             raise ValueError(
@@ -485,10 +448,11 @@ class MonthlyMeteo:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._open: Dict[Tuple[int, int, str], Optional[tuple]] = {}
         self._horizon: Optional[Tuple[int, int]] = None
-        self.missing: set = set()  # (year, month) served as NODATA
+        self.missing: set = set()  # (year, month, day) served as NODATA
 
-    def _local_path(self, year: int, month: int, band: str) -> Path:
-        return self.cache_dir / f"openEO_{year}-{month:02d}-01Z_{band}.tif"
+    def _local_path(self, year: int, month: int, day: int, band: str) -> Path:
+        return (self.cache_dir /
+                f"openEO_{year}-{month:02d}-{day:02d}Z_{band}.tif")
 
     def _daily_horizon(self) -> Tuple[int, int]:
         """Last month FULLY covered by the local daily archive."""
@@ -508,16 +472,17 @@ class MonthlyMeteo:
                 raise RuntimeError(f"no day folders under {AGERA5_DAILY}")
         return self._horizon
 
-    def _ensure(self, year: int, month: int, band: str) -> Optional[Path]:
-        p = self._local_path(year, month, band)
+    def _ensure(self, year: int, month: int, day: int,
+                band: str) -> Optional[Path]:
+        p = self._local_path(year, month, day, band)
         if p.exists() and p.stat().st_size > 0:
             return p
-        url = f"{AGERA5_S3}/openEO_{year}-{month:02d}-01Z_{band}.tif"
+        base = AGERA5_S3_DEKAD if self.freq == "dekad" else AGERA5_S3
+        url = f"{base}/openEO_{year}-{month:02d}-{day:02d}Z_{band}.tif"
         r = requests.get(url, timeout=120)
         if r.status_code == 200:
             # Per-process temp name: parallel shards may fetch the same
-            # month; rename is atomic and last-writer-wins with identical
-            # content. chmod so any group member can refresh it later.
+            # month, and rename is atomic with identical content.
             tmp = p.with_suffix(f".tmp{os.getpid()}")
             tmp.write_bytes(r.content)
             try:
@@ -529,25 +494,33 @@ class MonthlyMeteo:
         if (year, month) > self._daily_horizon():
             h = self._daily_horizon()
             logger.warning(
-                f"AGERA5 {year}-{month:02d} not on S3 and beyond the daily "
-                f"archive horizon ({h[0]}-{h[1]:02d}) — no source has it yet; "
-                "meteo = NODATA for this month")
+                f"AGERA5 {year}-{month:02d}-{day:02d} not on S3 and beyond the "
+                f"daily archive horizon ({h[0]}-{h[1]:02d}) — no source has it "
+                "yet; meteo = NODATA for this period")
             return None
         # Fallback: composite from the local daily archive (proven identical:
         # temp = floor(mean of raw K*100), precip = sum of raw mm*100).
-        logger.warning(f"S3 miss for {year}-{month:02d} {band}; compositing "
-                       "from /data/MTDA/AgERA5 dailies")
-        ndays = calendar.monthrange(year, month)[1]
+        logger.warning(f"S3 miss for {year}-{month:02d}-{day:02d} {band}; "
+                       "compositing from /data/MTDA/AgERA5 dailies")
+        # Day range of THIS period. Month = the whole month; dekad = 1-10,
+        # 11-20, or 21-end (the third is ragged, matching openEO).
+        eom = calendar.monthrange(year, month)[1]
+        if self.freq == "dekad":
+            d0 = day
+            d1 = eom if day == 21 else day + 9
+        else:
+            d0, d1 = 1, eom
+        ndays = d1 - d0 + 1
         acc: Optional[np.ndarray] = None
         profile = None
-        for day in range(1, ndays + 1):
-            f = (AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{day:02d}" /
-                 f"AgERA5_{band}_{year}{month:02d}{day:02d}.tif")
+        for dd in range(d0, d1 + 1):
+            f = (AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{dd:02d}" /
+                 f"AgERA5_{band}_{year}{month:02d}{dd:02d}.tif")
             with rasterio.open(f) as ds:
                 arr = ds.read(1).astype(np.float64)
                 profile = profile or ds.profile
             acc = arr if acc is None else acc + arr
-        assert acc is not None and profile is not None  # ndays >= 28
+        assert acc is not None and profile is not None  # ndays >= 8
         comp = (np.floor(acc / ndays) if band == "temperature-mean" else acc)
         profile.update(dtype="uint16", nodata=NODATA)
         tmp = p.with_suffix(f".tmp{os.getpid()}.tif")
@@ -560,11 +533,11 @@ class MonthlyMeteo:
         tmp.rename(p)
         return p
 
-    def sample(self, year: int, month: int, band: str,
+    def sample(self, year: int, month: int, day: int, band: str,
                lons: np.ndarray, lats: np.ndarray, mode: str) -> np.ndarray:
-        key = (year, month, band)
+        key = (year, month, day, band)
         if key not in self._open:
-            path = self._ensure(year, month, band)
+            path = self._ensure(year, month, day, band)
             if path is None:
                 self._open[key] = None
             else:
@@ -574,7 +547,7 @@ class MonthlyMeteo:
                 self._open.pop(next(iter(self._open)))
         entry = self._open[key]
         if entry is None:
-            self.missing.add((year, month))
+            self.missing.add((year, month, day))
             return np.full(len(lons), NODATA, dtype=np.float64)
         arr, transform = entry
         out = np.full(len(lons), NODATA, dtype=np.float64)
@@ -623,10 +596,8 @@ class SlopeSampler:
                 self._open[tile] = None
             else:
                 with rasterio.open(path) as ds:
-                    # Cast once, on load: a 5488x5488 uint8 tile is 30 MB, but
-                    # .astype(float64) per call allocated 240 MB *per point*,
-                    # which made a 7.7k-point host take longer than the entire
-                    # patch extraction that preceded it.
+                    # Cast once on load; .astype(float64) per call allocated
+                    # 240 MB per point.
                     self._open[tile] = (ds.read(1).astype(np.float64),
                                         ds.transform, ds.crs)
             if len(self._open) > 4:  # 240 MB each as float64; keep few
@@ -664,11 +635,9 @@ class ElevationSampler:
                 f"{ew}{abs(int(np.floor(lon))):03d}_00_DEM")
 
     def sample(self, lon: float, lat: float, mode: str) -> int:
-        """Sample one point. Cheap ONLY if consecutive calls stay within a few
-        DEM tiles — a 1x1-degree COG is 32 MB and casting it to float64 costs
-        ~150 ms. Callers with points spread over many tiles must group by
-        `tile_name()` first (see `sample_many`), otherwise every point evicts
-        the cache and reloads a tile from NFS.
+        """Sample one point; cheap only if consecutive calls stay within a few
+        DEM tiles. Callers with scattered points must group by tile first (see
+        `sample_many`), or every point reloads a 32 MB COG from NFS.
         """
         name = self._tile_name(lon, lat)
         if name not in self._open:
@@ -712,9 +681,51 @@ class ElevationSampler:
 # --- Month axis -----------------------------------------------------------
 
 
-def month_axis_from_patches(index: Dict[str, dict], needed: set) -> dict:
-    """Per-zone month axis from S2 patch filename dates (openEO derived the
-    job window per EPSG from the S2 STAC; zone dir == UTM zone == EPSG)."""
+def seed_meteo_cache(cache_dir: Path, start: str, end: str,
+                     freq: str = "month", workers: int = 8) -> int:
+    """Pre-fetch every AGERA5 raster the run needs, once, on the driver.
+
+    Required for Spark: executors sharing a cold cache issue the same GETs and
+    race on the same filenames ("TIFFReadEncodedTile failed"). Returns the
+    number of rasters in the cache afterwards.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    m = MonthlyMeteo(cache_dir=cache_dir, freq=freq)
+    s_ts = pd.Timestamp(start).replace(day=1)
+    e_ts = pd.Timestamp(end)
+    periods = [(t.year, t.month, d)
+               for t in pd.date_range(s_ts, e_ts, freq="MS")
+               for d in PERIOD_DAYS[freq]]
+    jobs = [(y, mo, d, b) for (y, mo, d) in periods
+            for b in ("temperature-mean", "precipitation-flux")]
+    todo = [j for j in jobs if not m._local_path(*j).exists()]
+    logger.info(f"AGERA5 seed ({freq}): {len(jobs)} raster(s) needed, "
+                f"{len(todo)} missing -> fetching with {workers} thread(s)")
+    if todo:
+        def _get(j):
+            try:
+                return m._ensure(*j) is not None
+            except Exception as exc:            # noqa: BLE001
+                logger.warning(f"AGERA5 seed {j[0]}-{j[1]:02d}-{j[2]:02d} "
+                               f"{j[3]}: {exc}")
+                return False
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            got = sum(bool(x) for x in pool.map(_get, todo))
+        logger.info(f"AGERA5 seed: fetched {got}/{len(todo)}")
+    n = len(list(cache_dir.glob("*.tif")))
+    logger.info(f"AGERA5 cache now holds {n} raster(s): {cache_dir}")
+    return n
+
+
+def month_axis_from_patches(index: Dict[str, dict], needed: set,
+                            freq: str = "month") -> dict:
+    """Per-zone period axis from S2 patch filename dates (zone dir == EPSG).
+
+    Returns (year, month, start_day) triples: one per month for freq="month",
+    three per month for freq="dekad".
+    """
     zone_bounds: Dict[str, list] = {}
     for sid in needed:
         entry = index.get(sid)
@@ -732,9 +743,12 @@ def month_axis_from_patches(index: Dict[str, dict], needed: set) -> dict:
         s = pd.Timestamp(start).replace(day=1)
         e = min(pd.Timestamp(end), last_complete)
         e = e.replace(day=1) + pd.offsets.MonthEnd(0)
-        months = [(t.year, t.month) for t in pd.date_range(s, e, freq="MS")]
+        months = [(t.year, t.month, d)
+                  for t in pd.date_range(s, e, freq="MS")
+                  for d in PERIOD_DAYS[freq]]
         axes[zone] = {"start": s.strftime("%Y-%m-%d"),
-                      "end": e.strftime("%Y-%m-%d"), "months": months}
+                      "end": e.strftime("%Y-%m-%d"), "months": months,
+                      "freq": freq}
     return axes
 
 
@@ -767,7 +781,7 @@ def _assemble_s1_only(host_ref_id: str, records: List[dict], sid_axis: dict,
         T = len(months)
         cols["sample_id"].extend([rec["sample_id"]] * T)
         cols["timestamp"].extend(
-            np.datetime64(f"{y:04d}-{m:02d}-01") for (y, m) in months)
+            np.datetime64(f"{y:04d}-{m:02d}-{d:02d}") for (y, m, d) in months)
         cols["S1-SIGMA0-VH"].extend(rec["s1"][0, :T].tolist())
         cols["S1-SIGMA0-VV"].extend(rec["s1"][1, :T].tolist())
         cols["s1_orbit"].extend([rec["s1_orbit"] or "none"] * T)
@@ -801,12 +815,9 @@ def extract_host(
 ) -> Tuple[pd.DataFrame, List[dict]]:
     """Extract one host. Returns (long dataframe, raw per-point records).
 
-    index_source: "fs" walks the extraction tree (original behaviour);
-    "stac"/"auto" build the patch index from the STAC catalogue via
-    RefCatalog (seconds instead of minutes per ref; identical entry shape).
-    `points` lets a campaign driver supply its own point set (columns
-    sample_id, host_sample_id, geometry); defaults to the in-patch
-    ground-truth+provenance loader.
+    index_source: "fs" walks the extraction tree, "stac"/"auto" use RefCatalog.
+    `points` lets a campaign driver supply its own point set (sample_id,
+    host_sample_id, geometry); defaults to the in-patch loader.
     """
     if points is None:
         points = load_host_points(host_ref_id)
@@ -825,7 +836,8 @@ def extract_host(
         logger.warning(f"{host_ref_id}: {len(missing_s2)} host patches have no "
                        "local S2 file; their points will be dropped")
 
-    axes = t_axis_override or month_axis_from_patches(index, needed)
+    freq = conventions.get("freq", "month")
+    axes = t_axis_override or month_axis_from_patches(index, needed, freq)
 
     tasks = []
     for hsid, grp in points.groupby("host_sample_id"):
@@ -877,7 +889,7 @@ def extract_host(
         return _assemble_s1_only(host_ref_id, records, sid_axis, out_path), records
 
     # --- Auxiliary bands (main process; cheap) ---
-    meteo = MonthlyMeteo()
+    meteo = MonthlyMeteo(freq=freq)
     slope_s = SlopeSampler()
     elev_s = ElevationSampler()
     pt_geom = dict(zip(points.sample_id, points.geometry))
@@ -897,15 +909,16 @@ def extract_host(
     lons = np.array([c[0] for c in centre_ll])
     lats = np.array([c[1] for c in centre_ll])
     meteo_vals = {}
-    for (yy, mm) in all_months:
-        meteo_vals[(yy, mm, "T")] = meteo.sample(
-            yy, mm, "temperature-mean", lons, lats, conventions["meteo"])
-        meteo_vals[(yy, mm, "P")] = meteo.sample(
-            yy, mm, "precipitation-flux", lons, lats, conventions["meteo"])
+    for (yy, mm, dd) in all_months:
+        meteo_vals[(yy, mm, dd, "T")] = meteo.sample(
+            yy, mm, dd, "temperature-mean", lons, lats, conventions["meteo"])
+        meteo_vals[(yy, mm, dd, "P")] = meteo.sample(
+            yy, mm, dd, "precipitation-flux", lons, lats, conventions["meteo"])
     if meteo.missing:
-        mm_str = ", ".join(f"{y}-{m:02d}" for (y, m) in sorted(meteo.missing))
+        mm_str = ", ".join(f"{y}-{m:02d}-{d:02d}"
+                           for (y, m, d) in sorted(meteo.missing))
         logger.warning(
-            f"{host_ref_id}: AGERA5-TMEAN/PRECIP = NODATA for month(s) "
+            f"{host_ref_id}: AGERA5-TMEAN/PRECIP = NODATA for period(s) "
             f"{mm_str} — in-season ref, no AGERA5 source covers them yet. "
             "Rows keep their S2/S1 values.")
 
@@ -918,17 +931,15 @@ def extract_host(
         months = tuple(map(tuple, axis_of[rec["sample_id"]][0]))
         if months not in ts_cache:
             ts_cache[months] = np.array(
-                [np.datetime64(f"{y:04d}-{m:02d}-01") for (y, m) in months],
+                [np.datetime64(f"{y:04d}-{m:02d}-{d:02d}")
+                 for (y, m, d) in months],
                 dtype="datetime64[ns]")
         n_per.append(len(months))
     reps = np.asarray(n_per)
     total = int(reps.sum())
 
-    # Elevation and slope must be sampled grouped by raster tile, not in point
-    # order: the DEM COGs are 32 MB each and points of a host are scattered
-    # over many 1-degree tiles, so per-point ordering reloads a tile per point
-    # (measured: 150 ms/point, i.e. ~20 min for a 7.7k-point host, vs ~1 s
-    # when grouped).
+    # Group by raster tile, not point order: DEM COGs are 32 MB and a host's
+    # points span many 1-degree tiles (150 ms/point ungrouped vs ~1 s total).
     elev_all = elev_s.sample_many(lons, lats, conventions["elevation"])
     slope_all = np.full(len(records), NODATA, dtype=np.int64)
     by_tile: Dict[str, List[int]] = {}
@@ -967,11 +978,11 @@ def extract_host(
             fidx_col[sl] = ri
             cols["slope"][sl] = np.uint16(slope_all[ri])
             cols["elevation"][sl] = np.uint16(elev_all[ri])
-            for mi, (yy, mm) in enumerate(months):
+            for mi, (yy, mm, dd) in enumerate(months):
                 cols["AGERA5-TMEAN"][offs + mi] = np.uint16(
-                    min(np.floor(meteo_vals[(yy, mm, "T")][ri]), NODATA))
+                    min(np.floor(meteo_vals[(yy, mm, dd, "T")][ri]), NODATA))
                 cols["AGERA5-PRECIP"][offs + mi] = np.uint16(
-                    min(np.floor(meteo_vals[(yy, mm, "P")][ri]), NODATA))
+                    min(np.floor(meteo_vals[(yy, mm, dd, "P")][ri]), NODATA))
             offs += T
 
         # Per-record scalars, repeated per month row. np.repeat on object
@@ -1017,9 +1028,8 @@ def extract_host(
             "quality_score_ct": np.repeat(
                 a["quality_score_ct"].to_numpy(np.int64), reps_b),
             "extract": np.repeat(a["extract"].to_numpy(np.int64), reps_b),
-            # point_kind ('centroid' | 'clipped' | 'point'): set by the RDM
-            # campaign driver's hybrid placement rule; absent for callers that
-            # do not provide it (in-patch campaign), keeping their schema.
+            # point_kind ('centroid'|'clipped'|'point'): set by the RDM
+            # driver, absent for callers that do not provide it.
             **({"point_kind": np.repeat(
                 a["point_kind"].astype(str).to_numpy(dtype=object), reps_b)}
                if "point_kind" in a.columns else {}),
@@ -1113,9 +1123,8 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mode", choices=["extract"], default="extract",
-                    help="kept for CLI compatibility; extraction is the only "
-                         "mode (calibration was a one-time bootstrap, see "
-                         "header)")
+                    help="kept for CLI compatibility; extraction is the "
+                         "only mode")
     ap.add_argument("--hosts", nargs="+", required=True)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--sample-limit", type=int, default=None)
@@ -1166,6 +1175,10 @@ def main():
     ap.add_argument("--agera5-s3", type=str, default=AGERA5_S3,
                     help="AGERA5 monthly composite S3 prefix "
                          "(default: %(default)s)")
+    ap.add_argument("--freq", choices=["month", "dekad"], default=None,
+                    help="compositing period (patch_to_point.py --period): "
+                         "'month' (default) or 'dekad' (3 composites per "
+                         "month at days 1/11/21).")
     args = ap.parse_args()
 
     S2_ROOT, S1_ROOT = args.s2_root, args.s1_root
@@ -1181,6 +1194,9 @@ def main():
     if conv_path.exists():
         conv = json.loads(conv_path.read_text())
         logger.info(f"Loaded conventions from {conv_path}")
+    if args.freq:
+        conv = {**conv, "freq": args.freq}
+        logger.info(f"compositing period: {args.freq}")
 
     for host in args.hosts:
         out_path = MERGED_DIR / f"{host}_{RUN_SUFFIX}.geoparquet"

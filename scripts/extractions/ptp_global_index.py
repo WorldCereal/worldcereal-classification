@@ -1,26 +1,21 @@
 """Global patches index for local patch-to-point extraction.
 
 Builds ONE geoparquet holding, for every patch of every ref: its footprint
-(EPSG:4326), file paths (S2 .nc, S1 per orbit), tile/zone/h3 and ref_id.
-This turns point-to-patch assignment into a single spatial join over the
-whole archive and gives coverage reporting ("which points have no patch
-anywhere?") for free.
+(EPSG:4326), file paths (S2 .nc, S1 per orbit), tile/zone/h3 and ref_id. That
+turns point-to-patch assignment into a single spatial join over the whole
+archive, and gives coverage reporting ("which points have no patch anywhere?")
+for free.
 
-Built strictly on top of ref_catalog.RefCatalog (STAC-primary with fs
-fallback and retries) — no new discovery code. Per-ref catalog parquets are
-cached in --cache-dir, so rebuilding the global index only refetches refs
-that were never cached.
+Built on ref_catalog.RefCatalog (STAC-primary, fs fallback, retries), so there
+is no new discovery code. Per-ref catalog parquets are cached in --cache-dir,
+so a rebuild only refetches refs that were never cached.
 
-Known caveats, addressed here:
-  * STALENESS: the index is a snapshot. `built_at` (UTC) is stored in the
-    parquet metadata, and --reconcile-sample N stat()s N random referenced
-    files per ref at build time to quantify STAC/disk drift. At use time the
-    extractor still degrades per-file at open, so a stale row costs one
-    dropped point, never a wrong value.
-  * REF-SCOPED SEMANTICS: the month axis and output/verification are per
-    ref. `catalog_for_ref` slices the index back into a RefCatalog, so the
-    existing ref-scoped machinery (select_and_assign, extract_host,
-    ptp_verify) is reused unchanged.
+The index is a snapshot: `built_at` (UTC) is stored in the parquet metadata,
+and --reconcile-sample N stat()s N random referenced files per ref to quantify
+STAC/disk drift. At use time the extractor still degrades per file at open, so
+a stale row costs one dropped point, never a wrong value. `catalog_for_ref`
+slices the index back into a RefCatalog, so the ref-scoped machinery
+(select_and_assign, extract_host, ptp_verify) is reused unchanged.
 
 CLI:
   # Build (append refs incrementally; existing refs in the index are kept):
@@ -36,16 +31,15 @@ CLI:
 TWO WAYS TO BUILD AN INDEX
 --------------------------
 `build` discovers patches BY REF NAME (STAC per ref_id, filesystem fallback
-under <root>/<ref_id>/...). Anything not named after a ref in the campaign list
-is invisible to it, which hides two things: orphaned ref dirs that exist on
-disk but are absent from rdm_campaign_refs.txt, and the -INPATCH refs whose
-points were sampled inside ANOTHER ref's patches (they own no patch directory
-at all, so only a spatial lookup finds them).
+under <root>/<ref_id>/...), so anything not named after a campaign ref is
+invisible to it: orphaned ref dirs absent from rdm_campaign_refs.txt, and the
+-INPATCH refs, whose points were sampled inside another ref's patches and which
+own no patch directory at all.
 
-`scan` instead walks both EXTRACTION roots directly and indexes every
-<ref_dir>/<zone>/<tile>/<sample_id>/*.nc it finds, recording `in_campaign` so
-the extra material is easy to isolate. Output schema is build's INDEX_COLUMNS
-plus `in_campaign`, `footprint_source`, `start_date`, `end_date`, so
+`scan` walks both EXTRACTION roots directly and indexes every
+<ref_dir>/<zone>/<tile>/<sample_id>/*.nc, recording `in_campaign` so the extra
+material is easy to isolate. Its schema is build's INDEX_COLUMNS plus
+`in_campaign`, `footprint_source`, `start_date` and `end_date`, so
 `catalog_for_ref` works on either index.
 
   # Fast: full disk walk, STAC footprints (~minutes)
@@ -63,8 +57,10 @@ plus `in_campaign`, `footprint_source`, `start_date`, `end_date`, so
 import argparse
 import json
 import os
+import re
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -72,15 +68,15 @@ import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
 from loguru import logger
-from shapely.geometry import shape
+from shapely.geometry import box, shape
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ref_catalog import RefCatalog  # noqa: E402
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from shapely.geometry import box
-from ref_catalog import S1_ROOT, S2_ROOT, _iter_items  # noqa: E402
+from ref_catalog import (  # noqa: E402
+    S1_ROOT,
+    S2_ROOT,
+    RefCatalog,
+    _iter_items,
+)
 
 INDEX_COLUMNS = [
     "ref_id", "sample_id", "tile", "zone",
@@ -148,7 +144,6 @@ def build_index(
         logger.info(f"{ref}: {len(frame):,} patches "
                     f"({n_fp:,} with footprint) via {cat.source}")
         if reconcile_sample > 0:
-            import random
             with_s2 = frame[frame.s2_path.notna()]
             picks = with_s2.sample(
                 n=min(reconcile_sample, len(with_s2)), random_state=0)
@@ -189,7 +184,6 @@ def build_index(
 def _write_with_meta(gdf: gpd.GeoDataFrame, path: Path,
                      drift: Dict[str, dict]) -> None:
     """to_parquet, then re-attach our metadata (built_at, drift) losslessly."""
-    import pyarrow.parquet as pq
 
     gdf.to_parquet(path, index=False)
     table = pq.read_table(path)
@@ -204,7 +198,6 @@ def _write_with_meta(gdf: gpd.GeoDataFrame, path: Path,
 
 
 def read_index_meta(path: Path) -> dict:
-    import pyarrow.parquet as pq
     meta = pq.read_schema(path).metadata or {}
     raw = meta.get(b"ptp_index")
     return json.loads(raw) if raw else {}
@@ -237,8 +230,7 @@ def catalog_for_ref(index: gpd.GeoDataFrame, ref_id: str) -> RefCatalog:
 
 def coverage(index: gpd.GeoDataFrame,
              points: gpd.GeoDataFrame) -> pd.DataFrame:
-    """For each point: how many patches cover it, and from which refs.
-    Pure sjoin — the 'which points are even extractable' question."""
+    """For each point: how many patches cover it, and from which refs."""
     pts = points.to_crs(4326) if points.crs else points.set_crs(4326)
     usable = index[index.s2_path.notna() & index.geometry.notna()]
     joined = gpd.sjoin(pts[["geometry"]].reset_index(names="_pt"),
@@ -277,8 +269,7 @@ def _dates_from_path(*paths: Optional[str]) -> tuple:
 
 def _scan_ref_dir(ref_id: str, root: Path, key: str) -> Dict[str, dict]:
     """One ref dir under one root. Mirrors ref_catalog.build_from_fs's layout
-    assumptions (and its os.scandir/readdir trick, which avoids a stat per
-    entry on NFS)."""
+    assumptions and its os.scandir trick, which avoids a stat per entry."""
     entries: Dict[str, dict] = {}
     base = root / ref_id
     if not base.is_dir():
@@ -378,7 +369,6 @@ def walk_all(s2_root: Path, s1_root: Path, workers: int,
 
 def footprints_from_stac(ref_ids: List[str], workers: int) -> pd.DataFrame:
     """(ref_id, sample_id) -> geometry, from the STAC item geometries."""
-    from shapely.geometry import shape
     out: List[dict] = []
 
     def _one(ref_id: str) -> List[dict]:
@@ -457,21 +447,17 @@ def _footprint_from_nc(path: str) -> Optional[object]:
 
 
 def _footprint_wkb(path: str) -> Optional[bytes]:
-    """Process-pool worker: shapely geometries do not pickle cheaply, and WKB
-    keeps the IPC payload small."""
+    """Process-pool worker; WKB keeps the IPC payload small."""
     g = _footprint_from_nc(path)
     return None if g is None else g.wkb
 
 
 def footprints_from_nc(df: pd.DataFrame, workers: int) -> pd.Series:
-    """Footprint per row by opening each patch file. SLOW — hours at ~800k.
+    """Footprint per row by opening each patch file. SLOW: hours at ~800k.
 
-    Uses PROCESSES, not threads: the netCDF4/HDF5 stack is not thread-safe for
-    concurrent opens and segfaults the interpreter under a ThreadPoolExecutor
-    (reproduced at 16+ threads). Processes also sidestep the GIL, which matters
-    because the CRS transform is CPU work, not just NFS I/O.
+    Processes, not threads: netCDF4/HDF5 is not thread-safe for concurrent
+    opens and segfaults the interpreter, and the CRS transform is CPU work.
     """
-    from concurrent.futures import ProcessPoolExecutor
 
     from shapely import wkb as _wkb
 
@@ -531,10 +517,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if n_dt:
         logger.info(f"temporal range parsed for {n_dt:,}/{len(df):,} patches: "
                     f"{df.start_date.min()} .. {df.end_date.max()}")
-        # A patch whose window does not CONTAIN the year in its ref_id is the
-        # case the ref name cannot tell you about. Windows normally straddle
-        # the target year (~18 months centred on it), so testing the start or
-        # end year for equality would flag ~89% of a healthy archive.
+        # Flag windows that do not CONTAIN the ref_id's year. Windows
+        # straddle the target year (~18 months), so an equality test on the
+        # start or end year would flag most of a healthy archive.
         yr = df.ref_id.str.slice(0, 4)
         odd = df.start_date.notna() & ~(
             (df.start_date.str.slice(0, 4) <= yr)

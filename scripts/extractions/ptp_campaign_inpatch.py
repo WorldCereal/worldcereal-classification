@@ -1,53 +1,32 @@
 """patch-to-point extraction of the IN-PATCH hard-negative (non-crop) points.
 
-These points were sampled *inside* existing S2/S1 patch extractions of other
-(host) datasets, so there is nothing new to composite -- the extraction loads
-the host's patches and samples them at our point locations. Three things differ
+These points were sampled inside existing S2/S1 patch extractions of other
+(host) datasets, so there is nothing new to composite: the extraction loads the
+host's patches and samples them at our point locations. Three things differ
 from a standard patch-to-point run, and this driver exists to handle them:
 
 A. Job routing is by HOST ref_id, not by our own ref_id. One input file mixes
    points hosted by several datasets, and a point hosted by ref A can also fall
-   inside an overlapping footprint of ref B. So the ground-truth file is split
+   inside an overlapping footprint of ref B, so the ground-truth file is split
    per host before the flow ever sees it.
 
 B. Outputs come back keyed by the host ref_id (`ref_id` is written as a
-   Categorical of the host's ref_id and `year` is derived from it -- a
-   convention inherited from the openEO flow's
-   `post_job_action_point_worldcereal`). The `rekey` stage regroups the rows
-   under our own ref_ids using the `<our_ref_id>_<i>` sample_id prefix.
+   Categorical of the host's ref_id and `year` is derived from it, a convention
+   inherited from the openEO flow's `post_job_action_point_worldcereal`). The
+   `rekey` stage regroups the rows under our own ref_ids using the
+   `<our_ref_id>_<i>` sample_id prefix.
 
-C. `h3_l3_cell` is used for *routing* inside the flow: `get_label_points`
-   pre-filters the ground-truth file on the L3 cells parsed out of the host
-   patch sample_ids, and `max_samples_per_job` splits jobs by the sample's own
-   L3 cell (then drops cells that have no S1 patch for that host+EPSG). A point
-   near a cell boundary can sit in a different L3 cell than its host patch and
-   be silently dropped. The `prepare` stage therefore rewrites `h3_l3_cell` to
-   the host patch's cell; `rekey` restores the point's true cell afterwards.
+C. `h3_l3_cell` routes points inside the flow, so a point near a cell boundary
+   can sit in a different L3 cell than its host patch and be silently dropped.
+   `prepare` therefore rewrites `h3_l3_cell` to the host patch's cell, and
+   `rekey` restores the point's true cell afterwards.
 
-Both input datasets share the same three hosts and the same schema, so they are
-extracted together (one set of jobs per host instead of one per host per file)
-and separated again at the rekey stage.
+Both input datasets share the same hosts and the same schema, so they are
+extracted together and separated again at the rekey stage.
 
-Stages: prepare -> [extraction] -> rekey -> gate. The extraction step between
-`prepare` and `rekey` is NOT part of this driver: run it locally with
-`ptp_engine.py` (or `run_ptp_campaign.sh` for the sharded
-screen layout) on the per-host ground-truth files that `prepare` writes.
-
-This driver used to carry an openEO `run` stage that drove the extraction as
-patch-to-point batch jobs. It was removed after openEO's `aggregate_spatial`
-was found to return the value of a NEIGHBOURING pixel for ~48% of sampled
-points (a sub-pixel job-layout offset: the whole time series and all bands
-shift together), so the campaign switched to the local route in
-`ptp_engine.py`, validated bit-exact against the host patches. The
-removed stage stays recoverable on branch `ptp-heavy-job-split`.
-
-Campaign history (the in-patch non-crop run, ~90 hosts): host sample_ids come
-in two naming flavours -- POL embeds the H3 L3 cell, BGR/DNK do not (see
-`_host_h3_cell`). The openEO run stage needed `max_samples_per_job` splitting
-for POL (~11.7k points; BGR/DNK stayed below any sane cap), and a single host
-with a dangling STAC item (a catalogue entry whose .nc file is missing) could
-fail all of its jobs -- `check_patch_stac_integrity.py` diagnoses that class
-of failure.
+Stages: prepare -> [extraction] -> rekey -> gate. The extraction step is not
+part of this driver: run it with ptp_engine.py on the per-host ground-truth
+files that `prepare` writes.
 """
 
 import argparse
@@ -221,9 +200,8 @@ def subset_for_dry_run(
 ) -> gpd.GeoDataFrame:
     """Cut the input down to ~`size` points inside a single H3 L3 cell.
 
-    Confining the pilot to one cell keeps it to a single job's worth of area
-    (the openEO cost is driven by the spatial spread of the points, not by how
-    many there are).
+    One cell keeps the pilot to a single job's worth of area; cost is driven
+    by the points' spatial spread, not by how many there are.
     """
     subset = gdf[gdf["host_ref_id"] == host_ref_id].copy()
     if subset.empty:
@@ -312,10 +290,9 @@ def rekey_outputs(
     for our_ref_id, group in gdf.groupby(our_ref):
         group = group.copy()
 
-        # `post_job_action_point_worldcereal` derives `year` from the job's
-        # ref_id, i.e. the host's. That happens to be right while our points
-        # and their hosts share a year, but will not be once a year file is
-        # hosted by patches of another year.
+        # `post_job_action_point_worldcereal` derives `year` from the host's
+        # ref_id, which is only right while our points and their hosts share
+        # a year.
         our_year = int(our_ref_id.split("_")[0])
         wrong_year = group["year"] != our_year
         if wrong_year.any():
@@ -353,9 +330,8 @@ def schema_gate(
     ok = True
 
     def _norm(arrow_type) -> str:
-        # `string`/`large_string` (and the binary pair) differ only in offset
-        # width and are interchangeable downstream; pandas picks either one
-        # depending on version, so comparing them literally is noise.
+        # string/large_string (and the binary pair) differ only in offset
+        # width, and pandas picks either depending on version.
         return (
             str(arrow_type)
             .replace("large_string", "string")
@@ -439,8 +415,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage",
         choices=["prepare", "rekey", "gate"],
         required=True,
-        help="Which stage to execute. The extraction itself runs externally "
-        "via ptp_engine.py between prepare and rekey.",
+        help="Which stage to execute. The extraction runs externally via "
+        "ptp_engine.py, between prepare and rekey.",
     )
     parser.add_argument(
         "--input-dir",
@@ -465,8 +441,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-suffix",
         type=str,
         default=RUN_SUFFIX,
-        help="Suffix appended to the host ref_id in per-run file/folder names. "
-        "Must match the --run-suffix the extraction ran with "
+        help="Suffix appended to the host ref_id in per-run file/folder "
+        "names. Must match the extraction's --run-suffix "
         "(ptp_engine.py defaults to 'LOCAL').",
     )
     parser.add_argument(

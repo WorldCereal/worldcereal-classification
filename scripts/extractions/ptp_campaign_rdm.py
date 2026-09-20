@@ -5,44 +5,33 @@ extractions — the standard patch-to-point flow, minus openEO.
 
 Per ref, three steps:
 
-  1. SELECT — stream the harmonized RDM geoparquet
-     (<rdm-dir>/<ref>/harmonized/<ref>.geoparquet) row-group by row-group,
-     keeping samples that (a) fall inside any patch footprint of the ref and
-     (b) have valid_time inside the ref's patch window. Polygon samples are
-     reduced to a point by the HYBRID rule (2026-08-21):
-       * true centroid — the EPSG:3857 centroid of the full polygon, when it
-         lies inside its own polygon and inside a patch footprint;
-       * clipped fallback — otherwise, the production/openEO-era point: the
-         3857 centroid of the polygon clipped to the job's patch-footprint
-         MultiPolygon shrunk 20 m inward (rdm_interaction.get_samples,
-         buffer=-20, cap_style=3; ST_Simplify 1e-6 on both geometries), kept
-         only if that centroid lies inside the clipped piece (gdf_to_points).
-     The fallback recovers the collateral polygons that overlap a patch while
-     their centroid falls just outside it (~1.3 M samples campaign-wide),
-     placing them exactly where the openEO-era store had them. `point_kind`
-     ('centroid' | 'clipped' | 'point') records the rule per sample.
-     --edge-fallback additionally applies the fallback to centroids inside the
-     outer 20 m band of their patch (fully production-faithful; moves ~5-10 %
-     of existing samples). --legacy-centroid disables the fallback.
-  2. ASSIGN — each sample is mapped to ONE patch:
-       primary   : the sample's own patch (sample_id == patch id), when it
-                   exists — the vast majority;
-       collateral: otherwise, the covering patch whose centre is nearest to
-                   the point (deterministic; openEO's mosaic pick here was
-                   arbitrary and irreproducible).
-  3. EXTRACT — ptp_engine.extract_host with `points=` supplying the
-     assignment; output is one long-format geoparquet per ref, keyed by the
-     ref's own ref_id. No rekey stage: unlike the in-patch campaign, samples
-     already belong to the ref they are extracted from.
+  1. SELECT — stream <rdm-dir>/<ref>/harmonized/<ref>.geoparquet row-group by
+     row-group, keeping samples that fall inside a patch footprint of the ref
+     and whose valid_time is inside the ref's patch window. Polygons are
+     reduced to a point by the hybrid rule, recorded per sample in
+     `point_kind`:
+       'centroid' : the EPSG:3857 centroid of the full polygon, when it lies
+                    inside its own polygon and inside a patch footprint;
+       'clipped'  : otherwise the production/openEO-era point — the centroid
+                    of the polygon clipped to the patch footprints shrunk
+                    20 m inward, kept only if it lies inside the clipped piece.
+     The fallback recovers the ~1.3 M collateral polygons that overlap a patch
+     while their centroid falls just outside it. --edge-fallback extends it to
+     centroids in the outer 20 m band; --legacy-centroid disables it.
+  2. ASSIGN — each sample maps to ONE patch: its own (primary) when that patch
+     exists, else the covering patch whose centre is nearest (deterministic,
+     where openEO's mosaic pick was arbitrary).
+  3. EXTRACT — ptp_engine.extract_host with `points=`, writing one long-format
+     geoparquet per ref. No rekey stage: samples already belong to their ref.
 
-Patch discovery + footprints come from ref_catalog (STAC-primary, seconds
-per ref; use --catalog-cache to persist).
+Patch discovery and footprints come from ref_catalog (STAC-primary; use
+--catalog-cache to persist).
 
 Usage:
-  ptp_campaign_rdm.py --mode assign  --ref-ids <ref> ...   # stats only, no extraction
+  ptp_campaign_rdm.py --mode assign  --ref-ids <ref> ...   # stats only
   ptp_campaign_rdm.py --mode extract --ref-ids <ref> ... --out-dir DIR
-  # targeted delta: extract only samples NOT already in an earlier output
-  ptp_campaign_rdm.py --mode extract --ref-ids <ref> --out-dir DIR_DELTA --delta-from DIR
+  # delta: extract only samples not already in an earlier output
+  ptp_campaign_rdm.py --mode extract --ref-ids <ref> --out-dir NEW --delta-from OLD
 """
 
 import argparse
@@ -107,17 +96,12 @@ def _tile_epsg(tile: Optional[str], zone: Optional[str]) -> Optional[int]:
 def shrunk_extents(catalog: RefCatalog,
                    margin_m: float = EDGE_MARGIN_M_DEFAULT) -> Dict[int, list]:
     """Production's spatial extent per openEO job (one ref x one EPSG), as
-    eroded footprint PARTS.
+    eroded footprint parts.
 
-    patch_to_point_worldcereal.get_label_points builds a MultiPolygon of the
-    job's S2 STAC item footprints (each .buffer(1e-9)); rdm_interaction.
-    get_samples estimates one UTM CRS for it, buffers it by -20 m with square
-    corners (cap_style=3) — GEOS erodes each member and unions the results —
-    returns to EPSG:4326 and ST_Simplify(1e-6)s it before clipping the RDM
-    polygons. Reproduced here from the catalog footprints grouped by patch
-    EPSG; the eroded members are kept as a list so that a polygon is clipped
-    only against the few parts it touches (intersection distributes over the
-    union; intersecting each polygon with a 10k-part union is ~100x slower)."""
+    Reproduces rdm_interaction.get_samples: catalog footprints grouped by patch
+    EPSG, buffered -margin_m with square corners in UTM, simplified in 4326.
+    Parts stay a list so a polygon is clipped only against the few it touches.
+    """
     groups: Dict[int, list] = {}
     for e in catalog.entries.values():
         fp = e.get("footprint")
@@ -139,10 +123,9 @@ def shrunk_extents(catalog: RefCatalog,
 
 
 def _clipped_centroid(poly, parts: List[Any]):
-    """gdf_to_points on the production-clipped polygon: 3857 centroid of
-    make_valid(simplify(poly)) ∩ (union of the eroded footprint parts the
-    polygon touches), kept only if inside the clipped piece. Returns a 4326
-    Point or None."""
+    """3857 centroid of the polygon clipped to the eroded footprint parts it
+    touches, kept only if it lies inside the clipped piece (production's
+    gdf_to_points). Returns a 4326 Point or None."""
     spoly = make_valid(poly.simplify(SIMPLIFY_DEG, preserve_topology=True))
     pieces = [spoly.intersection(p) for p in parts]
     pieces = [q for q in pieces if not q.is_empty]
@@ -204,19 +187,18 @@ def _place_points(
                 if inside_poly[i] and covered[i]:   # only under --edge-fallback
                     stats["edge_relocated"] += 1
             elif len(raw_tree.query(poly, predicate="intersects")):
-                # the polygon does touch a patch, yet no point could be placed:
-                # either it only grazes the outer 20 m band, or its centroid
-                # lies outside the polygon and so does the clipped piece's.
+                # Touches a patch but no point could be placed: it either
+                # only grazes the outer 20 m band, or both centroids fall out.
                 stats["outside_patches" if inside_poly[i] else "centroid_dropped"] += 1
-            # else: polygon nowhere near a patch — the ordinary spatial exclusion
+            # else: nowhere near a patch, the ordinary spatial exclusion
     else:
         stats["centroid_dropped"] += int((~sel & ~inside_poly & covered).sum())
         stats["outside_patches"] += int((~sel & inside_poly & covered).sum())
     out = gdf.loc[sel].copy()
     kept = gpd.GeoSeries([geoms[i] for i in np.where(sel)[0]],
                          index=out.index, crs="EPSG:4326")
-    # Quantise to 1e-11 deg (~1 um). otherwise-identical runs emit
-    # lat/lon differing in the last bit depending on CPU's FMA support.
+    # Quantise to 1e-11 deg (~1 um): otherwise identical runs emit lat/lon
+    # differing in the last bit depending on the CPU's FMA support.
     out["geometry"] = gpd.GeoSeries(
         gpd.points_from_xy(np.round(kept.x.to_numpy(), 11),
                            np.round(kept.y.to_numpy(), 11), crs=4326),
@@ -270,9 +252,8 @@ def assign_hosts(points: gpd.GeoDataFrame, catalog: RefCatalog,
 
 def run_s1_refresh(ref_id: str, catalog: RefCatalog, args, conventions: dict):
     """S1-only pass over an existing output: re-derive every sample's S1
-    series with the coverage-aware orbit rule and record the orbit
-    (--s1-refresh-from DIR -> <out-dir>/<ref>.parquet; merge with
-    ptp_merge_s1refresh.py)."""
+    series with the coverage-aware orbit rule and record the orbit. Merge the
+    result with ptp_merge_s1refresh.py."""
     src = Path(args.s1_refresh_from) / f"{ref_id}.geoparquet"
     out_path = Path(args.out_dir) / f"{ref_id}.parquet" if args.out_dir else None
     if out_path is not None and out_path.exists():
@@ -302,15 +283,9 @@ def run_s1_refresh(ref_id: str, catalog: RefCatalog, args, conventions: dict):
 
 
 # --- Children: multi-point sampling per polygon -----------------------------
-# One extra point set per polygon ("children"), patch-bounded: points live in
-# polygon.buffer(-edge) ∩ (footprint union − 20 m), so extraction needs no new
-# patches. Tier by ref-level median polygon area: smallholder refs get a
-# smaller edge buffer and spacing (assessment 2026-08-22,
-# _investigation_20260822_multipoint/). Child ids are parent + '_child<k>'
-# ('child' occurs in none of the 9,272,598 existing ids); parents keep their
-# row untouched and children carry parent_sample_id / point_kind='sampled' /
-# extract=0 so they can never trigger patch creation and are excluded from
-# store verification.
+# Extra points per polygon, inside polygon.buffer(-edge) ∩ (footprint union
+# - 20 m) so no new patches are needed; tiered by ref median polygon area.
+# Ids get a '_child<k>' suffix and carry parent_sample_id, extract=0.
 SMALLHOLDER_MEDIAN_HA = 1.5
 CHILD_TIER_PARAMS = {          # tier -> (polygon edge buffer m, min spacing m)
     "smallholder": (10.0, 40.0),
@@ -463,11 +438,9 @@ def select_and_assign(
     read_cols = [c for c in RDM_ATTR_COLUMNS if c != "geometry"] + ["geometry"]
     chunks: List[gpd.GeoDataFrame] = []
 
-    # Row-group skip on h3 statistics (cheap; same trick as the flow) —
-    # then stream the surviving groups in bounded batches: harmonized files
-    # can hold >1M rows in a single row group, and materializing that many
-    # polygons at once (plus the 3857 reprojection copy) blows past the
-    # ~4.3 GB per-process ceiling on the VMs.
+    # Skip row groups on h3 statistics, then stream the survivors in bounded
+    # batches: one row group can hold >1M polygons, which with the 3857
+    # reprojection copy exceeds the ~4.3 GB per-process ceiling.
     eligible_rgs = []
     for rg in range(pf.metadata.num_row_groups):
         keep = True
@@ -642,8 +615,8 @@ def run_ref(
          logger.error)(f"{ref_id}: verification {v['status']}")
         vdir = Path(args.out_dir) / "_verify"
         vdir.mkdir(exist_ok=True)
-        # tmp+rename: certs may be owned by another user (not group-
-        # writable); replacing needs only directory write permission.
+        # tmp+rename: certs may be owned by another user, and replacing one
+        # needs only directory write permission.
         vtmp = vdir / f"{ref_id}.json.tmp{os.getpid()}"
         vtmp.write_text(json.dumps(v, indent=2))
         try:
@@ -659,9 +632,8 @@ def run_ref(
 
 
 def main() -> None:
-    # Campaign logs are INFO-level: per-batch detail (e.g. centroid drops)
-    # is logger.debug and floods a large ref's log otherwise. Override with
-    # PTP_LOG_LEVEL=DEBUG when actually debugging.
+    # INFO by default: per-batch detail is logger.debug and floods a large
+    # ref's log. Override with PTP_LOG_LEVEL=DEBUG.
     logger.remove()
     logger.add(sys.stderr, level=os.environ.get("PTP_LOG_LEVEL", "INFO"))
     ap = argparse.ArgumentParser(
@@ -684,15 +656,14 @@ def main() -> None:
     ap.add_argument("--agera5-cache", type=Path, default=None,
                     help="cache dir for AGERA5 monthly composites "
                          "(default: <out-dir>/_agera5_cache)")
+    ap.add_argument("--freq", choices=["month", "dekad"], default=None,
+                    help="compositing period (patch_to_point.py --period): "
+                         "'month' (default) or 'dekad' (days 1, 11 and 21)")
     ap.add_argument("--s2-mask", choices=["dilated", "raw_scl"], default=None,
-                    help="S2 cloud masking. 'dilated' drops obs where the "
-                         "precomputed S2-L2A-SCL_DILATED_MASK == 1 (that band "
-                         "has a large erosion/dilation applied, so pixels NEAR "
-                         "cloud are masked too) — the openEO-era default. "
-                         "'raw_scl' drops obs whose raw S2-L2A-SCL class is in "
-                         "{0,1,3,8,9,10,11}, no erosion/dilation: less "
-                         "aggressive, denser composites. Mirrors "
-                         "patch_to_point.py --optical-mask-method.")
+                    help="S2 cloud masking (patch_to_point.py "
+                         "--optical-mask-method): 'dilated' drops "
+                         "SCL_DILATED_MASK == 1 (openEO-era default), "
+                         "'raw_scl' drops raw SCL classes {0,1,3,8,9,10,11}")
     ap.add_argument("--conventions", type=Path, default=None,
                     help="JSON conventions file (default: engine built-ins, "
                          "i.e. the validated locked conventions)")
@@ -700,10 +671,9 @@ def main() -> None:
                     help="keep only samples with extract > 0 (the flow's "
                          "only_flagged_samples; default keeps collaterals)")
     ap.add_argument("--delta-from", type=Path, default=None, metavar="DIR",
-                    help="targeted re-extraction: skip samples whose sample_id "
-                         "is already in DIR/<ref>.geoparquet (an earlier "
-                         "campaign output); write only the new ones to "
-                         "--out-dir (use a separate dir, then ptp_merge_delta)")
+                    help="targeted re-extraction: skip samples already in "
+                         "DIR/<ref>.geoparquet, write only the new ones to "
+                         "--out-dir (a separate dir, then ptp_merge_delta)")
     ap.add_argument("--edge-fallback", action="store_true",
                     help="also apply the clipped fallback to centroids in the "
                          "outer --edge-margin-m band of their patch (fully "
@@ -715,9 +685,8 @@ def main() -> None:
                     help="disable the clipped fallback (pre-2026-08-21 rule)")
     ap.add_argument("--children", type=int, default=0, metavar="K",
                     help="multi-point sampling: cap of K points per polygon "
-                         "(parent + children); 0 disables. Children are patch-"
-                         "bounded, ids get '_child<n>' suffixes, extract=0. "
-                         "Combine with --delta-from to extract children only.")
+                         "(parent + children); 0 disables. Combine with "
+                         "--delta-from to extract children only.")
     ap.add_argument("--children-tier", choices=["auto", "smallholder",
                     "commercial"], default="auto",
                     help="parameter tier; auto = by ref median polygon area "
@@ -731,23 +700,18 @@ def main() -> None:
                     help="write the selected points frame (with point_kind and "
                          "host_sample_id) to DIR/<ref>.points.geoparquet")
     ap.add_argument("--s1-refresh-from", type=Path, default=None, metavar="DIR",
-                    help="S1-only refresh: take every sample of DIR/<ref>."
-                         "geoparquet, re-derive its S1 series with the "
-                         "coverage-aware orbit rule and record the orbit, into "
-                         "--out-dir/<ref>.parquet (merge with ptp_merge_s1refresh)")
+                    help="S1-only refresh: re-derive every sample of "
+                         "DIR/<ref>.geoparquet with the coverage-aware orbit "
+                         "rule into --out-dir/<ref>.parquet")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--sample-limit", type=int, default=None)
     ap.add_argument("--verify-pct", type=float, default=None, metavar="P",
                     help="verify P%% of a ref's primary samples, clamped to "
-                         "[10, 200] points (overrides --verify). Fixed N is "
-                         "statistically sufficient for systematic faults; "
-                         "use pct only if per-ref proportionality matters.")
+                         "[10, 200] points (overrides --verify)")
     ap.add_argument("--verify", type=int, default=0, metavar="N",
-                    help="after each ref's extraction, verify N random "
-                         "primary samples against the openEO-era store: "
-                         "every difference must be explainable (neighbour-"
-                         "pixel bug / orbit / float32 edge noise / documented "
-                         "aux tolerance) or the ref FAILS. 0 disables.")
+                    help="after each ref, verify N random primary samples "
+                         "against the openEO-era store; every difference must "
+                         "be explainable or the ref FAILS. 0 disables.")
     ap.add_argument("--max-divergence-frac", type=float, default=0.3,
                     help="verification tripwire: FAIL a ref when more than "
                          "this fraction of checked points are geometry-"
@@ -777,11 +741,15 @@ def main() -> None:
     if args.s2_mask:
         conventions = {**conventions, "s2_mask": args.s2_mask}
         logger.info(f"S2 cloud mask: {args.s2_mask}")
+    if args.freq:
+        conventions = {**conventions, "freq": args.freq}
+        logger.info(f"compositing period: {args.freq}")
 
     refs = (args.ref_ids if args.ref_ids else
             [line.strip() for line in
              Path(args.ref_ids_file).read_text().splitlines()
              if line.strip() and not line.startswith("#")])
+
 
     all_stats = []
     failed: List[str] = []
@@ -798,10 +766,9 @@ def main() -> None:
         summary = pd.DataFrame(all_stats)
         print(summary.to_string(index=False))
         if args.out_dir:
-            # One JSON per ref (idempotent on rerun), then regenerate the
-            # CSV whole and rename into place. Appending would interleave
-            # and duplicate: three shard machines write here concurrently,
-            # and NFS appends are not atomic.
+            # One JSON per ref, then regenerate the CSV whole and rename in.
+            # Shard machines write here concurrently and NFS appends are not
+            # atomic, so appending would interleave and duplicate.
             stats_dir = args.out_dir / "_stats"
             stats_dir.mkdir(exist_ok=True)
             for s in all_stats:
