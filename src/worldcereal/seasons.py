@@ -876,6 +876,7 @@ def enrich_production_grid_from_crop_calendars(
     year: int,
     *,
     get_seasons: bool = True,
+    grouping_column: Optional[str] = None,
     extent_resolver: Optional[Callable[[pd.Series], BoundingBoxExtent]] = None,
     seasons: Sequence[str] = PROCESSING_SEASONS,
     period_months: int = PROCESSING_PERIOD_MONTHS,
@@ -884,12 +885,17 @@ def enrich_production_grid_from_crop_calendars(
 ) -> pd.DataFrame:
     """Enrich a production grid with temporal extent and optional season metadata.
 
-    All seasons of a grid cell are resolved jointly from a single crop-calendar
-    point, and ``start_date`` / ``end_date`` are then derived from their union
-    via `consolidate_processing_period`. This guarantees a processing period of
-    exactly ``period_months`` months that is always consistent with the seasons
-    it has to cover. The season windows are subsequently clipped to that period,
-    so seasons and processing period always remain mutually consistent.
+    By default, all seasons of a grid cell are resolved jointly from a single
+    crop-calendar point. When ``grouping_column`` is provided, rows sharing the
+    same value in that column are treated as one larger unit: one extent is
+    built around all rows in the group, one crop calendar is resolved for that
+    extent, and the result is written to every row in the group.
+
+    ``start_date`` / ``end_date`` are derived from the season union via
+    `consolidate_processing_period`. This guarantees a processing period of
+    exactly ``period_months`` months that is consistent with the seasons it has
+    to cover. The season windows are subsequently clipped to that period, so
+    seasons and processing period remain mutually consistent.
 
     Cells whose seasonality is too heterogeneous to be represented by a single
     crop calendar are rejected by default, since silently producing them would
@@ -898,13 +904,39 @@ def enrich_production_grid_from_crop_calendars(
     This function writes:
     - ``start_date`` and ``end_date``, consolidated from the season windows.
     - optionally ``season_ids`` and ``season_windows`` (JSON string).
+
+    Parameters
+    ----------
+    grouping_column : Optional[str]
+        Name of a column in ``grid_df`` whose values define larger spatial
+        groups. If ``None``, each row is processed independently.
     """
 
     resolver = extent_resolver or _row_spatial_extent_from_grid_row
     result = grid_df.copy()
 
-    for idx, row in result.iterrows():
-        extent = resolver(row)
+    if grouping_column is None:
+        groups = (
+            (idx, pd.DataFrame([row], index=[idx]))
+            for idx, row in result.iterrows()
+        )
+    else:
+        if grouping_column not in result.columns:
+            raise ValueError(
+                f"Grouping column '{grouping_column}' is not present in grid_df."
+            )
+        groups = result.groupby(grouping_column, dropna=False, sort=False)
+
+    for _, group in groups:
+        extents = [resolver(row) for _, row in group.iterrows()]
+        bounds = [_extent_to_wgs84_bounds(extent) for extent in extents]
+        extent = BoundingBoxExtent(
+            west=min(bound[0] for bound in bounds),
+            south=min(bound[1] for bound in bounds),
+            east=max(bound[2] for bound in bounds),
+            north=max(bound[3] for bound in bounds),
+            epsg=4326,
+        )
 
         season_contexts = get_seasons_for_extent(
             extent,
@@ -921,15 +953,17 @@ def enrich_production_grid_from_crop_calendars(
         processing_ctx = consolidate_processing_period(
             season_windows, period_months=period_months
         )
-        result.loc[idx, "start_date"] = processing_ctx.start_date
-        result.loc[idx, "end_date"] = processing_ctx.end_date
+        result.loc[group.index, "start_date"] = processing_ctx.start_date
+        result.loc[group.index, "end_date"] = processing_ctx.end_date
 
         if not get_seasons:
             continue
 
         season_windows = clip_season_windows_to_period(season_windows, processing_ctx)
-        result.loc[idx, "season_ids"] = ",".join(sorted(season_windows))
-        result.loc[idx, "season_windows"] = json.dumps(season_windows, sort_keys=True)
+        result.loc[group.index, "season_ids"] = ",".join(sorted(season_windows))
+        result.loc[group.index, "season_windows"] = json.dumps(
+            season_windows, sort_keys=True
+        )
 
     return result
 

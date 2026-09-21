@@ -203,6 +203,41 @@ def test_enrich_production_grid_from_crop_calendars(patched_lookup):
 	}
 
 
+def test_enrich_production_grid_from_crop_calendars_groups_rows(patched_lookup):
+	grid = pd.DataFrame(
+		{
+			"xmin": [20, 20, 21],
+			"ymin": [10, 10, 10],
+			"xmax": [20.5, 21, 22],
+			"ymax": [11, 11, 11],
+			"epsg": [4326, 4326, 4326],
+			"group_id": ["a", "a", "b"],
+		}
+	)
+
+	enriched = seasons.enrich_production_grid_from_crop_calendars(
+		grid, 2024, grouping_column="group_id"
+	)
+
+	assert enriched.loc[0, "start_date"] == enriched.loc[1, "start_date"]
+	assert enriched.loc[0, "end_date"] == enriched.loc[1, "end_date"]
+	assert enriched.loc[0, "season_windows"] == enriched.loc[1, "season_windows"]
+	assert enriched.loc[0, "start_date"] != enriched.loc[2, "start_date"]
+
+
+def test_enrich_production_grid_from_crop_calendars_rejects_unknown_grouping_column(
+	patched_lookup,
+):
+	grid = pd.DataFrame(
+		{"xmin": [20], "ymin": [10], "xmax": [22], "ymax": [11], "epsg": [4326]}
+	)
+
+	with pytest.raises(ValueError, match="Grouping column 'group_id'"):
+		seasons.enrich_production_grid_from_crop_calendars(
+			grid, 2024, grouping_column="group_id"
+		)
+
+
 def test_dekad_medoid_index_returns_an_observed_row():
 	# Two disagreeing regimes: a short early season and a long late one.
 	# Independent medians would yield (16, 30), a 15-dekad season that occurs
