@@ -1,0 +1,1427 @@
+{
+  "process_graph": {
+    "loadcollection1": {
+      "process_id": "load_collection",
+      "arguments": {
+        "bands": [
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B8A",
+          "B11",
+          "B12"
+        ],
+        "featureflags": {
+          "tilesize": 96
+        },
+        "id": "SENTINEL2_L2A",
+        "properties": {
+          "eo:cloud_cover": {
+            "process_graph": {
+              "lte1": {
+                "process_id": "lte",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": 95.0
+                },
+                "result": true
+              }
+            }
+          },
+          "grid:code": {
+            "process_graph": {
+              "eq1": {
+                "process_id": "eq",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": {
+                    "from_parameter": "s2_tile"
+                  }
+                },
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": null,
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      }
+    },
+    "resamplespatial1": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "loadcollection1"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "target_epsg"
+        },
+        "resolution": 10
+      }
+    },
+    "renamelabels1": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial1"
+        },
+        "dimension": "bands",
+        "source": [
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B8A",
+          "B11",
+          "B12"
+        ],
+        "target": [
+          "S2-L2A-B02",
+          "S2-L2A-B03",
+          "S2-L2A-B04",
+          "S2-L2A-B05",
+          "S2-L2A-B06",
+          "S2-L2A-B07",
+          "S2-L2A-B08",
+          "S2-L2A-B8A",
+          "S2-L2A-B11",
+          "S2-L2A-B12"
+        ]
+      }
+    },
+    "apply1": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange1": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "loadcollection2": {
+      "process_id": "load_collection",
+      "arguments": {
+        "bands": [
+          "SCL"
+        ],
+        "id": "SENTINEL2_L2A",
+        "properties": {
+          "eo:cloud_cover": {
+            "process_graph": {
+              "lte2": {
+                "process_id": "lte",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": 95.0
+                },
+                "result": true
+              }
+            }
+          },
+          "grid:code": {
+            "process_graph": {
+              "eq2": {
+                "process_id": "eq",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": {
+                    "from_parameter": "s2_tile"
+                  }
+                },
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": null,
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      }
+    },
+    "resamplespatial2": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "loadcollection2"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "target_epsg"
+        },
+        "resolution": 10
+      }
+    },
+    "toscldilationmask1": {
+      "process_id": "to_scl_dilation_mask",
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial2"
+        },
+        "erosion_kernel_size": 3,
+        "kernel1_size": 17,
+        "kernel2_size": 77,
+        "mask1_values": [
+          2,
+          4,
+          5,
+          6,
+          7
+        ],
+        "mask2_values": [
+          3,
+          8,
+          9,
+          10,
+          11
+        ],
+        "scl_band_name": "SCL"
+      }
+    },
+    "renamelabels2": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "toscldilationmask1"
+        },
+        "dimension": "bands",
+        "target": [
+          "S2-L2A-SCL_DILATED_MASK"
+        ]
+      }
+    },
+    "mask1": {
+      "process_id": "mask",
+      "arguments": {
+        "data": {
+          "from_node": "apply1"
+        },
+        "mask": {
+          "from_node": "renamelabels2"
+        }
+      }
+    },
+    "aggregatetemporalperiod1": {
+      "process_id": "aggregate_temporal_period",
+      "arguments": {
+        "data": {
+          "from_node": "mask1"
+        },
+        "dimension": "t",
+        "period": "month",
+        "reducer": {
+          "process_graph": {
+            "median1": {
+              "process_id": "median",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "apply2": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "aggregatetemporalperiod1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange2": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "loadcollection3": {
+      "process_id": "load_collection",
+      "arguments": {
+        "bands": [
+          "VH",
+          "VV"
+        ],
+        "featureflags": {
+          "tilesize": 96
+        },
+        "id": "SENTINEL1_GRD",
+        "properties": {
+          "sat:orbit_state": {
+            "process_graph": {
+              "eq3": {
+                "process_id": "eq",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": {
+                    "from_parameter": "orbit_state"
+                  }
+                },
+                "result": true
+              }
+            }
+          },
+          "polarisation": {
+            "process_graph": {
+              "eq4": {
+                "process_id": "eq",
+                "arguments": {
+                  "x": {
+                    "from_parameter": "value"
+                  },
+                  "y": "VV&VH"
+                },
+                "result": true
+              }
+            }
+          }
+        },
+        "spatial_extent": null,
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
+      }
+    },
+    "sarbackscatter1": {
+      "process_id": "sar_backscatter",
+      "arguments": {
+        "coefficient": "sigma0-ellipsoid",
+        "contributing_area": false,
+        "data": {
+          "from_node": "loadcollection3"
+        },
+        "elevation_model": "COPERNICUS_30",
+        "ellipsoid_incidence_angle": false,
+        "local_incidence_angle": false,
+        "mask": false,
+        "noise_removal": true
+      }
+    },
+    "resamplespatial3": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "sarbackscatter1"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "target_epsg"
+        },
+        "resolution": 20.0
+      }
+    },
+    "renamelabels3": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "resamplespatial3"
+        },
+        "dimension": "bands",
+        "source": [
+          "VH",
+          "VV"
+        ],
+        "target": [
+          "S1-SIGMA0-VH",
+          "S1-SIGMA0-VV"
+        ]
+      }
+    },
+    "aggregatetemporalperiod2": {
+      "process_id": "aggregate_temporal_period",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels3"
+        },
+        "dimension": "t",
+        "period": "month",
+        "reducer": {
+          "process_graph": {
+            "mean1": {
+              "process_id": "mean",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "applydimension1": {
+      "process_id": "apply_dimension",
+      "arguments": {
+        "data": {
+          "from_node": "aggregatetemporalperiod2"
+        },
+        "dimension": "bands",
+        "process": {
+          "process_graph": {
+            "arrayelement1": {
+              "process_id": "array_element",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 0
+              }
+            },
+            "log1": {
+              "process_id": "log",
+              "arguments": {
+                "base": 10,
+                "x": {
+                  "from_node": "arrayelement1"
+                }
+              }
+            },
+            "multiply1": {
+              "process_id": "multiply",
+              "arguments": {
+                "x": 10.0,
+                "y": {
+                  "from_node": "log1"
+                }
+              }
+            },
+            "add1": {
+              "process_id": "add",
+              "arguments": {
+                "x": {
+                  "from_node": "multiply1"
+                },
+                "y": 83.0
+              }
+            },
+            "divide1": {
+              "process_id": "divide",
+              "arguments": {
+                "x": {
+                  "from_node": "add1"
+                },
+                "y": 20.0
+              }
+            },
+            "power1": {
+              "process_id": "power",
+              "arguments": {
+                "base": 10,
+                "p": {
+                  "from_node": "divide1"
+                }
+              }
+            },
+            "arrayelement2": {
+              "process_id": "array_element",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "index": 1
+              }
+            },
+            "log2": {
+              "process_id": "log",
+              "arguments": {
+                "base": 10,
+                "x": {
+                  "from_node": "arrayelement2"
+                }
+              }
+            },
+            "multiply2": {
+              "process_id": "multiply",
+              "arguments": {
+                "x": 10.0,
+                "y": {
+                  "from_node": "log2"
+                }
+              }
+            },
+            "add2": {
+              "process_id": "add",
+              "arguments": {
+                "x": {
+                  "from_node": "multiply2"
+                },
+                "y": 83.0
+              }
+            },
+            "divide2": {
+              "process_id": "divide",
+              "arguments": {
+                "x": {
+                  "from_node": "add2"
+                },
+                "y": 20.0
+              }
+            },
+            "power2": {
+              "process_id": "power",
+              "arguments": {
+                "base": 10,
+                "p": {
+                  "from_node": "divide2"
+                }
+              }
+            },
+            "arraycreate1": {
+              "process_id": "array_create",
+              "arguments": {
+                "data": [
+                  {
+                    "from_node": "power1"
+                  },
+                  {
+                    "from_node": "power2"
+                  }
+                ]
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "apply3": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "applydimension1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange3": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 1,
+                "outputMax": 65534,
+                "outputMin": 1,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "mergecubes1": {
+      "process_id": "merge_cubes",
+      "arguments": {
+        "cube1": {
+          "from_node": "apply2"
+        },
+        "cube2": {
+          "from_node": "apply3"
+        }
+      }
+    },
+    "loadstac1": {
+      "process_id": "load_stac",
+      "arguments": {
+        "bands": [
+          "Slope"
+        ],
+        "url": "https://stac.openeo.vito.be/collections/COPERNICUS30_DEM_SLOPE"
+      }
+    },
+    "renamelabels4": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "loadstac1"
+        },
+        "dimension": "bands",
+        "target": [
+          "slope"
+        ]
+      }
+    },
+    "reducedimension1": {
+      "process_id": "reduce_dimension",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels4"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "min1": {
+              "process_id": "min",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "resamplespatial4": {
+      "process_id": "resample_spatial",
+      "arguments": {
+        "align": "upper-left",
+        "data": {
+          "from_node": "reducedimension1"
+        },
+        "method": "near",
+        "projection": {
+          "from_parameter": "target_epsg"
+        },
+        "resolution": 0
+      }
+    },
+    "loadcollection4": {
+      "process_id": "load_collection",
+      "arguments": {
+        "bands": [
+          "DEM"
+        ],
+        "id": "COPERNICUS_30",
+        "properties": {},
+        "spatial_extent": null,
+        "temporal_extent": null
+      }
+    },
+    "reducedimension2": {
+      "process_id": "reduce_dimension",
+      "arguments": {
+        "data": {
+          "from_node": "loadcollection4"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "min2": {
+              "process_id": "min",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "renamelabels5": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "reducedimension2"
+        },
+        "dimension": "bands",
+        "source": [
+          "DEM"
+        ],
+        "target": [
+          "COP-DEM"
+        ]
+      }
+    },
+    "renamelabels6": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels5"
+        },
+        "dimension": "bands",
+        "target": [
+          "elevation"
+        ]
+      }
+    },
+    "mergecubes2": {
+      "process_id": "merge_cubes",
+      "arguments": {
+        "cube1": {
+          "from_node": "resamplespatial4"
+        },
+        "cube2": {
+          "from_node": "renamelabels6"
+        }
+      }
+    },
+    "resamplecubespatial1": {
+      "process_id": "resample_cube_spatial",
+      "arguments": {
+        "data": {
+          "from_node": "mergecubes2"
+        },
+        "method": "bilinear",
+        "target": {
+          "from_node": "apply2"
+        }
+      }
+    },
+    "apply4": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "resamplecubespatial1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange4": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 65534,
+                "inputMin": 0,
+                "outputMax": 65534,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "mergecubes3": {
+      "process_id": "merge_cubes",
+      "arguments": {
+        "cube1": {
+          "from_node": "mergecubes1"
+        },
+        "cube2": {
+          "from_node": "apply4"
+        }
+      }
+    },
+    "loadstac2": {
+      "process_id": "load_stac",
+      "arguments": {
+        "bands": [
+          "precipitation-flux",
+          "temperature-mean"
+        ],
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        },
+        "url": "https://stac.openeo.vito.be/collections/agera5_monthly_composite"
+      }
+    },
+    "renamelabels7": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "loadstac2"
+        },
+        "dimension": "bands",
+        "target": [
+          "AGERA5-PRECIP",
+          "AGERA5-TMEAN"
+        ]
+      }
+    },
+    "resamplecubespatial2": {
+      "process_id": "resample_cube_spatial",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels7"
+        },
+        "method": "bilinear",
+        "target": {
+          "from_node": "apply2"
+        }
+      }
+    },
+    "mergecubes4": {
+      "process_id": "merge_cubes",
+      "arguments": {
+        "cube1": {
+          "from_node": "mergecubes3"
+        },
+        "cube2": {
+          "from_node": "resamplecubespatial2"
+        }
+      }
+    },
+    "filterbbox1": {
+      "process_id": "filter_bbox",
+      "arguments": {
+        "data": {
+          "from_node": "mergecubes4"
+        },
+        "extent": {
+          "from_parameter": "spatial_extent"
+        }
+      }
+    },
+    "croptypeinference1": {
+      "process_id": "croptype_inference",
+      "arguments": {
+        "context": {
+          "season_windows": {
+            "from_parameter": "season_windows"
+          },
+          "output_embeddings": true,
+          "output_ndvi": true,
+          "output_classification": true,
+          "output_probabilities": true,
+          "mask_cropland": {
+            "from_parameter": "mask_cropland"
+          },
+          "majority_vote": false,
+          "onnx_model_path": {
+            "from_parameter": "onnx_model_path"
+          }
+        },
+        "data": {
+          "from_node": "filterbbox1"
+        }
+      },
+      "namespace": "backend"
+    },
+    "renamelabels8": {
+      "process_id": "rename_labels",
+      "arguments": {
+        "data": {
+          "from_node": "croptypeinference1"
+        },
+        "dimension": "bands",
+        "target": {
+          "from_parameter": "output_labels"
+        }
+      }
+    },
+    "reducedimension3": {
+      "process_id": "reduce_dimension",
+      "arguments": {
+        "data": {
+          "from_node": "renamelabels8"
+        },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "max1": {
+              "process_id": "max",
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "filterbands1": {
+      "process_id": "filter_bands",
+      "arguments": {
+        "bands": {
+          "from_parameter": "classification_bands"
+        },
+        "data": {
+          "from_node": "reducedimension3"
+        }
+      }
+    },
+    "apply5": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "filterbands1"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange5": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 254,
+                "inputMin": 0,
+                "outputMax": 254,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "saveresult1": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply5"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": {
+            "from_parameter": "filename_prefix_classification"
+          }
+        }
+      }
+    },
+    "filterbands2": {
+      "process_id": "filter_bands",
+      "arguments": {
+        "bands": [
+          "ndvi:ts_0",
+          "ndvi:ts_1",
+          "ndvi:ts_2",
+          "ndvi:ts_3",
+          "ndvi:ts_4",
+          "ndvi:ts_5",
+          "ndvi:ts_6",
+          "ndvi:ts_7",
+          "ndvi:ts_8",
+          "ndvi:ts_9",
+          "ndvi:ts_10",
+          "ndvi:ts_11"
+        ],
+        "data": {
+          "from_node": "reducedimension3"
+        }
+      }
+    },
+    "apply6": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "filterbands2"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange6": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 254,
+                "inputMin": 0,
+                "outputMax": 254,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "saveresult2": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply6"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": {
+            "from_parameter": "filename_prefix_ndvi"
+          }
+        }
+      }
+    },
+    "filterbands3": {
+      "process_id": "filter_bands",
+      "arguments": {
+        "bands": [
+          "global_embedding:dim_0",
+          "global_embedding:dim_1",
+          "global_embedding:dim_2",
+          "global_embedding:dim_3",
+          "global_embedding:dim_4",
+          "global_embedding:dim_5",
+          "global_embedding:dim_6",
+          "global_embedding:dim_7",
+          "global_embedding:dim_8",
+          "global_embedding:dim_9",
+          "global_embedding:dim_10",
+          "global_embedding:dim_11",
+          "global_embedding:dim_12",
+          "global_embedding:dim_13",
+          "global_embedding:dim_14",
+          "global_embedding:dim_15",
+          "global_embedding:dim_16",
+          "global_embedding:dim_17",
+          "global_embedding:dim_18",
+          "global_embedding:dim_19",
+          "global_embedding:dim_20",
+          "global_embedding:dim_21",
+          "global_embedding:dim_22",
+          "global_embedding:dim_23",
+          "global_embedding:dim_24",
+          "global_embedding:dim_25",
+          "global_embedding:dim_26",
+          "global_embedding:dim_27",
+          "global_embedding:dim_28",
+          "global_embedding:dim_29",
+          "global_embedding:dim_30",
+          "global_embedding:dim_31",
+          "global_embedding:dim_32",
+          "global_embedding:dim_33",
+          "global_embedding:dim_34",
+          "global_embedding:dim_35",
+          "global_embedding:dim_36",
+          "global_embedding:dim_37",
+          "global_embedding:dim_38",
+          "global_embedding:dim_39",
+          "global_embedding:dim_40",
+          "global_embedding:dim_41",
+          "global_embedding:dim_42",
+          "global_embedding:dim_43",
+          "global_embedding:dim_44",
+          "global_embedding:dim_45",
+          "global_embedding:dim_46",
+          "global_embedding:dim_47",
+          "global_embedding:dim_48",
+          "global_embedding:dim_49",
+          "global_embedding:dim_50",
+          "global_embedding:dim_51",
+          "global_embedding:dim_52",
+          "global_embedding:dim_53",
+          "global_embedding:dim_54",
+          "global_embedding:dim_55",
+          "global_embedding:dim_56",
+          "global_embedding:dim_57",
+          "global_embedding:dim_58",
+          "global_embedding:dim_59",
+          "global_embedding:dim_60",
+          "global_embedding:dim_61",
+          "global_embedding:dim_62",
+          "global_embedding:dim_63",
+          "global_embedding:dim_64",
+          "global_embedding:dim_65",
+          "global_embedding:dim_66",
+          "global_embedding:dim_67",
+          "global_embedding:dim_68",
+          "global_embedding:dim_69",
+          "global_embedding:dim_70",
+          "global_embedding:dim_71",
+          "global_embedding:dim_72",
+          "global_embedding:dim_73",
+          "global_embedding:dim_74",
+          "global_embedding:dim_75",
+          "global_embedding:dim_76",
+          "global_embedding:dim_77",
+          "global_embedding:dim_78",
+          "global_embedding:dim_79",
+          "global_embedding:dim_80",
+          "global_embedding:dim_81",
+          "global_embedding:dim_82",
+          "global_embedding:dim_83",
+          "global_embedding:dim_84",
+          "global_embedding:dim_85",
+          "global_embedding:dim_86",
+          "global_embedding:dim_87",
+          "global_embedding:dim_88",
+          "global_embedding:dim_89",
+          "global_embedding:dim_90",
+          "global_embedding:dim_91",
+          "global_embedding:dim_92",
+          "global_embedding:dim_93",
+          "global_embedding:dim_94",
+          "global_embedding:dim_95",
+          "global_embedding:dim_96",
+          "global_embedding:dim_97",
+          "global_embedding:dim_98",
+          "global_embedding:dim_99",
+          "global_embedding:dim_100",
+          "global_embedding:dim_101",
+          "global_embedding:dim_102",
+          "global_embedding:dim_103",
+          "global_embedding:dim_104",
+          "global_embedding:dim_105",
+          "global_embedding:dim_106",
+          "global_embedding:dim_107",
+          "global_embedding:dim_108",
+          "global_embedding:dim_109",
+          "global_embedding:dim_110",
+          "global_embedding:dim_111",
+          "global_embedding:dim_112",
+          "global_embedding:dim_113",
+          "global_embedding:dim_114",
+          "global_embedding:dim_115",
+          "global_embedding:dim_116",
+          "global_embedding:dim_117",
+          "global_embedding:dim_118",
+          "global_embedding:dim_119",
+          "global_embedding:dim_120",
+          "global_embedding:dim_121",
+          "global_embedding:dim_122",
+          "global_embedding:dim_123",
+          "global_embedding:dim_124",
+          "global_embedding:dim_125",
+          "global_embedding:dim_126",
+          "global_embedding:dim_127"
+        ],
+        "data": {
+          "from_node": "reducedimension3"
+        }
+      }
+    },
+    "apply7": {
+      "process_id": "apply",
+      "arguments": {
+        "data": {
+          "from_node": "filterbands3"
+        },
+        "process": {
+          "process_graph": {
+            "linearscalerange7": {
+              "process_id": "linear_scale_range",
+              "arguments": {
+                "inputMax": 254,
+                "inputMin": 0,
+                "outputMax": 254,
+                "outputMin": 0,
+                "x": {
+                  "from_parameter": "x"
+                }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "saveresult3": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "apply7"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": {
+            "from_parameter": "filename_prefix_embeddings"
+          }
+        }
+      }
+    },
+    "filterbands4": {
+      "process_id": "filter_bands",
+      "arguments": {
+        "bands": [
+          "global_embedding:scale"
+        ],
+        "data": {
+          "from_node": "reducedimension3"
+        }
+      }
+    },
+    "saveresult4": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": {
+          "from_node": "filterbands4"
+        },
+        "format": "GTiff",
+        "options": {
+          "filename_prefix": {
+            "from_parameter": "filename_prefix_embeddings_scale"
+          }
+        }
+      },
+      "result": true
+    }
+  },
+  "id": "worldcereal_global_production_inference_onnx_no_export_workspace",
+  "default_job_options": {
+    "driver-memory": "8g",
+    "driver-memoryOverhead": "3g",
+    "executor-memory": "1800m",
+    "executor-memoryOverhead": "3300m",
+    "executor-request-cores": "750m",
+    "python-memory": "disable",
+    "soft-errors": "true",
+    "stac-version": "1.1",
+    "derived-from-document-experimental": true,
+    "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-snapshot-public/org/openeo/geotrellis-extensions/2.6.3_2.13-SNAPSHOT/geotrellis-extensions-2.6.3_2.13-SNAPSHOT.jar",
+    "concurrent_save_results": 3
+  },
+  "parameters": [
+    {
+      "name": "spatial_extent",
+      "description": "Limits the data to process to the specified bounding box or polygons.\n\nFor raster data, the process loads the pixel into the data cube if the point\nat the pixel center intersects with the bounding box or any of the polygons\n(as defined in the Simple Features standard by the OGC).\n\nFor vector data, the process loads the geometry into the data cube if the geometry\nis fully within the bounding box or any of the polygons (as defined in the\nSimple Features standard by the OGC). Empty geometries may only be in the\ndata cube if no spatial extent has been provided.\n\nEmpty geometries are ignored.\n\nSet this parameter to null to set no limit for the spatial extent.",
+      "schema": [
+        {
+          "title": "Bounding Box",
+          "type": "object",
+          "subtype": "bounding-box",
+          "required": [
+            "west",
+            "south",
+            "east",
+            "north"
+          ],
+          "properties": {
+            "west": {
+              "description": "West (lower left corner, coordinate axis 1).",
+              "type": "number"
+            },
+            "south": {
+              "description": "South (lower left corner, coordinate axis 2).",
+              "type": "number"
+            },
+            "east": {
+              "description": "East (upper right corner, coordinate axis 1).",
+              "type": "number"
+            },
+            "north": {
+              "description": "North (upper right corner, coordinate axis 2).",
+              "type": "number"
+            },
+            "base": {
+              "description": "Base (optional, lower left corner, coordinate axis 3).",
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null
+            },
+            "height": {
+              "description": "Height (optional, upper right corner, coordinate axis 3).",
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null
+            },
+            "crs": {
+              "description": "Coordinate reference system of the extent, specified as as [EPSG code](http://www.epsg-registry.org/) or [WKT2 CRS string](http://docs.opengeospatial.org/is/18-010r7/18-010r7.html). Defaults to `4326` (EPSG code 4326) unless the client explicitly requests a different coordinate reference system.",
+              "anyOf": [
+                {
+                  "title": "EPSG Code",
+                  "type": "integer",
+                  "subtype": "epsg-code",
+                  "minimum": 1000,
+                  "examples": [
+                    3857
+                  ]
+                },
+                {
+                  "title": "WKT2",
+                  "type": "string",
+                  "subtype": "wkt2-definition"
+                }
+              ],
+              "default": 4326
+            }
+          }
+        },
+        {
+          "title": "Vector data cube",
+          "description": "Limits the data cube to the bounding box of the given geometries in the vector data cube. For raster data, all pixels inside the bounding box that do not intersect with any of the polygons will be set to no data (`null`). Empty geometries are ignored.",
+          "type": "object",
+          "subtype": "datacube",
+          "dimensions": [
+            {
+              "type": "geometry"
+            }
+          ]
+        },
+        {
+          "title": "No filter",
+          "description": "Don't filter spatially. All data is included in the data cube.",
+          "type": "null"
+        }
+      ]
+    },
+    {
+      "name": "temporal_extent",
+      "description": "Temporal extent specified as two-element array with start and end date/date-time.",
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval",
+        "uniqueItems": true,
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {
+          "anyOf": [
+            {
+              "type": "string",
+              "subtype": "date-time",
+              "format": "date-time"
+            },
+            {
+              "type": "string",
+              "subtype": "date",
+              "format": "date"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "orbit_state",
+      "description": "Sentinel-1 orbit state.",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "ASCENDING",
+          "DESCENDING"
+        ]
+      }
+    },
+    {
+      "name": "target_epsg",
+      "description": "EPSG code of the target projection for the output products.",
+      "schema": {
+        "type": "integer"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "s2_tile",
+      "description": "Sentinel-2 tile to be loaded by the backend. Optional, if not provided, no filtering is applied.",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": "MGRS-*"
+    },
+    {
+      "name": "season_windows",
+      "description": "Season windows for each season",
+      "schema": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "minProperties": 1,
+        "maxProperties": 2
+      }
+    },
+    {
+      "name": "onnx_model_path",
+      "description": "Path to the ONNX model to be used for inference.",
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "output_labels",
+      "description": "List of names of the output labels (Embeddings + NDVI + Classification).",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "classification_bands",
+      "description": "List of names of the output classification bands.",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "filename_prefix_classification",
+      "description": "Filename for the classification output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_ndvi",
+      "description": "Filename for the NDVI output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_embeddings",
+      "description": "Filename for the embeddings output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    },
+    {
+      "name": "filename_prefix_embeddings_scale",
+      "description": "Filename for the embeddings scale output. Must be different from the other three!",
+      "schema": {
+        "type": "string"
+      },
+      "optional": true,
+      "default": null
+    }
+  ]
+}
