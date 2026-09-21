@@ -611,6 +611,12 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
     raise ValueError(f"Manifest does not define a '{task}' head")
 
 
+def _require_head_spec(spec: Optional[HeadSpec], task: str) -> HeadSpec:
+    if spec is None:
+        raise ValueError(f"{task.capitalize()} head specification is not available")
+    return spec
+
+
 class SeasonalModelBundle:
     """Convenience wrapper that owns the seasonal model and metadata.
 
@@ -688,16 +694,6 @@ class SeasonalModelBundle:
 
         self._update_cropland_gate()
 
-    def require_landcover_spec(self) -> HeadSpec:
-        if self.landcover_spec is None:
-            raise ValueError("Landcover head specification is not available")
-        return self.landcover_spec
-
-    def require_croptype_spec(self) -> HeadSpec:
-        if self.croptype_spec is None:
-            raise ValueError("Croptype head specification is not available")
-        return self.croptype_spec
-
     def _build_model(self) -> "WorldCerealSeasonalModel":
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
@@ -710,10 +706,14 @@ class SeasonalModelBundle:
 
         backbone = Presto()
         landcover_spec = (
-            self.require_landcover_spec() if self._cropland_head_enabled else None
+            _require_head_spec(self.landcover_spec, "landcover")
+            if self._cropland_head_enabled
+            else None
         )
         croptype_spec = (
-            self.require_croptype_spec() if self._croptype_head_enabled else None
+            _require_head_spec(self.croptype_spec, "croptype")
+            if self._croptype_head_enabled
+            else None
         )
         head = SeasonalFinetuningHead(
             embedding_dim=backbone.encoder.embedding_size,
@@ -789,9 +789,9 @@ class SeasonalModelBundle:
         # Get current head spec and module
         is_landcover = task == "landcover"
         current_spec = (
-            self.require_landcover_spec()
+            _require_head_spec(self.landcover_spec, "landcover")
             if is_landcover
-            else self.require_croptype_spec()
+            else _require_head_spec(self.croptype_spec, "croptype")
         )
         module = (
             self.model.head.landcover_head
@@ -883,7 +883,7 @@ class SeasonalModelBundle:
         croptype_cropland_classes = (
             self.croptype_spec.cropland_classes if self.croptype_spec else []
         )
-        landcover_spec = self.require_landcover_spec()
+        landcover_spec = _require_head_spec(self.landcover_spec, "landcover")
         self.cropland_gate_classes = list(
             landcover_spec.cropland_classes
             or croptype_cropland_classes
@@ -1752,14 +1752,18 @@ class SeasonalInferenceEngine:
                 .reshape(
                     height,
                     width,
-                    self.bundle.require_landcover_spec().num_classes,
+                    _require_head_spec(
+                        self.bundle.landcover_spec, "landcover"
+                    ).num_classes,
                 )
             )
             prob_cube = np.transpose(prob_cube, (2, 0, 1))
             preds_np = preds.numpy().reshape(height, width)
 
             landcover_classes = list(
-                self.bundle.require_landcover_spec().class_names
+                _require_head_spec(
+                    self.bundle.landcover_spec, "landcover"
+                ).class_names
             )
             if len(landcover_classes) > 2 and _emit_multiclass_landcover():
                 _ensure_uint8_range(preds_np, name="landcover_classification")
@@ -1865,7 +1869,9 @@ class SeasonalInferenceEngine:
                     height,
                     width,
                     num_seasons,
-                    self.bundle.require_croptype_spec().num_classes,
+                    _require_head_spec(
+                        self.bundle.croptype_spec, "croptype"
+                    ).num_classes,
                 )
             )
             gate_applicable = (
@@ -1891,7 +1897,11 @@ class SeasonalInferenceEngine:
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
                 idx: idx
-                for idx in range(self.bundle.require_croptype_spec().num_classes)
+                for idx in range(
+                    _require_head_spec(
+                        self.bundle.croptype_spec, "croptype"
+                    ).num_classes
+                )
             }
 
             processed_labels: List[np.ndarray] = []
@@ -1951,7 +1961,9 @@ class SeasonalInferenceEngine:
                     prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
                 for season_idx, season_id in enumerate(season_labels):
                     for class_idx, class_name in enumerate(
-                        self.bundle.require_croptype_spec().class_names
+                        _require_head_spec(
+                            self.bundle.croptype_spec, "croptype"
+                        ).class_names
                     ):
                         layer_name = f"croptype_probability:{season_id}:{class_name}"
                         _register_band(layer_name, prob_uint8[season_idx, class_idx])
@@ -1966,7 +1978,7 @@ class SeasonalInferenceEngine:
         if landcover_multiclass_layers is not None:
             logger.info(
                 "Landcover head is multiclass "
-                f"({self.bundle.require_landcover_spec().num_classes} classes); exporting "
+                f"({_require_head_spec(self.bundle.landcover_spec, 'landcover').num_classes} classes); exporting "
                 "landcover_classification and landcover_probability bands."
             )
             _register_band("landcover_classification", landcover_multiclass_layers[0])
