@@ -617,20 +617,6 @@
         }
       }
     },
-    "resamplespatial4": {
-      "process_id": "resample_spatial",
-      "arguments": {
-        "align": "upper-left",
-        "data": {
-          "from_node": "reducedimension1"
-        },
-        "method": "near",
-        "projection": {
-          "from_parameter": "target_epsg"
-        },
-        "resolution": 0
-      }
-    },
     "loadcollection4": {
       "process_id": "load_collection",
       "arguments": {
@@ -696,7 +682,7 @@
       "process_id": "merge_cubes",
       "arguments": {
         "cube1": {
-          "from_node": "resamplespatial4"
+          "from_node": "reducedimension1"
         },
         "cube2": {
           "from_node": "renamelabels6"
@@ -1245,7 +1231,9 @@
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
     "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-snapshot-public/org/openeo/geotrellis-extensions/2.6.3_2.13-SNAPSHOT/geotrellis-extensions-2.6.3_2.13-SNAPSHOT.jar",
-    "concurrent_save_results": 3
+    "concurrent_save_results": 3,
+    "force-s3proxy": true,
+    "etl_organization_id": 2059
   },
   "parameters": [
     {
