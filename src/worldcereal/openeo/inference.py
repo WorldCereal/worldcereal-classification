@@ -688,6 +688,16 @@ class SeasonalModelBundle:
 
         self._update_cropland_gate()
 
+    def require_landcover_spec(self) -> HeadSpec:
+        if self.landcover_spec is None:
+            raise ValueError("Landcover head specification is not available")
+        return self.landcover_spec
+
+    def require_croptype_spec(self) -> HeadSpec:
+        if self.croptype_spec is None:
+            raise ValueError("Croptype head specification is not available")
+        return self.croptype_spec
+
     def _build_model(self) -> "WorldCerealSeasonalModel":
         """Construct the seasonal model and load base checkpoint."""
         torch = _lazy_import_torch()
@@ -699,25 +709,31 @@ class SeasonalModelBundle:
         )
 
         backbone = Presto()
+        landcover_spec = (
+            self.require_landcover_spec() if self._cropland_head_enabled else None
+        )
+        croptype_spec = (
+            self.require_croptype_spec() if self._croptype_head_enabled else None
+        )
         head = SeasonalFinetuningHead(
             embedding_dim=backbone.encoder.embedding_size,
             landcover_num_outputs=(
-                self.landcover_spec.num_classes if self._cropland_head_enabled else None
+                landcover_spec.num_classes if landcover_spec is not None else None
             ),
             crop_num_outputs=(
-                self.croptype_spec.num_classes if self._croptype_head_enabled else None
+                croptype_spec.num_classes if croptype_spec is not None else None
             ),
             landcover_head_type=(
-                self.landcover_spec.head_type if self._cropland_head_enabled else "linear"
+                landcover_spec.head_type if landcover_spec is not None else "linear"
             ),
             croptype_head_type=(
-                self.croptype_spec.head_type if self._croptype_head_enabled else "linear"
+                croptype_spec.head_type if croptype_spec is not None else "linear"
             ),
             landcover_hidden_dim=(
-                self.landcover_spec.hidden_dim if self._cropland_head_enabled else 256
+                landcover_spec.hidden_dim if landcover_spec is not None else 256
             ),
             croptype_hidden_dim=(
-                self.croptype_spec.hidden_dim if self._croptype_head_enabled else 256
+                croptype_spec.hidden_dim if croptype_spec is not None else 256
             ),
         )
         model = WorldCerealSeasonalModel(backbone=backbone, head=head)
@@ -772,7 +788,11 @@ class SeasonalModelBundle:
 
         # Get current head spec and module
         is_landcover = task == "landcover"
-        current_spec = self.landcover_spec if is_landcover else self.croptype_spec
+        current_spec = (
+            self.require_landcover_spec()
+            if is_landcover
+            else self.require_croptype_spec()
+        )
         module = (
             self.model.head.landcover_head
             if is_landcover
@@ -863,8 +883,9 @@ class SeasonalModelBundle:
         croptype_cropland_classes = (
             self.croptype_spec.cropland_classes if self.croptype_spec else []
         )
+        landcover_spec = self.require_landcover_spec()
         self.cropland_gate_classes = list(
-            self.landcover_spec.cropland_classes
+            landcover_spec.cropland_classes
             or croptype_cropland_classes
             or []
         )
@@ -1728,12 +1749,18 @@ class SeasonalInferenceEngine:
                 probs.detach()
                 .cpu()
                 .numpy()
-                .reshape(height, width, self.bundle.landcover_spec.num_classes)
+                .reshape(
+                    height,
+                    width,
+                    self.bundle.require_landcover_spec().num_classes,
+                )
             )
             prob_cube = np.transpose(prob_cube, (2, 0, 1))
             preds_np = preds.numpy().reshape(height, width)
 
-            landcover_classes = list(self.bundle.landcover_spec.class_names)
+            landcover_classes = list(
+                self.bundle.require_landcover_spec().class_names
+            )
             if len(landcover_classes) > 2 and _emit_multiclass_landcover():
                 _ensure_uint8_range(preds_np, name="landcover_classification")
                 landcover_multiclass_layers = (
@@ -1835,7 +1862,10 @@ class SeasonalInferenceEngine:
                 .cpu()
                 .numpy()
                 .reshape(
-                    height, width, num_seasons, self.bundle.croptype_spec.num_classes
+                    height,
+                    width,
+                    num_seasons,
+                    self.bundle.require_croptype_spec().num_classes,
                 )
             )
             gate_applicable = (
@@ -1860,7 +1890,8 @@ class SeasonalInferenceEngine:
                 gating = cropland_mask_bool[None, None, :, :]
                 prob_cube = np.where(gating, prob_cube, 0.0)
             class_value_to_index = {
-                idx: idx for idx in range(self.bundle.croptype_spec.num_classes)
+                idx: idx
+                for idx in range(self.bundle.require_croptype_spec().num_classes)
             }
 
             processed_labels: List[np.ndarray] = []
@@ -1920,7 +1951,7 @@ class SeasonalInferenceEngine:
                     prob_uint8 = np.where(gate, prob_uint8, sentinel_uint8)
                 for season_idx, season_id in enumerate(season_labels):
                     for class_idx, class_name in enumerate(
-                        self.bundle.croptype_spec.class_names
+                        self.bundle.require_croptype_spec().class_names
                     ):
                         layer_name = f"croptype_probability:{season_id}:{class_name}"
                         _register_band(layer_name, prob_uint8[season_idx, class_idx])
@@ -1935,7 +1966,7 @@ class SeasonalInferenceEngine:
         if landcover_multiclass_layers is not None:
             logger.info(
                 "Landcover head is multiclass "
-                f"({self.bundle.landcover_spec.num_classes} classes); exporting "
+                f"({self.bundle.require_landcover_spec().num_classes} classes); exporting "
                 "landcover_classification and landcover_probability bands."
             )
             _register_band("landcover_classification", landcover_multiclass_layers[0])
