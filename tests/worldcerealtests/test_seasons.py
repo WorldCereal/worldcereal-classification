@@ -97,7 +97,7 @@ def test_fetch_cropcalendar_point_rejects_invalid_values(patched_lookup):
 def test_fetch_cropcalendar_dekads_extent_returns_medoid(patched_lookup):
 	extent = BoundingBoxExtent(west=20, south=10, east=22, north=11, epsg=4326)
 
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent).dekads == {
 		"tc-s1": (30, 60)
 	}
 
@@ -105,7 +105,7 @@ def test_fetch_cropcalendar_dekads_extent_returns_medoid(patched_lookup):
 def test_fetch_cropcalendar_dekads_extent_handles_dateline(patched_lookup):
 	extent = BoundingBoxExtent(west=179, south=11, east=-179, north=12, epsg=4326)
 
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent).dekads == {
 		"tc-s1": (36, 66)
 	}
 
@@ -115,7 +115,7 @@ def test_fetch_cropcalendar_dekads_extent_falls_back_to_centroid(patched_lookup)
 		west=20.5, south=10.5, east=20.75, north=10.75, epsg=4326
 	)
 
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent).dekads == {
 		"tc-s1": (30, 60)
 	}
 
@@ -284,12 +284,12 @@ def test_fetch_cropcalendar_dekads_extent_selects_seasons_jointly(two_regime_loo
 	extent = BoundingBoxExtent(west=20, south=10, east=24, north=11, epsg=4326)
 
 	# Taken on its own, season 1 is best represented by the second point ...
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent).dekads == {
 		"tc-s1": (11, 20)
 	}
 	# ... but jointly both seasons come from the third point, so the returned
 	# cropping calendar is one that really occurs somewhere in the extent.
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1", "tc-s2"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1", "tc-s2"], extent).dekads == {
 		"tc-s1": (12, 21),
 		"tc-s2": (61, 71),
 	}
@@ -310,7 +310,7 @@ def test_fetch_cropcalendar_dekads_extent_drops_nodata_season(two_regime_lookup)
 	two_regime_lookup["s2_sos_dekad"] = 0
 	extent = BoundingBoxExtent(west=20, south=10, east=24, north=11, epsg=4326)
 
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1", "tc-s2"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1", "tc-s2"], extent).dekads == {
 		"tc-s1": (11, 20)
 	}
 
@@ -322,6 +322,43 @@ def test_enrich_production_grid_rejects_heterogeneous_cell(two_regime_lookup):
 
 	with pytest.raises(ValueError, match="heterogeneous"):
 		seasons.enrich_production_grid_from_crop_calendars(grid, 2024)
+
+
+def test_enrich_production_grid_marks_heterogeneous_cells(two_regime_lookup):
+	grid = pd.DataFrame(
+		{
+			"xmin": [20],
+			"ymin": [10],
+			"xmax": [24],
+			"ymax": [11],
+			"epsg": [4326],
+		}
+	)
+
+	enriched = seasons.enrich_production_grid_from_crop_calendars(
+		grid, 2024, on_heterogeneity="warn"
+	)
+
+	assert enriched.loc[0, seasons.SEASONALITY_HETEROGENEOUS_COLUMN]
+
+
+def test_enrich_production_grid_marks_grouped_heterogeneity(two_regime_lookup):
+	grid = pd.DataFrame(
+		{
+			"xmin": [20, 20],
+			"ymin": [10, 10],
+			"xmax": [22, 24],
+			"ymax": [11, 11],
+			"epsg": [4326, 4326],
+			"group_id": ["group-a", "group-a"],
+		}
+	)
+
+	enriched = seasons.enrich_production_grid_from_crop_calendars(
+		grid, 2024, grouping_column="group_id", on_heterogeneity="warn"
+	)
+
+	assert enriched[seasons.SEASONALITY_HETEROGENEOUS_COLUMN].tolist() == [True, True]
 
 
 def test_clip_season_windows_to_period_clips_and_drops():
@@ -379,7 +416,7 @@ def test_fetch_cropcalendar_dekads_extent_filters_nodata(patched_lookup):
 	patched_lookup.loc[(10.25, 20.25), "s1_sos_dekad"] = 0
 	extent = BoundingBoxExtent(west=20, south=10, east=21.5, north=11, epsg=4326)
 
-	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent) == {
+	assert seasons.fetch_cropcalendar_dekads_extent(["tc-s1"], extent).dekads == {
 		"tc-s1": (33, 63)
 	}
 
