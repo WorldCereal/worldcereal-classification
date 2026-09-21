@@ -539,7 +539,7 @@ def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
         assert mock_inputs.call_args.kwargs["disable_dem"] is False
 
 
-def test_get_disabled_modalities_includes_training_masking_and_dem():
+def test_get_disabled_modalities_reads_only_disable_flags():
     from worldcereal.job import _get_artifact_run_config
 
     _get_artifact_run_config.cache_clear()
@@ -547,19 +547,16 @@ def test_get_disabled_modalities_includes_training_masking_and_dem():
     with patch("worldcereal.job.load_model_artifact") as mock_load_artifact:
         mock_load_artifact.return_value = MagicMock(
             run_config={
-                "args": {"disable_meteo": True},
+                "args": {"disable_meteo": True, "disable_dem": True},
+                # Training turns a probability of 1.0 into its flag, so this is ignored.
                 "dataset": {
-                    "train_masking": {
-                        "enable": True,
-                        "s1_timestep_dropout_prob": 1.0,
-                        "dem_dropout_prob": 1.0,
-                    }
+                    "train_masking": {"enable": True, "s1_timestep_dropout_prob": 1.0}
                 },
             }
         )
 
         assert _get_disabled_modalities("model.zip") == {
-            "s1": True,
+            "s1": False,
             "s2": False,
             "meteo": True,
             "dem": True,

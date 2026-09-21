@@ -32,7 +32,6 @@ from openeo_gfmap.backend import BACKEND_CONNECTIONS
 from worldcereal.openeo.inference import (
     _merge_workflow_sections,
     _select_workflow_preset,
-    _sensors_disabled_by_masking,
 )
 from worldcereal.openeo.mapping import _cropland_map, _croptype_map, _embeddings_map
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
@@ -386,14 +385,6 @@ def _get_disabled_modalities(seasonal_model_zip: str) -> Dict[str, bool]:
     if isinstance(args, Mapping):
         for sensor in disabled:
             disabled[sensor] = bool(args.get(f"disable_{sensor}", False))
-
-    dataset_cfg = run_config.get("dataset")
-    masking = None
-    if isinstance(dataset_cfg, Mapping):
-        masking = dataset_cfg.get("train_masking") or dataset_cfg.get("masking")
-    if isinstance(masking, Mapping):
-        for sensor, is_disabled in _sensors_disabled_by_masking(masking).items():
-            disabled[sensor] = disabled[sensor] or is_disabled
 
     return disabled
 
