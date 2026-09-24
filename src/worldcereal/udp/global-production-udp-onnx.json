@@ -18,7 +18,9 @@
         "featureflags": {
           "tilesize": 96
         },
-        "id": "SENTINEL2_L2A",
+        "id": "SENTINEL2_L2A",        "featureflags": {
+          "tilesize": 96
+        },
         "properties": {
           "eo:cloud_cover": {
             "process_graph": {
@@ -136,6 +138,9 @@
           "SCL"
         ],
         "id": "SENTINEL2_L2A",
+        "featureflags": {
+          "tilesize": 1024
+        },
         "properties": {
           "eo:cloud_cover": {
             "process_graph": {
