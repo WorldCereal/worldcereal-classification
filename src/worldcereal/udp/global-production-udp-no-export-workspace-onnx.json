@@ -811,6 +811,7 @@
           "output_ndvi": true,
           "output_classification": true,
           "output_probabilities": true,
+          "cropland_class_indices": [0,1],
           "mask_cropland": {
             "from_parameter": "mask_cropland"
           },
