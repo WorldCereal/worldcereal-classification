@@ -1237,7 +1237,7 @@ class SeasonalInferenceEngine:
             )
             mem.checkpoint("infer:after_generate_predictor")
             num_samples = getattr(predictors, "B", None)
-            num_timesteps = getattr(predictors, "T", None)
+            num_timesteps = predictor_cube.sizes["t"]
             expected_timesteps = self._get_expected_timesteps()
             if (
                 num_timesteps is not None
@@ -1338,7 +1338,12 @@ class SeasonalInferenceEngine:
         it, but may not enable lat/lon for a model trained without it.
         """
         configured = self._get_disabled_modalities()["latlon"]
-        return configured or override is True
+        resolved = configured or override is True
+        if resolved:
+            logger.info(
+                f"Disabling lat/lon for inference (configured={configured}, override={override})"
+            )
+        return resolved
 
     def _mask_disabled_modalities(self, arr: xr.DataArray) -> xr.DataArray:
         """Set all bands of disabled modalities to NODATA_VALUE."""
