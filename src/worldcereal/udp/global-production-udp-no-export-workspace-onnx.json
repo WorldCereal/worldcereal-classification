@@ -136,6 +136,9 @@
           "SCL"
         ],
         "id": "SENTINEL2_L2A",
+        "featureflags": {
+          "tilesize": 1024
+        },
         "properties": {
           "eo:cloud_cover": {
             "process_graph": {
