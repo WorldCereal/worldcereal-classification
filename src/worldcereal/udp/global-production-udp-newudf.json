@@ -969,6 +969,18 @@
         }
       }
     },
+    "exportworkspace1": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult1"
+        },
+        "merge": "worldcereal_global_production_classification/collection.json",
+        "workspace": {
+          "from_parameter": "workspace_classification"
+        }
+      }
+    },
     "filterbands2": {
       "process_id": "filter_bands",
       "arguments": {
@@ -1027,6 +1039,18 @@
           "filename_prefix": {
             "from_parameter": "filename_prefix_ndvi"
           }
+        }
+      }
+    },
+    "exportworkspace2": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult2"
+        },
+        "merge": "worldcereal_global_production_ndvi/collection.json",
+        "workspace": {
+          "from_parameter": "workspace_classification"
         }
       }
     },
@@ -1207,6 +1231,18 @@
         }
       }
     },
+    "exportworkspace3": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult3"
+        },
+        "merge": "worldcereal_global_production_embeddings/collection.json",
+        "workspace": {
+          "from_parameter": "workspace_embeddings"
+        }
+      }
+    },
     "filterbands4": {
       "process_id": "filter_bands",
       "arguments": {
@@ -1230,11 +1266,23 @@
             "from_parameter": "filename_prefix_embeddings_scale"
           }
         }
+      }
+    },
+    "exportworkspace4": {
+      "process_id": "export_workspace",
+      "arguments": {
+        "data": {
+          "from_node": "saveresult4"
+        },
+        "merge": "worldcereal_global_production_embeddings_scale/collection.json",
+        "workspace": {
+          "from_parameter": "workspace_embeddings"
+        }
       },
       "result": true
     }
   },
-  "id": "worldcereal_global_production_inference_no_export_workspace",
+  "id": "worldcereal_global_production_inference",
   "default_job_options": {
     "driver-memory": "8g",
     "executor-memory": "4g",
@@ -1480,6 +1528,20 @@
         "items": {
           "type": "string"
         }
+      }
+    },
+    {
+      "name": "workspace_classification",
+      "description": "The workspace in which the classification results will be exported.",
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "workspace_embeddings",
+      "description": "The workspace in which the embeddings will be exported.",
+      "schema": {
+        "type": "string"
       }
     },
     {
