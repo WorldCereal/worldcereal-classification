@@ -167,3 +167,103 @@ def load_model_artifact(
         run_config=run_config,
         checkpoint_path=checkpoint,
     )
+
+
+SUPPORTED_MASKABLE_MODALITIES = {"s1", "s2", "meteo", "dem"}
+
+
+def create_masked_seasonal_artifact(
+    base_source: str | Path,
+    excluded_modalities: Sequence[str],
+    output_dir: str | Path,
+    output_name: Optional[str] = None,
+    cache_root: Optional[Path] = None,
+) -> Path:
+    """Repackage a seasonal model artifact with sensor-disable flags baked in.
+
+    A downstream head trained with `excluded_modalities` is only ever
+    consistent at inference if the seasonal model suite it is deployed
+    with actually skips loading those same sensors. Since the backbone
+    itself is shared/frozen, this derives a new zip (same encoder,
+    checkpoints and manifest as `base_source`) whose `run_config.json`
+    records `excluded_modalities` as `disable_*` flags, so
+    `worldcereal.job._get_disabled_modalities` (and the inference engine's
+    own masking) correctly skip those sensors for this specific model
+    suite. Any embedded "landcover" head is dropped from the manifest,
+    since it was trained with the full sensor set and is not guaranteed
+    compatible with the excluded modalities.
+
+    Parameters
+    ----------
+    base_source : str | Path
+        URL or local path to the base seasonal model artifact to derive from.
+    excluded_modalities : Sequence[str]
+        Modalities to mark as disabled. Supported values are `s1`, `s2`,
+        `meteo` and `dem`.
+    output_dir : str | Path
+        Directory in which the derived zip is written.
+    output_name : Optional[str]
+        Base name (without extension) for the derived zip. Defaults to a
+        name derived from `base_source` and the excluded modalities.
+    cache_root : Optional[Path]
+        Cache root used to resolve/download `base_source`.
+
+    Returns
+    -------
+    Path
+        Path to the newly created zip archive.
+    """
+    excluded = sorted({str(modality).lower() for modality in excluded_modalities})
+    invalid = set(excluded) - SUPPORTED_MASKABLE_MODALITIES
+    if invalid:
+        raise ValueError(f"Unsupported excluded modalities: {', '.join(sorted(invalid))}")
+    if {"s1", "s2"}.issubset(excluded):
+        raise ValueError("S1 and S2 cannot both be excluded from a model suite.")
+
+    base_artifact = load_model_artifact(str(base_source), cache_root=cache_root)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(dir=output_dir))
+    try:
+        shutil.copytree(base_artifact.extract_dir, work_dir, dirs_exist_ok=True)
+
+        manifest_path = work_dir / "config.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        heads = manifest.get("heads", [])
+        dropped = [head.get("name", head.get("task")) for head in heads if head.get("task") == "landcover"]
+        manifest["heads"] = [head for head in heads if head.get("task") != "landcover"]
+        if dropped:
+            logger.info(
+                f"Dropping embedded landcover head(s) {dropped} from derived seasonal "
+                "model artifact: not guaranteed compatible with excluded modalities."
+            )
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        run_config_path = work_dir / "run_config.json"
+        run_config = (
+            json.loads(run_config_path.read_text(encoding="utf-8"))
+            if run_config_path.exists()
+            else {}
+        )
+        args = dict(run_config.get("args") or {})
+        for modality in SUPPORTED_MASKABLE_MODALITIES:
+            args[f"disable_{modality}"] = bool(
+                args.get(f"disable_{modality}", False) or modality in excluded
+            )
+        run_config["args"] = args
+        run_config_path.write_text(json.dumps(run_config, indent=2), encoding="utf-8")
+
+        name = output_name or (
+            f"{Path(str(base_source)).stem}_excl-{'-'.join(excluded) or 'none'}"
+        )
+        zip_path = output_dir / f"{name}.zip"
+        if zip_path.exists():
+            zip_path.unlink()
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in work_dir.rglob("*"):
+                if file_path.is_file():
+                    zf.write(file_path, file_path.relative_to(work_dir))
+        return zip_path
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)

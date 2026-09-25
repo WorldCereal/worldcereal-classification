@@ -26,6 +26,7 @@ which returns a TemporalContext object with the start and end dates of the seaso
 import datetime
 import json
 import math
+from dataclasses import dataclass
 from typing import (
     Callable,
     Dict,
@@ -53,6 +54,13 @@ DEFAULT_MAX_DEKAD_DIFFERENCE = 7
 # Seasons whose union defines the processing period of a production grid cell.
 PROCESSING_SEASONS: Tuple[str, ...] = ("tc-s1", "tc-s2")
 PROCESSING_PERIOD_MONTHS = 12
+SEASONALITY_HETEROGENEOUS_COLUMN = "seasonality_heterogeneous"
+
+
+@dataclass(frozen=True)
+class _SeasonalityResult:
+    dekads: Dict[str, Tuple[int, int]]
+    heterogeneous: bool
 
 
 def ensure_seasonality_lookup_table() -> pd.DataFrame:
@@ -461,7 +469,7 @@ def _check_extent_homogeneity(
     columns: Mapping[str, Tuple[str, str]],
     max_dekad_difference: int,
     on_heterogeneity: Literal["warn", "raise"],
-) -> None:
+) -> bool:
     """Report seasons whose dekad spread inside the extent is too large."""
 
     problems = []
@@ -473,7 +481,7 @@ def _check_extent_homogeneity(
                 problems.append(f"{season_id} {label} spans {spread} dekads")
 
     if not problems:
-        return
+        return False
 
     message = (
         "Seasonality inside the extent is heterogeneous "
@@ -484,6 +492,7 @@ def _check_extent_homogeneity(
     if on_heterogeneity == "raise":
         raise ValueError(message)
     logger.warning(message)
+    return True
 
 
 def fetch_cropcalendar_dekads_extent(
@@ -494,8 +503,8 @@ def fetch_cropcalendar_dekads_extent(
     max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
     max_dekad_difference: int = DEFAULT_MAX_DEKAD_DIFFERENCE,
     on_heterogeneity: Literal["warn", "raise"] = "warn",
-) -> Dict[str, Tuple[int, int]]:
-    """Fetch representative (SOS, EOS) dekads for several seasons at once.
+) -> _SeasonalityResult:
+    """Fetch representative (SOS, EOS) dekads and heterogeneity metadata.
 
     All returned seasons are read from a *single* lookup point, the joint medoid
     over every requested season. Selecting each season independently could pick
@@ -504,6 +513,12 @@ def fetch_cropcalendar_dekads_extent(
 
     Seasons that hold nodata everywhere inside the extent are dropped from the
     result rather than invalidating the whole selection.
+
+    Returns
+    -------
+    _SeasonalityResult
+        Representative dekads and whether the extent exceeded the configured
+        dekad-difference threshold.
     """
 
     if not season_ids:
@@ -555,7 +570,7 @@ def fetch_cropcalendar_dekads_extent(
 
     candidates = rows.iloc[np.flatnonzero(row_mask)]
     retained_columns = {sid: columns[sid] for sid in retained}
-    _check_extent_homogeneity(
+    heterogeneous = _check_extent_homogeneity(
         candidates, retained_columns, max_dekad_difference, on_heterogeneity
     )
 
@@ -567,10 +582,13 @@ def fetch_cropcalendar_dekads_extent(
         ]
     )
     medoid = candidates.iloc[dekad_medoid_index(values)]
-    return {
-        sid: (int(medoid[sos_col]), int(medoid[eos_col]))
-        for sid, (sos_col, eos_col) in retained_columns.items()
-    }
+    return _SeasonalityResult(
+        dekads={
+            sid: (int(medoid[sos_col]), int(medoid[eos_col]))
+            for sid, (sos_col, eos_col) in retained_columns.items()
+        },
+        heterogeneous=heterogeneous,
+    )
 
 
 def _any_season_valid(
@@ -607,8 +625,8 @@ def get_seasons_for_extent(
     max_dekad_difference: int = DEFAULT_MAX_DEKAD_DIFFERENCE,
     max_fallback_distance_degrees: float = DEFAULT_MAX_FALLBACK_DISTANCE_DEGREES,
     on_heterogeneity: Literal["warn", "raise"] = "warn",
-) -> Dict[str, TemporalContext]:
-    """Retrieve the season windows of an extent, jointly across all seasons.
+) -> Tuple[Dict[str, TemporalContext], bool]:
+    """Retrieve season windows and heterogeneity metadata for an extent.
 
     All returned seasons originate from the same lookup point, so the resulting
     cropping calendar is one that really occurs inside the extent instead of a
@@ -628,14 +646,15 @@ def get_seasons_for_extent(
             the extent is too heterogeneous while ``on_heterogeneity="raise"``.
 
     Returns:
-        Dict[str, TemporalContext]: inferred temporal range per season.
+        Tuple[Dict[str, TemporalContext], bool]: inferred temporal ranges and
+        whether the extent exceeded the configured dekad-difference threshold.
     """
 
     unsupported = [season for season in seasons if season not in SUPPORTED_SEASONS]
     if unsupported:
         raise ValueError(f"Season `{unsupported[0]}` not supported!")
 
-    dekads = fetch_cropcalendar_dekads_extent(
+    seasonality = fetch_cropcalendar_dekads_extent(
         seasons,
         extent,
         fallback_to_nearest=True,
@@ -644,7 +663,7 @@ def get_seasons_for_extent(
         on_heterogeneity=on_heterogeneity,
     )
 
-    return {
+    contexts = {
         season: TemporalContext(
             season_dekad_to_date(sos, target_year=year, mode="first").strftime(
                 "%Y-%m-%d"
@@ -653,8 +672,9 @@ def get_seasons_for_extent(
                 "%Y-%m-%d"
             ),
         )
-        for season, (sos, eos) in dekads.items()
+        for season, (sos, eos) in seasonality.dekads.items()
     }
+    return contexts, seasonality.heterogeneous
 
 
 def get_season_dates_for_extent(
@@ -687,7 +707,7 @@ def get_season_dates_for_extent(
         TemporalContext: inferred temporal range
     """
 
-    contexts = get_seasons_for_extent(
+    contexts, _ = get_seasons_for_extent(
         extent,
         year,
         [season],
@@ -876,6 +896,7 @@ def enrich_production_grid_from_crop_calendars(
     year: int,
     *,
     get_seasons: bool = True,
+    grouping_column: Optional[str] = None,
     extent_resolver: Optional[Callable[[pd.Series], BoundingBoxExtent]] = None,
     seasons: Sequence[str] = PROCESSING_SEASONS,
     period_months: int = PROCESSING_PERIOD_MONTHS,
@@ -884,12 +905,17 @@ def enrich_production_grid_from_crop_calendars(
 ) -> pd.DataFrame:
     """Enrich a production grid with temporal extent and optional season metadata.
 
-    All seasons of a grid cell are resolved jointly from a single crop-calendar
-    point, and ``start_date`` / ``end_date`` are then derived from their union
-    via `consolidate_processing_period`. This guarantees a processing period of
-    exactly ``period_months`` months that is always consistent with the seasons
-    it has to cover. The season windows are subsequently clipped to that period,
-    so seasons and processing period always remain mutually consistent.
+    By default, all seasons of a grid cell are resolved jointly from a single
+    crop-calendar point. When ``grouping_column`` is provided, rows sharing the
+    same value in that column are treated as one larger unit: one extent is
+    built around all rows in the group, one crop calendar is resolved for that
+    extent, and the result is written to every row in the group.
+
+    ``start_date`` / ``end_date`` are derived from the season union via
+    `consolidate_processing_period`. This guarantees a processing period of
+    exactly ``period_months`` months that is consistent with the seasons it has
+    to cover. The season windows are subsequently clipped to that period, so
+    seasons and processing period remain mutually consistent.
 
     Cells whose seasonality is too heterogeneous to be represented by a single
     crop calendar are rejected by default, since silently producing them would
@@ -898,21 +924,51 @@ def enrich_production_grid_from_crop_calendars(
     This function writes:
     - ``start_date`` and ``end_date``, consolidated from the season windows.
     - optionally ``season_ids`` and ``season_windows`` (JSON string).
+        - ``seasonality_heterogeneous``, indicating whether the dekad spread inside
+            the cell or group exceeded ``max_dekad_difference``.
+
+    Parameters
+    ----------
+    grouping_column : Optional[str]
+        Name of a column in ``grid_df`` whose values define larger spatial
+        groups. If ``None``, each row is processed independently.
     """
 
     resolver = extent_resolver or _row_spatial_extent_from_grid_row
     result = grid_df.copy()
+    result[SEASONALITY_HETEROGENEOUS_COLUMN] = False
 
-    for idx, row in result.iterrows():
-        extent = resolver(row)
+    if grouping_column is None:
+        groups = (
+            (idx, pd.DataFrame([row], index=[idx]))
+            for idx, row in result.iterrows()
+        )
+    else:
+        if grouping_column not in result.columns:
+            raise ValueError(
+                f"Grouping column '{grouping_column}' is not present in grid_df."
+            )
+        groups = result.groupby(grouping_column, dropna=False, sort=False)
 
-        season_contexts = get_seasons_for_extent(
+    for _, group in groups:
+        extents = [resolver(row) for _, row in group.iterrows()]
+        bounds = [_extent_to_wgs84_bounds(extent) for extent in extents]
+        extent = BoundingBoxExtent(
+            west=min(bound[0] for bound in bounds),
+            south=min(bound[1] for bound in bounds),
+            east=max(bound[2] for bound in bounds),
+            north=max(bound[3] for bound in bounds),
+            epsg=4326,
+        )
+
+        season_contexts, is_heterogeneous = get_seasons_for_extent(
             extent,
             year,
             seasons,
             max_dekad_difference=max_dekad_difference,
             on_heterogeneity=on_heterogeneity,
         )
+        result.loc[group.index, SEASONALITY_HETEROGENEOUS_COLUMN] = is_heterogeneous
         season_windows = {
             season: [context.start_date, context.end_date]
             for season, context in season_contexts.items()
@@ -921,15 +977,17 @@ def enrich_production_grid_from_crop_calendars(
         processing_ctx = consolidate_processing_period(
             season_windows, period_months=period_months
         )
-        result.loc[idx, "start_date"] = processing_ctx.start_date
-        result.loc[idx, "end_date"] = processing_ctx.end_date
+        result.loc[group.index, "start_date"] = processing_ctx.start_date
+        result.loc[group.index, "end_date"] = processing_ctx.end_date
 
         if not get_seasons:
             continue
 
         season_windows = clip_season_windows_to_period(season_windows, processing_ctx)
-        result.loc[idx, "season_ids"] = ",".join(sorted(season_windows))
-        result.loc[idx, "season_windows"] = json.dumps(season_windows, sort_keys=True)
+        result.loc[group.index, "season_ids"] = ",".join(sorted(season_windows))
+        result.loc[group.index, "season_windows"] = json.dumps(
+            season_windows, sort_keys=True
+        )
 
     return result
 
