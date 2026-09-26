@@ -1186,7 +1186,7 @@
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "image-name": "registry.internal/dev/openeo-geotrellis-kube-python311:20260925-1130",
+    "image-name": "registry.internal/dev/openeo-geotrellis-kube-python311:20260926-1133",
     "concurrent_save_results": 3,
     "force-s3proxy": true
   },
