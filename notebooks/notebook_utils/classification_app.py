@@ -91,6 +91,7 @@ class WorldCerealClassificationApp:
         """
         self.workflow_mode = "full"
         self.excluded_modalities: List[str] = []
+        self.disable_latlon = False
         self.training_has_compatible_landcover_head = True
         self._nav_buttons: List[Dict[str, widgets.Button]] = []
 
@@ -387,6 +388,10 @@ class WorldCerealClassificationApp:
             description="Exclude:",
             layout=widgets.Layout(width="420px", height="120px"),
         )
+        disable_latlon_checkbox = widgets.Checkbox(
+            value=False,
+            description="Disable latitude/longitude inputs",
+        )
         modality_message = widgets.HTML()
         training_setup = widgets.VBox(
             [
@@ -395,6 +400,7 @@ class WorldCerealClassificationApp:
                     "Choose inputs to leave out of the trained model. "
                 ),
                 modality_select,
+                disable_latlon_checkbox,
                 modality_message,
             ]
         )
@@ -410,6 +416,7 @@ class WorldCerealClassificationApp:
         self.tab0_widgets = {
             "workflow_mode_radio": workflow_mode_radio,
             "modality_select": modality_select,
+            "disable_latlon_checkbox": disable_latlon_checkbox,
             "modality_message": modality_message,
             "training_setup": training_setup,
             "select_button": select_button,
@@ -417,6 +424,7 @@ class WorldCerealClassificationApp:
 
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
         modality_select.observe(self._on_excluded_modalities_change, names="value")
+        disable_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
         children = [header]
@@ -466,13 +474,21 @@ class WorldCerealClassificationApp:
         self.workflow_mode = change["new"]
         if self.workflow_mode != "full":
             self.excluded_modalities = []
+            self.disable_latlon = False
             modality_select = self.tab0_widgets.get("modality_select")
             if modality_select is not None and modality_select.value:
                 modality_select.value = ()
+            disable_latlon_checkbox = self.tab0_widgets.get("disable_latlon_checkbox")
+            if disable_latlon_checkbox is not None and disable_latlon_checkbox.value:
+                disable_latlon_checkbox.value = False
         self._update_training_setup_state()
 
     def _on_excluded_modalities_change(self, change):
         self.excluded_modalities = list(change["new"])
+        self._update_training_setup_state()
+
+    def _on_disable_latlon_change(self, change):
+        self.disable_latlon = change["new"]
         self._update_training_setup_state()
 
     def _update_training_setup_state(self):
@@ -492,7 +508,11 @@ class WorldCerealClassificationApp:
         except Exception:
             self.training_has_compatible_landcover_head = False
 
-        if has_exclusions or not self.training_has_compatible_landcover_head:
+        if (
+            has_exclusions
+            or self.disable_latlon
+            or not self.training_has_compatible_landcover_head
+        ):
             if message is not None:
                 message.value = (
                     "<div style='color:#8a3b12; background:#fff4e5; padding:8px; "
@@ -3116,6 +3136,7 @@ class WorldCerealClassificationApp:
                     season_id=self.season_id,
                     mask_on_training=mask_on_training,
                     excluded_modalities=self.excluded_modalities,
+                    disable_latlon=self.disable_latlon,
                     repeats=repeats,
                     augment=augment,
                     min_season_coverage=min_season_coverage,
@@ -3442,6 +3463,7 @@ class WorldCerealClassificationApp:
                     use_balancing=use_balancing,
                     num_workers=0,
                     excluded_modalities=self.excluded_modalities,
+                    disable_latlon=self.disable_latlon,
                     presto_model_path=presto_model_path,
                     presto_model_fingerprint=presto_model_fingerprint,
                 )
@@ -3465,7 +3487,7 @@ class WorldCerealClassificationApp:
                     print(f"Torch head archive ready at: {self.head_package_path}")
 
                     self.derived_seasonal_model_path = None
-                    if self.excluded_modalities:
+                    if self.excluded_modalities or self.disable_latlon:
                         try:
                             from worldcereal.openeo.parameters import (
                                 DEFAULT_SEASONAL_MODEL_URL,
@@ -3485,11 +3507,12 @@ class WorldCerealClassificationApp:
                                     self.excluded_modalities,
                                     output_dir=self.head_output_path,
                                     output_name=f"{model_name}_seasonal-suite",
+                                    disable_latlon=self.disable_latlon,
                                 )
                             )
                             print(
                                 "Derived seasonal model suite (with "
-                                f"{', '.join(self.excluded_modalities)} disabled and "
+                                f"{', '.join(self.excluded_modalities) or 'latitude/longitude inputs'} disabled and "
                                 "the embedded landcover head removed) ready at: "
                                 f"{self.derived_seasonal_model_path}"
                             )
@@ -3687,19 +3710,21 @@ class WorldCerealClassificationApp:
             # them from the archive's own config.json instead (see TorchTrainer).
             self.derived_seasonal_model_path = None
             self.excluded_modalities = []
+            self.disable_latlon = False
             try:
                 with zipfile.ZipFile(path) as zf:
                     head_config = json.loads(zf.read("config.json"))
                 self.excluded_modalities = sorted(
                     head_config.get("excluded_modalities") or []
                 )
+                self.disable_latlon = bool(head_config.get("disable_latlon", False))
             except Exception as exc:
                 print(f"Warning: could not read config.json from archive: {exc}")
 
-            if self.excluded_modalities:
+            if self.excluded_modalities or self.disable_latlon:
                 print(
                     "This head was trained with "
-                    f"{', '.join(self.excluded_modalities)} excluded. Deriving a "
+                    f"{', '.join(self.excluded_modalities) or 'latitude/longitude inputs'} disabled. Deriving a "
                     "matching seasonal model suite..."
                 )
                 try:
@@ -3720,6 +3745,7 @@ class WorldCerealClassificationApp:
                         self.excluded_modalities,
                         output_dir=self.head_output_path,
                         output_name=f"{path.stem}_seasonal-suite",
+                        disable_latlon=self.disable_latlon,
                     )
                     print(
                         f"Derived seasonal model suite ready at: {self.derived_seasonal_model_path}"

@@ -178,6 +178,7 @@ def create_masked_seasonal_artifact(
     output_dir: str | Path,
     output_name: Optional[str] = None,
     cache_root: Optional[Path] = None,
+    disable_latlon: bool = False,
 ) -> Path:
     """Repackage a seasonal model artifact with sensor-disable flags baked in.
 
@@ -186,7 +187,7 @@ def create_masked_seasonal_artifact(
     with actually skips loading those same sensors. Since the backbone
     itself is shared/frozen, this derives a new zip (same encoder,
     checkpoints and manifest as `base_source`) whose `run_config.json`
-    records `excluded_modalities` as `disable_*` flags, so
+    records `excluded_modalities` and `disable_latlon` as disable flags, so
     `worldcereal.job._get_disabled_modalities` (and the inference engine's
     own masking) correctly skip those sensors for this specific model
     suite. Any embedded "landcover" head is dropped from the manifest,
@@ -207,6 +208,8 @@ def create_masked_seasonal_artifact(
         name derived from `base_source` and the excluded modalities.
     cache_root : Optional[Path]
         Cache root used to resolve/download `base_source`.
+    disable_latlon : bool, default=False
+        Whether to omit latitude/longitude predictors at inference.
 
     Returns
     -------
@@ -251,6 +254,9 @@ def create_masked_seasonal_artifact(
             args[f"disable_{modality}"] = bool(
                 args.get(f"disable_{modality}", False) or modality in excluded
             )
+        args["disable_latlon"] = bool(
+            args.get("disable_latlon", False) or disable_latlon
+        )
         run_config["args"] = args
         run_config_path.write_text(json.dumps(run_config, indent=2), encoding="utf-8")
 

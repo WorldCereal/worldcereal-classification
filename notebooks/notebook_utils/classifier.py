@@ -187,6 +187,7 @@ def compute_seasonal_presto_embeddings(
     augment: bool = False,
     mask_on_training: bool = True,
     excluded_modalities: Optional[Sequence[str]] = None,
+    disable_latlon: bool = False,
     repeats: int = 3,
     custom_presto_url: Optional[str] = None,
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
@@ -220,6 +221,8 @@ def compute_seasonal_presto_embeddings(
     excluded_modalities : sequence of str, optional
         Modalities to omit consistently while computing embeddings. Supported
         values are ``s1``, ``s2``, ``meteo`` and ``dem``.
+    disable_latlon : bool, default=False
+        Whether to omit latitude/longitude predictors for every sample.
     repeats : int, default=3
         Number of times to repeat each sample in the training set.
     custom_presto_url : str, optional
@@ -337,6 +340,7 @@ def compute_seasonal_presto_embeddings(
             task_type="multiclass" if task_type == "croptype" else "binary",
             augment=augment_flag,
             masking_config=masking_config,
+            disable_latlon=disable_latlon,
             repeats=repeats if (augment_flag or masking_config) else 1,
             season_ids=[season_id],
             season_calendar_mode=effective_mode,
@@ -379,6 +383,7 @@ def train_seasonal_torch_head(
     num_workers: int = 0,
     disable_progressbar: bool = True,
     excluded_modalities: Optional[Sequence[str]] = None,
+    disable_latlon: bool = False,
     **trainer_kwargs: Any,
 ):
     """Train a torch head compatible with the seasonal model bundle."""
@@ -410,6 +415,7 @@ def train_seasonal_torch_head(
         outlier_drop_mode="drop_candidate",
         zero_quality_cols=zero_quality_cols,
         excluded_modalities=list(excluded_modalities or []),
+        disable_latlon=disable_latlon,
         **trainer_kwargs,
     )
     return trainer.train()
