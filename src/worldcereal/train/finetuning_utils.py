@@ -1289,6 +1289,7 @@ def prepare_training_datasets(
     classes_list: Optional[List[str]] = None,
     train_masking_config: Optional[SensorMaskingConfig] = None,
     eval_masking_config: Optional[SensorMaskingConfig] = None,
+    disable_latlon: bool = False,
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
@@ -1338,6 +1339,9 @@ def prepare_training_datasets(
         sensor is scored without it. Pass it explicitly to eliminate further
         sensors at evaluation time; values should then be exactly 0.0 or 1.0,
         since stochastic dropout belongs in ``train_masking_config`` only.
+    disable_latlon : bool, default=False
+        Whether to omit latitude/longitude predictors from all splits. This is
+        distinct from Prometheo's training-only ``latlon_dropout``.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
@@ -1391,6 +1395,7 @@ def prepare_training_datasets(
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
         masking_config=train_masking_config,
+        disable_latlon=disable_latlon,
         label_jitter=label_jitter,
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
@@ -1410,6 +1415,7 @@ def prepare_training_datasets(
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
         masking_config=eval_masking_config,  # Only sensor-disable mirroring
+        disable_latlon=disable_latlon,
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
         min_season_coverage=eval_min_season_coverage,
@@ -1429,6 +1435,7 @@ def prepare_training_datasets(
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
         masking_config=eval_masking_config,  # Only sensor-disable mirroring
+        disable_latlon=disable_latlon,
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
         min_season_coverage=eval_min_season_coverage,
@@ -2910,7 +2917,9 @@ def run_finetuning(
                     if _effective_metric == "lc_regional_f1"
                     else best_ct_regional_f1
                 )
-                _glob = cur_lc_f1 if _effective_metric == "lc_regional_f1" else cur_ct_f1
+                _glob = (
+                    cur_lc_f1 if _effective_metric == "lc_regional_f1" else cur_ct_f1
+                )
                 logger.info(
                     f"Epoch {epoch + 1}: val {_task} regional F1 improved to "
                     f"{_cur_reg:.4f} (global macro F1={_glob:.4f}, "

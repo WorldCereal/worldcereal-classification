@@ -272,6 +272,25 @@ def test_row_removed_when_no_admissible_window_has_data():
     assert len(ds) == 1, "Row with unreachable S1/S2 data should be removed"
 
 
+@pytest.mark.parametrize(
+    ("disabled", "kept"),
+    [({"s1_full_dropout_prob": 1.0}, [0, 2]), ({"s2_full_dropout_prob": 1.0}, [0, 1])],
+)
+def test_disabled_sensor_does_not_count_as_data(disabled, kept):
+    # Row 1 has only S1 data, row 2 only S2 data: a row is kept only when it has
+    # data for a sensor the model actually sees.
+    df = _make_dummy_df(8, nrows=3)
+    df.loc[1, [c for c in df.columns if c.startswith("OPTICAL-")]] = NODATAVALUE
+    df.loc[2, [c for c in df.columns if c.startswith("SAR-")]] = NODATAVALUE
+    ds = WorldCerealDataset(
+        df,
+        num_timesteps=8,
+        masking_config=SensorMaskingConfig(enable=True, **disabled),
+        remove_samples_without_s1_s2=True,
+    )
+    assert ds.dataframe["lat"].tolist() == df.loc[kept, "lat"].tolist()
+
+
 def test_validate_rejects_double_disable():
     cfg = SensorMaskingConfig(
         enable=True,

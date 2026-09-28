@@ -449,6 +449,7 @@ def run_seasonal_inference(
     as_dataset: bool = True,
     mask_b8a: bool = True,
     timestep_freq: CompositeFreq = "month",
+    disable_latlon: Optional[bool] = None,
 ) -> Union[xr.Dataset, xr.DataArray]:
     """Run seasonal cropland/croptype inference locally with a single entrypoint.
 
@@ -556,6 +557,7 @@ def run_seasonal_inference(
         season_windows=season_windows,
         season_ids=season_ids,
         mask_cropland=mask_cropland,
+        disable_latlon=disable_latlon,
     )
 
     if device == "cuda" and hasattr(result, "cpu"):
