@@ -1518,17 +1518,19 @@ class SeasonalInferenceEngine:
 
             # Overall statistics
             total_values = arr.size
-            nan_count = np.isnan(arr.values).sum()
-            nan_pct = (nan_count / total_values * 100) if total_values > 0 else 0.0
+            missing_count = (np.isnan(arr.values) | (arr.values == NODATA_VALUE)).sum()
+            missing_pct = (
+                missing_count / total_values * 100 if total_values > 0 else 0.0
+            )
 
             logger.info(
                 f"Input cube statistics: shape={arr.shape}, total_values={total_values}, "
-                f"NaN_count={nan_count} ({nan_pct:.2f}%)"
+                f"missing_count={missing_count} ({missing_pct:.2f}%)"
             )
 
             for i, band in enumerate(bands_to_check):
                 band_data = arr.isel(bands=i).values
-                valid_mask = ~np.isnan(band_data)
+                valid_mask = ~np.isnan(band_data) & (band_data != NODATA_VALUE)
                 n_valid = valid_mask.sum()
                 n_total = band_data.size
 
@@ -1537,13 +1539,13 @@ class SeasonalInferenceEngine:
                     min_val = float(np.nanmin(valid_data))
                     max_val = float(np.nanmax(valid_data))
                     mean_val = float(np.nanmean(valid_data))
-                    logger.debug(
+                    logger.info(
                         f"  Band '{band}': valid={n_valid}/{n_total} ({n_valid / n_total * 100:.1f}%), "
                         f"min={min_val:.4f}, max={max_val:.4f}, mean={mean_val:.4f}"
                     )
                 else:
                     logger.warning(
-                        f"  Band '{band}': all values are NaN ({n_total} values)"
+                        f"  Band '{band}': all values are missing ({n_total} values)"
                     )
 
         except Exception as e:
