@@ -22,6 +22,7 @@ from prometheo.predictors import NODATAVALUE
 from pyproj import CRS
 
 from worldcereal.openeo.inference import (
+    POSTPROCESSING_NODATA,
     SeasonalInferenceEngine,
     SeasonWindowValue,
     get_expected_timesteps_from_artifact,
@@ -248,7 +249,7 @@ def subset_ds_temporally(
     end_dt = pd.Timestamp(end_str)
 
     # Enumerate the composite slots (month or dekad starts) covered by the
-    # season window, snapping both edges to their slot starts. 
+    # season window, snapping both edges to their slot starts.
     start_slot = align_to_composite_window(
         np.datetime64(start_dt.date()), timestep_freq
     )
@@ -303,6 +304,7 @@ def subset_ds_temporally(
     )
     # Reindex will insert missing timestamps with nodata_value
     return ds.sel(t=present).reindex(t=expected, fill_value=nodata_value)
+
 
 def compute_temporal_subset_window(
     season_windows: Mapping[str, object],
@@ -521,7 +523,7 @@ def run_seasonal_inference(
             f"timesteps; provide season_windows or pre-subset the data."
         )
 
-    # Hard guarantee: the encoder must see exactly the timestep count it was trained with. 
+    # Hard guarantee: the encoder must see exactly the timestep count it was trained with.
     t_final = ds.sizes.get("t", 0)
     if t_final != expected_timesteps:
         raise ValueError(
@@ -562,6 +564,9 @@ def run_seasonal_inference(
 
     if device == "cuda" and hasattr(result, "cpu"):
         result = result.cpu()
+
+    # Without embeddings/NDVI every band is uint8; skipped pixels come back as NaN.
+    result = result.fillna(POSTPROCESSING_NODATA).astype(np.uint8)
 
     if as_dataset and isinstance(result, xr.DataArray):
         result = xr.Dataset(
@@ -604,6 +609,12 @@ def classification_to_geotiff(
 
     band_names = [str(b) for b in classification.bands.values]
     classification.rio.set_crs(f"epsg:{epsg}", inplace=True)
+    nodata = (
+        POSTPROCESSING_NODATA
+        if np.issubdtype(classification.dtype, np.integer)
+        else np.nan
+    )
+    classification.rio.write_nodata(nodata, encoded=False, inplace=True)
     classification.rio.to_raster(out_path)
 
     class_map_json = None

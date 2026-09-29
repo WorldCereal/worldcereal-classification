@@ -59,6 +59,23 @@ def _nodes_with_process_id(cube: DataCube, process_id: str) -> list[dict]:
     return [node for node in graph.values() if node.get("process_id") == process_id]
 
 
+def _all_nodes_with_process_id(cube: DataCube, process_id: str) -> list[dict]:
+    matches: list[dict] = []
+
+    def _walk(value: object) -> None:
+        if isinstance(value, dict):
+            if value.get("process_id") == process_id:
+                matches.append(value)
+            for child in value.values():
+                _walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(cube.flat_graph())
+    return matches
+
+
 def _single_filter_bands_arg(cube: DataCube) -> list[str]:
     filter_nodes = _nodes_with_process_id(cube, "filter_bands")
     assert len(filter_nodes) == 1
@@ -69,6 +86,16 @@ def _single_rename_target(cube: DataCube) -> list[str]:
     rename_nodes = _nodes_with_process_id(cube, "rename_labels")
     assert len(rename_nodes) == 1
     return list(rename_nodes[0]["arguments"]["target"])
+
+
+def _assert_uint8_scale(cube: DataCube, *, maximum: int = 254) -> None:
+    scale_nodes = _all_nodes_with_process_id(cube, "linear_scale_range")
+    assert len(scale_nodes) == 1
+    arguments = scale_nodes[0]["arguments"]
+    assert arguments["inputMin"] == 0
+    assert arguments["inputMax"] == maximum
+    assert arguments["outputMin"] == 0
+    assert arguments["outputMax"] == maximum
 
 
 def test_run_largescale_inference_with_geodataframe(tmp_path: Path):
@@ -343,6 +370,10 @@ def test_create_inference_process_graph_cropland_splits_auxiliary_products():
     assert _single_filter_bands_arg(ndvi_graph) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(emb_graph) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(scale_graph) == ["global_embedding:scale"]
+    _assert_uint8_scale(main_graph)
+    _assert_uint8_scale(ndvi_graph)
+    _assert_uint8_scale(emb_graph)
+    assert not _all_nodes_with_process_id(scale_graph, "linear_scale_range")
 
 
 def test_create_inference_process_graph_croptype_has_expected_save_nodes_and_labels():
@@ -419,6 +450,10 @@ def test_create_inference_process_graph_croptype_has_expected_save_nodes_and_lab
     assert _single_filter_bands_arg(results[3]) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(results[4]) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(results[5]) == ["global_embedding:scale"]
+    for result in results[:4]:
+        _assert_uint8_scale(result)
+    _assert_uint8_scale(results[4])
+    assert not _all_nodes_with_process_id(results[5], "linear_scale_range")
 
 
 def test_create_inference_process_graph_croptype_merged_products():

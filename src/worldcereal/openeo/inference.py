@@ -1265,7 +1265,29 @@ class SeasonalInferenceEngine:
                 f"Season masks resolved for {active_season_ids} (shape={mask_array.shape})"
             )
             mem.checkpoint("infer:after_resolve_season_masks")
-            outputs = self._run_batches(predictors, mask_array, memory_trace=mem)
+            valid = _pixels_with_valid_inputs(predictors)
+            n_valid = int(valid.sum())
+            if n_valid < valid.size:
+                logger.info(
+                    f"Skipping {valid.size - n_valid}/{valid.size} pixels without valid S1 or S2 input"
+                )
+            if n_valid == 0:
+                outputs: Tuple[
+                    Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]
+                ] = (None, None, None)
+            else:
+                outputs = self._run_batches(
+                    _subset_predictors(predictors, valid),
+                    mask_array[valid],
+                    memory_trace=mem,
+                )
+            if n_valid < valid.size:
+                outputs = self._expand_to_all_pixels(
+                    outputs,
+                    valid,
+                    num_seasons=len(active_season_ids),
+                    export_embeddings=export_embeddings,
+                )
             mem.checkpoint("infer:after_run_batches")
             logger.info(
                 f"Batch inference complete; formatting outputs for {len(active_season_ids)} seasons"
@@ -1278,15 +1300,52 @@ class SeasonalInferenceEngine:
                 mask_cropland=mask_cropland,
                 export_embeddings=export_embeddings,
                 export_ndvi=export_ndvi,
+                valid_pixels=valid,
             )
 
             mem.checkpoint("infer:after_format_outputs")
-            out = _dataset_to_multiband_array(dataset)
+            # NaN, not 255: spec-compliant linear_scale_range would clip 255 to 254 (NOCROP).
+            out = _dataset_to_multiband_array(dataset).astype(np.float32)
+            out.values[:, ~valid.reshape(out.sizes["y"], out.sizes["x"])] = np.nan
             mem.checkpoint("infer:after_dataset_to_multiband")
             return out
         finally:
             mem.checkpoint("infer:end")
             mem.report(title="seasonal_inference", top_n=self._memory_report_top_n)
+
+    def _expand_to_all_pixels(
+        self,
+        outputs: Tuple[
+            Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]
+        ],
+        valid: np.ndarray,
+        *,
+        num_seasons: int,
+        export_embeddings: bool,
+    ) -> Tuple[Optional[TorchTensor], Optional[TorchTensor], Optional[TorchTensor]]:
+        """Scatter outputs of the valid pixels back to all pixels, zero-filling the rest."""
+        torch = _lazy_import_torch()
+        trailing_shapes = (
+            (self.bundle.landcover_spec.num_classes,)
+            if self._cropland_enabled
+            else None,
+            (num_seasons, self.bundle.croptype_spec.num_classes)
+            if self._croptype_enabled
+            else None,
+            (self.bundle.model.encoder.embedding_size,) if export_embeddings else None,
+        )
+        valid_t = torch.from_numpy(valid)
+        expanded: List[Optional[TorchTensor]] = []
+        for tensor, shape in zip(outputs, trailing_shapes):
+            if tensor is None:
+                if shape is None or valid.any():
+                    expanded.append(None)
+                    continue
+                tensor = torch.zeros((0, *shape))
+            full = tensor.new_zeros((valid.size, *tensor.shape[1:]))
+            full[valid_t] = tensor
+            expanded.append(full)
+        return expanded[0], expanded[1], expanded[2]
 
     def _get_expected_timesteps(self) -> Optional[int]:
         """Derive the number of timesteps the model was trained with.
@@ -1656,11 +1715,17 @@ class SeasonalInferenceEngine:
         mask_cropland: bool,
         export_embeddings: bool = False,
         export_ndvi: bool = False,
+        valid_pixels: Optional[np.ndarray] = None,
     ) -> xr.Dataset:
         torch = _lazy_import_torch()
         height = arr.sizes["y"]
         width = arr.sizes["x"]
         landcover_logits, croptype_logits, global_embeddings = outputs
+        invalid_pixels = (
+            ~valid_pixels.reshape(height, width)
+            if valid_pixels is not None
+            else np.zeros((height, width), dtype=bool)
+        )
 
         band_layers: List[Tuple[str, np.ndarray]] = []
         cropland_mask_bool: Optional[np.ndarray] = None
@@ -1745,6 +1810,8 @@ class SeasonalInferenceEngine:
                 cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
 
             cropland_labels_uint8 = cropland_mask_bool.astype(np.uint8)
+            cropland_labels_uint8[invalid_pixels] = POSTPROCESSING_NODATA
+            cropland_prob_cube[:, invalid_pixels] = 0.0
             cropland_method = self._cropland_postprocess.resolved_method()
             if cropland_method:
                 logger.info(
@@ -1759,7 +1826,7 @@ class SeasonalInferenceEngine:
                 cropland_prob_cube,
                 class_value_to_index={0: 0, 1: 1},
                 options=self._cropland_postprocess,
-                excluded_values=(),
+                excluded_values=(POSTPROCESSING_NODATA,),
             )
             cropland_mask_bool = cropland_labels_uint8.astype(bool)
             cropland_probability_uint8 = _probabilities_to_uint8(
@@ -1830,6 +1897,8 @@ class SeasonalInferenceEngine:
             for season_idx in range(num_seasons):
                 season_labels = preds_np[:, :, season_idx].astype(np.uint16, copy=True)
                 season_prob_cube = prob_cube[season_idx]
+                season_labels[invalid_pixels] = POSTPROCESSING_NODATA
+                season_prob_cube[:, invalid_pixels] = 0.0
                 raw_probability_cubes.append(season_prob_cube.copy())
                 (
                     season_labels,
@@ -2213,6 +2282,30 @@ def _emit_multiclass_landcover() -> bool:
     )
 
 
+def _pixels_with_valid_inputs(predictors: "Predictors") -> np.ndarray:
+    """Return whether each sample has at least one valid S1 or S2 value."""
+    valid = np.zeros(predictors.B, dtype=bool)
+    for field in ("s1", "s2"):
+        values = getattr(predictors, field)
+        if values is None:
+            continue
+        values = np.asarray(values).reshape(values.shape[0], -1)
+        valid |= (values != NODATA_VALUE).any(axis=1)
+    return valid
+
+
+def _subset_predictors(predictors: "Predictors", keep: np.ndarray) -> "Predictors":
+    from prometheo.predictors import Predictors
+
+    return Predictors(
+        **{
+            field: value[keep]
+            for field, value in predictors._asdict().items()
+            if value is not None
+        }
+    )
+
+
 def _probabilities_to_uint8(array: np.ndarray) -> np.ndarray:
     scaled = np.rint(np.clip(array, 0.0, 1.0) * 100.0)
     return scaled.astype(np.uint8)
@@ -2239,8 +2332,6 @@ def _quantize_embedding_cube(cube: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _get_scaled_ndvi(arr: xr.DataArray) -> np.ndarray:
-
-    # Nodata value is NaN because openEO needs to deal with it later
     ndvi_scale, ndvi_offset, ndvi_nodatavalue = 0.004, 0.08, np.nan
 
     band_names = [str(name) for name in np.asarray(arr.coords["bands"].values)]
