@@ -43,7 +43,7 @@ from worldcereal.utils.models import load_model_artifact
 FEATURE_DEPS_URL = (
     "https://s3.waw3-1.cloudferro.com/project_dependencies/torch_deps_python311.zip"
 )
-PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.5-py3-none-any.whl"
+PROMETHEO_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/prometheo-0.1.6-py3-none-any.whl"
 WORLDCEREAL_WHL_URL = "https://s3.waw3-1.cloudferro.com/project_dependencies/worldcereal/worldcereal-2.8.1-py3-none-any.whl"
 DEFAULT_INFERENCE_JOB_OPTIONS = {
     "driver-memory": "4g",
@@ -729,6 +729,7 @@ def create_inputs_process_graph(
     out_format: str = "NetCDF",
     backend_context: BackendContext = BackendContext(Backend.CDSE),
     tile_size: Optional[int] = 128,
+    s2_tile: Optional[str] = None,
     target_epsg: Optional[int] = None,
     compositing_window: Literal["month", "dekad"] = "month",
     optical_mask_method: Literal[
@@ -753,6 +754,9 @@ def create_inputs_process_graph(
         backend to run the job on, by default CDSE.
     tile_size: int, optional
         Tile size to use for the data loading in OpenEO, by default 128.
+    s2_tile: Optional[str] = None
+        Specific Sentinel-2 tile to use for the data loading. If not provided,
+        all available tiles will be considered.
     target_epsg: Optional[int] = None
         EPSG code to use for the output products. If not provided, the
         default EPSG will be used.
@@ -784,6 +788,7 @@ def create_inputs_process_graph(
         s1_orbit_state=s1_orbit_state,
         backend_context=backend_context,
         tile_size=tile_size,
+        s2_tile=s2_tile,
         target_epsg=target_epsg,
         compositing_window=compositing_window,
         optical_mask_method=optical_mask_method,
