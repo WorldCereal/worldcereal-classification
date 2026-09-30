@@ -18,9 +18,7 @@
         "featureflags": {
           "tilesize": 96
         },
-        "id": "SENTINEL2_L2A",        "featureflags": {
-          "tilesize": 96
-        },
+        "id": "SENTINEL2_L2A",
         "properties": {
           "eo:cloud_cover": {
             "process_graph": {
@@ -813,14 +811,17 @@
           "output_ndvi": true,
           "output_classification": true,
           "output_probabilities": true,
-          "cropland_class_indices": [0,1],
           "mask_cropland": {
             "from_parameter": "mask_cropland"
           },
           "majority_vote": false,
           "onnx_model_path": {
             "from_parameter": "onnx_model_path"
-          }
+          },
+          "cropland_class_indices": [
+            0,
+            1
+          ]
         },
         "data": {
           "from_node": "filterbbox1"
@@ -1229,14 +1230,14 @@
   "default_job_options": {
     "driver-memory": "8g",
     "driver-memoryOverhead": "3g",
-    "executor-memory": "1800m",
-    "executor-memoryOverhead": "3300m",
+    "executor-memory": "2100m",
+    "executor-memoryOverhead": "3600m",
     "executor-request-cores": "750m",
     "python-memory": "disable",
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "image-name": "registry.internal/dev/openeo-geotrellis-kube-python311:20260925-1130",    
+    "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/PR-877/geotrellis-extensions-PR-877.jar",
     "concurrent_save_results": 3,
     "force-s3proxy": true,
     "etl_organization_id": 2059
