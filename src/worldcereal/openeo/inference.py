@@ -1370,10 +1370,13 @@ class SeasonalInferenceEngine:
         """Scatter outputs of the valid pixels back to all pixels, zero-filling the rest."""
         torch = _lazy_import_torch()
         trailing_shapes = (
-            (self.bundle.landcover_spec.num_classes,)
+            (_require_head_spec(self.bundle.landcover_spec, "landcover").num_classes,)
             if self._cropland_enabled
             else None,
-            (num_seasons, self.bundle.croptype_spec.num_classes)
+            (
+                num_seasons,
+                _require_head_spec(self.bundle.croptype_spec, "croptype").num_classes,
+            )
             if self._croptype_enabled
             else None,
             (self.bundle.model.encoder.embedding_size,) if export_embeddings else None,
