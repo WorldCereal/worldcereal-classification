@@ -298,21 +298,23 @@ def compute_seasonal_presto_embeddings(
 
     masking_config = SensorMaskingConfig(
         enable=mask_on_training or bool(excluded),
-        s1_full_dropout_prob=1.0 if "s1" in excluded else 0.15 if mask_on_training else 0.0,
-        s1_timestep_dropout_prob=0.0,
-        s2_full_dropout_prob=1.0 if "s2" in excluded else 0.0,
-        s2_cloud_timestep_prob=0.25 if mask_on_training and "s2" not in excluded else 0.0,
-        s2_cloud_block_prob=0.05 if mask_on_training and "s2" not in excluded else 0.0,
-        s2_cloud_block_min=2,
+        s1_full_dropout_prob=1.0 if "s1" in excluded else 0.2,
+        s1_timestep_dropout_prob=0.0 if "s1" in excluded else 0.15,
+        s2_full_dropout_prob=1.0 if "s2" in excluded else 0.1,
+        s2_cloud_timestep_prob=0.0 if "s2" in excluded else 0.2,
+        s2_cloud_block_prob=0.0 if "s2" in excluded else 0.15,
+        s2_cloud_block_min=1,
         s2_cloud_block_max=5,
-        meteo_timestep_dropout_prob=0.03 if mask_on_training and "meteo" not in excluded else 0.0,
-        dem_dropout_prob=1.0 if "dem" in excluded else 0.01 if mask_on_training else 0.0,
+        meteo_full_dropout_prob=1.0 if "meteo" in excluded else 0.0,
+        meteo_timestep_dropout_prob=0.0 if "meteo" in excluded else 0.15,
+        dem_dropout_prob=1.0 if "dem" in excluded else 0.1,
     )
     excluded_masking_config = (
         SensorMaskingConfig(
             enable=True,
             s1_full_dropout_prob=1.0 if "s1" in excluded else 0.0,
             s2_full_dropout_prob=1.0 if "s2" in excluded else 0.0,
+            meteo_full_dropout_prob=1.0 if "meteo" in excluded else 0.0,
             dem_dropout_prob=1.0 if "dem" in excluded else 0.0,
         )
         if excluded
