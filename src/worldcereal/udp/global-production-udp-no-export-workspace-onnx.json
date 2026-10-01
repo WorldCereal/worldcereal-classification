@@ -1189,7 +1189,7 @@
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/PR-877/geotrellis-extensions-PR-877.jar",
+    "image-name": "registry.internal/stag/openeo-geotrellis-kube-python311:20260930-1160",
     "concurrent_save_results": 3,
     "force-s3proxy": true
   },
@@ -1316,7 +1316,8 @@
         "type": "string",
         "enum": [
           "ASCENDING",
-          "DESCENDING"
+          "DESCENDING",
+          "*"
         ]
       }
     },
