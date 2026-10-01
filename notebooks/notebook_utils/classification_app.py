@@ -4553,10 +4553,13 @@ class WorldCerealClassificationApp:
         )
         if active_exclusions:
             mask_cropland = False
+            enable_cropland_head = False
             with log_out:
                 print(
-                    "Cropland masking disabled because the trained model excludes "
-                    f"these modalities: {', '.join(active_exclusions)}."
+                    "Cropland masking and the cropland product are disabled "
+                    "because the trained model excludes these modalities: "
+                    f"{', '.join(active_exclusions)}. No compatible cropland "
+                    "head exists for this sensor configuration."
                 )
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 20
@@ -4598,18 +4601,12 @@ class WorldCerealClassificationApp:
                 landcover_head_zip = custom_seasonal_model_url
                 croptype_head_zip = self.tab7_head_url
                 enable_croptype_head = True
-                if self.tab7_seasonal_model_url is not None:
-                    # The derived seasonal suite has its embedded landcover head
-                    # removed (it was trained with the full sensor set), so it
-                    # cannot be reused as-is here.
+                if active_exclusions:
+                    # No seasonal model suite ships a landcover head compatible
+                    # with these excluded modalities (the derived suite, if any,
+                    # has its embedded landcover head removed).
                     landcover_head_zip = None
                     enable_cropland_head = False
-                    with log_out:
-                        print(
-                            "Cropland head disabled: the deployed seasonal model "
-                            "suite was derived for this croptype head's excluded "
-                            "modalities and has no compatible landcover head."
-                        )
         # save model URL's for later use
         self.tab8_seasonal_model_url = custom_seasonal_model_url
         self.tab8_landcover_head_url = landcover_head_zip
@@ -5369,6 +5366,14 @@ class WorldCerealClassificationApp:
             mask_cropland_checkbox.disabled = bool(active_exclusions)
             if active_exclusions:
                 mask_cropland_checkbox.value = False
+
+        enable_cropland_head_checkbox = self.tab8_widgets.get(
+            "enable_cropland_head_checkbox"
+        )
+        if enable_cropland_head_checkbox is not None:
+            enable_cropland_head_checkbox.disabled = bool(active_exclusions)
+            if active_exclusions:
+                enable_cropland_head_checkbox.value = False
 
         if product_type_dropdown is not None:
             if self.workflow_mode == "apply-default-model":
