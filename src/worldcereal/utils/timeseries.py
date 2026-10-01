@@ -187,11 +187,13 @@ class DataFrameValidator:
             + df_wide["available_timesteps"] // 2,
         )
 
+        # valid_time may already be a "%Y-%m-%d" string; pandas>=3 won't compare str to datetime
+        valid_time = pd.to_datetime(df_wide["valid_time"])
         validtime_outside_range = (
             (df_wide["valid_position"] < 0)
             | (df_wide["valid_position"] >= df_wide["available_timesteps"])
-            | (df_wide["valid_time"] > df_wide["end_date"])
-            | (df_wide["valid_time"] < df_wide["start_date"])
+            | (valid_time > pd.to_datetime(df_wide["end_date"]))
+            | (valid_time < pd.to_datetime(df_wide["start_date"]))
         )
         faulty_samples = (
             min_center_point > max_center_point

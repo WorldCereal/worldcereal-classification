@@ -1195,6 +1195,7 @@ class WorldCerealJobManager(MultiBackendJobManager):
             seasonal_preset=seasonal_preset,
             workflow_config=workflow_config,
             row=row,
+            skip_disabled_sensor_inputs=True,
         )
 
         inference_job_options = dict(DEFAULT_INFERENCE_JOB_OPTIONS)

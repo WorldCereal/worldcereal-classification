@@ -14,7 +14,7 @@ If the upstream Presto model changes dimensionality this file should be updated 
 """
 
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Sequence, Union
 
 import pandas as pd
 from loguru import logger
@@ -186,6 +186,8 @@ def compute_seasonal_presto_embeddings(
     task_type: str = "croptype",
     augment: bool = False,
     mask_on_training: bool = True,
+    excluded_modalities: Optional[Sequence[str]] = None,
+    disable_latlon: bool = False,
     repeats: int = 3,
     custom_presto_url: Optional[str] = None,
     season_calendar_mode: Literal["auto", "calendar", "custom", "off"] = "calendar",
@@ -216,6 +218,11 @@ def compute_seasonal_presto_embeddings(
         Whether to apply temporal jitter augmentation.
     mask_on_training : bool, default=True
         Whether to apply sensor masking augmentations on the training set.
+    excluded_modalities : sequence of str, optional
+        Modalities to omit consistently while computing embeddings. Supported
+        values are ``s1``, ``s2``, ``meteo`` and ``dem``.
+    disable_latlon : bool, default=False
+        Whether to omit latitude/longitude predictors for every sample.
     repeats : int, default=3
         Number of times to repeat each sample in the training set.
     custom_presto_url : str, optional
@@ -279,20 +286,40 @@ def compute_seasonal_presto_embeddings(
             stratify_label="downstream_class",
         )
 
-    if mask_on_training:
-        masking_config = SensorMaskingConfig(
-            enable=True,
-            s1_full_dropout_prob=0.15,
-            s1_timestep_dropout_prob=0.15,
-            s2_cloud_timestep_prob=0.25,
-            s2_cloud_block_prob=0.05,
-            s2_cloud_block_min=2,
-            s2_cloud_block_max=5,
-            meteo_timestep_dropout_prob=0.03,
-            dem_dropout_prob=0.01,
+    excluded = {str(modality).lower() for modality in (excluded_modalities or [])}
+    supported_modalities = {"s1", "s2", "meteo", "dem"}
+    invalid = excluded - supported_modalities
+    if invalid:
+        raise ValueError(
+            "Unsupported excluded modalities: " + ", ".join(sorted(invalid))
         )
-    else:
-        masking_config = SensorMaskingConfig(enable=False)
+    if "s1" in excluded and "s2" in excluded:
+        raise ValueError("S1 and S2 cannot both be excluded from the model.")
+
+    masking_config = SensorMaskingConfig(
+        enable=mask_on_training or bool(excluded),
+        s1_full_dropout_prob=1.0 if "s1" in excluded else 0.2,
+        s1_timestep_dropout_prob=0.0 if "s1" in excluded else 0.15,
+        s2_full_dropout_prob=1.0 if "s2" in excluded else 0.1,
+        s2_cloud_timestep_prob=0.0 if "s2" in excluded else 0.2,
+        s2_cloud_block_prob=0.0 if "s2" in excluded else 0.15,
+        s2_cloud_block_min=1,
+        s2_cloud_block_max=5,
+        meteo_full_dropout_prob=1.0 if "meteo" in excluded else 0.0,
+        meteo_timestep_dropout_prob=0.0 if "meteo" in excluded else 0.15,
+        dem_dropout_prob=1.0 if "dem" in excluded else 0.1,
+    )
+    excluded_masking_config = (
+        SensorMaskingConfig(
+            enable=True,
+            s1_full_dropout_prob=1.0 if "s1" in excluded else 0.0,
+            s2_full_dropout_prob=1.0 if "s2" in excluded else 0.0,
+            meteo_full_dropout_prob=1.0 if "meteo" in excluded else 0.0,
+            dem_dropout_prob=1.0 if "dem" in excluded else 0.0,
+        )
+        if excluded
+        else None
+    )
 
     season_windows = None
     if season_window is not None:
@@ -315,6 +342,7 @@ def compute_seasonal_presto_embeddings(
             task_type="multiclass" if task_type == "croptype" else "binary",
             augment=augment_flag,
             masking_config=masking_config,
+            disable_latlon=disable_latlon,
             repeats=repeats if (augment_flag or masking_config) else 1,
             season_ids=[season_id],
             season_calendar_mode=effective_mode,
@@ -325,8 +353,12 @@ def compute_seasonal_presto_embeddings(
     train_ds = _build_dataset(
         samples_train, augment_flag=augment, masking_config=masking_config
     )
-    val_ds = _build_dataset(samples_val, augment_flag=False)
-    test_ds = _build_dataset(samples_test, augment_flag=False)
+    val_ds = _build_dataset(
+        samples_val, augment_flag=False, masking_config=excluded_masking_config
+    )
+    test_ds = _build_dataset(
+        samples_test, augment_flag=False, masking_config=excluded_masking_config
+    )
 
     df_train = dataset_to_embeddings(
         train_ds, presto_model, batch_size=batch_size, season_index=0
@@ -352,6 +384,8 @@ def train_seasonal_torch_head(
     output_dir: Union[str, Path] = "./downstream_classifier",
     num_workers: int = 0,
     disable_progressbar: bool = True,
+    excluded_modalities: Optional[Sequence[str]] = None,
+    disable_latlon: bool = False,
     **trainer_kwargs: Any,
 ):
     """Train a torch head compatible with the seasonal model bundle."""
@@ -382,6 +416,8 @@ def train_seasonal_torch_head(
         outlier_col=outlier_col,
         outlier_drop_mode="drop_candidate",
         zero_quality_cols=zero_quality_cols,
+        excluded_modalities=list(excluded_modalities or []),
+        disable_latlon=disable_latlon,
         **trainer_kwargs,
     )
     return trainer.train()

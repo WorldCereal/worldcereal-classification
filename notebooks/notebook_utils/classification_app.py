@@ -21,6 +21,7 @@ import platform
 import re
 import shutil
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -89,6 +90,9 @@ class WorldCerealClassificationApp:
 
         """
         self.workflow_mode = "full"
+        self.excluded_modalities: List[str] = []
+        self.disable_latlon = False
+        self.training_has_compatible_landcover_head = True
         self._nav_buttons: List[Dict[str, widgets.Button]] = []
 
         # Tab 1 variables
@@ -114,6 +118,9 @@ class WorldCerealClassificationApp:
         self.embeddings_df_path: Optional[Path] = None
         self.head_output_path: Optional[Path] = None
         self.head_package_path: Optional[Path] = None
+        # Seasonal model suite derived from the base backbone when the head
+        # was trained with sensors excluded (see `_update_training_setup_state`).
+        self.derived_seasonal_model_path: Optional[Path] = None
 
         # Final outputs per tab that need to be stored for use in later tabs
         self.tab2_df: Optional[pd.DataFrame] = None
@@ -121,7 +128,8 @@ class WorldCerealClassificationApp:
         self.tab4_df: Optional[pd.DataFrame] = None
         self.tab4_confirmed = False
         self.tab5_df: Optional[pd.DataFrame] = None
-        self.tab7_model_url: Optional[str] = None
+        self.tab7_head_url: Optional[str] = None
+        self.tab7_seasonal_model_url: Optional[str] = None
         self.tab8_processing_period: Optional[TemporalContext] = None
         self.tab8_season_window: Optional[TemporalContext] = None
         self.tab8_results: Optional[Path] = None
@@ -369,6 +377,43 @@ class WorldCerealClassificationApp:
         workflow_mode_radio.layout = widgets.Layout(width="100%")
         workflow_mode_radio.style = {"description_width": "90px"}
 
+        exclude_s1_checkbox = widgets.Checkbox(
+            value=False,
+            description="Sentinel-1",
+        )
+        exclude_s2_checkbox = widgets.Checkbox(
+            value=False,
+            description="Sentinel-2",
+        )
+        exclude_meteo_checkbox = widgets.Checkbox(
+            value=False,
+            description="Meteorological data",
+        )
+        exclude_dem_checkbox = widgets.Checkbox(
+            value=False,
+            description="DEM and slope",
+        )
+        disable_latlon_checkbox = widgets.Checkbox(
+            value=False,
+            description="Location (lat/lon)",
+        )
+        modality_message = widgets.HTML()
+        training_setup = widgets.VBox(
+            [
+                widgets.HTML("<h3>Training model setup</h3>"),
+                widgets.HTML(
+                    "Choose inputs to IGNORE during model training."
+                ),
+                exclude_s1_checkbox,
+                exclude_s2_checkbox,
+                exclude_meteo_checkbox,
+                exclude_dem_checkbox,
+                disable_latlon_checkbox,
+                modality_message,
+            ]
+        )
+        training_setup.layout.display = "none"
+
         select_button = widgets.Button(
             description="Launch application",
             button_style="primary",
@@ -378,16 +423,30 @@ class WorldCerealClassificationApp:
 
         self.tab0_widgets = {
             "workflow_mode_radio": workflow_mode_radio,
+            "exclude_s1_checkbox": exclude_s1_checkbox,
+            "exclude_s2_checkbox": exclude_s2_checkbox,
+            "exclude_meteo_checkbox": exclude_meteo_checkbox,
+            "exclude_dem_checkbox": exclude_dem_checkbox,
+            "disable_latlon_checkbox": disable_latlon_checkbox,
+            "modality_message": modality_message,
+            "training_setup": training_setup,
             "select_button": select_button,
         }
 
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
+        exclude_s1_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        exclude_s2_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        exclude_meteo_checkbox.observe(
+            self._on_excluded_modalities_change, names="value"
+        )
+        exclude_dem_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        disable_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
         children = [header]
         if warning_box is not None:
             children.append(warning_box)
-        children.extend([workflow_mode_radio, widgets.HBox([select_button])])
+        children.extend([workflow_mode_radio, training_setup, widgets.HBox([select_button])])
 
         return widgets.VBox(children)
 
@@ -429,6 +488,88 @@ class WorldCerealClassificationApp:
     def _on_workflow_mode_change(self, change):
         """Handle workflow mode selection changes."""
         self.workflow_mode = change["new"]
+        if self.workflow_mode != "full":
+            self.excluded_modalities = []
+            self.disable_latlon = False
+            for key in (
+                "exclude_s1_checkbox",
+                "exclude_s2_checkbox",
+                "exclude_meteo_checkbox",
+                "exclude_dem_checkbox",
+                "disable_latlon_checkbox",
+            ):
+                checkbox = self.tab0_widgets.get(key)
+                if checkbox is not None and checkbox.value:
+                    checkbox.value = False
+        self._update_training_setup_state()
+
+    def _on_excluded_modalities_change(self, change=None):
+        modality_checkboxes = {
+            "s1": "exclude_s1_checkbox",
+            "s2": "exclude_s2_checkbox",
+            "meteo": "exclude_meteo_checkbox",
+            "dem": "exclude_dem_checkbox",
+        }
+        self.excluded_modalities = [
+            modality
+            for modality, key in modality_checkboxes.items()
+            if self.tab0_widgets.get(key) is not None
+            and self.tab0_widgets[key].value
+        ]
+        self._update_training_setup_state()
+
+    def _on_disable_latlon_change(self, change):
+        self.disable_latlon = change["new"]
+        self._update_training_setup_state()
+
+    def _update_training_setup_state(self):
+        """Update training-only modality controls and extraction guidance."""
+        setup = self.tab0_widgets.get("training_setup")
+        if setup is not None:
+            setup.layout.display = "block" if self.workflow_mode == "full" else "none"
+
+        if self.workflow_mode != "full":
+            return
+
+        message = self.tab0_widgets.get("modality_message")
+        has_exclusions = bool(self.excluded_modalities)
+        try:
+            supported = self._get_supported_product_types()
+            self.training_has_compatible_landcover_head = "cropland" in supported
+        except Exception:
+            self.training_has_compatible_landcover_head = False
+
+        if (
+            has_exclusions
+            or self.disable_latlon
+            or not self.training_has_compatible_landcover_head
+        ):
+            if message is not None:
+                message.value = (
+                    "<div style='color:#8a3b12; background:#fff4e5; padding:8px; "
+                    "border-left:4px solid #f0a04b;'>"
+                    "The default cropland mask will not be available for this training "
+                    "configuration. We advise to include non-crop and permanent-crop classes in a 'no-crop' class so your "
+                    "model can distinguish cropland from non-cropland areas.</div>"
+                )
+            crop_only = self.tab1_widgets.get("crop_only_checkbox")
+            if crop_only is not None:
+                crop_only.value = False
+                crop_only.disabled = True
+        else:
+            if message is not None:
+                message.value = ""
+            crop_only = self.tab1_widgets.get("crop_only_checkbox")
+            if crop_only is not None:
+                crop_only.disabled = False
+
+        if message is not None and {"s1", "s2"}.issubset(self.excluded_modalities):
+            message.value = (
+                "<div style='color:#8a1c1c; background:#fdecec; padding:8px; "
+                "border-left:4px solid #c0392b;'>"
+                "Sentinel-1 and Sentinel-2 cannot both be excluded. Keep at least "
+                "one optical or radar modality for training your model.</div>"
+            )
 
     def _on_workflow_mode_select(self, button):
         """Apply workflow choice and launch the application."""
@@ -445,6 +586,7 @@ class WorldCerealClassificationApp:
         else:
             mode_label = "Full workflow"
         print(f"Mode '{mode_label}' selected. Launching the application...")
+        self._update_training_setup_state()
         self._update_tab2_state()
         self._update_tab3_state()
         self._update_tab4_state()
@@ -3024,6 +3166,8 @@ class WorldCerealClassificationApp:
                     df,
                     season_id=self.season_id,
                     mask_on_training=mask_on_training,
+                    excluded_modalities=self.excluded_modalities,
+                    disable_latlon=self.disable_latlon,
                     repeats=repeats,
                     augment=augment,
                     min_season_coverage=min_season_coverage,
@@ -3349,6 +3493,8 @@ class WorldCerealClassificationApp:
                     weight_decay=weight_decay,
                     use_balancing=use_balancing,
                     num_workers=0,
+                    excluded_modalities=self.excluded_modalities,
+                    disable_latlon=self.disable_latlon,
                     presto_model_path=presto_model_path,
                     presto_model_fingerprint=presto_model_fingerprint,
                 )
@@ -3370,6 +3516,43 @@ class WorldCerealClassificationApp:
                             f"Warning: head archive {package_name} not found in output directory, something went wrong!"
                         )
                     print(f"Torch head archive ready at: {self.head_package_path}")
+
+                    self.derived_seasonal_model_path = None
+                    if self.excluded_modalities or self.disable_latlon:
+                        try:
+                            from worldcereal.openeo.parameters import (
+                                DEFAULT_SEASONAL_MODEL_URL,
+                            )
+                            from worldcereal.utils.models import (
+                                create_masked_seasonal_artifact,
+                            )
+
+                            base_seasonal_model = (
+                                self.presto_model_package.get("seasonal_model_path")
+                                if self.presto_model_package
+                                else None
+                            ) or DEFAULT_SEASONAL_MODEL_URL
+                            self.derived_seasonal_model_path = (
+                                create_masked_seasonal_artifact(
+                                    base_seasonal_model,
+                                    self.excluded_modalities,
+                                    output_dir=self.head_output_path,
+                                    output_name=f"{model_name}_seasonal-suite",
+                                    disable_latlon=self.disable_latlon,
+                                )
+                            )
+                            print(
+                                "Derived seasonal model suite (with "
+                                f"{', '.join(self.excluded_modalities) or 'latitude/longitude inputs'} disabled and "
+                                "the embedded landcover head removed) ready at: "
+                                f"{self.derived_seasonal_model_path}"
+                            )
+                        except Exception as exc:
+                            print(
+                                "Warning: failed to derive a seasonal model suite "
+                                f"matching the excluded modalities: {exc}"
+                            )
+
                     self._update_tab7_state()
                 else:
                     print(
@@ -3553,6 +3736,56 @@ class WorldCerealClassificationApp:
                 return
             self.head_package_path = path
             self.head_output_path = path.parent
+            # A manually loaded archive isn't tied to the exclusions used to
+            # derive any previously trained head's seasonal model suite; recover
+            # them from the archive's own config.json instead (see TorchTrainer).
+            self.derived_seasonal_model_path = None
+            self.excluded_modalities = []
+            self.disable_latlon = False
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    head_config = json.loads(zf.read("config.json"))
+                self.excluded_modalities = sorted(
+                    head_config.get("excluded_modalities") or []
+                )
+                self.disable_latlon = bool(head_config.get("disable_latlon", False))
+            except Exception as exc:
+                print(f"Warning: could not read config.json from archive: {exc}")
+
+            if self.excluded_modalities or self.disable_latlon:
+                print(
+                    "This head was trained with "
+                    f"{', '.join(self.excluded_modalities) or 'latitude/longitude inputs'} disabled. Deriving a "
+                    "matching seasonal model suite..."
+                )
+                try:
+                    from worldcereal.openeo.parameters import (
+                        DEFAULT_SEASONAL_MODEL_URL,
+                    )
+                    from worldcereal.utils.models import (
+                        create_masked_seasonal_artifact,
+                    )
+
+                    base_seasonal_model = (
+                        self.presto_model_package.get("seasonal_model_path")
+                        if self.presto_model_package
+                        else None
+                    ) or DEFAULT_SEASONAL_MODEL_URL
+                    self.derived_seasonal_model_path = create_masked_seasonal_artifact(
+                        base_seasonal_model,
+                        self.excluded_modalities,
+                        output_dir=self.head_output_path,
+                        output_name=f"{path.stem}_seasonal-suite",
+                        disable_latlon=self.disable_latlon,
+                    )
+                    print(
+                        f"Derived seasonal model suite ready at: {self.derived_seasonal_model_path}"
+                    )
+                except Exception as exc:
+                    print(
+                        "Warning: failed to derive a seasonal model suite matching "
+                        f"the excluded modalities: {exc}"
+                    )
             filename = path.parent.stem
             self.season_id, self.season_window = self._parse_season_info_from_filename(
                 filename
@@ -3616,15 +3849,39 @@ class WorldCerealClassificationApp:
                 target_object_name, str(self.head_package_path)
             )
             model_url = artifact_helper.get_presigned_url(model_s3_uri)
+
+            self.tab7_seasonal_model_url = None
+            seasonal_s3_uri = None
+            if (
+                self.derived_seasonal_model_path is not None
+                and self.derived_seasonal_model_path.exists()
+            ):
+                seasonal_object_name = self.derived_seasonal_model_path.name
+                with report_output:
+                    print(
+                        f"Uploading derived seasonal model suite as {seasonal_object_name} ..."
+                    )
+                seasonal_s3_uri = artifact_helper.upload_file(
+                    seasonal_object_name, str(self.derived_seasonal_model_path)
+                )
+                self.tab7_seasonal_model_url = artifact_helper.get_presigned_url(
+                    seasonal_s3_uri
+                )
         except Exception as exc:
             with report_output:
                 print(f"Deployment failed: {exc}")
             return
 
         with report_output:
-            self.tab7_model_url = model_url
+            self.tab7_head_url = model_url
             print(f"S3 URI: {model_s3_uri}")
             print(f"Your torch head can be downloaded from: {model_url}")
+            if self.tab7_seasonal_model_url is not None:
+                print(f"Seasonal model suite S3 URI: {seasonal_s3_uri}")
+                print(
+                    "Your derived seasonal model suite (sensors disabled, landcover "
+                    f"head removed) can be downloaded from: {self.tab7_seasonal_model_url}"
+                )
             print(
                 "You can proceed to the next step to generate a map using your deployed model."
             )
@@ -3946,8 +4203,31 @@ class WorldCerealClassificationApp:
             else:
                 export_probs_checkbox.layout.display = "block"
 
+            _update_cropland_postprocess_visibility()
+
+        def _update_cropland_postprocess_visibility(_=None):
+            # A cropland layer is only produced when the cropland head is
+            # enabled (standalone/cropland product) or used internally to
+            # mask the crop type output; otherwise postprocessing it is moot.
+            is_cropland = product_type_dropdown.value == "cropland"
+            cropland_relevant = (
+                is_cropland
+                or enable_cropland_head_checkbox.value
+                or mask_cropland_checkbox.value
+            )
+            display_value = "block" if cropland_relevant else "none"
+            cropland_postprocess_enabled.layout.display = display_value
+            cropland_postprocess_method.layout.display = display_value
+            cropland_postprocess_kernel.layout.display = display_value
+
         _update_product_controls()
         product_type_dropdown.observe(_update_product_controls, names="value")
+        enable_cropland_head_checkbox.observe(
+            _update_cropland_postprocess_visibility, names="value"
+        )
+        mask_cropland_checkbox.observe(
+            _update_cropland_postprocess_visibility, names="value"
+        )
 
         def _update_cropland_postprocess_controls(change=None):
             enabled = cropland_postprocess_enabled.value
@@ -4291,6 +4571,19 @@ class WorldCerealClassificationApp:
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
+        active_exclusions = (
+            self.excluded_modalities if self.workflow_mode == "full" else []
+        )
+        if active_exclusions:
+            mask_cropland = False
+            enable_cropland_head = False
+            with log_out:
+                print(
+                    "Cropland masking and the cropland product are disabled "
+                    "because the trained model excludes these modalities: "
+                    f"{', '.join(active_exclusions)}. No compatible cropland "
+                    "head exists for this sensor configuration."
+                )
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 20
         )
@@ -4302,8 +4595,9 @@ class WorldCerealClassificationApp:
         self.tab8_product_type = product_type
 
         # model selection
-        # seasonal model taken from provided presto model package (if any)
-        custom_seasonal_model_url = (
+        # prefer the seasonal model suite derived to match this head's excluded
+        # modalities; fall back to a provided presto model package, else default
+        custom_seasonal_model_url = self.tab7_seasonal_model_url or (
             self.presto_model_package.get("seasonal_model_path")
             if self.presto_model_package
             else None
@@ -4321,15 +4615,21 @@ class WorldCerealClassificationApp:
             if product_type == "cropland":
                 # if cropland product only,
                 # we assume the user wants to use the custom trained model for cropland mapping
-                landcover_head_zip = self.tab7_model_url
+                landcover_head_zip = self.tab7_head_url
                 croptype_head_zip = None
                 enable_croptype_head = False
             else:
                 # if croptype product, we assume the user wants to use the custom trained model for crop type mapping
                 # and we use the seasonal model for landcover task
                 landcover_head_zip = custom_seasonal_model_url
-                croptype_head_zip = self.tab7_model_url
+                croptype_head_zip = self.tab7_head_url
                 enable_croptype_head = True
+                if active_exclusions:
+                    # No seasonal model suite ships a landcover head compatible
+                    # with these excluded modalities (the derived suite, if any,
+                    # has its embedded landcover head removed).
+                    landcover_head_zip = None
+                    enable_cropland_head = False
         # save model URL's for later use
         self.tab8_seasonal_model_url = custom_seasonal_model_url
         self.tab8_landcover_head_url = landcover_head_zip
@@ -4428,6 +4728,7 @@ class WorldCerealClassificationApp:
             landcover_head=landcover_head_zip,
             croptype_head=croptype_head_zip,
             presto_model=presto_model_path,
+            excluded_modalities=active_exclusions,
         )
 
         # Save all production settings so the run can be resumed with identical
@@ -5019,6 +5320,18 @@ class WorldCerealClassificationApp:
                     with model_output:
                         model_output.clear_output()
                         print(f"Model archive: {self.head_package_path}")
+                        if (
+                            self.derived_seasonal_model_path is not None
+                            and self.derived_seasonal_model_path.exists()
+                        ):
+                            print(
+                                "Seasonal model suite (excluded modalities + "
+                                f"landcover head removed): {self.derived_seasonal_model_path}"
+                            )
+                            print(
+                                "Both archives will be uploaded and deployed "
+                                "separately when you click 'Deploy Model'."
+                            )
                 for widget in [load_title, load_input, load_button, load_output]:
                     if widget is not None:
                         widget.layout.display = "none"
@@ -5067,6 +5380,23 @@ class WorldCerealClassificationApp:
         season_retrieve_info = self.tab8_widgets.get("season_retrieve_info")
         season_retrieve_button = self.tab8_widgets.get("season_retrieve_button")
         season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
+        mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
+
+        active_exclusions = (
+            self.excluded_modalities if self.workflow_mode == "full" else []
+        )
+        if mask_cropland_checkbox is not None:
+            mask_cropland_checkbox.disabled = bool(active_exclusions)
+            if active_exclusions:
+                mask_cropland_checkbox.value = False
+
+        enable_cropland_head_checkbox = self.tab8_widgets.get(
+            "enable_cropland_head_checkbox"
+        )
+        if enable_cropland_head_checkbox is not None:
+            enable_cropland_head_checkbox.disabled = bool(active_exclusions)
+            if active_exclusions:
+                enable_cropland_head_checkbox.value = False
 
         if product_type_dropdown is not None:
             if self.workflow_mode == "apply-default-model":
@@ -5160,7 +5490,7 @@ class WorldCerealClassificationApp:
                 status_message.value = (
                     "<i>Ready to generate map with the default WorldCereal model.</i>"
                 )
-            elif self.tab7_model_url is not None:
+            elif self.tab7_head_url is not None:
                 status_message.value = (
                     "<i>Ready to generate map with a deployed model.</i>"
                 )
@@ -5293,6 +5623,7 @@ class WorldCerealClassificationApp:
         landcover_head: Optional[str],
         croptype_head: Optional[str],
         presto_model: Optional[str] = None,
+        excluded_modalities: Optional[List[str]] = None,
     ) -> None:
         """Save model metadata to *output_dir* and copy any local model files.
 
@@ -5322,6 +5653,7 @@ class WorldCerealClassificationApp:
             "landcover_head": _resolve(landcover_head),
             "croptype_head": _resolve(croptype_head),
             "presto_model": _resolve(presto_model),
+            "excluded_modalities": sorted(excluded_modalities or []),
         }
         with open(output_dir / "model_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
@@ -5365,6 +5697,7 @@ class WorldCerealClassificationApp:
         self.tab8_seasonal_model_url = metadata.get("seasonal_model")
         self.tab8_landcover_head_url = metadata.get("landcover_head")
         self.tab8_croptype_head_url = metadata.get("croptype_head")
+        self.excluded_modalities = list(metadata.get("excluded_modalities") or [])
         presto_model = metadata.get("presto_model")
         if presto_model is not None and self.presto_model_package is not None:
             # restore whichever key is appropriate based on whether it's a URL or a path
@@ -5382,7 +5715,7 @@ class WorldCerealClassificationApp:
         back to ``["cropland", "croptype"]`` if the manifest cannot be read,
         so the UI is never accidentally over-restricted.
         """
-        from worldcereal.job import _get_artifact_manifest
+        from worldcereal.job import _get_artifact_manifest, _manifest_has_head
         from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
         seasonal_url = (
@@ -5393,11 +5726,10 @@ class WorldCerealClassificationApp:
 
         try:
             manifest = _get_artifact_manifest(seasonal_url)
-            head_names = {h.get("name") for h in manifest.get("heads", [])}
             products: List[str] = []
-            if "landcover" in head_names:
+            if _manifest_has_head(manifest, task="landcover"):
                 products.append("cropland")
-            if "croptype" in head_names:
+            if _manifest_has_head(manifest, task="croptype"):
                 products.append("croptype")
             return products or ["cropland", "croptype"]
         except Exception:
