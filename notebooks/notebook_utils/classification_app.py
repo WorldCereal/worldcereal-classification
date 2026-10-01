@@ -377,29 +377,37 @@ class WorldCerealClassificationApp:
         workflow_mode_radio.layout = widgets.Layout(width="100%")
         workflow_mode_radio.style = {"description_width": "90px"}
 
-        modality_select = widgets.SelectMultiple(
-            options=[
-                ("Sentinel-1", "s1"),
-                ("Sentinel-2", "s2"),
-                ("Meteorological data", "meteo"),
-                ("DEM and slope", "dem"),
-            ],
-            value=(),
-            description="Exclude:",
-            layout=widgets.Layout(width="420px", height="120px"),
+        exclude_s1_checkbox = widgets.Checkbox(
+            value=False,
+            description="Sentinel-1",
+        )
+        exclude_s2_checkbox = widgets.Checkbox(
+            value=False,
+            description="Sentinel-2",
+        )
+        exclude_meteo_checkbox = widgets.Checkbox(
+            value=False,
+            description="Meteorological data",
+        )
+        exclude_dem_checkbox = widgets.Checkbox(
+            value=False,
+            description="DEM and slope",
         )
         disable_latlon_checkbox = widgets.Checkbox(
             value=False,
-            description="Disable latitude/longitude inputs",
+            description="Location (lat/lon)",
         )
         modality_message = widgets.HTML()
         training_setup = widgets.VBox(
             [
                 widgets.HTML("<h3>Training model setup</h3>"),
                 widgets.HTML(
-                    "Choose inputs to leave out of the trained model. "
+                    "Choose inputs to IGNORE during model training."
                 ),
-                modality_select,
+                exclude_s1_checkbox,
+                exclude_s2_checkbox,
+                exclude_meteo_checkbox,
+                exclude_dem_checkbox,
                 disable_latlon_checkbox,
                 modality_message,
             ]
@@ -415,7 +423,10 @@ class WorldCerealClassificationApp:
 
         self.tab0_widgets = {
             "workflow_mode_radio": workflow_mode_radio,
-            "modality_select": modality_select,
+            "exclude_s1_checkbox": exclude_s1_checkbox,
+            "exclude_s2_checkbox": exclude_s2_checkbox,
+            "exclude_meteo_checkbox": exclude_meteo_checkbox,
+            "exclude_dem_checkbox": exclude_dem_checkbox,
             "disable_latlon_checkbox": disable_latlon_checkbox,
             "modality_message": modality_message,
             "training_setup": training_setup,
@@ -423,7 +434,12 @@ class WorldCerealClassificationApp:
         }
 
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
-        modality_select.observe(self._on_excluded_modalities_change, names="value")
+        exclude_s1_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        exclude_s2_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        exclude_meteo_checkbox.observe(
+            self._on_excluded_modalities_change, names="value"
+        )
+        exclude_dem_checkbox.observe(self._on_excluded_modalities_change, names="value")
         disable_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
@@ -475,16 +491,31 @@ class WorldCerealClassificationApp:
         if self.workflow_mode != "full":
             self.excluded_modalities = []
             self.disable_latlon = False
-            modality_select = self.tab0_widgets.get("modality_select")
-            if modality_select is not None and modality_select.value:
-                modality_select.value = ()
-            disable_latlon_checkbox = self.tab0_widgets.get("disable_latlon_checkbox")
-            if disable_latlon_checkbox is not None and disable_latlon_checkbox.value:
-                disable_latlon_checkbox.value = False
+            for key in (
+                "exclude_s1_checkbox",
+                "exclude_s2_checkbox",
+                "exclude_meteo_checkbox",
+                "exclude_dem_checkbox",
+                "disable_latlon_checkbox",
+            ):
+                checkbox = self.tab0_widgets.get(key)
+                if checkbox is not None and checkbox.value:
+                    checkbox.value = False
         self._update_training_setup_state()
 
-    def _on_excluded_modalities_change(self, change):
-        self.excluded_modalities = list(change["new"])
+    def _on_excluded_modalities_change(self, change=None):
+        modality_checkboxes = {
+            "s1": "exclude_s1_checkbox",
+            "s2": "exclude_s2_checkbox",
+            "meteo": "exclude_meteo_checkbox",
+            "dem": "exclude_dem_checkbox",
+        }
+        self.excluded_modalities = [
+            modality
+            for modality, key in modality_checkboxes.items()
+            if self.tab0_widgets.get(key) is not None
+            and self.tab0_widgets[key].value
+        ]
         self._update_training_setup_state()
 
     def _on_disable_latlon_change(self, change):
