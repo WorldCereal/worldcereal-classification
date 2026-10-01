@@ -4203,8 +4203,31 @@ class WorldCerealClassificationApp:
             else:
                 export_probs_checkbox.layout.display = "block"
 
+            _update_cropland_postprocess_visibility()
+
+        def _update_cropland_postprocess_visibility(_=None):
+            # A cropland layer is only produced when the cropland head is
+            # enabled (standalone/cropland product) or used internally to
+            # mask the crop type output; otherwise postprocessing it is moot.
+            is_cropland = product_type_dropdown.value == "cropland"
+            cropland_relevant = (
+                is_cropland
+                or enable_cropland_head_checkbox.value
+                or mask_cropland_checkbox.value
+            )
+            display_value = "block" if cropland_relevant else "none"
+            cropland_postprocess_enabled.layout.display = display_value
+            cropland_postprocess_method.layout.display = display_value
+            cropland_postprocess_kernel.layout.display = display_value
+
         _update_product_controls()
         product_type_dropdown.observe(_update_product_controls, names="value")
+        enable_cropland_head_checkbox.observe(
+            _update_cropland_postprocess_visibility, names="value"
+        )
+        mask_cropland_checkbox.observe(
+            _update_cropland_postprocess_visibility, names="value"
+        )
 
         def _update_cropland_postprocess_controls(change=None):
             enabled = cropland_postprocess_enabled.value
