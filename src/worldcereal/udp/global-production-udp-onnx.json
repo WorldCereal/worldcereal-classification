@@ -1230,8 +1230,8 @@
   "default_job_options": {
     "driver-memory": "8g",
     "driver-memoryOverhead": "3g",
-    "executor-memory": "2100m",
-    "executor-memoryOverhead": "3600m",
+    "executor-memory": "2000m",
+    "executor-memoryOverhead": "3800m",
     "executor-request-cores": "750m",
     "python-memory": "disable",
     "soft-errors": "true",
