@@ -349,7 +349,8 @@
         "ellipsoid_incidence_angle": false,
         "local_incidence_angle": false,
         "mask": false,
-        "noise_removal": true
+        "noise_removal": true,
+        "options":{"max_processing_area_pixels":1536}
       }
     },
     "resamplespatial3": {
