@@ -1231,7 +1231,7 @@
     "driver-memory": "8g",
     "driver-memoryOverhead": "3g",
     "executor-memory": "2000m",
-    "executor-memoryOverhead": "3800m",
+    "executor-memoryOverhead": "4200",
     "executor-request-cores": "750m",
     "python-memory": "disable",
     "soft-errors": "true",
