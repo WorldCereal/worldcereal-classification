@@ -52,13 +52,13 @@ def plot_job_status(
 
     geojson = status_plot.set_index("tile_name").__geo_interface__
 
-    fig = px.choropleth_mapbox(
+    fig = px.choropleth_map(
         status_plot,
         geojson=geojson,
         locations="tile_name",
         color="status",
         color_discrete_map=color_dict,
-        mapbox_style="carto-positron",
+        map_style="open-street-map",
         center=center,
         zoom=zoom,
         title="Job Status Overview",

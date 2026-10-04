@@ -16,6 +16,7 @@ from worldcereal.job import (
     DEFAULT_SEASONAL_WORKFLOW_PRESET,
     WorldCerealProductType,
     WorldCerealTask,
+    _get_disabled_modalities,
     create_inference_process_graph,
 )
 from worldcereal.jobmanager import WorldCerealJobManager
@@ -59,6 +60,23 @@ def _nodes_with_process_id(cube: DataCube, process_id: str) -> list[dict]:
     return [node for node in graph.values() if node.get("process_id") == process_id]
 
 
+def _all_nodes_with_process_id(cube: DataCube, process_id: str) -> list[dict]:
+    matches: list[dict] = []
+
+    def _walk(value: object) -> None:
+        if isinstance(value, dict):
+            if value.get("process_id") == process_id:
+                matches.append(value)
+            for child in value.values():
+                _walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(cube.flat_graph())
+    return matches
+
+
 def _single_filter_bands_arg(cube: DataCube) -> list[str]:
     filter_nodes = _nodes_with_process_id(cube, "filter_bands")
     assert len(filter_nodes) == 1
@@ -69,6 +87,16 @@ def _single_rename_target(cube: DataCube) -> list[str]:
     rename_nodes = _nodes_with_process_id(cube, "rename_labels")
     assert len(rename_nodes) == 1
     return list(rename_nodes[0]["arguments"]["target"])
+
+
+def _assert_uint8_scale(cube: DataCube, *, maximum: int = 254) -> None:
+    scale_nodes = _all_nodes_with_process_id(cube, "linear_scale_range")
+    assert len(scale_nodes) == 1
+    arguments = scale_nodes[0]["arguments"]
+    assert arguments["inputMin"] == 0
+    assert arguments["inputMax"] == maximum
+    assert arguments["outputMin"] == 0
+    assert arguments["outputMax"] == maximum
 
 
 def test_run_largescale_inference_with_geodataframe(tmp_path: Path):
@@ -343,6 +371,10 @@ def test_create_inference_process_graph_cropland_splits_auxiliary_products():
     assert _single_filter_bands_arg(ndvi_graph) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(emb_graph) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(scale_graph) == ["global_embedding:scale"]
+    _assert_uint8_scale(main_graph)
+    _assert_uint8_scale(ndvi_graph)
+    _assert_uint8_scale(emb_graph)
+    assert not _all_nodes_with_process_id(scale_graph, "linear_scale_range")
 
 
 def test_create_inference_process_graph_croptype_has_expected_save_nodes_and_labels():
@@ -419,6 +451,10 @@ def test_create_inference_process_graph_croptype_has_expected_save_nodes_and_lab
     assert _single_filter_bands_arg(results[3]) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(results[4]) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(results[5]) == ["global_embedding:scale"]
+    for result in results[:4]:
+        _assert_uint8_scale(result)
+    _assert_uint8_scale(results[4])
+    assert not _all_nodes_with_process_id(results[5], "linear_scale_range")
 
 
 def test_create_inference_process_graph_croptype_merged_products():
@@ -470,6 +506,96 @@ def test_create_inference_process_graph_croptype_merged_products():
     assert _single_filter_bands_arg(results[1]) == ["ndvi:ts_0"]
     assert _single_filter_bands_arg(results[2]) == ["global_embedding:dim_0"]
     assert _single_filter_bands_arg(results[3]) == ["global_embedding:scale"]
+
+
+def test_create_inference_process_graph_default_does_not_skip_sensor_inputs():
+    """UDP generation relies on this default: the model can still be swapped
+    at runtime via a process parameter, so the graph must always load every
+    sensor, regardless of what any concrete model's run_config says."""
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+        )
+
+        mock_load_artifact.assert_not_called()
+        assert mock_inputs.call_args.kwargs["disable_s1"] is False
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
+
+
+def test_create_inference_process_graph_skip_disabled_sensor_inputs_opt_in():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    spatial_extent = BoundingBoxExtent(0, 0, 1, 1, epsg=4326)
+    temporal_extent = TemporalContext("2023-01-01", "2023-12-31")
+    mock_connection = MagicMock(spec=Connection)
+    udf_bands = ["cropland_classification", "probability_cropland", "probability_other"]
+
+    with (
+        patch("worldcereal.job.worldcereal_preprocessed_inputs") as mock_inputs,
+        patch("worldcereal.job.load_model_artifact") as mock_load_artifact,
+        patch("worldcereal.openeo.mapping.apply_metadata") as mock_apply_metadata,
+    ):
+        mock_inputs.return_value = _dummy_input_cube()
+        mock_load_artifact.return_value = MagicMock(
+            run_config={"args": {"disable_s1": True}}
+        )
+        mock_apply_metadata.return_value = _metadata_for_bands(udf_bands)
+
+        create_inference_process_graph(
+            spatial_extent=spatial_extent,
+            temporal_extent=temporal_extent,
+            product_type=WorldCerealProductType.CROPLAND,
+            connection=mock_connection,
+            skip_disabled_sensor_inputs=True,
+        )
+
+        assert mock_inputs.call_args.kwargs["disable_s1"] is True
+        assert mock_inputs.call_args.kwargs["disable_s2"] is False
+        assert mock_inputs.call_args.kwargs["disable_meteo"] is False
+        assert mock_inputs.call_args.kwargs["disable_dem"] is False
+
+
+def test_get_disabled_modalities_reads_only_disable_flags():
+    from worldcereal.job import _get_artifact_run_config
+
+    _get_artifact_run_config.cache_clear()
+
+    with patch("worldcereal.job.load_model_artifact") as mock_load_artifact:
+        mock_load_artifact.return_value = MagicMock(
+            run_config={
+                "args": {"disable_meteo": True, "disable_dem": True},
+                # Training turns a probability of 1.0 into its flag, so this is ignored.
+                "dataset": {
+                    "train_masking": {"enable": True, "s1_timestep_dropout_prob": 1.0}
+                },
+            }
+        )
+
+        assert _get_disabled_modalities("model.zip") == {
+            "s1": False,
+            "s2": False,
+            "meteo": True,
+            "dem": True,
+        }
 
 
 def test_create_inputs_job_logic(tmp_path: Path):

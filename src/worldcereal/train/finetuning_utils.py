@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Dict,
     List,
     Literal,
     Mapping,
@@ -1241,6 +1242,39 @@ class SeasonalMultiTaskLoss(nn.Module):
         return loss
 
 
+def _mirror_eliminated_sensors(
+    train_config: SensorMaskingConfig,
+) -> Optional[SensorMaskingConfig]:
+    """Derive the evaluation masking implied by a training config.
+
+    Only whole-sensor elimination carries over, so a model trained without a
+    sensor is scored without it too. The stochastic knobs stay a training-time
+    augmentation: a validation set masked differently on every epoch would make
+    the checkpoint metric noisy and the selected checkpoint arbitrary.
+
+    Returns None when the training config eliminates no sensor, i.e. when there
+    is nothing to mirror.
+    """
+    if not train_config.enable:
+        return None
+    if not any(
+        (
+            train_config.s1_disabled,
+            train_config.s2_disabled,
+            train_config.meteo_disabled,
+            train_config.dem_disabled,
+        )
+    ):
+        return None
+    return SensorMaskingConfig(
+        enable=True,
+        s1_full_dropout_prob=1.0 if train_config.s1_disabled else 0.0,
+        s2_full_dropout_prob=1.0 if train_config.s2_disabled else 0.0,
+        meteo_full_dropout_prob=1.0 if train_config.meteo_disabled else 0.0,
+        dem_dropout_prob=1.0 if train_config.dem_disabled else 0.0,
+    )
+
+
 def prepare_training_datasets(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -1253,7 +1287,9 @@ def prepare_training_datasets(
     task_type: Literal["binary", "multiclass"] = "binary",
     num_outputs: int = 1,
     classes_list: Optional[List[str]] = None,
-    masking_config: Optional[SensorMaskingConfig] = None,
+    train_masking_config: Optional[SensorMaskingConfig] = None,
+    eval_masking_config: Optional[SensorMaskingConfig] = None,
+    disable_latlon: bool = False,
     label_jitter=0,
     label_window=0,
     train_min_season_coverage: float = 0.5,
@@ -1294,8 +1330,18 @@ def prepare_training_datasets(
         Number of output classes.
     classes_list : Optional[List[str]], default=None
         List of class names. If None, an empty list is used. Required for multiclass task.
-    masking_config : Optional[SensorMaskingConfig], default=None
-        Configuration for sensor masking during training and validation.
+    train_masking_config : Optional[SensorMaskingConfig], default=None
+        Configuration for sensor masking applied to the **training** split.
+    eval_masking_config : Optional[SensorMaskingConfig], default=None
+        Configuration for sensor masking applied to the **validation and test**
+        splits. When omitted it is derived from ``train_masking_config``, which
+        mirrors whole-sensor elimination only, so a model trained without a
+        sensor is scored without it. Pass it explicitly to eliminate further
+        sensors at evaluation time; values should then be exactly 0.0 or 1.0,
+        since stochastic dropout belongs in ``train_masking_config`` only.
+    disable_latlon : bool, default=False
+        Whether to omit latitude/longitude predictors from all splits. This is
+        distinct from Prometheo's training-only ``latlon_dropout``.
     label_jitter : int, default=0
         Jittering true position of label(s). If 0, no jittering is applied.
     label_window : int, default=0
@@ -1332,6 +1378,12 @@ def prepare_training_datasets(
     Tuple[InSeasonLabelledDataset, InSeasonLabelledDataset, InSeasonLabelledDataset]
         Tuple containing training, validation, and test datasets.
     """
+    # A caller that disables a sensor for training must not be scored with it.
+    # Deriving this here rather than in each training script means no caller can
+    # forget it; passing eval_masking_config explicitly still overrides.
+    if eval_masking_config is None and train_masking_config is not None:
+        eval_masking_config = _mirror_eliminated_sensors(train_masking_config)
+
     train_ds = WorldCerealLabelledDataset(
         train_df,
         num_timesteps=num_timesteps,
@@ -1342,7 +1394,8 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=augment,
-        masking_config=masking_config,
+        masking_config=train_masking_config,
+        disable_latlon=disable_latlon,
         label_jitter=label_jitter,
         label_window=label_window,
         min_season_coverage=train_min_season_coverage,
@@ -1361,7 +1414,8 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for validation
-        masking_config=None,  # No masking for validation
+        masking_config=eval_masking_config,  # Only sensor-disable mirroring
+        disable_latlon=disable_latlon,
         label_jitter=0,  # No jittering for validation
         label_window=0,  # No windowing for validation
         min_season_coverage=eval_min_season_coverage,
@@ -1380,7 +1434,8 @@ def prepare_training_datasets(
         time_explicit=time_explicit,
         classes_list=classes_list if classes_list is not None else [],
         augment=False,  # No augmentation for testing
-        masking_config=None,  # No masking for testing
+        masking_config=eval_masking_config,  # Only sensor-disable mirroring
+        disable_latlon=disable_latlon,
         label_jitter=0,  # No jittering for testing
         label_window=0,  # No windowing for testing
         min_season_coverage=eval_min_season_coverage,
@@ -2146,9 +2201,16 @@ def run_finetuning(
     tensorboard_logdir: Optional[Union[Path, str]] = None,
     model_ema_alpha: float = 0.0,
     checkpoint_metric: Literal[
-        "val_loss", "lc_f1", "ct_f1", "mean_f1", "regional_mean_f1"
+        "val_loss",
+        "lc_f1",
+        "ct_f1",
+        "mean_f1",
+        "regional_mean_f1",
+        "lc_regional_f1",
+        "ct_regional_f1",
     ] = "mean_f1",
     regional_f1_min_support: int = 50,
+    baseline_scores: Optional[Dict[str, float]] = None,
 ):
     """Perform the training loop for fine-tuning a model.
 
@@ -2172,7 +2234,10 @@ def run_finetuning(
     best_lc_f1: Optional[float] = None
     best_mean_f1: Optional[float] = None
     best_regional_mean_f1: Optional[float] = None
+    best_lc_regional_f1: Optional[float] = None
+    best_ct_regional_f1: Optional[float] = None
     best_model_dict = None
+    improved_over_baseline = False
     epochs_since_improvement = 0
     ema_model: Optional[torch.nn.Module] = (
         None  # EMA of model weights (used when model_ema_alpha > 0)
@@ -2309,6 +2374,47 @@ def run_finetuning(
                     originally_frozen_layers.add(name)
                 param.requires_grad = False
                 logger.info(f"Freezing layer: {name}")
+
+    # Floor model selection at the pre-training scores. Otherwise every best_*
+    # tracker starts at None, epoch 1 is always checkpointed however bad it is,
+    # and a warm-started head-only run can only ever ship a degraded head.
+    if baseline_scores:
+        best_lc_f1 = baseline_scores.get("lc_f1")
+        best_ct_f1 = baseline_scores.get("ct_f1")
+        best_mean_f1 = baseline_scores.get("mean_f1")
+        best_regional_mean_f1 = baseline_scores.get("regional_mean_f1")
+        best_lc_regional_f1 = baseline_scores.get("lc_regional_f1")
+        best_ct_regional_f1 = baseline_scores.get("ct_regional_f1")
+        best_loss = baseline_scores.get("val_loss")
+        best_model_dict = deepcopy(model.state_dict())
+
+        _floor = {
+            "lc_f1": best_lc_f1,
+            "ct_f1": best_ct_f1,
+            "mean_f1": best_mean_f1,
+            "regional_mean_f1": best_regional_mean_f1,
+            "lc_regional_f1": best_lc_regional_f1,
+            "ct_regional_f1": best_ct_regional_f1,
+            "val_loss": best_loss,
+        }.get(_effective_metric)
+
+        if _floor is None:
+            logger.warning(
+                f"Baseline floor requested but no pre-training value for "
+                f"checkpoint_metric='{_effective_metric}'; model selection is "
+                "unfloored and epoch 1 will be checkpointed unconditionally."
+            )
+        else:
+            logger.info("=" * 66)
+            logger.info(
+                f"Model selection floored at the pre-training baseline: "
+                f"{_effective_metric}={_floor:.4f}. Training must beat this to "
+                "produce a checkpoint; otherwise the warm-start weights are kept."
+            )
+            logger.info("=" * 66)
+
+        # Persist the warm start so a checkpoint exists even if nothing improves.
+        _save_best(0, model, best_loss if best_loss is not None else float("nan"))
 
     for epoch in (pbar := tqdm(range(hyperparams.max_epochs), desc="Finetuning")):
         model.train()
@@ -2737,6 +2843,26 @@ def run_finetuning(
                 best_regional_mean_f1 is None
                 or cur_regional_mean_f1 - best_regional_mean_f1 > _MIN_DELTA
             )
+        elif _effective_metric == "lc_regional_f1":
+            # Single-task regional metric: in a head-only run the frozen task's
+            # regional F1 is constant and would halve the selection signal.
+            _cur = (
+                cur_lc_regional_f1
+                if cur_lc_regional_f1 is not None
+                else max(0.0, cur_lc_f1)
+            )
+            loss_improved = (
+                best_lc_regional_f1 is None or _cur - best_lc_regional_f1 > _MIN_DELTA
+            )
+        elif _effective_metric == "ct_regional_f1":
+            _cur = (
+                cur_ct_regional_f1
+                if cur_ct_regional_f1 is not None
+                else max(0.0, cur_ct_f1)
+            )
+            loss_improved = (
+                best_ct_regional_f1 is None or _cur - best_ct_regional_f1 > _MIN_DELTA
+            )
         else:
             loss_improved = (
                 best_loss is None or best_loss - current_val_loss > _MIN_DELTA
@@ -2748,6 +2874,10 @@ def run_finetuning(
             best_ct_f1 = cur_ct_f1
             best_mean_f1 = cur_mean_f1
             best_regional_mean_f1 = cur_regional_mean_f1
+            if cur_lc_regional_f1 is not None:
+                best_lc_regional_f1 = cur_lc_regional_f1
+            if cur_ct_regional_f1 is not None:
+                best_ct_regional_f1 = cur_ct_regional_f1
             epochs_since_improvement = 0
             if _effective_metric == "lc_f1":
                 logger.info(
@@ -2780,6 +2910,21 @@ def run_finetuning(
                     f"{cur_regional_mean_f1:.4f} (lc={_lc_reg_str}, ct={_ct_reg_str}, "
                     f"val_loss={current_val_loss:.4f})"
                 )
+            elif _effective_metric in ("lc_regional_f1", "ct_regional_f1"):
+                _task = "LC" if _effective_metric == "lc_regional_f1" else "CT"
+                _cur_reg = (
+                    best_lc_regional_f1
+                    if _effective_metric == "lc_regional_f1"
+                    else best_ct_regional_f1
+                )
+                _glob = (
+                    cur_lc_f1 if _effective_metric == "lc_regional_f1" else cur_ct_f1
+                )
+                logger.info(
+                    f"Epoch {epoch + 1}: val {_task} regional F1 improved to "
+                    f"{_cur_reg:.4f} (global macro F1={_glob:.4f}, "
+                    f"val_loss={current_val_loss:.4f})"
+                )
             else:
                 logger.info(
                     f"Epoch {epoch + 1}: val loss improved to {current_val_loss:.4f}"
@@ -2799,6 +2944,7 @@ def run_finetuning(
             # otherwise the final load_state_dict() restores the *last* epoch,
             # not the best one, and final metrics diverge from the saved .pt.
             best_model_dict = deepcopy(_ckpt_model.state_dict())
+            improved_over_baseline = True
             _ckpt_label = (
                 f"EMA model (alpha={model_ema_alpha})"
                 if ema_model is not None
@@ -2860,6 +3006,18 @@ def run_finetuning(
                 if best_regional_mean_f1 is not None
                 else "n/a"
             )
+        elif _effective_metric == "lc_regional_f1":
+            _best_str = (
+                f"{best_lc_regional_f1:.3f} (lc_regional_f1)"
+                if best_lc_regional_f1 is not None
+                else "n/a"
+            )
+        elif _effective_metric == "ct_regional_f1":
+            _best_str = (
+                f"{best_ct_regional_f1:.3f} (ct_regional_f1)"
+                if best_ct_regional_f1 is not None
+                else "n/a"
+            )
         else:
             _best_str = f"{best_loss:.4f}" if best_loss is not None else "n/a"
         description = (
@@ -2884,9 +3042,22 @@ def run_finetuning(
 
     assert best_model_dict is not None
 
-    _restore_label = (
-        f"EMA model (alpha={model_ema_alpha})" if model_ema_alpha > 0.0 else "raw model"
-    )
+    if baseline_scores and not improved_over_baseline:
+        logger.warning("=" * 66)
+        logger.warning(
+            "NO EPOCH BEAT THE PRE-TRAINING BASELINE: returning the warm-start "
+            "weights unchanged. Training did not help under this configuration -- "
+            "check the balancing / augmentation / learning-rate settings before "
+            "reading anything into the final metrics."
+        )
+        logger.warning("=" * 66)
+        _restore_label = "warm-start (pre-training)"
+    else:
+        _restore_label = (
+            f"EMA model (alpha={model_ema_alpha})"
+            if model_ema_alpha > 0.0
+            else "raw model"
+        )
     logger.info(f"Restoring best {_restore_label} weights into model before returning.")
     model.load_state_dict(best_model_dict)
     model.eval()

@@ -174,7 +174,10 @@ def main(
     if not job_db.exists():
         logger.info("Job tracking file does not exist, creating new jobs.")
         job_df = create_job_dataframe_patch_to_point_worldcereal(
-            ref_id, ground_truth_file, only_flagged_samples
+            ref_id,
+            connection,
+            ground_truth_file,
+            only_flagged_samples,
         )
         job_db.initialize_from_df(job_df)
 
@@ -290,8 +293,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--image_name",
         type=str,
-        default="python38",
-        help="openEO image name.",  # Use python 3.8 by default, until patch-to-point works on 3.11 https://github.com/eu-cdse/openeo-cdse-infra/issues/738
+        default=None,
+        help="openEO image name.",
     )
     parser.add_argument(
         "--organization_id", type=int, default=None, help="Organization id."

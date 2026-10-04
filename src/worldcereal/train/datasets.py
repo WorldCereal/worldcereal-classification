@@ -1,7 +1,6 @@
 import re
 from collections import Counter
 from dataclasses import dataclass
-from math import floor
 from typing import (
     Any,
     Dict,
@@ -30,14 +29,11 @@ from prometheo.predictors import (
 )
 from torch.utils.data import Dataset, Sampler
 
-from worldcereal.data.cropcalendars import (
-    SEASONALITY_COLUMN_MAP,
-    SEASONALITY_LAT_RANGE,
-    SEASONALITY_LON_RANGE,
-    SEASONALITY_LOOKUP_COLUMNS,
-    load_seasonality_lookup,
+from worldcereal.seasons import (
+    fetch_cropcalendar_dekad_point,
+    fetch_cropcalendar_dekad_points_batch,
+    season_dekad_to_date,
 )
-from worldcereal.seasons import season_doys_to_dates_refyear
 from worldcereal.train import GLOBAL_SEASON_IDS, MIN_EDGE_BUFFER, OUTLIER_COLUMNS
 from worldcereal.train import predictors as _predictor_utils
 from worldcereal.train.collation import ATTR_KEYS_ALLOW_PARTIAL_NONE
@@ -59,8 +55,6 @@ run_model_inference = _predictor_utils.run_model_inference
 # we need to define it globally so that it can be used in process_parquet as well
 SeasonCalendarMode = Literal["calendar", "custom", "auto", "off"]
 SeasonEngine = Literal["manual", "calendar", "off"]
-
-_SEASONALITY_LOOKUP_TABLE: Optional[pd.DataFrame] = None
 
 
 def _is_lc_only_dataset(ref_id: str) -> bool:
@@ -295,50 +289,6 @@ def _filter_frame_by_manual_windows(
 
     filtered = dataframe.loc[keep_mask].copy().reset_index(drop=True)
     return filtered, dropped
-
-
-def _ensure_seasonality_lookup() -> pd.DataFrame:
-    """Load and cache the seasonality lookup table indexed by lat/lon centers."""
-
-    global _SEASONALITY_LOOKUP_TABLE
-    if _SEASONALITY_LOOKUP_TABLE is not None:
-        return _SEASONALITY_LOOKUP_TABLE
-
-    try:
-        table = load_seasonality_lookup()
-    except (FileNotFoundError, ModuleNotFoundError) as exc:
-        raise FileNotFoundError(
-            "Seasonality lookup parquet not found in worldcereal.data.cropcalendars."
-        ) from exc
-    required = {"lat", "lon", *SEASONALITY_LOOKUP_COLUMNS}
-    missing = required.difference(table.columns)
-    if missing:
-        raise ValueError(
-            f"Seasonality lookup parquet is missing required columns: {sorted(missing)}"
-        )
-    table = table.astype({"lat": np.float64, "lon": np.float64})
-    table = table.set_index(["lat", "lon"])
-    if not table.index.is_unique:
-        raise ValueError("Seasonality lookup index must be unique per lat/lon cell.")
-
-    _SEASONALITY_LOOKUP_TABLE = table[list(SEASONALITY_LOOKUP_COLUMNS)].sort_index()
-    return _SEASONALITY_LOOKUP_TABLE
-
-
-def _snap_coordinate_to_grid(value: float, bounds: Tuple[float, float]) -> float:
-    """Snap a coordinate to the 0.5° grid center used by the lookup."""
-
-    min_value, max_value = bounds
-    if value is None:
-        raise ValueError("Cannot snap a missing coordinate to the seasonality grid.")
-    clamped = max(min(float(value), max_value), min_value)
-    return (floor(clamped * 2.0) / 2.0) + 0.25
-
-
-def _snap_latlon_to_calendar_grid(lat: float, lon: float) -> Tuple[float, float]:
-    lat_center = _snap_coordinate_to_grid(lat, SEASONALITY_LAT_RANGE)
-    lon_center = _snap_coordinate_to_grid(lon, SEASONALITY_LON_RANGE)
-    return lat_center, lon_center
 
 
 def get_class_weights(
@@ -681,13 +631,9 @@ def _get_per_bin_class_weights(
                 counts_override=smoothed_counts,
             )
         )
-        sample_mean = (
-            sum(
-                int(cnt) * bin_w_dict[str(lbl)]
-                for lbl, cnt in class_counts.items()
-            )
-            / float(class_counts.sum())
-        )
+        sample_mean = sum(
+            int(cnt) * bin_w_dict[str(lbl)] for lbl, cnt in class_counts.items()
+        ) / float(class_counts.sum())
         weights[mask] = np.array(
             [bin_w_dict[str(lbl)] / sample_mean for lbl in bin_labels],
             dtype=np.float64,
@@ -899,13 +845,10 @@ def _build_per_class_weight_grid(
                 counts_override=smoothed_counts,
             )
         )
-        sample_mean = (
-            sum(int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items())
-            / float(class_counts.sum())
-        )
-        bin_weights[(li, lo)] = {
-            cls: w / sample_mean for cls, w in wdict.items()
-        }
+        sample_mean = sum(
+            int(cnt) * wdict[str(lbl)] for lbl, cnt in class_counts.items()
+        ) / float(class_counts.sum())
+        bin_weights[(li, lo)] = {cls: w / sample_mean for cls, w in wdict.items()}
     n_total_bins = bin_groups.ngroups
     n_dense_bins = len(bin_weights)
 
@@ -942,11 +885,21 @@ class SensorMaskingConfig:
     Probabilities are applied independently per sample. Values are in [0,1].
     Set config to None or enabled=False to disable masking.
 
-    Invariant: masking never leaves a sample with S1 and S2 both fully
-    masked-or-missing. If the drawn masks (combined with gaps already present
-    in the data) would wipe both sensors, one synthetically masked timestep is
-    restored — preferring S2, and never a sensor whose full elimination is
-    intentional (s1_full_dropout_prob or s2_cloud_timestep_prob of 1.0).
+    Each sensor has a *full* dropout knob (whole sensor gone) and, where it
+    applies, a *per-timestep* knob. A full dropout probability of 1.0 switches
+    the sensor off for the whole run (``--disable_s1`` and friends).
+
+    A sensor counts as *intentionally eliminated* when its full-dropout knob
+    or its per-timestep knob is 1.0 (``dem_dropout_prob`` for DEM). Such a
+    sensor is never revived by the guards.
+
+    Two invariants are enforced (see
+    :meth:`WorldCerealDataset._rescue_fully_masked_sample`): S1 and S2 are never
+    both fully masked-or-missing, and a sample never loses every encoder token.
+    The encoder builds tokens from S1, S2, meteo and DEM only, so a sample with
+    all four gone yields a degenerate embedding. On violation one masked
+    timestep is restored, preferring S2, then S1, then meteo, then DEM, and
+    never for a sensor whose elimination is intentional.
 
     Attributes
     ----------
@@ -956,6 +909,9 @@ class SensorMaskingConfig:
         Probability that all S1 timesteps (VV & VH) are missing (e.g. prolonged platform outage).
     s1_timestep_dropout_prob: float
         Probability applied per timestep to drop S1 values (sporadic acquisition gaps).
+    s2_full_dropout_prob: float
+        Probability that all S2 timesteps (all optical bands) are missing, on top of
+        the per-timestep cloud paths (e.g. a scene never revisited cloud-free).
     s2_cloud_timestep_prob: float
         Probability applied per timestep to cloud-mask S2 (all optical bands) individually.
     s2_cloud_block_prob: float
@@ -964,6 +920,8 @@ class SensorMaskingConfig:
         Minimum length of the contiguous S2 cloud block.
     s2_cloud_block_max: int
         Maximum length of the contiguous S2 cloud block.
+    meteo_full_dropout_prob: float
+        Probability that all meteo timesteps are missing (e.g. AGERA5 unavailable).
     meteo_timestep_dropout_prob: float
         Probability applied per timestep to mask meteorological data.
     dem_dropout_prob: float
@@ -975,13 +933,39 @@ class SensorMaskingConfig:
     enable: bool = False
     s1_full_dropout_prob: float = 0.0
     s1_timestep_dropout_prob: float = 0.0
+    s2_full_dropout_prob: float = 0.0
     s2_cloud_timestep_prob: float = 0.0
     s2_cloud_block_prob: float = 0.0
     s2_cloud_block_min: int = 2
     s2_cloud_block_max: int = 5
+    meteo_full_dropout_prob: float = 0.0
     meteo_timestep_dropout_prob: float = 0.0
     dem_dropout_prob: float = 0.0
     seed: Optional[int] = None
+
+    # Used by the rescue logic: a deliberately eliminated sensor is never revived.
+    @property
+    def s1_disabled(self) -> bool:
+        """True when S1 is eliminated for every sample."""
+        return self.s1_full_dropout_prob >= 1.0 or self.s1_timestep_dropout_prob >= 1.0
+
+    @property
+    def s2_disabled(self) -> bool:
+        """True when S2 is eliminated for every sample."""
+        return self.s2_full_dropout_prob >= 1.0 or self.s2_cloud_timestep_prob >= 1.0
+
+    @property
+    def meteo_disabled(self) -> bool:
+        """True when meteo is eliminated for every sample."""
+        return (
+            self.meteo_full_dropout_prob >= 1.0
+            or self.meteo_timestep_dropout_prob >= 1.0
+        )
+
+    @property
+    def dem_disabled(self) -> bool:
+        """True when DEM is eliminated for every sample."""
+        return self.dem_dropout_prob >= 1.0
 
     def validate(self, num_timesteps: int):
         if self.s2_cloud_block_min > self.s2_cloud_block_max:
@@ -990,16 +974,29 @@ class SensorMaskingConfig:
             )
         if self.s2_cloud_block_max > num_timesteps:
             raise ValueError("s2_cloud_block_max cannot exceed num_timesteps")
-        if self.s1_full_dropout_prob >= 1.0 and self.s2_cloud_timestep_prob >= 1.0:
+        if self.s1_disabled and self.s2_disabled:
+            culprits = [
+                f"{name}={getattr(self, name)}"
+                for name in (
+                    "s1_full_dropout_prob",
+                    "s1_timestep_dropout_prob",
+                    "s2_full_dropout_prob",
+                    "s2_cloud_timestep_prob",
+                )
+                if getattr(self, name) >= 1.0
+            ]
             raise ValueError(
-                "s1_full_dropout_prob and s2_cloud_timestep_prob cannot both be 1.0: "
-                "every sample would end up with S1 and S2 fully masked"
+                f"S1 and S2 are both eliminated ({', '.join(culprits)}): every "
+                "sample would end up with S1 and S2 fully masked. Disabling all "
+                "but one of S1/S2 is supported; disabling both is not."
             )
         for name in [
             "s1_full_dropout_prob",
             "s1_timestep_dropout_prob",
+            "s2_full_dropout_prob",
             "s2_cloud_timestep_prob",
             "s2_cloud_block_prob",
+            "meteo_full_dropout_prob",
             "meteo_timestep_dropout_prob",
             "dem_dropout_prob",
         ]:
@@ -1041,6 +1038,7 @@ class WorldCerealDataset(Dataset):
         num_outputs: Optional[int] = None,
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
+        disable_latlon: bool = False,
         min_season_coverage: float = 1.0,
         remove_samples_without_s1_s2: bool = False,
     ):
@@ -1064,6 +1062,9 @@ class WorldCerealDataset(Dataset):
             whether to augment the data, by default False
         masking_config : Optional[SensorMaskingConfig], optional
             configuration for sensor masking during training, by default None.
+        disable_latlon : bool, optional
+            Whether to omit latitude/longitude predictors for every sample,
+            by default False.
         min_season_coverage : float, optional
             Minimum fraction of a season's composite slots that must fall inside
             the selected timestep window for the season mask to be enabled.
@@ -1098,6 +1099,7 @@ class WorldCerealDataset(Dataset):
         self.is_ssl = task_type == "ssl"
         self.augment = augment
         self.masking_config = masking_config
+        self.disable_latlon = disable_latlon
         if not (0.0 < min_season_coverage <= 1.0):
             raise ValueError(
                 f"min_season_coverage must be in (0, 1]; got {min_season_coverage}"
@@ -1110,6 +1112,9 @@ class WorldCerealDataset(Dataset):
             )
 
         self.remove_samples_without_s1_s2 = remove_samples_without_s1_s2
+
+        # Throttling counters for the sensor-masking guard warnings.
+        self._masking_guard_warnings: Dict[str, int] = {}
 
         masking_enabled = False
         if self.masking_config:
@@ -1129,6 +1134,18 @@ class WorldCerealDataset(Dataset):
                     "Sensor masking config provided but enable=False; masking disabled."
                 )
 
+        # A disabled sensor never reaches the model, so its data does not count
+        # when deciding whether a sample or window has usable S1/S2 data.
+        cfg = self.masking_config if masking_enabled else None
+        self._s1_counts = not (cfg is not None and cfg.s1_disabled)
+        self._s2_counts = not (cfg is not None and cfg.s2_disabled)
+        self._data_column_templates = [
+            t
+            for t in self.S1_S2_COLUMN_TEMPLATES
+            if (self._s1_counts or not t.startswith("SAR-"))
+            and (self._s2_counts or not t.startswith("OPTICAL-"))
+        ]
+
         if self.remove_samples_without_s1_s2 or masking_enabled:
             self._check_joint_s1_s2_availability()
 
@@ -1147,7 +1164,8 @@ class WorldCerealDataset(Dataset):
         timeseries yet still be unusable if none of it is reachable from
         `valid_position`. Since admissible windows slide by one timestep,
         their union is the contiguous range ``[first_min, first_max + T)``,
-        so checking that range for data is exact.
+        so checking that range for data is exact. A disabled sensor's data is
+        ignored, so an S1-disabled model only keeps samples with S2 data.
         """
         if (
             "available_timesteps" not in self.dataframe.columns
@@ -1169,7 +1187,7 @@ class WorldCerealDataset(Dataset):
         timestep_cols = [
             [
                 col
-                for template in self.S1_S2_COLUMN_TEMPLATES
+                for template in self._data_column_templates
                 if (col := template.format(t)) in self.dataframe.columns
             ]
             for t in range(max_ts)
@@ -1208,16 +1226,21 @@ class WorldCerealDataset(Dataset):
         num_bad = int(bad.sum())
         if not num_bad:
             return
+        counted = " or ".join(
+            name
+            for name, on in (("S1", self._s1_counts), ("S2", self._s2_counts))
+            if on
+        )
         if self.remove_samples_without_s1_s2:
             self.dataframe = self.dataframe.loc[~bad].reset_index(drop=True)
             logger.warning(
-                f"Removed {num_bad}/{len(bad)} sample(s) with no S1 and no S2 "
+                f"Removed {num_bad}/{len(bad)} sample(s) with no {counted} "
                 "data in any admissible timestep window "
                 "(remove_samples_without_s1_s2=True)."
             )
         else:
             logger.warning(
-                f"{num_bad}/{len(self)} sample(s) have no S1 and no S2 data in any "
+                f"{num_bad}/{len(self.dataframe)} sample(s) have no {counted} data in any "
                 "admissible timestep window; the joint S1/S2 masking guard cannot "
                 "restore data for these. Consider removing them with "
                 "remove_samples_without_s1_s2=True."
@@ -1336,9 +1359,9 @@ class WorldCerealDataset(Dataset):
         return timestep_positions, valid_position
 
     def _window_has_s1_s2(self, row_d: Dict, timestep_positions: List[int]) -> bool:
-        """Whether any S1 or S2 band has data at any of the given timesteps."""
+        """Whether any enabled S1 or S2 band has data at any of the given timesteps."""
         for t in timestep_positions:
-            for template in self.S1_S2_COLUMN_TEMPLATES:
+            for template in self._data_column_templates:
                 value = row_d.get(template.format(t))
                 if value is not None and value != NODATAVALUE:
                     return True
@@ -1401,9 +1424,12 @@ class WorldCerealDataset(Dataset):
 
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
         # Get latlons which need to have spatial dims
-        latlon = np.reshape(
-            np.array([row_d["lat"], row_d["lon"]], dtype=np.float32), (1, 1, 2)
-        )
+        latlon = None
+        if not self.disable_latlon:
+            latlon = np.reshape(
+                np.array([row_d["lat"], row_d["lon"]], dtype=np.float32),
+                (1, 1, 2),
+            )
 
         # Get timestamps belonging to each timestep
         timestamps = self._get_timestamps(row_d, timestep_positions)
@@ -1480,13 +1506,15 @@ class WorldCerealDataset(Dataset):
         2. Per-timestep S1 dropout.
         3. S2 contiguous cloud block.
         4. Per-timestep S2 cloud dropout.
-        5. Joint S1/S2 guard: if S1 and S2 would both end up fully
-           masked-or-missing, one synthetically masked timestep is restored.
-        6. Per-timestep meteo dropout.
+        5. Full S2 dropout (overrides the block/timestep draws).
+        6. Full meteo dropout, else per-timestep meteo dropout.
         7. DEM dropout.
+        8. Token guard: if the draws would leave S1 and S2 both fully
+           masked-or-missing, or would leave the sample without a single
+           encoder token, one synthetically masked timestep is restored.
 
-        The S1 and S2 dropouts are drawn as boolean masks first so the joint
-        guard can repair them before any values are overwritten.
+        All dropouts are drawn as boolean masks first so the guard can repair
+        them before any values are overwritten.
         """
         # Guard: if masking_config is None (should not happen when enable checked)
         if self.masking_config is None:
@@ -1497,6 +1525,8 @@ class WorldCerealDataset(Dataset):
         # Timesteps already missing in the input data (all bands NODATAVALUE)
         s1_missing = np.all(s1[0, 0] == NODATAVALUE, axis=-1)
         s2_missing = np.all(s2[0, 0] == NODATAVALUE, axis=-1)
+        meteo_missing = np.all(meteo[0, 0] == NODATAVALUE, axis=-1)
+        dem_missing = bool(np.all(dem == NODATAVALUE))
 
         # 1. Full S1 dropout / 2. per-timestep S1 dropout
         s1_drop = np.zeros(T, dtype=bool)
@@ -1518,76 +1548,120 @@ class WorldCerealDataset(Dataset):
                 s2_drop[start : start + block_len] = True
         if cfg.s2_cloud_timestep_prob > 0:
             s2_drop |= np.random.rand(T) < cfg.s2_cloud_timestep_prob
+        # 5. Full S2 dropout (whole-sensor outage, on top of the cloud paths)
+        if cfg.s2_full_dropout_prob > 0 and np.random.rand() < cfg.s2_full_dropout_prob:
+            s2_drop[:] = True
 
-        # 5. Joint S1/S2 guard
-        s1_drop, s2_drop = self._rescue_joint_s1_s2_wipe(
-            s1_drop, s2_drop, s1_missing, s2_missing
+        # 6. Full meteo dropout / per-timestep meteo dropout
+        meteo_drop = np.zeros(T, dtype=bool)
+        if (
+            cfg.meteo_full_dropout_prob > 0
+            and np.random.rand() < cfg.meteo_full_dropout_prob
+        ):
+            meteo_drop[:] = True
+        elif cfg.meteo_timestep_dropout_prob > 0:
+            meteo_drop = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
+
+        # 7. DEM dropout
+        dem_drop = cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob
+
+        # 8. Token guard (repairs the masks before anything is written)
+        s1_drop, s2_drop, meteo_drop, dem_drop = self._rescue_fully_masked_sample(
+            s1_drop,
+            s2_drop,
+            meteo_drop,
+            dem_drop,
+            s1_missing,
+            s2_missing,
+            meteo_missing,
+            dem_missing,
         )
 
         if s1_drop.any():
             s1[..., s1_drop, :] = NODATAVALUE
         if s2_drop.any():
             s2[..., s2_drop, :] = NODATAVALUE
-
-        # 6. Meteo per-timestep dropout
-        if cfg.meteo_timestep_dropout_prob > 0:
-            meteo_mask = np.random.rand(T) < cfg.meteo_timestep_dropout_prob
-            if meteo_mask.any():
-                meteo[..., meteo_mask, :] = NODATAVALUE
-                # logger.debug(
-                #     f"Applied meteo timestep dropout on {meteo_mask.sum()} timesteps"
-                # )
-
-        # 7. DEM dropout
-        if cfg.dem_dropout_prob > 0 and np.random.rand() < cfg.dem_dropout_prob:
+        if meteo_drop.any():
+            meteo[..., meteo_drop, :] = NODATAVALUE
+        if dem_drop:
             dem[:] = NODATAVALUE
-            # logger.debug("Applied DEM dropout")
 
         return s1, s2, meteo, dem
 
-    def _rescue_joint_s1_s2_wipe(
+    def _rescue_fully_masked_sample(
         self,
         s1_drop: np.ndarray,
         s2_drop: np.ndarray,
+        meteo_drop: np.ndarray,
+        dem_drop: bool,
         s1_missing: np.ndarray,
         s2_missing: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Ensure S1 and S2 never end up both fully masked-or-missing.
+        meteo_missing: np.ndarray,
+        dem_missing: bool,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+        """Repair dropout masks that would leave a sample unusable.
 
-        If the drawn dropout masks, combined with gaps already present in the
-        data, would leave neither sensor with a single valid timestep, one
-        synthetically dropped timestep is restored. S2 is restored in
-        preference to S1 because the dominant violating path is the explicit
-        full-S1-dropout draw, whose semantics should stay intact. A sensor
-        whose full elimination is intentional (dropout probability of 1.0,
-        e.g. disable_s1/disable_s2 experiments) is never restored.
+        Two guards, in order. The S1/S2 guard restores one dropped timestep if
+        neither sensor would keep a valid one, preferring S2 because the usual
+        violating path is the explicit full-S1-dropout draw. The token guard
+        then applies when that cannot be repaired: the sample must keep at least
+        one encoder token, so meteo is restored next, then DEM. A sensor whose
+        elimination is intentional (probability 1.0) is never restored.
         """
         cfg: SensorMaskingConfig = self.masking_config  # type: ignore[assignment]
-        if not (s1_drop | s1_missing).all() or not (s2_drop | s2_missing).all():
-            return s1_drop, s2_drop
+        s1_gone = bool((s1_drop | s1_missing).all())
+        s2_gone = bool((s2_drop | s2_missing).all())
+        if not s1_gone or not s2_gone:
+            return s1_drop, s2_drop, meteo_drop, dem_drop
 
+        # --- invariant 1: keep at least one S1 or S2 timestep alive ---------
         candidates = [
-            (
-                s2_drop,
-                np.flatnonzero(s2_drop & ~s2_missing),
-                cfg.s2_cloud_timestep_prob >= 1.0,
-            ),
-            (
-                s1_drop,
-                np.flatnonzero(s1_drop & ~s1_missing),
-                cfg.s1_full_dropout_prob >= 1.0,
-            ),
+            (s2_drop, np.flatnonzero(s2_drop & ~s2_missing), cfg.s2_disabled),
+            (s1_drop, np.flatnonzero(s1_drop & ~s1_missing), cfg.s1_disabled),
         ]
         for drop, restorable, intentional in candidates:
             if restorable.size and not intentional:
                 drop[np.random.choice(restorable)] = False
-                return s1_drop, s2_drop
+                return s1_drop, s2_drop, meteo_drop, dem_drop
 
-        logger.warning(
+        self._warn_masking_guard(
+            "no_s1_s2",
             "Sample has S1 and S2 fully masked-or-missing and no restorable "
-            "timesteps; the joint S1/S2 guard cannot be enforced for this sample."
+            "timestep; the joint S1/S2 guard cannot be enforced for it",
         )
-        return s1_drop, s2_drop
+
+        # --- invariant 2: keep at least one encoder token alive -------------
+        meteo_gone = bool((meteo_drop | meteo_missing).all())
+        dem_gone = dem_drop or dem_missing
+        if not meteo_gone or not dem_gone:
+            return s1_drop, s2_drop, meteo_drop, dem_drop
+
+        meteo_restorable = np.flatnonzero(meteo_drop & ~meteo_missing)
+        if meteo_restorable.size and not cfg.meteo_disabled:
+            meteo_drop[np.random.choice(meteo_restorable)] = False
+            return s1_drop, s2_drop, meteo_drop, dem_drop
+        if dem_drop and not dem_missing and not cfg.dem_disabled:
+            return s1_drop, s2_drop, meteo_drop, False
+
+        self._warn_masking_guard(
+            "no_tokens",
+            "Sample has S1, S2, meteo and DEM all masked-or-missing and no "
+            "restorable timestep; it carries no encoder token and its "
+            "embedding will be degenerate",
+        )
+        return s1_drop, s2_drop, meteo_drop, dem_drop
+
+    def _warn_masking_guard(self, kind: str, message: str) -> None:
+        """Warn (throttled) that a masking invariant could not be repaired.
+
+        Emitting one line per sample would flood the logs of a global run, so
+        only the first occurrence of each *kind* and every 1000th afterwards
+        are reported.
+        """
+        n = self._masking_guard_warnings.get(kind, 0) + 1
+        self._masking_guard_warnings[kind] = n
+        if n == 1 or n % 1000 == 0:
+            logger.warning(f"{message} (occurrence {n} for this dataset).")
 
     def _build_sample_attrs(
         self,
@@ -1947,65 +2021,60 @@ class WorldCerealDataset(Dataset):
     ) -> Tuple[np.datetime64, np.datetime64]:
         """Fetch (start, end) dates for a season/grid cell from the lookup."""
 
-        lat_center, lon_center = _snap_latlon_to_calendar_grid(lat, lon)
         try:
-            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"Season '{season_id}' is not available in the seasonality lookup. "
-                f"Known seasons: {sorted(SEASONALITY_COLUMN_MAP)}"
-            ) from exc
-
-        table = _ensure_seasonality_lookup()
-        if sos_col not in table.columns or eos_col not in table.columns:
-            raise ValueError(
-                f"Season '{season_id}' requires columns ({sos_col}, {eos_col}) "
-                "but they are not present in the seasonality lookup parquet. "
-                "Regenerate the parquet with the required bands included."
+            sos_dekad, eos_dekad = fetch_cropcalendar_dekad_point(
+                season_id=season_id,
+                lat=lat,
+                lon=lon,
             )
-        try:
-            doy_row = table.loc[(lat_center, lon_center)]
-        except KeyError as exc:  # pragma: no cover - unexpected gaps
-            lat_vals = table.index.get_level_values("lat").to_numpy()
-            lon_vals = table.index.get_level_values("lon").to_numpy()
-            if lat_vals.size == 0:
-                raise ValueError(
-                    "No seasonality record found for snapped lat/lon "
-                    f"({lat_center}, {lon_center})."
-                ) from exc
-            distances = (lat_vals - lat_center) ** 2 + (lon_vals - lon_center) ** 2
-            best_idx = int(distances.argmin())
-            fallback_key = (lat_vals[best_idx], lon_vals[best_idx])
-            logger.error(
-                f"Seasonality lookup missing ({lat_center}, {lon_center}); using nearest cell ({fallback_key[0]}, {fallback_key[1]})."
-            )
-            lat_center, lon_center = float(fallback_key[0]), float(fallback_key[1])
-            doy_row = table.iloc[best_idx]
-
-        sos_doy = int(doy_row[sos_col])
-        eos_doy = int(doy_row[eos_col])
-        if sos_doy <= 0 or eos_doy <= 0:
+        except ValueError as exc:
             sample_id = row.get("sample_id", "n/a")
             raise ValueError(
-                "Seasonality lookup returned nodata DOY values for "
-                f"season '{season_id}' (sample_id={sample_id})."
-            )
+                f"{exc} (sample_id={sample_id}, season={season_id})"
+            ) from exc
 
-        # For year-crossing seasons (SOS DOY > EOS DOY), season_doys_to_dates_refyear
-        # places the EOS in ref_year. When target_year is derived from label_datetime.year,
-        # this is only correct if the label falls early in the year (before/at EOS DOY).
-        # If the label falls later (after EOS DOY), the relevant season instance ends in
-        # year+1, so we must increment ref_year accordingly.
-        ref_year = year
-        if sos_doy > eos_doy and label_datetime is not None:
-            label_doy = pd.Timestamp(label_datetime).day_of_year
-            if label_doy > eos_doy:
-                ref_year = year + 1
+        # Convert the start and end dekads to actual dates
+        candidate_years = [year - 1, year, year + 1]
+        start_dates = [
+            season_dekad_to_date(sos_dekad, target_year=yr, mode="first")
+            for yr in candidate_years
+        ]
+        end_dates = [
+            season_dekad_to_date(eos_dekad, target_year=yr, mode="last")
+            for yr in candidate_years
+        ]
 
-        start_dt, end_dt = season_doys_to_dates_refyear(sos_doy, eos_doy, ref_year)
+        # Select the start and end dates for the season that best matches the label_datetime
+        ## If there is no label_datetime, default to the current year's season
+        ## If there is a label_datetime, we prefer the season that encompasses it
+        ## If no season encompasses the label_datetime, select the closest one
+        if label_datetime is not None:
+            for start_date, end_date in zip(start_dates, end_dates):
+                # Look for encompassing season
+                if start_date <= label_datetime <= end_date:
+                    start_date_fin = start_date
+                    end_date_fin = end_date
+                    break
+            else:
+                # Default to the year for which the distance to the label_datetime is minimal
+                label_diffs_start = [
+                    abs((label_datetime - sd).days) for sd in start_dates
+                ]
+                label_diffs_end = [abs((label_datetime - ed).days) for ed in end_dates]
+                label_diffs = [
+                    min(s, e) for s, e in zip(label_diffs_start, label_diffs_end)
+                ]
+                min_diff_idx = label_diffs.index(min(label_diffs))
+                start_date_fin = start_dates[min_diff_idx]
+                end_date_fin = end_dates[min_diff_idx]
+        else:
+            # default to the current year if no label_datetime is provided
+            start_date_fin = start_dates[1]
+            end_date_fin = end_dates[1]
+
         return (
-            np.datetime64(start_dt, "D"),
-            np.datetime64(end_dt, "D"),
+            np.datetime64(start_date_fin, "D"),
+            np.datetime64(end_date_fin, "D"),
         )
 
 
@@ -2413,7 +2482,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         # Joint S1/S2 data presence per (row, timestep) — computed on raw
         # values, before the dB conversion below (the NODATAVALUE sentinel is
         # preserved by all transforms, so this matches _window_has_s1_s2).
-        presence = (s2 != NODATAVALUE).any(axis=-1) | (s1 != NODATAVALUE).any(axis=-1)
+        # A disabled sensor does not count, as in _window_has_s1_s2.
+        presence = np.zeros(s1.shape[:2], dtype=bool)
+        if self._s2_counts:
+            presence |= (s2 != NODATAVALUE).any(axis=-1)
+        if self._s1_counts:
+            presence |= (s1 != NODATAVALUE).any(axis=-1)
 
         # S1 dB conversion (valid positive values only, as in get_inputs)
         s1_valid = (s1 != NODATAVALUE) & (s1 > 0)
@@ -2441,13 +2515,15 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             if dst in DEM_BANDS:
                 dem[:, DEM_BANDS.index(dst)] = df[src].to_numpy(dtype=np.float32)
 
-        latlon = np.stack(
-            [
-                df["lat"].to_numpy(dtype=np.float32),
-                df["lon"].to_numpy(dtype=np.float32),
-            ],
-            axis=1,
-        )
+        latlon = None
+        if not self.disable_latlon:
+            latlon = np.stack(
+                [
+                    df["lat"].to_numpy(dtype=np.float32),
+                    df["lon"].to_numpy(dtype=np.float32),
+                ],
+                axis=1,
+            )
 
         # ---- timestamps --------------------------------------------------
         start_dates = pd.to_datetime(df["start_date"]).to_numpy()
@@ -2556,51 +2632,12 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         """Precompute per-row, per-season calendar windows (month numbers)."""
         n_rows = len(df)
         seasons = tuple(self._season_ids)
-        for season in seasons:
-            if season not in SEASONALITY_COLUMN_MAP:
-                logger.warning(
-                    f"Fast batched fetching disabled: season {season!r} not in "
-                    "seasonality lookup; using per-sample loading."
-                )
-                return None
 
-        table = _ensure_seasonality_lookup()
         lat = df["lat"].to_numpy(dtype=np.float64)
         lon = df["lon"].to_numpy(dtype=np.float64)
-        lat_c = (np.floor(np.clip(lat, *SEASONALITY_LAT_RANGE) * 2.0) / 2.0) + 0.25
-        lon_c = (np.floor(np.clip(lon, *SEASONALITY_LON_RANGE) * 2.0) / 2.0) + 0.25
-
-        key_index = pd.MultiIndex.from_arrays([lat_c, lon_c], names=["lat", "lon"])
-        joined = table.reindex(key_index)
-
-        # Nearest-cell fallback for grid cells absent from the lookup (mirrors
-        # the per-sample KeyError fallback, logged once per unique cell).
-        missing_rows = joined[list(SEASONALITY_LOOKUP_COLUMNS)].isna().all(axis=1)
-        if missing_rows.to_numpy().any():
-            lat_vals = table.index.get_level_values("lat").to_numpy()
-            lon_vals = table.index.get_level_values("lon").to_numpy()
-            missing_pos = np.flatnonzero(missing_rows.to_numpy())
-            missing_cells = {(float(lat_c[i]), float(lon_c[i])) for i in missing_pos}
-            cell_to_row = {}
-            for cell_lat, cell_lon in missing_cells:
-                distances = (lat_vals - cell_lat) ** 2 + (lon_vals - cell_lon) ** 2
-                best_idx = int(distances.argmin())
-                cell_to_row[(cell_lat, cell_lon)] = best_idx
-                logger.error(
-                    f"Seasonality lookup missing ({cell_lat}, {cell_lon}); using "
-                    f"nearest cell ({lat_vals[best_idx]}, {lon_vals[best_idx]})."
-                )
-            joined = joined.reset_index(drop=True)
-            for i in missing_pos:
-                joined.iloc[i] = table.iloc[
-                    cell_to_row[(float(lat_c[i]), float(lon_c[i]))]
-                ]
-
         label_days = label_dt.to_numpy().astype("datetime64[D]")
         label_month_num = label_days.astype("datetime64[M]").astype(np.int64)
         label_year = label_days.astype("datetime64[Y]").astype(np.int64) + 1970
-        year_start = label_days.astype("datetime64[Y]").astype("datetime64[D]")
-        label_doy = (label_days - year_start).astype(np.int64) + 1
 
         num_seasons = len(seasons)
         season_start_m = np.zeros((n_rows, num_seasons), dtype=np.int64)
@@ -2610,33 +2647,53 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         season_in_raw = np.zeros((n_rows, num_seasons), dtype=bool)
 
         for s_idx, season in enumerate(seasons):
-            sos_col, eos_col = SEASONALITY_COLUMN_MAP[season]
-            if sos_col not in joined.columns or eos_col not in joined.columns:
+            try:
+                sos_i, eos_i, invalid = fetch_cropcalendar_dekad_points_batch(
+                    season, lat, lon
+                )
+            except ValueError as exc:
                 logger.warning(
-                    f"Fast batched fetching disabled: seasonality lookup lacks "
-                    f"columns for season {season!r}; using per-sample loading."
+                    f"Fast batched fetching disabled: season {season!r} is not "
+                    f"available in the seasonality lookup ({exc}); using "
+                    "per-sample loading."
                 )
                 return None
-            sos = joined[sos_col].to_numpy(dtype=np.float64)
-            eos = joined[eos_col].to_numpy(dtype=np.float64)
-            invalid = ~np.isfinite(sos) | ~np.isfinite(eos) | (sos <= 0) | (eos <= 0)
-            sos_i = np.where(invalid, 1, sos).astype(np.int64)
-            eos_i = np.where(invalid, 1, eos).astype(np.int64)
 
-            # For year-crossing seasons, shift ref year when the label falls
-            # after EOS (mirrors _season_context_for).
-            ref_year = label_year + ((sos_i > eos_i) & (label_doy > eos_i)).astype(
-                np.int64
-            )
+            # Mirrors _season_context_for: evaluate the season window for the
+            # three candidate ref years around the label year, prefer the
+            # window that encompasses the label, else fall back to the
+            # nearest one.
+            candidate_years = [label_year - 1, label_year, label_year + 1]
+            start_candidates = [
+                season_dekad_to_date(sos_i, cy, mode="first") for cy in candidate_years
+            ]
+            end_candidates = [
+                season_dekad_to_date(eos_i, cy, mode="last") for cy in candidate_years
+            ]
 
-            # season_doys_to_dates_refyear, vectorized:
-            #   end = Jan 1 of ref_year + eos days; start = end - duration
-            ref_year_start = (
-                (ref_year - 1970).astype("datetime64[Y]").astype("datetime64[D]")
+            encompasses = [
+                (start_candidates[i] <= label_days) & (label_days <= end_candidates[i])
+                for i in range(3)
+            ]
+            selected_idx = np.select(encompasses, [0, 1, 2], default=-1)
+
+            diffs = np.stack(
+                [
+                    np.minimum(
+                        np.abs((label_days - start_candidates[i]).astype(np.int64)),
+                        np.abs((label_days - end_candidates[i]).astype(np.int64)),
+                    )
+                    for i in range(3)
+                ],
+                axis=0,
             )
-            end_date = ref_year_start + eos_i.astype("timedelta64[D]")
-            duration = np.where(sos_i < eos_i, eos_i - sos_i, eos_i + 365 - sos_i)
-            start_date = end_date - duration.astype("timedelta64[D]")
+            fallback_idx = np.argmin(diffs, axis=0)
+            final_idx = np.where(selected_idx >= 0, selected_idx, fallback_idx)
+
+            start_stack = np.stack(start_candidates, axis=0)
+            end_stack = np.stack(end_candidates, axis=0)
+            start_date = np.take_along_axis(start_stack, final_idx[None, :], axis=0)[0]
+            end_date = np.take_along_axis(end_stack, final_idx[None, :], axis=0)[0]
 
             start_m = start_date.astype("datetime64[M]").astype(np.int64)
             end_m = end_date.astype("datetime64[M]").astype(np.int64)
@@ -2750,13 +2807,19 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         s1_full = s1_win.reshape(B, 1, 1, T, len(S1_BANDS)).copy()
         meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
         dem_full = c["dem"][rows].reshape(B, 1, 1, len(DEM_BANDS)).copy()
-        latlon_full = c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+        latlon_full = (
+            c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+            if c["latlon"] is not None
+            else None
+        )
 
         # ---- sensor masking (mirrors _apply_masking) ------------------------
         if self.masking_config and self.masking_config.enable:
             cfg = self.masking_config
             s1_missing = np.all(s1_win == NODATAVALUE, axis=-1)
             s2_missing = np.all(s2_win == NODATAVALUE, axis=-1)
+            meteo_missing = np.all(meteo_win == NODATAVALUE, axis=-1)
+            dem_missing = np.all(c["dem"][rows] == NODATAVALUE, axis=-1)
 
             s1_full_drop = rng.random(B) < cfg.s1_full_dropout_prob
             if cfg.s1_timestep_dropout_prob > 0:
@@ -2782,38 +2845,67 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
                 s2_drop |= block_mask & has_block[:, None]
             if cfg.s2_cloud_timestep_prob > 0:
                 s2_drop |= rng.random((B, T)) < cfg.s2_cloud_timestep_prob
+            if cfg.s2_full_dropout_prob > 0:
+                s2_drop[rng.random(B) < cfg.s2_full_dropout_prob] = True
 
-            # Joint S1/S2 guard (rare; per-row like _rescue_joint_s1_s2_wipe)
+            if cfg.meteo_timestep_dropout_prob > 0:
+                meteo_drop = rng.random((B, T)) < cfg.meteo_timestep_dropout_prob
+            else:
+                meteo_drop = np.zeros((B, T), dtype=bool)
+            if cfg.meteo_full_dropout_prob > 0:
+                meteo_drop[rng.random(B) < cfg.meteo_full_dropout_prob] = True
+
+            if cfg.dem_dropout_prob > 0:
+                dem_drop = rng.random(B) < cfg.dem_dropout_prob
+            else:
+                dem_drop = np.zeros(B, dtype=bool)
+
+            # Masking guards (rare; per-row like _rescue_fully_masked_sample)
             violated = ((s1_drop | s1_missing).all(axis=1)) & (
                 (s2_drop | s2_missing).all(axis=1)
             )
             for i in np.flatnonzero(violated):
                 restorable = np.flatnonzero(s2_drop[i] & ~s2_missing[i])
-                if restorable.size and cfg.s2_cloud_timestep_prob < 1.0:
+                if restorable.size and not cfg.s2_disabled:
                     s2_drop[i, int(rng.choice(restorable))] = False
                     continue
                 restorable = np.flatnonzero(s1_drop[i] & ~s1_missing[i])
-                if restorable.size and cfg.s1_full_dropout_prob < 1.0:
+                if restorable.size and not cfg.s1_disabled:
                     s1_drop[i, int(rng.choice(restorable))] = False
                     continue
-                logger.warning(
+                self._warn_masking_guard(
+                    "no_s1_s2",
                     "Sample has S1 and S2 fully masked-or-missing and no "
-                    "restorable timesteps; the joint S1/S2 guard cannot be "
-                    "enforced for this sample."
+                    "restorable timestep; the joint S1/S2 guard cannot be "
+                    "enforced for it",
+                )
+                # S1 and S2 gone for good: keep one meteo or DEM token alive,
+                # else the attention row is fully masked (see
+                # _rescue_fully_masked_sample).
+                if not (meteo_drop[i] | meteo_missing[i]).all() or not (
+                    dem_drop[i] or dem_missing[i]
+                ):
+                    continue
+                restorable = np.flatnonzero(meteo_drop[i] & ~meteo_missing[i])
+                if restorable.size and not cfg.meteo_disabled:
+                    meteo_drop[i, int(rng.choice(restorable))] = False
+                    continue
+                if dem_drop[i] and not dem_missing[i] and not cfg.dem_disabled:
+                    dem_drop[i] = False
+                    continue
+                self._warn_masking_guard(
+                    "no_tokens",
+                    "Sample has S1, S2, meteo and DEM all masked-or-missing "
+                    "and no restorable timestep; it carries no encoder token "
+                    "and its embedding will be degenerate",
                 )
 
             s1_view = s1_full[:, 0, 0]
             s2_view = s2_full[:, 0, 0]
             s1_view[s1_drop] = NODATAVALUE
             s2_view[s2_drop] = NODATAVALUE
-
-            if cfg.meteo_timestep_dropout_prob > 0:
-                meteo_mask = rng.random((B, T)) < cfg.meteo_timestep_dropout_prob
-                meteo_full[:, 0, 0][meteo_mask] = NODATAVALUE
-
-            if cfg.dem_dropout_prob > 0:
-                dem_drop = rng.random(B) < cfg.dem_dropout_prob
-                dem_full[dem_drop] = NODATAVALUE
+            meteo_full[:, 0, 0][meteo_drop] = NODATAVALUE
+            dem_full[dem_drop] = NODATAVALUE
 
         # ---- timestamps ------------------------------------------------------
         month_num = c["start_month_num"][rows][:, None] + tidx  # (B, T)
@@ -2967,7 +3059,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
             s2=torch.from_numpy(s2_full),
             meteo=torch.from_numpy(meteo_full),
             dem=torch.from_numpy(dem_full),
-            latlon=torch.from_numpy(latlon_full),
+            latlon=torch.from_numpy(latlon_full) if latlon_full is not None else None,
             timestamps=torch.from_numpy(timestamps),
             label=label_tensor,
         )
@@ -3586,6 +3678,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         num_outputs: Optional[int] = None,
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
+        disable_latlon: bool = False,
         repeats: int = 1,
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
@@ -3604,6 +3697,7 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             num_outputs=num_outputs,
             augment=augment,
             masking_config=masking_config,
+            disable_latlon=disable_latlon,
             min_season_coverage=min_season_coverage,
             remove_samples_without_s1_s2=remove_samples_without_s1_s2,
         )

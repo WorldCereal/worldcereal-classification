@@ -130,6 +130,8 @@ class TorchTrainer:
         disable_progressbar: bool = False,
         use_spatial_split: bool = True,
         spatial_bin_size_degrees: float = 0.25,
+        excluded_modalities: Optional[Sequence[str]] = None,
+        disable_latlon: bool = False,
     ):
         self.training_df = embeddings_df
         self.split_column = split_column
@@ -208,6 +210,10 @@ class TorchTrainer:
         # Spatial splitting
         self.use_spatial_split = use_spatial_split
         self.spatial_bin_size_degrees = spatial_bin_size_degrees
+        self.excluded_modalities = sorted(
+            {str(modality).lower() for modality in (excluded_modalities or [])}
+        )
+        self.disable_latlon = disable_latlon
 
         # Early stopping
         self.early_stopping_patience = early_stopping_patience
@@ -255,6 +261,8 @@ class TorchTrainer:
                 "eval_min_class_samples": self.eval_min_class_samples,
                 "use_spatial_split": self.use_spatial_split,
                 "spatial_bin_size_degrees": self.spatial_bin_size_degrees,
+                "excluded_modalities": self.excluded_modalities,
+                "disable_latlon": self.disable_latlon,
                 "early_stopping_patience": self.early_stopping_patience,
                 "early_stopping_min_delta": self.early_stopping_min_delta,
                 "weight_decay": self.weight_decay,

@@ -73,7 +73,12 @@ def _dummy_probability_arr() -> xr.DataArray:
     return xr.DataArray(
         np.zeros((1, 1, 2, 2), dtype=np.float32),
         dims=("bands", "t", "x", "y"),
-        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+        coords={
+            "bands": ["B2"],
+            "t": np.array(["2024-01-01"], dtype="datetime64[D]"),
+            "x": [0, 1],
+            "y": [0, 1],
+        },
     )
 
 
@@ -647,3 +652,272 @@ def test_prepare_array_preserves_b8a_band_when_disabled():
     # Check B8A band is NOT masked (values preserved as ~100.0)
     b8a_idx = list(result.bands.values).index("B8A")
     assert np.all(result.values[b8a_idx] > 50.0)  # Values should be preserved
+
+
+def test_mask_disabled_modalities_uses_model_run_config():
+    bands = ["B2", "VV", "temperature_2m"]
+    data = np.ones((len(bands), 1, 2, 2), dtype=np.float32)
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_s1": True, "disable_meteo": False}}
+        )
+    )
+
+    result = engine._mask_disabled_modalities(arr)
+
+    assert np.all(result.sel(bands="VV") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 1.0)
+    assert np.all(result.sel(bands="temperature_2m") == 1.0)
+
+
+def test_get_disabled_modalities_reads_disable_latlon():
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_latlon": True}})
+    )
+
+    disabled = engine._get_disabled_modalities()
+
+    assert disabled["latlon"] is True
+    assert disabled["s1"] is False
+
+
+@pytest.mark.parametrize(
+    ("configured", "override", "expected"),
+    [
+        (True, None, True),
+        (False, None, False),
+        (False, True, True),
+        (True, False, True),
+    ],
+)
+def test_resolve_disable_latlon_override(configured, override, expected):
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={"args": {"disable_latlon": configured}}
+        )
+    )
+
+    assert engine._resolve_disable_latlon(override) is expected
+
+
+def test_generate_predictor_can_disable_latlon():
+    from worldcereal.train.predictors import generate_predictor
+
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "x", "y"),
+        coords={"bands": ["B2"], "t": [0], "x": [0, 1], "y": [0, 1]},
+    )
+
+    predictors = generate_predictor(arr, epsg=4326, disable_latlon=True)
+
+    assert predictors.latlon is None
+
+
+def test_mask_disabled_modalities_rejects_disabling_both_s1_and_s2():
+    arr = xr.DataArray(
+        np.ones((1, 1, 2, 2), dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": ["B2"], "t": [0], "y": [0, 1], "x": [0, 1]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(
+            run_config={
+                "args": {
+                    "disable_s1": True,
+                    "disable_s2": True,
+                    "disable_meteo": True,
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="eliminates both S1 and S2"):
+        engine._mask_disabled_modalities(arr)
+
+
+def test_prepare_array_blanks_dem_without_deriving_slope():
+    """DEM disabled: elevation is blanked and slope is never derived from it."""
+    bands = ["B2", "COP-DEM"]
+    arr = xr.DataArray(
+        np.full((len(bands), 2, 2, 2), 100.0, dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 10], "x": [0, 10]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = False
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_dem": True}})
+    )
+
+    result = engine._prepare_array(arr, epsg=32631)
+
+    # An absent slope band reaches the predictor as NODATA, same as a masked one.
+    assert "slope" not in result.bands.values
+    assert np.all(result.sel(bands="COP-DEM") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 100.0)
+
+
+def test_prepare_array_masks_slope_supplied_with_the_cube():
+    """On CDSE slope arrives pre-loaded, so it must be masked rather than skipped."""
+    bands = ["B2", "elevation", "slope"]
+    arr = xr.DataArray(
+        np.full((len(bands), 2, 2, 2), 100.0, dtype=np.float32),
+        dims=("bands", "t", "y", "x"),
+        coords={"bands": bands, "t": [0, 1], "y": [0, 10], "x": [0, 10]},
+    )
+    engine = inference.SeasonalInferenceEngine.__new__(
+        inference.SeasonalInferenceEngine
+    )
+    engine._mask_b8a = False
+    engine.bundle = SimpleNamespace(
+        base_artifact=SimpleNamespace(run_config={"args": {"disable_dem": True}})
+    )
+
+    result = engine._prepare_array(arr, epsg=32631)
+
+    assert np.all(result.sel(bands="slope") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="elevation") == inference.NODATA_VALUE)
+    assert np.all(result.sel(bands="B2") == 100.0)
+
+
+def test_pixels_with_valid_inputs_requires_s1_or_s2_in_output_order():
+    from worldcereal.train.predictors import generate_predictor
+
+    data = np.ones((4, 1, 3, 2), dtype=np.float32)  # bands, t, x, y
+    data[:2, :, 2, 0] = inference.NODATA_VALUE
+    arr = xr.DataArray(
+        data,
+        dims=("bands", "t", "x", "y"),
+        coords={
+            "bands": ["B2", "VV", "temperature", "elevation"],
+            "t": [0],
+            "x": [0, 1, 2],
+            "y": [0, 1],
+        },
+    )
+    predictors = generate_predictor(arr, epsg=4326)
+
+    valid = inference._pixels_with_valid_inputs(predictors)
+
+    expected = np.ones((2, 3), dtype=bool)  # (y, x), as in _format_outputs
+    expected[0, 2] = False
+    np.testing.assert_array_equal(valid.reshape(2, 3), expected)
+    subset = inference._subset_predictors(predictors, valid)
+    assert subset.B == 5
+    assert subset.latlon.shape[0] == 5
+
+
+def test_skipped_pixels_do_not_affect_postprocessing():
+    engine = _build_probability_engine()
+    engine._cropland_postprocess = inference.PostprocessOptions(
+        method="majority_vote", kernel_size=3
+    )
+    arr = _dummy_probability_arr()
+    landcover_logits = torch.tensor(
+        [[0.0, 5.0], [0.0, 0.0], [0.0, 5.0], [0.0, 5.0]], dtype=torch.float32
+    )
+    valid = np.array([True, False, True, True])
+
+    dataset = engine._format_outputs(
+        arr=arr,
+        outputs=(landcover_logits, None, None),
+        season_ids=["tc-s1"],
+        mask_cropland=True,
+        valid_pixels=valid,
+    )
+
+    labels = dataset["cropland_classification"].values
+    assert labels[0, 0] == 1
+    assert labels[0, 1] == inference.POSTPROCESSING_NODATA
+    for values in dataset.data_vars.values():
+        assert values.dtype == np.uint8
+
+
+def test_output_dtypes_with_embeddings_and_ndvi():
+    engine = _build_probability_engine()
+    arr = xr.DataArray(
+        np.full((2, 1, 2, 2), 100.0, dtype=np.float32),
+        dims=("bands", "t", "x", "y"),
+        coords={
+            "bands": ["B4", "B8"],
+            "t": [np.datetime64("2024-01-01")],
+            "x": [0, 1],
+            "y": [0, 1],
+        },
+    )
+    embeddings = torch.ones((4, 4), dtype=torch.float32)
+    valid = np.array([True, False, True, True])
+
+    dataset = engine._format_outputs(
+        arr=arr,
+        outputs=(None, None, embeddings),
+        season_ids=["tc-s1"],
+        mask_cropland=False,
+        export_embeddings=True,
+        export_ndvi=True,
+        valid_pixels=valid,
+    )
+
+    for name, values in dataset.data_vars.items():
+        expected_dtype = (
+            np.float32
+            if name == "global_embedding:scale" or name.startswith("ndvi:")
+            else np.uint8
+        )
+        assert values.dtype == expected_dtype
+    assert inference._dataset_to_multiband_array(dataset).dtype == np.float32
+
+
+def test_quantized_embeddings_keep_full_uint8_range():
+    cube = np.array([[[-1000.0, 0.0, 1000.0]]], dtype=np.float32)
+
+    quantized, scale = inference._quantize_embedding_cube(cube)
+
+    assert quantized.dtype == np.uint8
+    assert quantized.min() >= 0
+    assert quantized.max() == 255
+    assert scale.dtype == np.float32
+
+
+def test_expand_to_all_pixels_zero_fills_skipped_pixels():
+    engine = _build_probability_engine()
+    engine.bundle.model = SimpleNamespace(encoder=SimpleNamespace(embedding_size=4))
+    valid = np.array([True, False, True])
+    landcover = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    lc, ct, ge = engine._expand_to_all_pixels(
+        (landcover, None, None), valid, num_seasons=2, export_embeddings=False
+    )
+
+    torch.testing.assert_close(lc, torch.tensor([[1.0, 2.0], [0.0, 0.0], [3.0, 4.0]]))
+    assert ct is None and ge is None
+
+    lc, ct, ge = engine._expand_to_all_pixels(
+        (None, None, None),
+        np.zeros(3, dtype=bool),
+        num_seasons=2,
+        export_embeddings=True,
+    )
+
+    assert lc.shape == (3, 2) and ct.shape == (3, 2, 3) and ge.shape == (3, 4)
+    assert not lc.any() and not ct.any() and not ge.any()

@@ -16,6 +16,7 @@ from shapely import wkt
 from shapely.geometry import Polygon
 
 from worldcereal.data import croptype_mappings
+from worldcereal.utils.legend import CROP_LEGEND_URL
 from worldcereal.utils.sharepoint import build_class_mappings, get_excel_from_sharepoint
 
 SHAREPOINT_SITE_URL = "https://vitoresearch.sharepoint.com/sites/21717-ccn-world-cereal"
@@ -24,6 +25,11 @@ SHAREPOINT_FILE_URL = (
 )
 
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def parent_sample_ids(sample_ids: pd.Series) -> pd.Series:
+    """Return original polygon IDs for samples, including child points."""
+    return sample_ids.astype("string").str.replace(r"_child\d+$", "", regex=True)
 
 
 def get_class_mappings(
@@ -82,14 +88,7 @@ def get_legend() -> pd.DataFrame:
         the latest parsed version of the WorldCereal legend
     """
 
-    artifactory_base_url = (
-        "https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal/"
-    )
-    crop_legend_url = (
-        artifactory_base_url + "legend/WorldCereal_LC_CT_legend_latest.csv"
-    )
-
-    crop_legend = pd.read_csv(crop_legend_url, header=0, sep=";")
+    crop_legend = pd.read_csv(CROP_LEGEND_URL, header=0, sep=";")
     crop_legend["ewoc_code"] = crop_legend["ewoc_code"].str.replace("-", "").astype(int)
     crop_legend = crop_legend.ffill(axis=1)
 
@@ -344,7 +343,6 @@ def query_public_extractions(
     # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
     # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
     # temporary_cropland is defined based on WorldCereal legend
-    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         cropland_filter_query_part = """
@@ -508,7 +506,6 @@ def query_private_extractions(
     # multiclass models are trained on temporary cropland samples only, thus when user wants to do croptype classification
     # we need to filter out non-cropland samples, since croptype model will not be able to predict them correctly;
     # temporary_cropland is defined based on WorldCereal legend
-    # https://artifactory.vgt.vito.be/artifactory/auxdata-public/worldcereal//legend/WorldCereal_LC_CT_legend_latest.csv
     # and constitutes of all classes that start with 11-..., except fallow classes (11-15-...).
     if filter_cropland:
         prefix = "WHERE" if bbox_poly is None else "AND"
@@ -1020,21 +1017,32 @@ def split_df(
     val_size: Optional[float] = None,
     train_only_samples: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if "sample_id" not in df.columns:
+        raise ValueError("Splitting requires a 'sample_id' column.")
+
+    parent_ids = parent_sample_ids(df["sample_id"])
+
     if val_size is not None:
         assert (
             (val_countries_iso3 is None)
             and (val_years is None)
             and (val_sample_ids is None)
         )
-        val, train = np.split(
-            df.sample(frac=1, random_state=DEFAULT_SEED), [int(val_size * len(df))]
+        shuffled_parents = parent_ids.drop_duplicates().sample(
+            frac=1, random_state=DEFAULT_SEED
         )
-        logger.info(f"Using {len(train)} train and {len(val)} val samples")
-        return pd.DataFrame(train), pd.DataFrame(val)
+        val_parent_ids = set(
+            shuffled_parents.iloc[: int(val_size * len(shuffled_parents))]
+        )
+        is_val = parent_ids.isin(val_parent_ids)
+        is_train = ~is_val
+        logger.info(f"Using {is_train.sum()} train and {is_val.sum()} val samples")
+        return df[is_train], df[is_val]
     if val_sample_ids is not None:
         assert (val_countries_iso3 is None) and (val_years is None)
-        is_val = df.sample_id.isin(val_sample_ids)
-        is_train = ~df.sample_id.isin(val_sample_ids)
+        val_parent_ids = set(parent_sample_ids(pd.Series(val_sample_ids)))
+        is_val = parent_ids.isin(val_parent_ids)
+        is_train = ~is_val
     elif val_countries_iso3 is not None:
         assert (val_sample_ids is None) and (val_years is None)
         df = join_with_world_df(df)
@@ -1043,25 +1051,25 @@ def split_df(
                 f"Tried removing {country} but it is not in the dataframe"
             )
         if train_only_samples is not None:
-            is_val = df.iso3.isin(val_countries_iso3) & ~df.sample_id.isin(
-                train_only_samples
-            )
+            is_val = df.iso3.isin(val_countries_iso3)
+            train_only_parents = set(parent_sample_ids(pd.Series(train_only_samples)))
+            is_val &= ~parent_ids.isin(train_only_parents)
         else:
             is_val = df.iso3.isin(val_countries_iso3)
-        is_train = ~df.iso3.isin(val_countries_iso3)
+        is_val = parent_ids.isin(set(parent_ids[is_val]))
+        is_train = ~is_val
     elif val_years is not None:
         df["end_date_ts"] = pd.to_datetime(df.end_date)
         if train_only_samples is not None:
-            is_val = df.end_date_ts.dt.year.isin(val_years) & ~df.sample_id.isin(
-                train_only_samples
-            )
+            is_val = df.end_date_ts.dt.year.isin(val_years)
+            train_only_parents = set(parent_sample_ids(pd.Series(train_only_samples)))
+            is_val &= ~parent_ids.isin(train_only_parents)
         else:
             is_val = df.end_date_ts.dt.year.isin(val_years)
-        is_train = ~df.end_date_ts.dt.year.isin(val_years)
+        is_val = parent_ids.isin(set(parent_ids[is_val]))
+        is_train = ~is_val
 
-    logger.info(
-        f"Using {len(is_val) - sum(is_val)} train and {sum(is_val)} val samples"
-    )
+    logger.info(f"Using {is_train.sum()} train and {is_val.sum()} val samples")
 
     return df[is_train], df[is_val]
 

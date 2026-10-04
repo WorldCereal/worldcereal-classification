@@ -11,13 +11,6 @@ SUPPORTED_SEASONS = [
     "custom",
 ]
 
-SEASONAL_MAPPING = {
-    "tc-s1": "S1",
-    "tc-s2": "S2",
-    "tc-annual": "ANNUAL",
-    "custom": "custom",
-}
-
 
 # Default buffer (days) prior to
 # season start

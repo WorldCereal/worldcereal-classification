@@ -96,7 +96,7 @@ def visualize_spatial_extents(collections: List[RdmCollection]):
 
     # Create the basemap
     m = Map(
-        basemap=basemaps.CartoDB.Positron,
+        basemap=basemaps.Esri.WorldStreetMap,
         zoom=zoom,
         center=center,
         scroll_wheel_zoom=True,

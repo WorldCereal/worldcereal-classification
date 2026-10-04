@@ -848,7 +848,7 @@ def retrieve_extractions_extent(
     info_control = WidgetControl(widget=info, position="topright")
 
     extent_map = Map(
-        basemap=basemaps.CartoDB.Positron,
+        basemap=basemaps.Esri.WorldStreetMap,
         center=(0, 0),
         zoom=1,
         scroll_wheel_zoom=True,

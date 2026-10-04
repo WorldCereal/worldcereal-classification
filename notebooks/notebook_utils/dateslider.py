@@ -59,20 +59,26 @@ class date_slider:
         self.html_text: widgets.HTML
         self._year_dropdown: Optional[widgets.Dropdown] = None
 
-        # Parse initial_window into start/exclusive-end timestamps used by
-        # _build_slider to snap the handles to the right positions.
-        self._initial_start: Optional[pd.Timestamp] = None
-        self._initial_end_exclusive: Optional[pd.Timestamp] = None
+        # Track the currently selected season as a month-of-year + span
+        # (deliberately not tied to a specific year), so switching the year
+        # dropdown repositions the slider on the same season instead of
+        # resetting to the default window. Seeded from `initial_window` when
+        # provided, and kept up to date on every slider change afterwards.
+        self._current_start_month: Optional[int] = None
+        self._current_span_months: Optional[int] = None
         if initial_window is not None:
             try:
                 ws = pd.Timestamp(initial_window.start_date)
                 we = pd.Timestamp(initial_window.end_date)
-                self._initial_start = ws.replace(day=1)
                 # The slider uses an exclusive-end convention: the end handle
                 # sits at the first day of the month *after* the last included
                 # month, so add one month to the season-end month.
                 we_first = we.replace(day=1)
-                self._initial_end_exclusive = we_first + pd.DateOffset(months=1)
+                end_exclusive = we_first + pd.DateOffset(months=1)
+                self._current_start_month = ws.month
+                self._current_span_months = (end_exclusive.year - ws.year) * 12 + (
+                    end_exclusive.month - ws.month
+                )
                 # Auto-select the year in the dropdown to the season start year
                 # (only if the caller has not already provided an explicit value).
                 if year_selector and year_selector_initial is None:
@@ -207,27 +213,17 @@ class date_slider:
         options = [(date.strftime("%b %Y"), date) for date in dates]
 
         default_start_index = 0
-        if self._initial_start is not None and focus_year == self._initial_start.year:
-            # Snap to the month specified by the initial window.
+        if self._current_start_month is not None and focus_year is not None:
+            # Snap to the previously selected month-of-year so switching years
+            # preserves the chosen season instead of resetting to the default.
             for idx, date in enumerate(dates):
-                if (
-                    date.year == self._initial_start.year
-                    and date.month == self._initial_start.month
-                ):
+                if date.year == focus_year and date.month == self._current_start_month:
                     default_start_index = idx
                     break
-            # Exclusive end: find the month *after* the season-end month.
-            default_end_index = min(
-                len(dates) - 1, default_start_index + self.default_window_months
-            )
-            if self._initial_end_exclusive is not None:
-                for idx, date in enumerate(dates):
-                    if (
-                        date.year == self._initial_end_exclusive.year
-                        and date.month == self._initial_end_exclusive.month
-                    ):
-                        default_end_index = idx
-                        break
+            span = self.default_window_months
+            if self._current_span_months is not None:
+                span = self._current_span_months
+            default_end_index = min(len(dates) - 1, default_start_index + span)
         elif focus_year is not None:
             for idx, date in enumerate(dates):
                 if date.year == focus_year:
@@ -386,6 +382,13 @@ class date_slider:
         season_start = start.replace(day=1)
         # end is exclusive: the season ends on the last day of the previous month
         season_end = self._get_last_day_of_month(end - pd.DateOffset(months=1))
+
+        # Remember the chosen month-of-year + span so a later year switch can
+        # re-apply this same season instead of resetting to the default.
+        self._current_start_month = start.month
+        self._current_span_months = (end.year - start.year) * 12 + (
+            end.month - start.month
+        )
 
         processing_start_month = season_end.replace(day=1) - pd.DateOffset(
             months=self.processing_months - 1
