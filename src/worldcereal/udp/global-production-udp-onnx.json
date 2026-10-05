@@ -350,7 +350,7 @@
         "local_incidence_angle": false,
         "mask": false,
         "noise_removal": true,
-        "options":{"max_processing_area_pixels":1536}
+        "options":{"max_processing_area_pixels":1024}
       }
     },
     "resamplespatial3": {
