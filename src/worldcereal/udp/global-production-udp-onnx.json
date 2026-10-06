@@ -1238,13 +1238,13 @@
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "image-name": "registry.internal/staging/openeo-geotrellis-kube-python311:20261004-1192",
+    "image-name": "registry.internal/dev/openeo-geotrellis-kube-python311:20261006-1202",
     "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/error_on_missing_band/geotrellis-extensions-error_on_missing_band.jar",
     "gdal-dataset-cache-size": 6,
     "concurrent_save_results": 3,
     "force-s3proxy": true,
     "etl_organization_id": 2059,
-    "spark-context-cleanup" : "kill-executors"
+    "spark-context-cleanup" : "stop"
   },
   "parameters": [
     {
