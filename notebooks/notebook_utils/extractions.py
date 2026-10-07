@@ -3,16 +3,19 @@ import textwrap
 import time
 import urllib.request
 import warnings
+from io import BytesIO
 from pathlib import Path
 from typing import List, Optional, Union
 
 import geopandas as gpd
 import ipywidgets as widgets
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from ipyleaflet import GeoJSON, Map, WidgetControl, basemaps
+from IPython.display import Image, display
 from loguru import logger
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from openeo.extra.job_management import CsvJobDatabase
 from openeo_gfmap.manager.job_splitters import load_s2_grid
 from prometheo.utils import DEFAULT_SEED
@@ -511,7 +514,9 @@ def visualize_timeseries(
     else:
         selected_ids = np.array(sample_ids)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig = Figure(figsize=(12, 6))
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
 
     for sample_id in selected_ids:
         sample = extractions_gdf[extractions_gdf["sample_id"] == sample_id]
@@ -541,22 +546,22 @@ def visualize_timeseries(
             values,
             marker="o",
             linestyle="-",
-            label=f"{crop_label} ({sample_id})",
+            label=textwrap.fill(f"{crop_label} ({sample_id})", width=30),
         )
 
-    plt.xlabel("Date")
-    plt.ylabel(band)
-    plt.xticks(rotation=90)
-    # put legend underneath the plot
+    ax.set_xlabel("Date")
+    ax.set_ylabel(band)
+    ax.tick_params(axis="x", labelrotation=90)
     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0)
-    fig.subplots_adjust(right=0.75)  # Ensures enough space for the legend
-    # add gridlines
-    plt.grid()
-    plt.tight_layout()
-    plt.show()
+    ax.grid()
+    fig.tight_layout(rect=(0, 0, 0.75, 1))
 
     if outfile is not None:
-        plt.savefig(outfile)
+        fig.savefig(outfile, bbox_inches="tight")
+
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight")
+    display(Image(data=buffer.getvalue()))
     return
 
 
