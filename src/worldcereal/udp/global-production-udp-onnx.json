@@ -136,9 +136,6 @@
           "SCL"
         ],
         "id": "SENTINEL2_L2A",
-        "featureflags": {
-          "tilesize": 1024
-        },
         "properties": {
           "eo:cloud_cover": {
             "process_graph": {
@@ -174,6 +171,9 @@
         "spatial_extent": null,
         "temporal_extent": {
           "from_parameter": "temporal_extent"
+        },
+        "featureflags": {
+          "tilesize": 2048
         }
       }
     },
@@ -350,7 +350,9 @@
         "local_incidence_angle": false,
         "mask": false,
         "noise_removal": true,
-        "options":{"max_processing_area_pixels":1024}
+        "options": {
+          "max_processing_area_pixels": 1024
+        }
       }
     },
     "resamplespatial3": {
@@ -1238,13 +1240,11 @@
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "image-name": "registry.internal/dev/openeo-geotrellis-kube-python311:20261006-1202",
-    "openeo-jar-path": "https://artifactory.vgt.vito.be/artifactory/libs-release-public/org/openeo/geotrellis-extensions/error_on_missing_band/geotrellis-extensions-error_on_missing_band.jar",
-    "gdal-dataset-cache-size": 6,
+    "image-name": "registry.internal/staging/openeo-geotrellis-kube-python311:20261008-1216",
     "concurrent_save_results": 3,
     "force-s3proxy": true,
     "etl_organization_id": 2059,
-    "spark-context-cleanup" : "stop"
+    "spark-context-cleanup": "stop"
   },
   "parameters": [
     {
