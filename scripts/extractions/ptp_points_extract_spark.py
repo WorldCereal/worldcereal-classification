@@ -367,16 +367,16 @@ def main() -> None:
             import pyarrow as pa
             import pyarrow.parquet as pq
             tabs = [pq.read_table(p) for p in have]
-            t = pa.concat_tables(tabs)
-            host = t.column("ref_id")
-            t = t.drop(["ref_id"])
-            t = t.append_column(pa.field("host_ref_id", pa.string()), host)
-            t = t.append_column(
+            tbl = pa.concat_tables(tabs)
+            host = tbl.column("ref_id")
+            tbl = tbl.drop(["ref_id"])
+            tbl = tbl.append_column(pa.field("host_ref_id", pa.string()), host)
+            tbl = tbl.append_column(
                 pa.field("ref_id", pa.string()),
-                pa.array([src_ref] * t.num_rows, type=pa.string()))
-            t = t.replace_schema_metadata(tabs[0].schema.metadata)
-            pq.write_table(t, out_path)
-            out = t
+                pa.array([src_ref] * tbl.num_rows, type=pa.string()))
+            tbl = tbl.replace_schema_metadata(tabs[0].schema.metadata)
+            pq.write_table(tbl, out_path)
+            n_out = tbl.num_rows
         else:
             frames = [gpd.read_parquet(p) for p in have]
             out = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True),
@@ -385,8 +385,8 @@ def main() -> None:
                 out["host_ref_id"] = out["ref_id"]
             out["ref_id"] = src_ref
             out.to_parquet(out_path)
+            n_out = len(out)
         written += 1
-        n_out = out.num_rows if args.native else len(out)
         logger.success(f"{src_ref}: {n_out:,} rows -> {out_path}")
 
         # Same machinery and _verify/ layout as the RDM campaign driver.

@@ -109,6 +109,8 @@ def shrunk_extents(catalog: RefCatalog,
             continue
         parts = list(fp.geoms) if fp.geom_type == "MultiPolygon" else [fp]
         epsg = _tile_epsg(e.get("tile"), e.get("zone"))
+        if epsg is None:
+            continue
         groups.setdefault(epsg, []).extend(p.buffer(1e-9) for p in parts)
     out: Dict[int, list] = {}
     for epsg, polys in groups.items():
@@ -725,9 +727,10 @@ def main() -> None:
     if args.mode == "extract":
         if args.out_dir is None:
             ap.error("--out-dir is required for --mode extract")
-        args.out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir: Path = args.out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
         ptp_engine.AGERA5_CACHE = (args.agera5_cache
-                                   or args.out_dir / "_agera5_cache")
+                                   or out_dir / "_agera5_cache")
         ptp_engine.AGERA5_CACHE.mkdir(parents=True, exist_ok=True)
 
     if (args.verify or args.verify_pct) and args.verify_store is None:

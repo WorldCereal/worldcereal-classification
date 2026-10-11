@@ -69,6 +69,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from loguru import logger
 from shapely.geometry import box, shape
+from shapely.geometry.base import BaseGeometry  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ref_catalog import (  # noqa: E402
@@ -404,7 +405,7 @@ def footprints_from_stac(ref_ids: List[str], workers: int) -> pd.DataFrame:
     return df.drop_duplicates(subset=["ref_id", "sample_id"])
 
 
-def _footprint_from_nc(path: str) -> Optional[object]:
+def _footprint_from_nc(path: str) -> Optional["BaseGeometry"]:
     """Bounding box of one patch .nc, in EPSG:4326, from its CRS + x/y axes."""
     try:
         import netCDF4

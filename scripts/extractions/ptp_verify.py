@@ -53,6 +53,7 @@ from ptp_engine import (  # noqa: E402
     S1_BANDS,
     S2_BANDS,
     _nearest_idx,
+    _period_key,
     _read_patch,
     composite_s1,
     composite_s2,
@@ -394,7 +395,12 @@ def verify_ref(
         verdict["n_checked"] += 1
         s_vals = srows.loc[common_ts]
         l_vals = lrows.loc[common_ts]
-        months = [(t.year, t.month) for t in common_ts]
+        # Build the period keys with the engine's own function. These are
+        # dict keys inside _period_index, so a 2-tuple (year, month) never
+        # matches the 3-tuple (year, month, start_day) _period_key returns and
+        # every observation silently falls outside the window, making the
+        # composites below all-NODATA and the mismatch explanations dead.
+        months = [_period_key(t, "month") for t in common_ts]
 
         s2_store = s_vals[S2_BANDS].to_numpy(np.int64)
         s2_local = l_vals[S2_BANDS].to_numpy(np.int64)

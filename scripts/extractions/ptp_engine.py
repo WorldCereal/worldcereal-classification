@@ -83,7 +83,7 @@ CHUNK_ROWS = 1_500_000
 
 # Frozen semantic/encoding decisions. Row/col offsets are grid steps relative
 # to the nearest-pixel-centre match; all zero means pure geometry.
-DEFAULT_CONVENTIONS = {
+DEFAULT_CONVENTIONS: Dict[str, Any] = {
     "s2": {"row_off": 0, "col_off": 0},
     "s1_same_crs": {"row_off": 0, "col_off": 0},
     "s1_cross_crs": {"row_off": 0, "col_off": 0},
@@ -422,8 +422,9 @@ def composite_s1_chip(
                 continue
             mean_power = _chip_period_means(power[tsel])
             with np.errstate(all="ignore"):
-                dn = np.float32(10.0 ** ((10.0 * np.log10(
-                    mean_power.astype(np.float64)) + 83.0) / 20.0))
+                dn = (10.0 ** ((10.0 * np.log10(
+                    mean_power.astype(np.float64)) + 83.0) / 20.0)
+                      ).astype(np.float32)
             ok = np.isfinite(dn)
             out[bi, mi][ok] = np.clip(np.floor(dn[ok]), 1, 65534
                                       ).astype(np.uint16)
@@ -762,7 +763,7 @@ class MonthlyMeteo:
                 "AGERA5_CACHE set, which main() does from --agera5-cache)")
         self.cache_dir = Path(resolved)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._open: Dict[Tuple[int, int, str], Optional[tuple]] = {}
+        self._open: Dict[Tuple[int, int, int, str], Optional[tuple]] = {}
         self._horizon: Optional[Tuple[int, int]] = None
         self.missing: set = set()  # (year, month, day) served as NODATA
 

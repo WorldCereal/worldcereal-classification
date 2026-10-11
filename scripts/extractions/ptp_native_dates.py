@@ -87,10 +87,11 @@ class DailyMeteo:
             if not path.exists():
                 self.missing.add(day)
                 continue
-            ri = np.fromiter((i for i, _ in idx), dtype=np.int64, count=len(idx))
+            sel = np.fromiter((i for i, _ in idx), dtype=np.int64,
+                              count=len(idx))
             with rasterio.open(path) as ds:
                 inv = ~ds.transform
-                cc, rr = inv * (lons[ri], lats[ri])
+                cc, rr = inv * (lons[sel], lats[sel])
                 rr = np.floor(rr).astype(np.int64)
                 cc = np.floor(cc).astype(np.int64)
                 inside = (rr >= 0) & (rr < ds.height) & (cc >= 0) & (cc < ds.width)

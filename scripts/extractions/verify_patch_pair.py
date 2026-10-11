@@ -79,7 +79,9 @@ def main() -> int:
         db = xr.open_dataset(raw / rel, mask_and_scale=False)
         tag = rel
 
-        have = {v for v in da.data_vars if v != "crs"}
+        # xarray keys are Hashable; REQUIRED is a set of str, so make the
+        # comparison well-typed rather than relying on runtime equality.
+        have = {str(v) for v in da.data_vars if v != "crs"}
         if have != REQUIRED:
             logger.error(f"{tag}: band set wrong "
                          f"(missing={sorted(REQUIRED - have)}, extra={sorted(have - REQUIRED)})")

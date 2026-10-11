@@ -161,7 +161,9 @@ def main() -> int:
                         else "s1_cross_crs")
                 tf = Transformer.from_crs(s2_crs, s1_crs, always_xy=True)
                 break
-        if s1p is not None:
+        # case and tf are set on the same iteration that sets s1p; spell
+        # that out so the types are not Optional at the call sites below.
+        if s1p is not None and case is not None and tf is not None:
             off = E.DEFAULT_CONVENTIONS[case]
             chip1 = E.composite_s1_chip(s1p, periods, t0, t1, args.freq)
             for a, b in zip(rows, cols):

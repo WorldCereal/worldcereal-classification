@@ -211,7 +211,7 @@ def _pixel_lonlat(patch: dict) -> Tuple[np.ndarray, np.ndarray]:
 def aux_grids(
     patch: dict,
     tile: str,
-    months: List[Tuple[int, int]],
+    months: List[Tuple[int, int, int]],
     conventions: dict,
     meteo: E.MonthlyMeteo,
     slope_s: E.SlopeSampler,
@@ -252,7 +252,7 @@ def aux_grids(
 def write_patch_netcdf(
     out_path: Path,
     patch: dict,
-    months: List[Tuple[int, int]],
+    months: List[Tuple[int, int, int]],
     s2: np.ndarray,
     s1: np.ndarray,
     aux: Dict[str, np.ndarray],

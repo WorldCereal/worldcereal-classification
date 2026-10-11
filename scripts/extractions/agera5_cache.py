@@ -74,7 +74,9 @@ def cmd_prestage(cache_dir: Path, start: str, end: str) -> None:
     n = 0
     for year, month in _months(start, end):
         for band in BANDS:
-            meteo._ensure(year, month, band)
+            # MonthlyMeteo is monthly here (freq defaults to "month"), so the
+            # period's start day is 1; _ensure takes (year, month, day, band).
+            meteo._ensure(year, month, 1, band)
             n += 1
     logger.success(f"prestaged/confirmed {n} rasters in {cache_dir}")
 

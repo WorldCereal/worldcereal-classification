@@ -85,6 +85,25 @@ ATTR_DEFAULTS: Dict[str, object] = {
 
 # --- Point loading -----------------------------------------------------------
 
+
+def _centroid_points(gdf: "gpd.GeoDataFrame") -> "gpd.GeoDataFrame":
+    """Reduce non-point geometries to their EPSG:3857 centroid.
+
+    The same rule ptp_campaign_rdm._place_points applies to its plain-centroid
+    case: project to 3857, take the centroid, and keep it only where it falls
+    inside its own polygon. The clipped-centroid fallback is deliberately NOT
+    reproduced, because that needs the patch footprints and those are not known
+    until a host is assigned.
+    """
+    is_pt = gdf.geometry.geom_type.isin(("Point", "MultiPoint")).to_numpy()
+    merc = gdf.to_crs(epsg=3857)
+    cen_m = merc.geometry.centroid
+    keep = cen_m.within(merc.geometry).to_numpy() | is_pt
+    cen_ll = gpd.GeoSeries(cen_m, crs=3857).to_crs(4326)
+    out = gdf.copy()
+    out = out.set_geometry(list(cen_ll.values), crs="EPSG:4326")
+    return out.loc[keep].reset_index(drop=True)
+
 def load_points(path: Path,
                 ref_ids: Optional[List[str]] = None) -> gpd.GeoDataFrame:
     """Read the point source; accept geometry or lat/lon; fill attributes."""
@@ -121,7 +140,6 @@ def load_points(path: Path,
     # Non-point geometries (someone handed us polygons): use the same rule as
     # the RDM route -- EPSG:3857 centroid, dropped when outside its own shape.
     if not (gdf.geom_type == "Point").all():
-        from ptp_campaign_rdm import _centroid_points
         n0 = len(gdf)
         gdf = _centroid_points(gdf)
         logger.info(f"reduced {n0:,} non-point geometries to {len(gdf):,} "

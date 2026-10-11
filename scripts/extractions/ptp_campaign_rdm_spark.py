@@ -110,7 +110,8 @@ def run_ref_task(task: dict) -> dict:
                 return _RefCatalog.load(rid, source=source,
                                         cache_dir=cache_dir)
 
-        _rdm.RefCatalog = _Loader()
+        # deliberate: swap the class for an index-first loader instance
+        _rdm.RefCatalog = _Loader()  # type: ignore[assignment,misc]
 
         run_args = SimpleNamespace(
             mode="extract",
