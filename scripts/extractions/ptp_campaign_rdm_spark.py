@@ -83,7 +83,8 @@ def run_ref_task(task: dict) -> dict:
         # S2 cloud-mask method travels in the conventions dict, so the
         # executors need it applied HERE (they re-import the engine fresh).
         _CONV = {**_CONV, "s2_mask": task.get("s2_mask", "dilated"),
-                 "freq": task.get("freq", "month")}
+                 "freq": task.get("freq", "month"),
+                 "spatial_context": task.get("spatial_context", 0)}
         from ptp_global_index import catalog_for_ref as _cat_for_ref
         from ref_catalog import RefCatalog as _RefCatalog
 
@@ -229,6 +230,11 @@ def main() -> None:
                          "--optical-mask-method): 'dilated' drops "
                          "SCL_DILATED_MASK == 1 (openEO-era default), "
                          "'raw_scl' drops raw SCL classes {0,1,3,8,9,10,11}")
+    ap.add_argument("--spatial-context", type=int, default=0, metavar="N",
+                    help="spatial context: 0 (default) extracts the point's own pixel as a "
+                         "scalar per band; N>0 extracts the (2N+1)x(2N+1) "
+                         "window around it (N=1 -> 3x3) and each S2/S1 band "
+                         "cell becomes a (2N+1)^2 array in row-major order")
     ap.add_argument("--children", type=int, default=0, metavar="K",
                     help="extra blue-noise points sampled INSIDE each polygon "
                          "parent (0 = off). Child ids are <parent>_child<k>; "
@@ -368,6 +374,7 @@ def main() -> None:
         "delta_from": str(args.delta_from) if args.delta_from else None,
         "s2_mask": args.s2_mask,
         "freq": args.freq,
+        "spatial_context": args.spatial_context,
         "children": args.children,
         "children_tier": args.children_tier,
         "children_edge_buffer": args.children_edge_buffer,

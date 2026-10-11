@@ -69,7 +69,8 @@ def run_pair_task(task: dict) -> dict:
         import ptp_engine as _engine
         from ptp_engine import DEFAULT_CONVENTIONS as _CONV
         _CONV = {**_CONV, "s2_mask": task.get("s2_mask", "dilated"),
-                 "freq": task.get("freq", "month")}
+                 "freq": task.get("freq", "month"),
+                 "spatial_context": task.get("spatial_context", 0)}
         from ptp_engine import extract_host as _extract
         from ptp_points_extract import _index_to_entries
 
@@ -86,9 +87,16 @@ def run_pair_task(task: dict) -> dict:
         entries = _index_to_entries(idx)
 
         tmp = part.with_suffix(".tmp")
-        _extract(host_ref, _CONV, workers=task["workers"], out_path=tmp,
-                 points=pts, index_source="auto", catalog_cache=None,
-                 index=entries)
+        if task.get("native"):
+            # Native dates: no compositing, one row per sample with the
+            # per-acquisition lists (see ptp_native_dates).
+            from ptp_native_dates import extract_host_native
+            extract_host_native(host_ref, _CONV, points=pts, index=entries,
+                                out_path=tmp, workers=task["workers"])
+        else:
+            _extract(host_ref, _CONV, workers=task["workers"], out_path=tmp,
+                     points=pts, index_source="auto", catalog_cache=None,
+                     index=entries)
         if tmp.exists():
             tmp.rename(part)          # atomic: a part is complete or absent
         return {"tag": tag, "status": "OK"}
@@ -158,6 +166,16 @@ def main() -> None:
                     help="cores per executor (default: --workers). Leave it "
                          "unset and YARN gives 1 core while --workers spawns "
                          "N processes on it, permanently oversubscribed.")
+    ap.add_argument("--native", action="store_true",
+                    help="no compositing: emit one row per sample holding the "
+                         "actual acquisitions and their dates (s2_date/s1_date "
+                         "plus day-of-year), for models that take irregular "
+                         "time series. Ignores --freq; see ptp_native_dates.py")
+    ap.add_argument("--spatial-context", type=int, default=0, metavar="N",
+                    help="spatial context: 0 (default) extracts the point's own pixel as a "
+                         "scalar per band; N>0 extracts the (2N+1)x(2N+1) "
+                         "window around it (N=1 -> 3x3) and each S2/S1 band "
+                         "cell becomes a (2N+1)^2 array in row-major order")
     ap.add_argument("--agera5-cache", type=Path, default=None)
     ap.add_argument("--kinit-env", type=str,
                     default=str(Path.home() / "Private" / "kinit.env"))
@@ -190,17 +208,21 @@ def main() -> None:
     # Seed AGERA5 on the driver before any executor starts: on a cold shared
     # cache they otherwise fetch the same rasters at once and read each
     # other's half-written files. See ptp_campaign_rdm_spark.
-    try:
-        # pandas, not geopandas: a subset without the geometry column raises.
-        import pandas as _pd
-        from ptp_engine import seed_meteo_cache as _seed
-        _ix = _pd.read_parquet(args.index, columns=["start_date", "end_date"])
-        _seed(agera5, str(_ix.start_date.min()), str(_ix.end_date.max()),
-              freq=args.freq)
-        del _ix
-    except Exception as exc:                    # noqa: BLE001
-        logger.warning(f"AGERA5 seeding skipped ({exc}); executors will "
-                       "fetch on demand")
+    if args.native:
+        logger.info("native mode: AGERA5 is read from the daily archive; "
+                    "no composite seeding")
+    else:
+        try:
+            # pandas, not geopandas: a subset without the geometry column raises.
+            import pandas as _pd
+            from ptp_engine import seed_meteo_cache as _seed
+            _ix = _pd.read_parquet(args.index, columns=["start_date", "end_date"])
+            _seed(agera5, str(_ix.start_date.min()), str(_ix.end_date.max()),
+                  freq=args.freq)
+            del _ix
+        except Exception as exc:                    # noqa: BLE001
+            logger.warning(f"AGERA5 seeding skipped ({exc}); executors will "
+                           "fetch on demand")
 
     # Assign once, on the driver, and hand executors a parquet they can filter.
     import geopandas as gpd
@@ -256,6 +278,8 @@ def main() -> None:
             "workers": args.workers,
             "s2_mask": args.s2_mask,
             "freq": args.freq,
+            "spatial_context": args.spatial_context,
+            "native": args.native,
         })
     logger.info(f"{len(pairs)} (source,host) pairs, {len(tasks)} to run "
                 f"({len(pairs) - len(tasks)} already done)")
@@ -268,9 +292,14 @@ def main() -> None:
         else:
             import mepsy
             _cores = args.executor_cores or args.workers
+            mode = ("native dates" if args.native
+                    else f"{args.freq} composites")
+            sc = args.spatial_context
             logger.info(f"Spark: {args.executors} executors x "
                         f"{args.executor_memory} GB x {_cores} core(s), "
-                        f"{args.workers} worker(s)/task, queue={args.queue}")
+                        f"{args.workers} worker(s)/task, queue={args.queue} | "
+                        f"{mode}, {args.s2_mask}, "
+                        f"{'single pixel' if not sc else f'{2*sc+1}x{2*sc+1} window'}")
             mep = mepsy.SparkApp(
                 app_name="ptp_points_extract",
                 driver_memory=args.driver_memory,
@@ -299,6 +328,24 @@ def main() -> None:
             mep.foreach(run_pair_task, tasks)
 
     # --- merge parts per source ref ---
+    # In cluster mode this merge runs on the ApplicationMaster, while the parts
+    # were renamed into place by executors on other hosts moments earlier.
+    # NFS caches lookups per host, so a part can look missing here for up to
+    # the attribute-cache timeout. Wait (bounded, once) before judging.
+    import time
+    expected = [parts_dir / f"{r.ref_id}__{r.host_ref_id}.geoparquet"
+                for r in pairs.itertuples()]
+    unseen = [q for q in expected if not q.exists()]
+    waited = 0
+    while unseen and waited < 90:
+        time.sleep(5)
+        waited += 5
+        os.listdir(parts_dir)          # force a fresh READDIR
+        unseen = [q for q in unseen if not q.exists()]
+    if waited:
+        logger.info(f"waited {waited}s for NFS to show late parts; "
+                    f"{len(unseen)} still absent")
+
     import pandas as pd
     written, missing = 0, []
     for src_ref, grp in pairs.groupby("ref_id"):
@@ -312,20 +359,40 @@ def main() -> None:
         if len(have) < len(grp):
             logger.warning(f"{src_ref}: {len(grp) - len(have)} of "
                            f"{len(grp)} host parts missing; writing partial")
-        frames = [gpd.read_parquet(p) for p in have]
-        out = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True),
-                               crs="EPSG:4326")
-        if "ref_id" in out.columns:
-            out["host_ref_id"] = out["ref_id"]
-        out["ref_id"] = src_ref
-        out.to_parquet(out_path)
+        if args.native:
+            # Concatenate in arrow, not pandas: the parts carry an explicit
+            # ragged-list schema (see ptp_native_dates._write_native_parquet)
+            # and a geopandas round-trip would re-infer it, turning an
+            # all-empty S1 axis back into a null-typed column.
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            tabs = [pq.read_table(p) for p in have]
+            t = pa.concat_tables(tabs)
+            host = t.column("ref_id")
+            t = t.drop(["ref_id"])
+            t = t.append_column(pa.field("host_ref_id", pa.string()), host)
+            t = t.append_column(
+                pa.field("ref_id", pa.string()),
+                pa.array([src_ref] * t.num_rows, type=pa.string()))
+            t = t.replace_schema_metadata(tabs[0].schema.metadata)
+            pq.write_table(t, out_path)
+            out = t
+        else:
+            frames = [gpd.read_parquet(p) for p in have]
+            out = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True),
+                                   crs="EPSG:4326")
+            if "ref_id" in out.columns:
+                out["host_ref_id"] = out["ref_id"]
+            out["ref_id"] = src_ref
+            out.to_parquet(out_path)
         written += 1
-        logger.success(f"{src_ref}: {len(out):,} rows -> {out_path}")
+        n_out = out.num_rows if args.native else len(out)
+        logger.success(f"{src_ref}: {n_out:,} rows -> {out_path}")
 
         # Same machinery and _verify/ layout as the RDM campaign driver.
         # Runs on the driver after the merge, since verify_ref needs the
         # whole per-ref file.
-        if args.verify:
+        if args.verify and not args.native:
             try:
                 import json as _json
 

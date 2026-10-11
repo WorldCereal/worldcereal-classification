@@ -73,6 +73,8 @@ S2_BANDS = [
     "S2-L2A-B07", "S2-L2A-B08", "S2-L2A-B8A", "S2-L2A-B11", "S2-L2A-B12",
 ]
 S1_BANDS = ["S1-SIGMA0-VH", "S1-SIGMA0-VV"]
+# Bands that become a (2N+1)^2 array when spatial_context > 0.
+_WIN_BANDS = frozenset(S2_BANDS + S1_BANDS)
 NODATA = 65535
 # Max rows per assembled block. Big refs (200k+ samples) would otherwise
 # materialise the whole long frame plus its Arrow copy at once and OOM a 15 GB
@@ -99,6 +101,10 @@ DEFAULT_CONVENTIONS = {
     # composite per calendar month; "dekad" is three, at days 1/11/21, the
     # third ragged. Only the axis changes, the per-period recipe is identical.
     "freq": "month",                # vs "dekad"
+    # Spatial context: 0 = the point's own pixel (a scalar per band,
+    # the production schema). N > 0 emits the (2N+1)x(2N+1) window
+    # centred on it, so each band cell becomes a (2N+1)^2 array.
+    "spatial_context": 0,
 }
 
 # Period start days within a month. Periods are identified everywhere by the
@@ -217,15 +223,259 @@ def _month_key(t: np.datetime64) -> Tuple[int, int]:
     return ts.year, ts.month
 
 
+def _window_slice(arr: np.ndarray, row: int, col: int, half: int) -> np.ndarray:
+    """(T, H, W) -> (T, w, w) centred on (row, col); outside the patch = NODATA."""
+    w = 2 * half + 1
+    out = np.full((arr.shape[0], w, w), NODATA, dtype=arr.dtype)
+    r0, c0 = row - half, col - half
+    sr0, sc0 = max(r0, 0), max(c0, 0)
+    sr1 = min(row + half + 1, arr.shape[1])
+    sc1 = min(col + half + 1, arr.shape[2])
+    if sr0 < sr1 and sc0 < sc1:
+        out[:, sr0 - r0:sr1 - r0, sc0 - c0:sc1 - c0] = arr[:, sr0:sr1, sc0:sc1]
+    return out
+
+
+def _period_index(times: np.ndarray, sel: np.ndarray,
+                  months: List[Tuple[int, int, int]], freq: str) -> np.ndarray:
+    """Period slot per time step, or -1 when out of window."""
+    midx = {m: i for i, m in enumerate(months)}
+    return np.array(
+        [midx.get(_period_key(t, freq), -1) if sel[ti] else -1
+         for ti, t in enumerate(times)], dtype=np.int64)
+
+
+# --- Chip-level windows ---------------------------------------------------
+#
+# Compositing one window per point redoes overlapping work and pays numpy's
+# nanmedian overhead once per point per band per period. Compositing the whole
+# chip once costs the same whatever the point count, so it wins from 2 points
+# per patch upward (measured 2.2x at 4 points, 4x at 8, 8-28x at 30-40) and
+# only loses when a patch hosts a single point. Output is identical value for
+# value; verify_window_grid.py checks that on real patches.
+
+CHIP_MIN_POINTS = 2
+
+
+def _use_chip(n_points: int, half: int) -> bool:
+    """True when compositing the whole chip beats per-point windows."""
+    return half > 0 and n_points >= CHIP_MIN_POINTS
+
+
+def _nanmedian0(a: np.ndarray) -> np.ndarray:
+    """Median along axis 0 ignoring NaN. Same values as np.nanmedian, faster.
+
+    np.nanmedian sends small arrays through np.ma.median, which builds a masked
+    array and sorts it on every call.
+    """
+    cnt = a.shape[0] - np.isnan(a).sum(axis=0)
+    s = np.sort(a, axis=0)                      # NaN sorts to the end
+    idx = np.maximum(cnt - 1, 0)
+    lo = np.take_along_axis(s, (idx // 2)[None], 0)[0]
+    hi = np.take_along_axis(s, ((idx + 1) // 2)[None], 0)[0]
+    return np.where(cnt == 0, np.nan, (lo + hi) / 2.0)
+
+
+def _slice_chip(chip: np.ndarray, row: int, col: int, half: int) -> np.ndarray:
+    """(B, P, H, W) -> (B, P, w, w) centred on (row, col), NODATA outside.
+
+    Equivalent to compositing a _window_slice: a padded cell is NODATA and is
+    masked out either way.
+    """
+    w = 2 * half + 1
+    out = np.full(chip.shape[:2] + (w, w), NODATA, dtype=chip.dtype)
+    r0, c0 = row - half, col - half
+    sr0, sc0 = max(r0, 0), max(c0, 0)
+    sr1 = min(row + half + 1, chip.shape[2])
+    sc1 = min(col + half + 1, chip.shape[3])
+    if sr0 < sr1 and sc0 < sc1:
+        out[:, :, sr0 - r0:sr1 - r0, sc0 - c0:sc1 - c0] = \
+            chip[:, :, sr0:sr1, sc0:sc1]
+    return out
+
+
+def _s1_window_idx(
+    s2_patch: dict, s1: dict, tf, off: dict, row: int, col: int, half: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """S1 (row, col) covering the centre of every S2 cell of the window.
+
+    S1 patches are 20 m where S2 is 10 m, over the same 640 m footprint, so a
+    (2N+1)^2 block of S1 PIXELS spans four times the ground of the S2 block and
+    would not line up with the S2 window. openEO reads the merged cube on the
+    S2 grid, which is also what the single-pixel path does, so each S2 cell
+    takes the S1 value at its own centre; with 20 m S1 that repeats an S1 pixel
+    across 2x2 S2 cells and keeps the bands co-registered.
+
+    Cells off the S2 patch, or whose centre lands off the S1 patch, come back
+    as -1 and are filled with NODATA.
+    """
+    w = 2 * half + 1
+    rr = np.arange(row - half, row + half + 1)
+    cc = np.arange(col - half, col + half + 1)
+    ny, nx = len(s2_patch["y"]), len(s2_patch["x"])
+    r_ok, c_ok = (rr >= 0) & (rr < ny), (cc >= 0) & (cc < nx)
+    ys = s2_patch["y"][np.clip(rr, 0, ny - 1)]
+    xs = s2_patch["x"][np.clip(cc, 0, nx - 1)]
+    gx, gy = np.meshgrid(xs, ys)
+    qx, qy = tf.transform(gx.ravel(), gy.ravel())
+    qx = np.asarray(qx, dtype=np.float64).reshape(w, w)
+    qy = np.asarray(qy, dtype=np.float64).reshape(w, w)
+    ir = np.full((w, w), -1, np.int64)
+    ic = np.full((w, w), -1, np.int64)
+    ok = np.outer(r_ok, c_ok) & np.isfinite(qx) & np.isfinite(qy)
+    for i, j in zip(*np.nonzero(ok)):
+        a = _nearest_idx(s1["y"], float(qy[i, j])) + off["row_off"]
+        b = _nearest_idx(s1["x"], float(qx[i, j])) + off["col_off"]
+        if 0 <= a < len(s1["y"]) and 0 <= b < len(s1["x"]):
+            ir[i, j], ic[i, j] = a, b
+    return ir, ic
+
+
+def _gather_s1_window(chip: np.ndarray, ir: np.ndarray,
+                      ic: np.ndarray) -> np.ndarray:
+    """(2, P, H, W) chip -> (2, P, w, w) at the given per-cell S1 indices."""
+    out = np.full(chip.shape[:2] + ir.shape, NODATA, dtype=np.uint16)
+    m = ir >= 0
+    if m.any():
+        out[:, :, m] = chip[:, :, ir[m], ic[m]]
+    return out
+
+
+def composite_s2_chip(
+    patch: dict, months: List[Tuple[int, int, int]],
+    t_start: np.datetime64, t_end_excl: np.datetime64,
+    s2_mask: str = "dilated", freq: str = "month",
+) -> np.ndarray:
+    """(10, n_periods, H, W) uint16 — composite_s2 at every pixel of the chip."""
+    times = patch["times"]
+    sel = (times >= t_start) & (times < t_end_excl)
+    if s2_mask == "raw_scl":
+        bad = np.isin(patch["bands"][SCL_RAW_BAND], list(SCL_REJECT_CLASSES))
+    else:
+        bad = patch["bands"][SCL_DILATED_BAND] == 1
+    pidx = _period_index(times, sel, months, freq)
+    ny, nx = bad.shape[1], bad.shape[2]
+    out = np.full((len(S2_BANDS), len(months), ny, nx), NODATA, np.uint16)
+    for bi, band in enumerate(S2_BANDS):
+        series = patch["bands"][band]
+        vals = np.where(bad | (series == NODATA), np.nan,
+                        series.astype(np.float64))
+        for mi in range(len(months)):
+            tsel = pidx == mi
+            if not tsel.any():
+                continue
+            with np.errstate(all="ignore"):
+                med = _nanmedian0(vals[tsel])
+            ok = ~np.isnan(med)
+            out[bi, mi][ok] = np.floor(med[ok]).astype(np.uint16)
+    return out
+
+
+def _chip_period_means(power: np.ndarray) -> np.ndarray:
+    """(k, H, W) float32 -> (H, W) float32 mean over axis 0, NaN skipped.
+
+    Each pixel's mean has to be a 1-D float32 mean over that pixel's values in
+    time order, as composite_s1 does: reducing a 3-D array along axis 0 sums in
+    another order and lands 1 DN off in about 1e-5 of values. Transposing to
+    (npix, k) puts the reduction on a contiguous last axis, which is the
+    summation numpy uses for a 1-D mean; pixels whose NaN pattern differs are
+    compacted one at a time.
+    """
+    k, ny, nx = power.shape
+    flat = np.ascontiguousarray(power.reshape(k, -1).T)         # (npix, k)
+    nan = np.isnan(flat)
+    out = np.full(flat.shape[0], np.nan, dtype=np.float32)
+    clean = ~nan.any(axis=1)
+    if clean.any():
+        out[clean] = np.ascontiguousarray(flat[clean]).mean(axis=1,
+                                                            dtype=np.float32)
+    for i in np.nonzero(~clean)[0]:
+        pw = flat[i][~nan[i]]
+        if len(pw):
+            out[i] = np.float32(pw.mean())
+    return out.reshape(ny, nx)
+
+
+def composite_s1_chip(
+    s1: dict, months: List[Tuple[int, int, int]],
+    t_start: np.datetime64, t_end_excl: np.datetime64, freq: str = "month",
+) -> np.ndarray:
+    """(2, n_periods, H, W) uint16 — composite_s1 at every pixel of the chip."""
+    times = s1["times"]
+    sel = (times >= t_start) & (times < t_end_excl)
+    pidx = _period_index(times, sel, months, freq)
+    any_band = next(iter(s1["bands"].values()))
+    ny, nx = any_band.shape[1], any_band.shape[2]
+    out = np.full((len(S1_BANDS), len(months), ny, nx), NODATA, np.uint16)
+    for bi, band in enumerate(S1_BANDS):
+        if band not in s1["bands"]:
+            continue
+        series = s1["bands"][band]
+        dns = np.where((series == 0) | (series == NODATA), np.nan,
+                       series.astype(np.float64))
+        with np.errstate(all="ignore"):
+            power = (10.0 ** ((20.0 * np.log10(dns) - 83.0) / 10.0)
+                     ).astype(np.float32)
+        for mi in range(len(months)):
+            tsel = pidx == mi
+            if not tsel.any():
+                continue
+            mean_power = _chip_period_means(power[tsel])
+            with np.errstate(all="ignore"):
+                dn = np.float32(10.0 ** ((10.0 * np.log10(
+                    mean_power.astype(np.float64)) + 83.0) / 20.0))
+            ok = np.isfinite(dn)
+            out[bi, mi][ok] = np.clip(np.floor(dn[ok]), 1, 65534
+                                      ).astype(np.uint16)
+    return out
+
+
+def _composite_s2_window(
+    patch: dict, row: int, col: int, months: List[Tuple[int, int, int]],
+    t_start: np.datetime64, t_end_excl: np.datetime64,
+    s2_mask: str, freq: str, half: int,
+) -> np.ndarray:
+    """(10, n_periods, w, w) uint16 — composite_s2 over a (2half+1)^2 window."""
+    w = 2 * half + 1
+    times = patch["times"]
+    sel = (times >= t_start) & (times < t_end_excl)
+    if s2_mask == "raw_scl":
+        bad = np.isin(_window_slice(patch["bands"][SCL_RAW_BAND], row, col, half),
+                      list(SCL_REJECT_CLASSES))
+    else:
+        bad = _window_slice(patch["bands"][SCL_DILATED_BAND], row, col, half) == 1
+    pidx = _period_index(times, sel, months, freq)
+    out = np.full((len(S2_BANDS), len(months), w, w), NODATA, dtype=np.uint16)
+    for bi, band in enumerate(S2_BANDS):
+        series = _window_slice(patch["bands"][band], row, col, half)
+        vals = np.where(bad | (series == NODATA), np.nan,
+                        series.astype(np.float64))
+        for mi in range(len(months)):
+            tsel = pidx == mi
+            if not tsel.any():
+                continue
+            with np.errstate(all="ignore"):
+                med = np.nanmedian(vals[tsel], axis=0)
+            ok = ~np.isnan(med)
+            if ok.any():
+                out[bi, mi][ok] = np.floor(med[ok]).astype(np.uint16)
+    return out
+
+
+
 def composite_s2(
     patch: dict, row: int, col: int, months: List[Tuple[int, int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
-    s2_mask: str = "dilated", freq: str = "month",
+    s2_mask: str = "dilated", freq: str = "month", half: int = 0,
 ) -> np.ndarray:
     """(10, n_periods) uint16: masked per-period median per band, floor-cast.
 
     `s2_mask` is "dilated" or "raw_scl"; see DEFAULT_CONVENTIONS["s2_mask"].
+    `half` > 0 returns (10, n_periods, 2half+1, 2half+1) instead.
     """
+    if half > 0:
+        return _composite_s2_window(patch, row, col, months, t_start,
+                                    t_end_excl, s2_mask, freq, half)
     times = patch["times"]
     sel = (times >= t_start) & (times < t_end_excl)
     if s2_mask == "raw_scl":
@@ -292,9 +542,22 @@ def s1_nodata_months(
 def composite_s1(
     s1: dict, row: int, col: int, months: List[Tuple[int, int, int]],
     t_start: np.datetime64, t_end_excl: np.datetime64,
-    freq: str = "month",
+    freq: str = "month", half: int = 0,
 ) -> np.ndarray:
-    """(2, n_periods) uint16: linear-power per-period mean, recompressed, floored."""
+    """(2, n_periods) uint16: linear-power per-period mean, recompressed, floored.
+
+    Scalar only. A windowed S1 series cannot be built from this function: S1 is
+    20 m against S2's 10 m, so the window has to be gathered per S2 cell with
+    _s1_window_idx + _gather_s1_window over composite_s1_chip, which is what
+    process_patch does. Taking a (2N+1)^2 block of S1 pixels instead would
+    cover four times the ground of the S2 window and silently mis-register the
+    bands, so this raises rather than returning something plausible.
+    """
+    if half > 0:
+        raise ValueError(
+            "composite_s1 is scalar only; for spatial_context > 0 use "
+            "composite_s1_chip with _s1_window_idx/_gather_s1_window so the "
+            "window lands on the S2 grid (S1 is 20 m, S2 is 10 m)")
     times = s1["times"]
     sel = (times >= t_start) & (times < t_end_excl)
     mkeys = [_period_key(t, freq) for t in times]
@@ -335,11 +598,19 @@ def process_patch(task: dict) -> List[dict]:
     """
     conv = task["conventions"]
     freq = conv.get("freq", "month")
+    half = int(conv.get("spatial_context", 0) or 0)
+    wshape = (2 * half + 1, 2 * half + 1) if half > 0 else ()
     months: List[Tuple[int, int, int]] = [tuple(m) for m in task["months"]]
     t_start = np.datetime64(task["t_start"])
     t_end_excl = np.datetime64(task["t_end_excl"])
     results = []
     s1_only = bool(task.get("s1_only", False))
+    # Windows come from one composite of the whole chip, sliced per point, once
+    # a patch hosts enough points to pay for it. Built on first use; the S1 one
+    # per orbit, because a patch has at most two and points nearly always agree.
+    chip = _use_chip(len(task["points"]), half)
+    s2_chip: Optional[np.ndarray] = None
+    s1_chips: Dict[str, np.ndarray] = {}
 
     try:
         s2_patch = _read_patch(
@@ -391,12 +662,20 @@ def process_patch(task: dict) -> List[dict]:
         if s1_only:
             rec["s2"] = None
         elif 0 <= row < len(s2_patch["y"]) and 0 <= col < len(s2_patch["x"]):
-            rec["s2"] = composite_s2(s2_patch, row, col, months,
-                                     t_start, t_end_excl,
-                                     s2_mask=conv.get("s2_mask", "dilated"),
-                                     freq=freq)
+            if chip:
+                if s2_chip is None:
+                    s2_chip = composite_s2_chip(
+                        s2_patch, months, t_start, t_end_excl,
+                        conv.get("s2_mask", "dilated"), freq)
+                rec["s2"] = _slice_chip(s2_chip, row, col, half)
+            else:
+                rec["s2"] = composite_s2(s2_patch, row, col, months,
+                                         t_start, t_end_excl,
+                                         s2_mask=conv.get("s2_mask", "dilated"),
+                                         freq=freq, half=half)
         else:
-            rec["s2"] = np.full((len(S2_BANDS), len(months)), NODATA, np.uint16)
+            rec["s2"] = np.full((len(S2_BANDS), len(months)) + wshape,
+                                NODATA, np.uint16)
 
         # Coverage-aware orbit choice: fewest NODATA months wins, then
         # shortest NODATA run, then larger file. A file-size-only proxy picked
@@ -416,18 +695,55 @@ def process_patch(task: dict) -> List[dict]:
             if best is None or key < best[0]:
                 best = (key, orbit, case, s1p, s1_row, s1_col, inside)
         if best is None:
-            rec["s1"] = np.full((2, len(months)), NODATA, np.uint16)
+            rec["s1"] = np.full((2, len(months)) + wshape, NODATA, np.uint16)
         else:
             _, orbit, case, s1p, s1_row, s1_col, inside = best
-            rec["s1"] = (composite_s1(s1p, s1_row, s1_col, months,
-                                      t_start, t_end_excl, freq) if inside
-                         else np.full((2, len(months)), NODATA, np.uint16))
+            if not inside:
+                rec["s1"] = np.full((2, len(months)) + wshape,
+                                    NODATA, np.uint16)
+            elif half > 0:
+                # Always via the chip: the window is gathered per S2 cell
+                # because S1 is 20 m and S2 is 10 m, and the chip is 32x32 so
+                # compositing all of it is cheap even for a single point.
+                if orbit not in s1_chips:
+                    s1_chips[orbit] = composite_s1_chip(
+                        s1p, months, t_start, t_end_excl, freq)
+                ir, ic = _s1_window_idx(s2_patch, s1p, s1_tf[orbit],
+                                        conv[case], row, col, half)
+                rec["s1"] = _gather_s1_window(s1_chips[orbit], ir, ic)
+            else:
+                rec["s1"] = composite_s1(s1p, s1_row, s1_col, months,
+                                         t_start, t_end_excl, freq)
             rec["s1_orbit"], rec["s1_case"] = orbit, case
         results.append(rec)
     return results
 
 
 # --- Auxiliary bands ------------------------------------------------------
+
+
+def agera5_daily_file(year: int, month: int, day: int, band: str) -> Path:
+    """The daily AgERA5 raster, under either naming convention.
+
+    The archive started adding a version suffix from 11 June 2026:
+    `AgERA5_<band>_<date>.tif` became `AgERA5_<band>_<date>_v2.0.0.tif`, and
+    days around the change carry both. Try the unsuffixed name, then the
+    highest-sorting versioned one, so a run spanning the change works.
+    Raises FileNotFoundError naming the directory, which is more use than
+    rasterio's "No such file or directory" on a path that was never right.
+    """
+    stamp = f"{year}{month:02d}{day:02d}"
+    d = AGERA5_DAILY / f"{year}" / stamp
+    old = d / f"AgERA5_{band}_{stamp}.tif"
+    if old.exists():
+        return old
+    hits = sorted(d.glob(f"AgERA5_{band}_{stamp}_v*.tif"))
+    if hits:
+        return hits[-1]
+    raise FileNotFoundError(
+        f"no AgERA5 {band} raster for {year}-{month:02d}-{day:02d} in {d} "
+        f"(tried AgERA5_{band}_{stamp}.tif and "
+        f"AgERA5_{band}_{stamp}_v*.tif)")
 
 
 class MonthlyMeteo:
@@ -514,8 +830,7 @@ class MonthlyMeteo:
         acc: Optional[np.ndarray] = None
         profile = None
         for dd in range(d0, d1 + 1):
-            f = (AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{dd:02d}" /
-                 f"AgERA5_{band}_{year}{month:02d}{dd:02d}.tif")
+            f = agera5_daily_file(year, month, dd, band)
             with rasterio.open(f) as ds:
                 arr = ds.read(1).astype(np.float64)
                 profile = profile or ds.profile
@@ -837,6 +1152,7 @@ def extract_host(
                        "local S2 file; their points will be dropped")
 
     freq = conventions.get("freq", "month")
+    half = int(conventions.get("spatial_context", 0) or 0)
     axes = t_axis_override or month_axis_from_patches(index, needed, freq)
 
     tasks = []
@@ -957,8 +1273,13 @@ def extract_host(
         recs = records[i0:i1]
         reps_b = reps[i0:i1]
         total_b = int(reps_b.sum())
+        # With spatial_context > 0 the S2/S1 bands carry one (2N+1)^2 array per
+        # row; slope/elevation/meteo stay scalars (static or 0.1-degree, so a
+        # sub-100 m window does not resolve them).
+        npix = (2 * half + 1) ** 2 if half > 0 else 1
         cols: Dict[str, np.ndarray] = {
-            b: np.full(total_b, NODATA, dtype=np.uint16)
+            b: np.full((total_b, npix) if (half > 0 and b in _WIN_BANDS)
+                       else total_b, NODATA, dtype=np.uint16)
             for b in S2_BANDS + S1_BANDS
             + ["slope", "elevation", "AGERA5-PRECIP", "AGERA5-TMEAN"]}
         ts_col = np.empty(total_b, dtype="datetime64[ns]")
@@ -971,9 +1292,11 @@ def extract_host(
             T = len(months)
             sl = slice(offs, offs + T)
             for bi, b in enumerate(S2_BANDS):
-                cols[b][sl] = rec["s2"][bi, :T]
-            cols["S1-SIGMA0-VH"][sl] = rec["s1"][0, :T]
-            cols["S1-SIGMA0-VV"][sl] = rec["s1"][1, :T]
+                v = rec["s2"][bi, :T]
+                cols[b][sl] = v.reshape(T, npix) if half > 0 else v
+            for bi, b in enumerate(S1_BANDS):
+                v = rec["s1"][bi, :T]
+                cols[b][sl] = v.reshape(T, npix) if half > 0 else v
             ts_col[sl] = ts_cache[months]
             fidx_col[sl] = ri
             cols["slope"][sl] = np.uint16(slope_all[ri])
@@ -990,13 +1313,17 @@ def extract_host(
         rec_sids = np.array([r["sample_id"] for r in recs], dtype=object)
         a = attrs.loc[list(rec_sids)]
         geom_arr = np.array([pt_geom[s] for s in rec_sids], dtype=object)
+        def _col(b):
+            """Windowed bands become one array per row; scalars stay scalars."""
+            return list(cols[b]) if (half > 0 and b in _WIN_BANDS) else cols[b]
+
         df = pd.DataFrame({
             "feature_index": fidx_col,
             "sample_id": np.repeat(rec_sids, reps_b),
             "timestamp": ts_col,
-            **{b: cols[b] for b in S2_BANDS},
-            "S1-SIGMA0-VH": cols["S1-SIGMA0-VH"],
-            "S1-SIGMA0-VV": cols["S1-SIGMA0-VV"],
+            **{b: _col(b) for b in S2_BANDS},
+            "S1-SIGMA0-VH": _col("S1-SIGMA0-VH"),
+            "S1-SIGMA0-VV": _col("S1-SIGMA0-VV"),
             "slope": cols["slope"],
             "elevation": cols["elevation"],
             "AGERA5-PRECIP": cols["AGERA5-PRECIP"],
@@ -1043,7 +1370,17 @@ def extract_host(
         # all-nodata drop, same rule as post_job_action: every S2/S1 column
         # at NODATA for every timestep of the sample.
         sensor_cols = [c for c in df.columns if "S2" in c or "S1" in c]
-        nodata_rows = (df[sensor_cols] == NODATA).all(axis=1)
+        if half > 0:
+            # Judged on the CENTRE pixel, so a window store keeps exactly the
+            # samples of the single-pixel store: a point whose own pixel was
+            # never observed is dropped even if its neighbours were.
+            c = npix // 2
+            nodata_rows = pd.Series(
+                np.logical_and.reduce(
+                    [cols[b][:, c] == NODATA for b in S2_BANDS + S1_BANDS]),
+                index=df.index)
+        else:
+            nodata_rows = (df[sensor_cols] == NODATA).all(axis=1)
         drop = df.assign(_nd=nodata_rows).groupby(
             "sample_id")["_nd"].transform("all")
         if drop.any():
@@ -1175,6 +1512,11 @@ def main():
     ap.add_argument("--agera5-s3", type=str, default=AGERA5_S3,
                     help="AGERA5 monthly composite S3 prefix "
                          "(default: %(default)s)")
+    ap.add_argument("--spatial-context", type=int, default=None, metavar="N",
+                    help="spatial context: 0 (default) extracts the point's own pixel as a "
+                         "scalar per band; N>0 extracts the (2N+1)x(2N+1) "
+                         "window around it (N=1 -> 3x3) and each S2/S1 band "
+                         "cell becomes a (2N+1)^2 array in row-major order")
     ap.add_argument("--freq", choices=["month", "dekad"], default=None,
                     help="compositing period (patch_to_point.py --period): "
                          "'month' (default) or 'dekad' (3 composites per "
@@ -1197,6 +1539,11 @@ def main():
     if args.freq:
         conv = {**conv, "freq": args.freq}
         logger.info(f"compositing period: {args.freq}")
+    if args.spatial_context is not None:
+        conv = {**conv, "spatial_context": args.spatial_context}
+        n = args.spatial_context
+        logger.info(f"spatial context: {n} -> {2 * n + 1}x{2 * n + 1} window"
+                    if n else "spatial context: single pixel")
 
     for host in args.hosts:
         out_path = MERGED_DIR / f"{host}_{RUN_SUFFIX}.geoparquet"

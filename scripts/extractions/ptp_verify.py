@@ -156,9 +156,11 @@ def _meteo_month_matches_dailies(src: str, year: int, month: int,
     ndays = _cal.monthrange(year, month)[1]
     acc = [0.0] * len(pts)
     for day in range(1, ndays + 1):
-        f = (_pe.AGERA5_DAILY / f"{year}" / f"{year}{month:02d}{day:02d}" /
-             f"AgERA5_{src}_{year}{month:02d}{day:02d}.tif")
-        if not f.exists():
+        # Either naming convention; the archive added a version suffix from
+        # 11 June 2026 (ptp_engine.agera5_daily_file).
+        try:
+            f = _pe.agera5_daily_file(year, month, day, src)
+        except FileNotFoundError:
             return False  # incomplete daily archive: cannot prove our side
         with rasterio.open(f) as ds:
             inv = ~ds.transform

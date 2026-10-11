@@ -12,7 +12,7 @@ The local extraction patches under S2_ROOT are raw time series carrying BOTH
 mask bands (S2-L2A-SCL and S2-L2A-SCL_DILATED_MASK), so the same patch can be
 composited either way with no openEO call. This module applies the per-point
 recipe of `ptp_engine.composite_s2` to the whole 2-D grid and writes the result
-in the layout `spatial_inference.py` expects.
+in the layout `spatial_inference.py` expects. 
 
 The two conventions differ only in which observations enter the per-period
 median. S1, slope, elevation and AGERA5 come from the same code in both runs,
@@ -540,6 +540,13 @@ def main() -> int:
                     help="Directory for staged AGERA5 monthly composites.")
     ap.add_argument("--s2-root", type=Path, default=None)
     ap.add_argument("--s1-root", type=Path, default=None)
+    # The engine defaults to the cluster mount, which a VM may expose under a
+    # different prefix; without an override slope silently composites to NODATA.
+    ap.add_argument("--slope-dir", type=Path, default=None,
+                    help="Slope tile directory (default: the engine's "
+                         "cluster path, which is not mounted on every host).")
+    ap.add_argument("--dem-dir", type=Path, default=None,
+                    help="Copernicus DEM tile directory.")
     args = ap.parse_args()
     if not args.manifest and not args.host_ref_id:
         ap.error("one of --manifest or --host-ref-id is required")
@@ -548,6 +555,14 @@ def main() -> int:
         E.S2_ROOT = args.s2_root
     if args.s1_root:
         E.S1_ROOT = args.s1_root
+    if args.slope_dir:
+        E.SLOPE_DIR = args.slope_dir
+    if args.dem_dir:
+        E.DEM_DIR = args.dem_dir
+    for label, d in (("slope", E.SLOPE_DIR), ("DEM", E.DEM_DIR)):
+        if not Path(d).is_dir():
+            logger.warning(f"{label} directory not readable: {d} -- that band "
+                           f"will composite to NODATA on every patch")
     E.AGERA5_CACHE = args.agera5_cache
     args.agera5_cache.mkdir(parents=True, exist_ok=True)
 
