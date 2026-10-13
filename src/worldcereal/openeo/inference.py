@@ -589,7 +589,9 @@ def _backbone_fingerprint_from_artifact(artifact: "ModelArtifact") -> str:
     return fingerprint
 
 
-def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec:
+def _select_optional_head_spec(
+    heads: Iterable[Mapping[str, Any]], task: str
+) -> Optional[HeadSpec]:
     for head in heads:
         if head.get("task") == task:
             class_names = [str(cls) for cls in head.get("class_names", [])]
@@ -608,6 +610,13 @@ def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec
                 hidden_dim=int(head.get("hidden_dim", 256)),
                 dropout=float(head.get("dropout", 0.0)),
             )
+    return None
+
+
+def _select_head_spec(heads: Iterable[Mapping[str, Any]], task: str) -> HeadSpec:
+    spec = _select_optional_head_spec(heads, task)
+    if spec is not None:
+        return spec
     raise ValueError(f"Manifest does not define a '{task}' head")
 
 
@@ -650,8 +659,8 @@ class SeasonalModelBundle:
         self._cropland_head_enabled = enable_cropland_head
 
         heads = base_artifact.manifest.get("heads", [])
-        # Skip head-spec lookup for disabled heads; the manifest may not define
-        # a head that was intentionally removed (e.g. when training without S1).
+        # Required prediction specs are only loaded for enabled heads. The
+        # optional croptype spec also supplies gate metadata when prediction is off.
         self.landcover_spec: Optional[HeadSpec] = (
             _select_head_spec(heads, task="landcover")
             if self._cropland_head_enabled
@@ -660,7 +669,7 @@ class SeasonalModelBundle:
         self.croptype_spec: Optional[HeadSpec] = (
             _select_head_spec(heads, task="croptype")
             if self._croptype_head_enabled
-            else None
+            else _select_optional_head_spec(heads, task="croptype")
         )
         self.cropland_gate_classes: List[str] = []
         self._base_backbone_fingerprint = _backbone_fingerprint_from_artifact(
@@ -878,17 +887,22 @@ class SeasonalModelBundle:
             logger.info("Cropland head disabled; cropland gating unavailable.")
             return
 
-        # landcover_spec is guaranteed set here since the cropland head is enabled,
-        # but croptype_spec may be None if the croptype head is disabled.
         croptype_cropland_classes = (
-            self.croptype_spec.cropland_classes if self.croptype_spec else []
+            self.croptype_spec.cropland_classes
+            if self.croptype_spec
+            else []
         )
         landcover_spec = _require_head_spec(self.landcover_spec, "landcover")
-        self.cropland_gate_classes = list(
+        gate_classes = (
             landcover_spec.cropland_classes
             or croptype_cropland_classes
-            or []
         )
+        if not gate_classes:
+            raise ValueError(
+                "Cropland head is enabled, but no cropland gate classes are "
+                "declared by the landcover or croptype head."
+            )
+        self.cropland_gate_classes = list(gate_classes)
         logger.info(
             f"Cropland gating enabled for classes: {self.cropland_gate_classes}"
         )
@@ -1826,10 +1840,15 @@ class SeasonalInferenceEngine:
                 name for name in cropland_gate_labels if name not in class_index
             ]
             if missing_cropland:
-                logger.warning(
-                    f"Cropland classes {missing_cropland} missing from landcover outputs; treating them as non-cropland."
+                raise ValueError(
+                    f"Configured cropland classes {missing_cropland} are missing "
+                    "from landcover outputs."
                 )
             cropland_indices = [class_index[name] for name in cropland_label_order]
+            if not cropland_indices:
+                raise ValueError(
+                    "No configured cropland gate classes match the landcover outputs."
+                )
             cropland_index_set = set(cropland_indices)
             other_indices = [
                 idx
@@ -1852,19 +1871,7 @@ class SeasonalInferenceEngine:
             )
             cropland_prob_cube = raw_cropland_prob_cube.copy()
 
-            if cropland_gate_labels:
-                if cropland_indices:
-                    cropland_mask_bool = np.isin(preds_np, cropland_indices)
-                else:
-                    logger.warning(
-                        "Configured cropland classes do not match landcover outputs; defaulting to all pixels as cropland."
-                    )
-                    cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
-            else:
-                logger.warning(
-                    "Cropland classes unavailable; defaulting to all pixels as cropland."
-                )
-                cropland_mask_bool = np.ones_like(preds_np, dtype=bool)
+            cropland_mask_bool = np.isin(preds_np, cropland_indices)
 
             cropland_labels_uint8 = cropland_mask_bool.astype(np.uint8)
             cropland_labels_uint8[invalid_pixels] = POSTPROCESSING_NODATA
