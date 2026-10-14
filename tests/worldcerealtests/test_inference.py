@@ -69,6 +69,84 @@ def _build_probability_engine(
     return engine
 
 
+def _build_cropland_gate_bundle(
+    *,
+    landcover_classes: list[str],
+    croptype_spec: inference.HeadSpec | None,
+) -> inference.SeasonalModelBundle:
+    bundle = inference.SeasonalModelBundle.__new__(inference.SeasonalModelBundle)
+    bundle._cropland_head_enabled = True
+    bundle._croptype_head_enabled = False
+    bundle.landcover_spec = inference.HeadSpec(
+        task="landcover",
+        class_names=["background", "crop"],
+        cropland_classes=landcover_classes,
+        gating_enabled=bool(landcover_classes),
+    )
+    bundle.croptype_spec = croptype_spec
+    bundle.cropland_gate_classes = []
+    return bundle
+
+
+def test_cropland_gate_uses_croptype_spec_when_head_is_disabled():
+    croptype_spec = inference._select_optional_head_spec(
+        [
+            {
+                "task": "croptype",
+                "class_names": ["wheat", "no_crop"],
+                "gating": {"cropland_classes": ["crop"]},
+            }
+        ],
+        task="croptype",
+    )
+    bundle = _build_cropland_gate_bundle(
+        landcover_classes=[], croptype_spec=croptype_spec
+    )
+
+    bundle._update_cropland_gate()
+
+    assert bundle.cropland_gate_classes == ["crop"]
+    assert bundle.croptype_spec is croptype_spec
+
+
+def test_cropland_gate_supports_manifest_without_croptype_head():
+    assert inference._select_optional_head_spec([], task="croptype") is None
+    bundle = _build_cropland_gate_bundle(
+        landcover_classes=["crop"], croptype_spec=None
+    )
+
+    bundle._update_cropland_gate()
+
+    assert bundle.cropland_gate_classes == ["crop"]
+
+
+def test_cropland_gate_requires_classes_from_either_head():
+    bundle = _build_cropland_gate_bundle(
+        landcover_classes=[], croptype_spec=None
+    )
+
+    with pytest.raises(ValueError, match="no cropland gate classes are declared"):
+        bundle._update_cropland_gate()
+
+
+def test_landcover_output_rejects_unmatched_cropland_gate_class():
+    engine = _build_probability_engine()
+    engine.bundle.cropland_gate_classes = ["temporary_crops"]
+    arr = _dummy_probability_arr()
+    landcover_logits = torch.tensor(
+        [[6.0, 1.0], [1.0, 6.0], [1.0, 6.0], [1.0, 6.0]],
+        dtype=torch.float32,
+    )
+
+    with pytest.raises(ValueError, match="missing from landcover outputs"):
+        engine._format_outputs(
+            arr=arr,
+            outputs=(landcover_logits, None, None),
+            season_ids=["tc-s1"],
+            mask_cropland=True,
+        )
+
+
 def _dummy_probability_arr() -> xr.DataArray:
     return xr.DataArray(
         np.zeros((1, 1, 2, 2), dtype=np.float32),
