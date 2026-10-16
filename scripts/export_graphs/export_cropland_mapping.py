@@ -14,21 +14,19 @@ import sys
 from pathlib import Path
 
 import geopandas as gpd
+from openeo_gfmap import Backend, BackendContext, TemporalContext
 from shapely.geometry import box
 
+from worldcereal.job import WorldCerealTask
+from worldcereal.jobmanager import WorldCerealJobManager
+from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
+from worldcereal.openeo.workflow_config import build_config_from_params
 from worldcereal.parameters import WorldCerealProductType
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
-
-from openeo_gfmap import Backend, BackendContext, TemporalContext
-
-from worldcereal.jobmanager import WorldCerealJobManager
-from worldcereal.job import WorldCerealTask
-from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
-from worldcereal.openeo.workflow_config import build_config_from_params
 
 
 def _parse_bbox(value: str) -> tuple[float, float, float, float]:
