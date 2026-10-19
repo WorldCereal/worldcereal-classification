@@ -107,9 +107,7 @@ class WorldCerealClassificationApp:
 
         # Tab 3 variables
         self.processing_period: Optional[TemporalContext] = None
-        self.tab3_aoi_gdf = (
-            None  # GeoDataFrame AOI loaded from file (for seasons display)
-        )
+        self.tab3_aoi_gdf = None  # AOI derived from loaded extractions
         self.season_window: Optional[TemporalContext] = None
         self.season_id: Optional[str] = None
 
@@ -1248,20 +1246,36 @@ class WorldCerealClassificationApp:
         """Automatically save the Tab 1 AOI to ./bbox after the user submits it."""
         self._auto_save_aoi_map(self.tab1_widgets.get("aoi_map"))
 
-    def _try_load_aoi_for_seasons(self, aoi_name: str):
-        """Try to load an AOI GeoDataFrame from ./bbox/{aoi_name}.gpkg.
+    def _set_aoi_from_extractions(self, df: pd.DataFrame, aoi_name: str) -> None:
+        """Replace the Tab 1 AOI with the total bounds of loaded extractions."""
+        aoi_map = self.tab1_widgets["aoi_map"]
+        aoi_map._clear_extent()
+        self.tab1_aoi_names = []
+        self.tab3_aoi_gdf = None
 
-        Returns a GeoDataFrame on success, or None when the file is not found.
-        """
-        if not aoi_name:
-            return None
-        bbox_file = Path("./bbox") / f"{aoi_name}.gpkg"
-        if not bbox_file.exists():
-            return None
-        try:
-            return gpd.read_file(str(bbox_file))
-        except Exception:
-            return None
+        if "geometry" in df.columns:
+            geometries = gpd.GeoSeries(
+                df["geometry"], crs=getattr(df, "crs", None) or "EPSG:4326"
+            ).to_crs(epsg=4326)
+        elif {"lon", "lat"}.issubset(df.columns):
+            geometries = gpd.GeoSeries(
+                gpd.points_from_xy(df["lon"], df["lat"]), crs="EPSG:4326"
+            )
+        else:
+            raise ValueError("Extractions contain no geometry or lon/lat coordinates.")
+
+        geometries = geometries[geometries.notna() & ~geometries.is_empty]
+        if geometries.empty:
+            raise ValueError("Extractions contain no geometry with a usable extent.")
+        bounds = geometries.total_bounds
+        if not np.isfinite(bounds).all():
+            raise ValueError("Extractions contain no finite spatial extent.")
+
+        aoi_map._set_gdf_from_polygon(
+            shapely_box(*bounds), aoi_name or "loaded_extractions", replace=True
+        )
+        aoi_map._set_geojson_layer_from_gdf(aoi_map.get_gdf())
+        self.tab3_aoi_gdf = aoi_map.get_gdf()
 
     def _gdf_to_utm_bbox(self, gdf) -> "Optional[BoundingBoxExtent]":
         """Convert a GeoDataFrame to a UTM BoundingBoxExtent for seasons retrieval."""
@@ -1455,7 +1469,8 @@ class WorldCerealClassificationApp:
         load_info = self._info_callout(
             "If you have previously saved extractions to disk (in the <code>./training_extractions/</code> folder), "
             "you can reload them here to skip Tab 1 entirely.<br><br>"
-            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>."
+            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>.<br>"
+            "The AOI in Tab 1 will be replaced by the total bounds of the loaded extractions."
         )
         load_input = widgets.Text(
             value="",
@@ -1705,7 +1720,10 @@ class WorldCerealClassificationApp:
             self.tab1_saved = True
             self.tab2_df = None
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
-            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
+            try:
+                self._set_aoi_from_extractions(self.tab1_df, self.aoi_name_from_file)
+            except ValueError as exc:
+                print(f"Warning: could not set the Tab 1 AOI: {exc}")
             print(f"Extractions loaded from: {path}")
             nsamples = df["sample_id"].nunique()
             print(f"Total samples: {nsamples:,}")
@@ -1846,7 +1864,8 @@ class WorldCerealClassificationApp:
         tab3_load_info = self._info_callout(
             "If you have previously saved inspected/cleaned extractions to disk, "
             "you can reload them here to skip Tabs 1 and 2 entirely.<br><br>"
-            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>."
+            "Provide the full path to a <code>.parquet</code> extractions file and click <b>Load extractions</b>.<br>"
+            "The AOI in Tab 1 will be replaced by the total bounds of the loaded extractions."
         )
         tab3_load_input = widgets.Text(
             value="",
@@ -1987,7 +2006,10 @@ class WorldCerealClassificationApp:
                 return
             self.tab2_df = self._wkt_to_geometry(df)
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
-            self.tab3_aoi_gdf = self._try_load_aoi_for_seasons(self.aoi_name_from_file)
+            try:
+                self._set_aoi_from_extractions(self.tab2_df, self.aoi_name_from_file)
+            except ValueError as exc:
+                print(f"Warning: could not set the Tab 1 AOI: {exc}")
             print(f"Extractions loaded from: {path}")
             nsamples = df["sample_id"].nunique()
             print(f"Total samples: {nsamples:,}")
@@ -2198,9 +2220,8 @@ class WorldCerealClassificationApp:
                     print(
                         "No Area of Interest is available. "
                         "WorldCereal seasons cannot be displayed without an AOI.\n"
-                        "Make sure to draw and submit an AOI in Tab 1, or ensure "
-                        "the corresponding AOI file exists in the ./bbox folder "
-                        "when loading extractions from disk."
+                        "Draw and submit an AOI in Tab 1, or load extractions "
+                        "containing geometry or lon/lat coordinates."
                     )
                     return
 
@@ -2349,6 +2370,10 @@ class WorldCerealClassificationApp:
                 return
             self.tab3_df = df
             self.aoi_name_from_file = self._parse_aoi_from_filename(path)
+            try:
+                self._set_aoi_from_extractions(df, self.aoi_name_from_file)
+            except ValueError as exc:
+                print(f"Warning: could not set the Tab 1 AOI: {exc}")
             season_id, season_window = self._parse_season_info_from_filename(path.stem)
             if season_id is not None:
                 self.season_id = season_id
@@ -2529,7 +2554,8 @@ class WorldCerealClassificationApp:
         load_aligned_info = self._info_callout(
             "If you have previously saved aligned extractions to disk (in the <code>./training_extractions_aligned/</code> folder), "
             "you can reload them here to skip Tabs 1–3 entirely.<br><br>"
-            "Provide the full path to a <code>.parquet</code> aligned extractions file and click <b>Load aligned extractions</b>."
+            "Provide the full path to a <code>.parquet</code> aligned extractions file and click <b>Load aligned extractions</b>.<br>"
+            "The AOI in Tab 1 will be replaced by the total bounds of the loaded extractions."
         )
         load_aligned_input = widgets.Text(
             value="",
