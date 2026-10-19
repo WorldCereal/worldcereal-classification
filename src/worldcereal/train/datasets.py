@@ -1039,6 +1039,8 @@ class WorldCerealDataset(Dataset):
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
         disable_latlon: bool = False,
+        perturb_latlon_range: float = 0.0,
+        snap_latlon_step: float = 0.0,
         min_season_coverage: float = 1.0,
         remove_samples_without_s1_s2: bool = False,
     ):
@@ -1100,6 +1102,14 @@ class WorldCerealDataset(Dataset):
         self.augment = augment
         self.masking_config = masking_config
         self.disable_latlon = disable_latlon
+        if perturb_latlon_range < 0.0:
+            raise ValueError(
+                f"perturb_latlon_range must be >= 0; got {perturb_latlon_range}"
+            )
+        if snap_latlon_step < 0.0:
+            raise ValueError(f"snap_latlon_step must be >= 0; got {snap_latlon_step}")
+        self.perturb_latlon_range = perturb_latlon_range
+        self.snap_latlon_step = snap_latlon_step
         if not (0.0 < min_season_coverage <= 1.0):
             raise ValueError(
                 f"min_season_coverage must be in (0, 1]; got {min_season_coverage}"
@@ -1422,13 +1432,58 @@ class WorldCerealDataset(Dataset):
             axis=1,
         )
 
+    def _transform_latlon(self, latlon: np.ndarray, rng=None) -> np.ndarray:
+        """Apply the lat/lon regime to the model input: snapping and/or jitter.
+
+        Both are done here rather than baked into the parquet, so one dataset of real
+        coordinates serves every regime:
+
+        ``snap_latlon_step > 0``
+            Quantise to the centres of a grid of that size, ``floor(x/s)*s + s/2``.
+        ``perturb_latlon_range > 0``
+            Jitter uniformly within +-range degrees.
+
+        With both set, the point is snapped to its node and then jittered around it.
+
+        **Both are training-only**, gated on ``augment``. Inference has no snap or jitter option
+        and always supplies the true coordinate, so validation and test must see the true
+        coordinate too - otherwise they measure a regime that never occurs in production and
+        hide whatever the coarsened position costs. Scoring a snap-trained model against real
+        coordinates is the whole point of the comparison.
+
+        Only the model input is moved. H3 spatial bins and the season calendar are derived from
+        the dataframe upstream, so the sampler's bins and the season windows always come from
+        the true position whatever the regime.
+        """
+        out = latlon
+        if not self.augment:
+            return latlon
+        if self.snap_latlon_step > 0.0:
+            s = self.snap_latlon_step
+            # float64 for the floor: in float32 a coordinate a hair under a multiple of the
+            # step rounds up and lands in the next bin. Measured against a pre-snapped parquet
+            # this changed 11 rows in 3.1M, all within 1e-5 degrees of a bin edge, but there is
+            # no reason to carry the ambiguity.
+            out = (np.floor(out.astype(np.float64) / s) * s + s / 2.0).astype(latlon.dtype)
+        if self.perturb_latlon_range > 0.0:
+            draw = (rng or np.random).uniform
+            noise = draw(-self.perturb_latlon_range, self.perturb_latlon_range, out.shape)
+            out = out + noise.astype(latlon.dtype)
+        if out is latlon:
+            return latlon
+        out[..., 0] = np.clip(out[..., 0], -90.0, 90.0)
+        out[..., 1] = (out[..., 1] + 180.0) % 360.0 - 180.0
+        return out
+
     def get_inputs(self, row_d: Dict, timestep_positions: List[int]) -> dict:
         # Get latlons which need to have spatial dims
         latlon = None
         if not self.disable_latlon:
-            latlon = np.reshape(
-                np.array([row_d["lat"], row_d["lon"]], dtype=np.float32),
-                (1, 1, 2),
+            latlon = self._transform_latlon(
+                np.reshape(
+                    np.array([row_d["lat"], row_d["lon"]], dtype=np.float32),
+                    (1, 1, 2),
+                )
             )
 
         # Get timestamps belonging to each timestep
@@ -2808,7 +2863,7 @@ class WorldCerealLabelledDataset(WorldCerealDataset):
         meteo_full = meteo_win.reshape(B, 1, 1, T, len(METEO_BANDS)).copy()
         dem_full = c["dem"][rows].reshape(B, 1, 1, len(DEM_BANDS)).copy()
         latlon_full = (
-            c["latlon"][rows].reshape(B, 1, 1, 2).copy()
+            self._transform_latlon(c["latlon"][rows].reshape(B, 1, 1, 2).copy(), rng)
             if c["latlon"] is not None
             else None
         )
@@ -3679,6 +3734,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
         augment: bool = False,
         masking_config: Optional[SensorMaskingConfig] = None,
         disable_latlon: bool = False,
+        perturb_latlon_range: float = 0.0,
+        snap_latlon_step: float = 0.0,
         repeats: int = 1,
         season_ids: Optional[Sequence[str]] = None,
         season_windows: Optional[Mapping[str, Tuple[Any, Any]]] = None,
@@ -3698,6 +3755,8 @@ class WorldCerealTrainingDataset(WorldCerealDataset):
             augment=augment,
             masking_config=masking_config,
             disable_latlon=disable_latlon,
+            perturb_latlon_range=perturb_latlon_range,
+            snap_latlon_step=snap_latlon_step,
             min_season_coverage=min_season_coverage,
             remove_samples_without_s1_s2=remove_samples_without_s1_s2,
         )
