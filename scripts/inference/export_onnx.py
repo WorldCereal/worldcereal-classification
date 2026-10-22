@@ -65,10 +65,10 @@ def export_onnx_model(engine, season_windows,season_ids):
 
     input_names = ["x", "dynamic_world", "latlons", "mask", "month", "season_masks"]
 
-    from torch.export.dynamic_shapes import Dim
-    dynamic = {"x": (Dim.DYNAMIC, Dim.STATIC, Dim.STATIC), "dynamic_world": (Dim.DYNAMIC, Dim.STATIC),
-               "latlons": (Dim.DYNAMIC, Dim.STATIC), "mask": (Dim.DYNAMIC, Dim.STATIC, Dim.STATIC),
-               "month": (Dim.DYNAMIC, Dim.STATIC), "eval_pooling": None}
+    # from torch.export.dynamic_shapes import Dim
+    # dynamic = {"x": (Dim.DYNAMIC, Dim.STATIC, Dim.STATIC), "dynamic_world": (Dim.DYNAMIC, Dim.STATIC),
+    #            "latlons": (Dim.DYNAMIC, Dim.STATIC), "mask": (Dim.DYNAMIC, Dim.STATIC, Dim.STATIC),
+    #            "month": (Dim.DYNAMIC, Dim.STATIC), "eval_pooling": None}
     dynamic_axes = {"x": {0: "batch_size"}, "dynamic_world": {0: "batch_size"},
                     "latlons": {0: "batch_size"}, "mask": {0: "batch_size"},
                     "month": {0: "batch_size"},"season_masks": {0: "batch_size"}}
@@ -81,12 +81,12 @@ def export_onnx_model(engine, season_windows,season_ids):
     import torch
     timestamps = arr.t.values
 
-    disable_latlons = True
+    disable_latlons = False
     if disable_latlons:
         presto_args[1]['latlons'] = None
         input_names.remove("latlons")
         del dynamic_axes['latlons']
-        del dynamic['latlons']
+        # del dynamic['latlons']
 
 
     season_masks = engine._resolve_season_masks(
@@ -100,7 +100,7 @@ def export_onnx_model(engine, season_windows,season_ids):
     # if using dyname=True => dynamic_shapes = dynamic
     wrapper = WorldCerealSeasonalONNX(engine.bundle.model).eval()
 
-    onnx_program = torch.onnx.export(wrapper, presto_args, f="worldcereal_seasonal_us_nolatlon.onnx",
+    onnx_program = torch.onnx.export(wrapper, presto_args, f="worldcereal_seasonal_south_asia.onnx",
                                      input_names=input_names, dynamic_axes=dynamic_axes, dynamo=False, verbose=True)
 
 
