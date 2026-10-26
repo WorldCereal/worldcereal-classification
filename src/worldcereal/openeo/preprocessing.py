@@ -188,6 +188,11 @@ def raw_datacube_S2(
             - "mask_scl_dilation": compute the mask from the dilation of the SCL layer, using the `to_scl_dilation_mask` process. This is the default.
             - "mask_scl_raw_values": compute the mask directly from the raw SCL values, without dilation. This is the least conservative method available and allows more data to come through.
     """
+
+    # Correct the S2 tile ID if a filter is applied
+    if filter_tile and not filter_tile.startswith("MGRS-"):
+            filter_tile = f"MGRS-{filter_tile}"
+    
     # Extract the SCL collection only
     scl_cube_properties = {"eo:cloud_cover": lambda val: val <= 95.0}
     if filter_tile:
