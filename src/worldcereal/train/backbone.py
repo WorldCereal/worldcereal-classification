@@ -28,9 +28,13 @@ def checkpoint_fingerprint(path: Union[str, Path]) -> str:
 def resolve_seasonal_encoder(
     seasonal_model_url: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return the resolved encoder checkpoint path and fingerprint from a seasonal model."""
+    """Resolve a seasonal encoder and verify its declared SHA-256 fingerprint."""
 
-    model_url = seasonal_model_url or DEFAULT_SEASONAL_MODEL_URL
+    if seasonal_model_url is not None and not str(seasonal_model_url).strip():
+        raise ValueError("seasonal_model_url must not be empty.")
+    model_url = (
+        DEFAULT_SEASONAL_MODEL_URL if seasonal_model_url is None else seasonal_model_url
+    )
     artifact = load_model_artifact(model_url)
     manifest_backbone = artifact.manifest.get("backbone") or {}
     checkpoints_entry = artifact.manifest.get("artifacts", {}).get("checkpoints", {})
@@ -43,9 +47,13 @@ def resolve_seasonal_encoder(
     checkpoint_path = _resolve_checkpoint_path(checkpoint_rel, artifact.extract_dir)
 
     if checkpoint_path:
-        fingerprint = manifest_backbone.get("fingerprint") or checkpoint_fingerprint(
-            checkpoint_path
-        )
+        fingerprint = checkpoint_fingerprint(checkpoint_path)
+        declared_fingerprint = manifest_backbone.get("fingerprint")
+        if declared_fingerprint and declared_fingerprint != fingerprint:
+            raise ValueError(
+                f"Encoder fingerprint mismatch for seasonal model at {model_url}: "
+                f"{fingerprint} != {declared_fingerprint}."
+            )
         return str(checkpoint_path), fingerprint
 
     raise FileNotFoundError(

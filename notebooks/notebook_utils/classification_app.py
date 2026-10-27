@@ -2,7 +2,7 @@
 Interactive application for the WorldCereal training and inference workflow.
 
 Usage:
-    app = WorldCerealClassificationApp.run(presto_model_package=presto_model_package)
+    app = WorldCerealClassificationApp.run(seasonal_model_path="https://.../seasonal_model.zip")
 
 This module provides an interactive widget-based interface for:
 1. Retrieving reference data
@@ -59,6 +59,7 @@ from worldcereal.job import WorldCerealTask, resolve_workflow_luts
 from worldcereal.openeo.parameters import DEFAULT_SEASONAL_WORKFLOW_PRESET
 from worldcereal.openeo.preprocessing import WORLDCEREAL_BANDS
 from worldcereal.parameters import WorldCerealProductType
+from worldcereal.train.backbone import resolve_seasonal_encoder
 from worldcereal.utils.legend import (
     ewoc_code_to_label,
     get_legend,
@@ -70,23 +71,28 @@ from worldcereal.utils.upload import OpenEOArtifactHelper
 class WorldCerealClassificationApp:
     @classmethod
     def run(
-        cls, presto_model_package: Optional[dict] = None
+        cls,
+        *,
+        seasonal_model_path: Optional[str | Path] = None,
     ) -> "WorldCerealClassificationApp":
         """Instantiate and display the training application."""
-        app = cls(presto_model_package=presto_model_package)
+        app = cls(seasonal_model_path=seasonal_model_path)
         display(app.tabs_container)
         return app
 
-    def __init__(self, presto_model_package: Optional[dict] = None):
+    def __init__(
+        self,
+        *,
+        seasonal_model_path: Optional[str | Path] = None,
+    ):
         """
         Initialize the classification application, setting up state variables and building the UI.
 
         Parameters:
-        - presto_model_package: Optional dictionary containing information about the Presto model to use, including:
-            - "presto_remote_path": URL to the remote Presto model
-            - "presto_local_path": Path to the local Presto model
-            - "presto_fingerprint": Fingerprint of the Presto model
-            - "seasonal_model_path": URL to a seasonal model package (.zip)
+        - seasonal_model_path: URL or local path to a seasonal model ZIP. Its
+          encoder and fingerprint are resolved automatically for training.
+          Invalid custom packages raise an error; they never select the default.
+          A local ZIP must be uploaded to a backend-accessible URL for mapping.
 
         """
         self.workflow_mode = "full"
@@ -137,8 +143,21 @@ class WorldCerealClassificationApp:
         self.tab8_product_type: Optional[str] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
 
-        self.presto_model_package = presto_model_package
-        self.init_warnings = self._validate_init_params(presto_model_package)
+        self.seasonal_model_path: Optional[str] = None
+        self.presto_model_path: Optional[str] = None
+        self.presto_model_fingerprint: Optional[str] = None
+        if seasonal_model_path is not None:
+            if (
+                not isinstance(seasonal_model_path, (str, Path))
+                or not str(seasonal_model_path).strip()
+            ):
+                raise ValueError(
+                    "seasonal_model_path must be a non-empty URL or local path."
+                )
+            self.seasonal_model_path = str(seasonal_model_path)
+            self.presto_model_path, self.presto_model_fingerprint = resolve_seasonal_encoder(
+                self.seasonal_model_path
+            )
 
         self.cdse_auth_cleared = False
         self.cdse_auth_failed = False
@@ -336,30 +355,6 @@ class WorldCerealClassificationApp:
             "<p>Select your workflow mode and launch the application.</p>"
         )
 
-        warning_box = None
-        if self.init_warnings:
-            items = "".join(f"<li>{warning}</li>" for warning in self.init_warnings)
-            warning_box = widgets.HTML(
-                value=(
-                    "<div style='"
-                    "box-sizing:border-box;"
-                    "width:100%;"
-                    "max-width:100%;"
-                    "background:#fff4e5;"
-                    "border:1px solid #f5c38b;"
-                    "border-left:4px solid #f0a04b;"
-                    "padding:8px 10px;"
-                    "border-radius:4px;"
-                    "color:#6b3d00;"
-                    "font-size:13px;"
-                    "line-height:1.4;"
-                    "margin:8px 0 10px 0;"
-                    "'>"
-                    "<b>Initialization warnings</b><ul style='margin:6px 0 0 18px;'>"
-                    f"{items}</ul></div>"
-                )
-            )
-
         workflow_mode_radio = widgets.RadioButtons(
             options=[
                 (
@@ -441,47 +436,14 @@ class WorldCerealClassificationApp:
         disable_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
-        children = [header]
-        if warning_box is not None:
-            children.append(warning_box)
-        children.extend([workflow_mode_radio, training_setup, widgets.HBox([select_button])])
+        children = [
+            header,
+            workflow_mode_radio,
+            training_setup,
+            widgets.HBox([select_button]),
+        ]
 
         return widgets.VBox(children)
-
-    def _validate_init_params(self, presto_model_package: Optional[dict]) -> List[str]:
-        warnings: List[str] = []
-        if presto_model_package is None:
-            return warnings
-        if not isinstance(presto_model_package, dict):
-            return ["presto_model_package must be a dict or None."]
-        if not presto_model_package:
-            warnings.append("presto_model_package is empty.")
-            return warnings
-
-        allowed_and_required_keys = {
-            "presto_remote_path",
-            "presto_local_path",
-            "presto_fingerprint",
-            "seasonal_model_path",
-        }
-        unknown_keys = sorted(set(presto_model_package) - allowed_and_required_keys)
-        if unknown_keys:
-            warnings.append(
-                "presto_model_package has unknown keys: " + ", ".join(unknown_keys)
-            )
-        missing_keys = sorted(allowed_and_required_keys - set(presto_model_package))
-        if missing_keys:
-            warnings.append(
-                "presto_model_package is missing required keys: "
-                + ", ".join(missing_keys)
-            )
-        # all values should be str
-        for key in allowed_and_required_keys:
-            value = presto_model_package.get(key)
-            if not isinstance(value, str):
-                warnings.append(f"presto_model_package['{key}'] should be a string.")
-
-        return warnings
 
     def _on_workflow_mode_change(self, change):
         """Handle workflow mode selection changes."""
@@ -2698,31 +2660,18 @@ class WorldCerealClassificationApp:
         )
 
         presto_title = widgets.HTML("<h3>Presto model</h3>")
-        presto_items: List[str] = []
-        if self.presto_model_package is None:
+        if self.seasonal_model_path is None:
             presto_message = widgets.HTML(
                 value="<i>Using default globally trained Presto model...</i>"
             )
         else:
-            for key in (
-                "presto_remote_path",
-                "presto_local_path",
-                "seasonal_model_path",
-            ):
-                value = self.presto_model_package.get(key)
-                if value:
-                    presto_items.append(f"<li><b>{key}:</b> {value}</li>")
-            if presto_items:
-                presto_message = widgets.HTML(
-                    value=(
-                        "<i>Using custom Presto model with the following paths:</i><br>"
-                        f"<ul>{''.join(presto_items)}</ul>"
-                    )
+            presto_message = widgets.HTML(
+                value=(
+                    "<i>Using the encoder from the custom seasonal model:</i><br>"
+                    f"<b>Seasonal model:</b> {self.seasonal_model_path}<br>"
+                    f"<b>Cached encoder:</b> {self.presto_model_path}"
                 )
-            else:
-                presto_message = widgets.HTML(
-                    value="<i>Presto model package provided, but no paths were found, cannot continue!.</i>"
-                )
+            )
 
         embeddings_message = widgets.HTML(
             value="<i>Tune parameters and click the button below to compress the EO time series of your samples into comprehensive geospatial embeddings (your training features).</i>"
@@ -3203,10 +3152,6 @@ class WorldCerealClassificationApp:
             if not (0 <= min_season_coverage <= 1):
                 print("Min season coverage must be in the range [0, 1].")
                 return
-            if self.presto_model_package is None:
-                custom_presto_url = None
-            else:
-                custom_presto_url = self.presto_model_package.get("presto_local_path")
             try:
                 print("Computing Presto embeddings...")
                 self.tab5_df = compute_seasonal_presto_embeddings(
@@ -3220,7 +3165,7 @@ class WorldCerealClassificationApp:
                     min_season_coverage=min_season_coverage,
                     season_window=self.season_window,
                     season_calendar_mode="custom",
-                    custom_presto_url=custom_presto_url,
+                    custom_presto_url=self.presto_model_path,
                     use_spatial_split=use_spatial_split,
                     bin_size_degrees=bin_size_degrees,
                     val_size=val_size,
@@ -3518,15 +3463,6 @@ class WorldCerealClassificationApp:
             self.head_output_path = Path(base_output_dir) / model_name
             self.head_output_path.mkdir(parents=True, exist_ok=True)
 
-            # Get custom presto model info if available
-            presto_model_path = None
-            presto_model_fingerprint = None
-            if self.presto_model_package is not None:
-                presto_model_path = self.presto_model_package.get("presto_local_path")
-                presto_model_fingerprint = self.presto_model_package.get(
-                    "presto_fingerprint"
-                )
-
             try:
                 print("Training started...")
                 train_seasonal_torch_head(
@@ -3542,8 +3478,8 @@ class WorldCerealClassificationApp:
                     num_workers=0,
                     excluded_modalities=self.excluded_modalities,
                     disable_latlon=self.disable_latlon,
-                    presto_model_path=presto_model_path,
-                    presto_model_fingerprint=presto_model_fingerprint,
+                    presto_model_path=self.presto_model_path,
+                    presto_model_fingerprint=self.presto_model_fingerprint,
                 )
                 print(
                     f"Training completed. Artifacts saved to: {self.head_output_path}"
@@ -3575,10 +3511,8 @@ class WorldCerealClassificationApp:
                             )
 
                             base_seasonal_model = (
-                                self.presto_model_package.get("seasonal_model_path")
-                                if self.presto_model_package
-                                else None
-                            ) or DEFAULT_SEASONAL_MODEL_URL
+                                self.seasonal_model_path or DEFAULT_SEASONAL_MODEL_URL
+                            )
                             self.derived_seasonal_model_path = (
                                 create_masked_seasonal_artifact(
                                     base_seasonal_model,
@@ -3814,10 +3748,8 @@ class WorldCerealClassificationApp:
                     )
 
                     base_seasonal_model = (
-                        self.presto_model_package.get("seasonal_model_path")
-                        if self.presto_model_package
-                        else None
-                    ) or DEFAULT_SEASONAL_MODEL_URL
+                        self.seasonal_model_path or DEFAULT_SEASONAL_MODEL_URL
+                    )
                     self.derived_seasonal_model_path = create_masked_seasonal_artifact(
                         base_seasonal_model,
                         self.excluded_modalities,
@@ -4652,11 +4584,9 @@ class WorldCerealClassificationApp:
 
         # model selection
         # prefer the seasonal model suite derived to match this head's excluded
-        # modalities; fall back to a provided presto model package, else default
-        custom_seasonal_model_url = self.tab7_seasonal_model_url or (
-            self.presto_model_package.get("seasonal_model_path")
-            if self.presto_model_package
-            else None
+        # modalities; otherwise use the supplied seasonal ZIP, else default
+        custom_seasonal_model_url = (
+            self.tab7_seasonal_model_url or self.seasonal_model_path
         )
         if self.workflow_mode == "apply-default-model":
             landcover_head_zip = None
@@ -4769,19 +4699,13 @@ class WorldCerealClassificationApp:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model metadata so Tab 9 can always resolve the correct LUTs
-        presto_model_path = (
-            self.presto_model_package.get("presto_local_path")
-            or self.presto_model_package.get("presto_remote_path")
-            if self.presto_model_package
-            else None
-        )
         self._save_model_metadata(
             output_dir=output_dir,
             product_type=product_type,
             seasonal_model=custom_seasonal_model_url,
             landcover_head=landcover_head_zip,
             croptype_head=croptype_head_zip,
-            presto_model=presto_model_path,
+            presto_model=self.presto_model_path,
             excluded_modalities=active_exclusions,
         )
 
@@ -5750,13 +5674,8 @@ class WorldCerealClassificationApp:
         self.tab8_landcover_head_url = metadata.get("landcover_head")
         self.tab8_croptype_head_url = metadata.get("croptype_head")
         self.excluded_modalities = list(metadata.get("excluded_modalities") or [])
-        presto_model = metadata.get("presto_model")
-        if presto_model is not None and self.presto_model_package is not None:
-            # restore whichever key is appropriate based on whether it's a URL or a path
-            if self._is_valid_url(presto_model):
-                self.presto_model_package["presto_remote_path"] = presto_model
-            else:
-                self.presto_model_package["presto_local_path"] = presto_model
+        # Run metadata is for resuming/visualizing that run, not for replacing
+        # the active training encoder independently of its seasonal package.
         return True
 
     def _get_supported_product_types(self) -> List[str]:
@@ -5770,11 +5689,7 @@ class WorldCerealClassificationApp:
         from worldcereal.job import _get_artifact_manifest, _manifest_has_head
         from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
-        seasonal_url = (
-            self.presto_model_package.get("seasonal_model_path")
-            if self.presto_model_package
-            else None
-        ) or DEFAULT_SEASONAL_MODEL_URL
+        seasonal_url = self.seasonal_model_path or DEFAULT_SEASONAL_MODEL_URL
 
         try:
             manifest = _get_artifact_manifest(seasonal_url)
