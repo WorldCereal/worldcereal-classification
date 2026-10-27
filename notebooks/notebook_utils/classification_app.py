@@ -2415,6 +2415,9 @@ class WorldCerealClassificationApp:
             sample_df=df,
             display_ui=False,
         )
+        selector.apply_button.layout.display = "none"
+        selector.reset_button.on_click(selector._on_reset, remove=True)
+        selector.reset_button.on_click(self._on_tab4_reset_classes)
         self.tab4_widgets["class_selection_widget"] = selector
         selector.group_dropdown.observe(
             self._update_tab4_subsample_classes, names="options"
@@ -2473,8 +2476,7 @@ class WorldCerealClassificationApp:
         )
         croptype_info = self._info_callout(
             "Use the widget below to define the final class list for the workflow.<br><br>"
-            "<b>Apply is required</b><br>"
-            "Make sure to confirm your final classes by pressing <b>Apply class selection</b>."
+            "After editing the final classes, click <b>Apply selected classes</b> once to use them for training."
         )
         select_crops_button = widgets.Button(
             button_style="primary",
@@ -2483,7 +2485,7 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="240px"),
         )
         apply_crops_button = widgets.Button(
-            description="Apply class selection",
+            description="Apply selected classes",
             button_style="success",
             icon="check",
             layout=widgets.Layout(width="240px", height="48px"),
@@ -2513,7 +2515,7 @@ class WorldCerealClassificationApp:
             "Clicking the 'Subsample class' button will generate a stratified random sample, accounting for dataset ID.<br><br>"
         )
         subsample_text = widgets.IntText(
-            value=0,
+            value=100,
             description="Max samples per class:",
             style={"description_width": "140px"},
             layout=widgets.Layout(width="260px"),
@@ -2549,7 +2551,7 @@ class WorldCerealClassificationApp:
             layout=widgets.Layout(width="240px", height="60px"),
         )
         reset_classes_button = widgets.Button(
-            description="Reset training classes",
+            description="Reset class selection",
             button_style="danger",
             icon="undo",
             layout=widgets.Layout(width="220px", height="60px"),
@@ -3057,6 +3059,7 @@ class WorldCerealClassificationApp:
         """Reset Tab 4 selections and outputs."""
         self.tab4_df = None
         self.tab4_confirmed = False
+        self.training_df_path = None
 
         selector = self.tab4_widgets.get("class_selection_widget")
         if selector is not None:
@@ -3069,18 +3072,12 @@ class WorldCerealClassificationApp:
         if selection_container is not None:
             selection_container.children = []
 
-        output = self.tab4_widgets.get("croptype_output")
-        if output is not None:
-            output.clear_output()
+        for widget in self.tab4_widgets.values():
+            if isinstance(widget, widgets.Output):
+                widget.clear_output()
 
-        subsample_output = self.tab4_widgets.get("subsample_output")
-        if subsample_output is not None:
-            subsample_output.clear_output()
-
-        output = self.tab4_widgets.get("final_output")
-        if output is not None:
-            output.clear_output()
-            print("Training classes reset. Start again by applying crop selection.")
+        if self.tab3_df is not None and not self.tab3_df.empty:
+            self._on_tab4_select_crops()
 
         self._update_tab5_state()
 
