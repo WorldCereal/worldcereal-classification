@@ -35,7 +35,7 @@ You can use a preconfigured environment on [**Terrascope**](https://terrascope.b
 | :point_up:    | Once you are prompted with "Server Options", make sure to select the "Worldcereal" image. Did you choose "Terrascope" by accident? Then go to File > Hub Control Panel > Stop my server, and click the link below once again.  |
 |---------------|:------------------------|
 
-- Access our classification app here: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_classification_app.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20cropland%20demo-Terrascope-brightgreen" alt="Run cropland demo" valign="middle"></a>
+- Access our classification app here: <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_classification_app.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20classification%20app-Terrascope-brightgreen" alt="Run classification app" valign="middle"></a>
 
 - For a demo on how to interact with the WorldCereal Reference Data Module (RDM): <a href="https://notebooks.terrascope.be/hub/user-redirect/git-pull?repo=https%3A%2F%2Fgithub.com%2FWorldCereal%2Fworldcereal-classification&urlpath=lab%2Ftree%2Fworldcereal-classification%2Fnotebooks%2Fworldcereal_RDM_demo.ipynb&branch=main"><img src="https://img.shields.io/badge/run%20RDM%20demo-Terrascope-brightgreen" alt="Run RDM demo" valign="middle"></a>
 
