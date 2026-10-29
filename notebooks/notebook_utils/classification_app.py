@@ -483,7 +483,14 @@ class WorldCerealClassificationApp:
         self._update_training_setup_state()
 
     def _has_compatible_landcover_head(self) -> bool:
-        return not self.excluded_modalities and not self.disable_latlon
+        """Whether a usable cropland (landcover) head is available.
+
+        Requires that no input modalities are excluded and that the active
+        seasonal model actually contains a landcover head.
+        """
+        if self.excluded_modalities or self.disable_latlon:
+            return False
+        return "cropland" in self._get_supported_product_types()
 
     def _update_training_setup_state(self):
         """Update training-only modality controls and extraction guidance."""
@@ -3967,15 +3974,16 @@ class WorldCerealClassificationApp:
         processing_params_info = self._info_callout(
             "The following parameters are available to configure the map generation process:<br><br>"
             "<b>Product</b>:<br>"
-            "   - Select whether to generate a <b>cropland</b> or <b>croptype</b> product.<br>"
-            "     Cropland outputs a binary cropland mask; croptype produces a multi-class crop type map.<br>"
-            "     Available options depend on which heads are present in the active model.<br><br>"
-            "<b>Land cover mapping</b>:<br>"
-            "   - Generate cropland product:<br>"
-            "     In case you selected croptype product, you can choose here whether to also export the cropland product as a separate layer in the output map.<br>"
-            "     Disable if you are not interested in the cropland results to save processing time and output storage space.<br><br>"
+            "   - <b>Cropland only</b>: binary cropland map (only available in the default-model workflow).<br>"
+            "   - <b>Crop type only</b>: multi-class crop type map.<br>"
+            "   - <b>Cropland + crop type</b>: crop type map with the cropland map exported as a separate layer.<br>"
+            "     Available options depend on which heads are present in the active model.<br>"
+            "     When you train or apply a custom crop type model, the cropland map comes from the land cover head of the seasonal model.<br>"
+            "     It is only offered when that head is compatible with your model's input configuration.<br><br>"
+            "<b>Masking</b>:<br>"
             "   - Mask cropland in crop type product: By default enabled to mask out non-cropland areas in the crop type output.<br>"
-            "     Depending on your use case, you may want to disable this to get predictions for all land cover types.<br><br>"
+            "     Depending on your use case, you may want to disable this to get predictions for all land cover types.<br>"
+            "     Note that when masking is enabled, the cropland layer is always exported alongside the crop type product.<br><br>"
             "<b>Postprocessing:</b><br>"
             "       By default enabled to run a majority vote postprocessing step on the predicted classes to smooth the results.<br>"
             "       Depending on your use case, you may want to disable postprocessing to get the raw model predictions without any smoothing.<br><br>"
@@ -3997,17 +4005,18 @@ class WorldCerealClassificationApp:
         )
 
         product_type_dropdown = widgets.Dropdown(
-            options=[("Cropland", "cropland"), ("Croptype", "croptype")],
-            value="croptype",
-            description="Product type:",
-            layout=widgets.Layout(width="240px"),
+            options=[
+                ("Crop type only", "croptype"),
+                ("Cropland + crop type", "both"),
+            ],
+            value="both",
+            description="Product:",
+            layout=widgets.Layout(width="320px"),
         )
+        # Shown only for crop type products in the default-model workflow.
+        default_croptype_warning = widgets.HTML(value="")
+        default_croptype_warning.layout.display = "none"
 
-        enable_cropland_head_checkbox = widgets.Checkbox(
-            value=True,
-            description="Generate cropland product",
-            description_width="300px",
-        )
         mask_cropland_checkbox = widgets.Checkbox(
             value=True,
             description="Mask cropland?",
@@ -4067,7 +4076,7 @@ class WorldCerealClassificationApp:
         )
 
         product_header = widgets.HTML("<h4>Product</h4>")
-        landcover_header = widgets.HTML("<h4>Land cover mapping</h4>")
+        landcover_header = widgets.HTML("<h4>Masking</h4>")
         postprocess_header = widgets.HTML("<h4>Postprocessing</h4>")
         export_header = widgets.HTML("<h4>Export</h4>")
 
@@ -4132,13 +4141,13 @@ class WorldCerealClassificationApp:
             "season_retrieve_output": season_retrieve_output,
             "season_id_input": season_id_input,
             "product_type_dropdown": product_type_dropdown,
+            "default_croptype_warning": default_croptype_warning,
             "product_header": product_header,
             "landcover_header": landcover_header,
             "postprocess_header": postprocess_header,
             "export_header": export_header,
             "output_name_input": output_name_input,
             "mask_cropland_checkbox": mask_cropland_checkbox,
-            "enable_cropland_head_checkbox": enable_cropland_head_checkbox,
             "export_probs_checkbox": export_probs_checkbox,
             "croptype_postprocess_enabled": croptype_postprocess_enabled,
             "croptype_postprocess_method": croptype_postprocess_method,
@@ -4157,12 +4166,20 @@ class WorldCerealClassificationApp:
 
         def _update_product_controls(_=None):
             is_cropland = product_type_dropdown.value == "cropland"
-
-            landcover_header.layout.display = "none" if is_cropland else "block"
-            enable_cropland_head_checkbox.layout.display = (
-                "none" if is_cropland else "block"
+            show_croptype_warning = (
+                self.workflow_mode == "apply-default-model"
+                and product_type_dropdown.value in ("croptype", "both")
             )
-            mask_cropland_checkbox.layout.display = "none" if is_cropland else "block"
+            if show_croptype_warning and not default_croptype_warning.value:
+                default_croptype_warning.value = self._build_default_croptype_warning()
+            default_croptype_warning.layout.display = (
+                "block" if show_croptype_warning else "none"
+            )
+            # The mask checkbox is disabled when no compatible cropland head exists.
+            show_mask = not is_cropland and not mask_cropland_checkbox.disabled
+
+            landcover_header.layout.display = "block" if show_mask else "none"
+            mask_cropland_checkbox.layout.display = "block" if show_mask else "none"
 
             croptype_postprocess_enabled.layout.display = (
                 "none" if is_cropland else "block"
@@ -4188,11 +4205,9 @@ class WorldCerealClassificationApp:
             # A cropland layer is only produced when the cropland head is
             # enabled (standalone/cropland product) or used internally to
             # mask the crop type output; otherwise postprocessing it is moot.
-            is_cropland = product_type_dropdown.value == "cropland"
-            cropland_relevant = (
-                is_cropland
-                or enable_cropland_head_checkbox.value
-                or mask_cropland_checkbox.value
+            product = product_type_dropdown.value
+            cropland_relevant = product in ("cropland", "both") or (
+                product == "croptype" and mask_cropland_checkbox.value
             )
             display_value = "block" if cropland_relevant else "none"
             cropland_postprocess_enabled.layout.display = display_value
@@ -4200,10 +4215,8 @@ class WorldCerealClassificationApp:
             cropland_postprocess_kernel.layout.display = display_value
 
         _update_product_controls()
+        self._tab8_update_product_controls = _update_product_controls
         product_type_dropdown.observe(_update_product_controls, names="value")
-        enable_cropland_head_checkbox.observe(
-            _update_cropland_postprocess_visibility, names="value"
-        )
         mask_cropland_checkbox.observe(
             _update_cropland_postprocess_visibility, names="value"
         )
@@ -4259,8 +4272,8 @@ class WorldCerealClassificationApp:
                 processing_params_info,
                 product_header,
                 widgets.HBox([product_type_dropdown]),
+                default_croptype_warning,
                 landcover_header,
-                widgets.HBox([enable_cropland_head_checkbox]),
                 widgets.HBox([mask_cropland_checkbox]),
                 postprocess_header,
                 widgets.HBox([croptype_postprocess_enabled]),
@@ -4464,9 +4477,6 @@ class WorldCerealClassificationApp:
         season_slider_obj = self.tab8_widgets.get("season_slider")
         generate_button = self.tab8_widgets.get("generate_button")
         mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
-        enable_cropland_head_checkbox = self.tab8_widgets.get(
-            "enable_cropland_head_checkbox"
-        )
         export_probs_checkbox = self.tab8_widgets.get("export_probs_checkbox")
         croptype_postprocess_enabled = self.tab8_widgets.get(
             "croptype_postprocess_enabled"
@@ -4542,45 +4552,46 @@ class WorldCerealClassificationApp:
         mask_cropland = (
             mask_cropland_checkbox.value if mask_cropland_checkbox is not None else True
         )
-        enable_cropland_head = (
-            enable_cropland_head_checkbox.value
-            if enable_cropland_head_checkbox is not None
-            else True
-        )
         export_class_probs = (
             export_probs_checkbox.value if export_probs_checkbox is not None else True
         )
-        active_exclusions = list(self.excluded_modalities)
-        landcover_compatible = self._has_compatible_landcover_head()
-        if not landcover_compatible:
-            mask_cropland = False
-            enable_cropland_head = False
-            disabled_inputs = list(active_exclusions)
-            if self.disable_latlon:
-                disabled_inputs.append("lat/lon")
-            with log_out:
-                print(
-                    "Cropland masking and the cropland product are disabled "
-                    "because the trained model excludes these inputs: "
-                    f"{', '.join(disabled_inputs)}. No compatible cropland "
-                    "head exists for this sensor configuration."
-                )
         tile_resolution = (
             tile_resolution_input.value if tile_resolution_input is not None else 20
         )
-        product_type = (
-            product_type_dropdown.value
-            if product_type_dropdown is not None
-            else "cropland"
+        selected_product = (
+            product_type_dropdown.value if product_type_dropdown is not None else None
         )
-        self.tab8_product_type = product_type
-        if product_type == "cropland" and not landcover_compatible:
+        if selected_product not in ("cropland", "croptype", "both"):
             with log_out:
-                print(
-                    "Cannot generate a cropland product: this model has no "
-                    "compatible landcover head. Select the croptype product instead."
-                )
+                print("No product available for the selected model.")
             return
+        # "both" is a croptype product that also exports the cropland layer.
+        product_type = "croptype" if selected_product == "both" else selected_product
+        enable_cropland_head = selected_product in ("cropland", "both")
+        enable_croptype_head = selected_product in ("croptype", "both")
+
+        active_exclusions = list(self.excluded_modalities)
+        landcover_compatible = self._has_compatible_landcover_head()
+        if not landcover_compatible:
+            disabled_inputs = list(active_exclusions)
+            if self.disable_latlon:
+                disabled_inputs.append("lat/lon")
+            if disabled_inputs:
+                reason = (
+                    "the trained model excludes these inputs: "
+                    f"{', '.join(disabled_inputs)}. No compatible cropland "
+                    "head exists for this sensor configuration."
+                )
+            else:
+                reason = "the seasonal model does not contain a cropland (landcover) head."
+            if enable_cropland_head:
+                with log_out:
+                    print(f"Cannot generate a cropland product because {reason}")
+                return
+            mask_cropland = False
+            with log_out:
+                print(f"Cropland masking is disabled because {reason}")
+        self.tab8_product_type = product_type
 
         # model selection
         # prefer the seasonal model suite derived to match this head's excluded
@@ -4591,29 +4602,21 @@ class WorldCerealClassificationApp:
         if self.workflow_mode == "apply-default-model":
             landcover_head_zip = None
             croptype_head_zip = None
-            if product_type == "cropland":
-                enable_cropland_head = True
-                enable_croptype_head = False
-            else:
-                enable_cropland_head = True
-                enable_croptype_head = True
         else:
-            if product_type == "cropland":
-                # if cropland product only,
-                # we assume the user wants to use the custom trained model for cropland mapping
-                landcover_head_zip = self.tab7_head_url
-                croptype_head_zip = None
-                enable_croptype_head = False
-            else:
-                # if croptype product, we assume the user wants to use the custom trained model for crop type mapping
-                # and use the seasonal model for landcover only when compatible.
-                landcover_head_zip = (
-                    custom_seasonal_model_url if landcover_compatible else None
-                )
-                croptype_head_zip = self.tab7_head_url
-                enable_croptype_head = True
-                if not landcover_compatible:
-                    enable_cropland_head = False
+            # Custom/full workflows: crop type comes from the custom trained head;
+            # the cropland layer (or mask) comes from the seasonal model's
+            # landcover head, only when compatible.
+            if not enable_croptype_head:
+                with log_out:
+                    print(
+                        "Custom model workflows always produce a crop type product. "
+                        "Select 'Crop type only' or 'Cropland + crop type'."
+                    )
+                return
+            landcover_head_zip = (
+                custom_seasonal_model_url if landcover_compatible else None
+            )
+            croptype_head_zip = self.tab7_head_url
         # save model URL's for later use
         self.tab8_seasonal_model_url = custom_seasonal_model_url
         self.tab8_landcover_head_url = landcover_head_zip
@@ -4659,11 +4662,18 @@ class WorldCerealClassificationApp:
                 cropland_pp_enabled = False
 
         with log_out:
+            if self.workflow_mode == "apply-default-model" and enable_croptype_head:
+                print(
+                    "WARNING: you are generating a crop type product with the generic "
+                    "default crop type model. Results will be suboptimal compared to a "
+                    "model trained on local reference data. Crop types in this model: "
+                    + ", ".join(self._get_croptype_class_names())
+                )
             print("Using the following models:")
             print(
                 f"- Seasonal model: {custom_seasonal_model_url or 'Default WorldCereal seasonal model'}"
             )
-            if enable_cropland_head:
+            if enable_cropland_head or mask_cropland:
                 print(
                     f"- Cropland head: {landcover_head_zip or 'Default cropland head contained in seasonal model'}"
                 )
@@ -5360,41 +5370,51 @@ class WorldCerealClassificationApp:
         season_retrieve_output = self.tab8_widgets.get("season_retrieve_output")
         mask_cropland_checkbox = self.tab8_widgets.get("mask_cropland_checkbox")
 
+        is_default_mode = self.workflow_mode == "apply-default-model"
         landcover_compatible = self._has_compatible_landcover_head()
         if mask_cropland_checkbox is not None:
             mask_cropland_checkbox.disabled = not landcover_compatible
             if not landcover_compatible:
                 mask_cropland_checkbox.value = False
 
-        enable_cropland_head_checkbox = self.tab8_widgets.get(
-            "enable_cropland_head_checkbox"
-        )
-        if enable_cropland_head_checkbox is not None:
-            enable_cropland_head_checkbox.disabled = not landcover_compatible
-            if not landcover_compatible:
-                enable_cropland_head_checkbox.value = False
-
+        no_products_available = False
         if product_type_dropdown is not None:
-            if self.workflow_mode == "apply-default-model":
-                supported = self._get_supported_product_types()
+            previous_value = product_type_dropdown.value
+            # Default-model workflow: products follow the heads present in the
+            # seasonal model. Custom/full workflows always produce crop type
+            # (from the custom head), optionally with the seasonal cropland layer.
+            if is_default_mode:
+                has_croptype = "croptype" in self._get_supported_product_types()
+                has_cropland_only = landcover_compatible
             else:
-                supported = ["cropland", "croptype"]
-            options = [("Cropland", "cropland")] if landcover_compatible else []
-            if "croptype" in supported:
-                options.append(("Croptype", "croptype"))
+                has_croptype = True
+                has_cropland_only = False
+            options = []
+            if has_cropland_only:
+                options.append(("Cropland only", "cropland"))
+            if has_croptype:
+                options.append(("Crop type only", "croptype"))
+                if landcover_compatible:
+                    options.append(("Cropland + crop type", "both"))
+            allowed_values = [value for _, value in options]
+            no_products_available = not allowed_values
+
+            if "both" in allowed_values:
+                mode_default = "both"
+            elif "croptype" in allowed_values:
+                mode_default = "croptype"
+            else:
+                mode_default = allowed_values[0] if allowed_values else None
+
             product_type_dropdown.options = options
-            allowed_values = {value for _, value in options}
-            if reset_default:
-                # Set a mode-appropriate default value
-                if self.workflow_mode == "apply-default-model":
-                    mode_default = "cropland"
-                else:
-                    mode_default = (
-                        "croptype" if "croptype" in allowed_values else "cropland"
-                    )
+            if not reset_default and previous_value in allowed_values:
+                product_type_dropdown.value = previous_value
+            else:
                 product_type_dropdown.value = mode_default
-            elif product_type_dropdown.value not in allowed_values:
-                product_type_dropdown.value = "cropland"
+
+        update_product_controls = getattr(self, "_tab8_update_product_controls", None)
+        if update_product_controls is not None:
+            update_product_controls()
 
         if season_hint is not None:
             if self.workflow_mode == "apply-default-model":
@@ -5462,7 +5482,13 @@ class WorldCerealClassificationApp:
 
         if generate_button and status_message:
             generate_button.disabled = False
-            if self.workflow_mode == "apply-default-model":
+            if no_products_available:
+                generate_button.disabled = True
+                status_message.value = (
+                    "<i>The selected seasonal model contains neither a cropland "
+                    "(landcover) nor a crop type head. No map can be generated.</i>"
+                )
+            elif self.workflow_mode == "apply-default-model":
                 status_message.value = (
                     "<i>Ready to generate map with the default WorldCereal model.</i>"
                 )
@@ -5678,13 +5704,55 @@ class WorldCerealClassificationApp:
         # the active training encoder independently of its seasonal package.
         return True
 
-    def _get_supported_product_types(self) -> List[str]:
-        """Return the product types supported by the active default seasonal model.
+    def _get_croptype_class_names(self) -> List[str]:
+        """Return the crop type class names of the active seasonal model's croptype head."""
+        from worldcereal.job import _get_artifact_manifest
+        from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
 
-        Loads the model manifest from the seasonal model zip (served from the
-        local cache when available) and inspects the ``heads`` section.  Falls
-        back to ``["cropland", "croptype"]`` if the manifest cannot be read,
-        so the UI is never accidentally over-restricted.
+        seasonal_url = self.seasonal_model_path or DEFAULT_SEASONAL_MODEL_URL
+        manifest = _get_artifact_manifest(seasonal_url)
+        for head in manifest.get("heads", []):
+            if head.get("task") == "croptype":
+                return [str(name) for name in head.get("class_names") or []]
+        return []
+
+    def _build_default_croptype_warning(self) -> str:
+        """HTML warning about generic crop type models, listing their classes."""
+        try:
+            class_names = self._get_croptype_class_names()
+        except Exception:  # noqa: BLE001
+            class_names = []
+        if class_names:
+            class_list = ", ".join(class_names)
+            classes_html = (
+                f"<br><br><b>Crop types included in this model ({len(class_names)}):</b><br>"
+                f"{class_list}"
+            )
+        else:
+            classes_html = (
+                "<br><br><i>The list of crop types could not be read from the model.</i>"
+            )
+        return (
+            "<div style='color:#8a3b12; background:#fff4e5; padding:8px; "
+            "border-left:4px solid #f0a04b; margin:6px 0;'>"
+            "<b>Warning:</b> the default crop type model is a generic model trained "
+            "for a fixed set of crop types. "
+            "Results will be <b>suboptimal</b> compared to a crop type model trained "
+            "on reference data from your area and season of interest "
+            "(use the 'Full workflow' to train such a model). "
+            "Crops that are not in the list below cannot be detected."
+            f"{classes_html}</div>"
+        )
+
+    def _get_supported_product_types(self) -> List[str]:
+        """Return the product types supported by the active seasonal model.
+
+        Loads the model manifest from the seasonal model zip (the provided
+        ``seasonal_model_path`` or the default WorldCereal seasonal model,
+        served from the local cache when available) and inspects its
+        ``heads``: a ``landcover`` head enables ``"cropland"`` and a
+        ``croptype`` head enables ``"croptype"``. Returns an empty list when
+        neither head is present.
         """
         from worldcereal.job import _get_artifact_manifest, _manifest_has_head
         from worldcereal.openeo.parameters import DEFAULT_SEASONAL_MODEL_URL
@@ -5693,16 +5761,17 @@ class WorldCerealClassificationApp:
 
         try:
             manifest = _get_artifact_manifest(seasonal_url)
-            products: List[str] = []
-            if _manifest_has_head(manifest, task="landcover"):
-                products.append("cropland")
-            if _manifest_has_head(manifest, task="croptype"):
-                products.append("croptype")
-            return products or ["cropland", "croptype"]
-        except Exception:
+        except Exception as exc:
             raise RuntimeError(
-                "Failed to load model manifest to determine supported product types. "
-            )
+                "Failed to load model manifest to determine supported product "
+                f"types from {seasonal_url}."
+            ) from exc
+        products: List[str] = []
+        if _manifest_has_head(manifest, task="landcover"):
+            products.append("cropland")
+        if _manifest_has_head(manifest, task="croptype"):
+            products.append("croptype")
+        return products
 
     def _infer_product_type_from_dir(
         self, results_dir: Optional[Path]
