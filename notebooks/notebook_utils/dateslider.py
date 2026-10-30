@@ -26,7 +26,7 @@ class date_slider:
     def __init__(
         self,
         start_date=datetime(2017, 1, 1),
-        end_date=datetime(2025, 12, 31),
+        end_date=datetime(2026, 12, 31),
         show_year=True,
         display_interval=2,
         title="Select growing season window:",
