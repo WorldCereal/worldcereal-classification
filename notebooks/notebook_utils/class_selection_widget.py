@@ -21,6 +21,9 @@ Design principles
 -----------------
 * Every source class starts **not selected**; nothing is assumed about the
     final class list until the user decides.
+* The Source classes tab only displays classes not yet in the final list.
+  Selected classes are managed in the Final classes overview; removing a final
+  class makes its source classes available again.
 * The WorldCereal legend hierarchy guides users when composing broader groups.
 * Users explicitly select, combine, or leave out classes. Bulk actions let the
     remaining not-selected classes be kept individually or grouped into a
@@ -437,6 +440,8 @@ class ClassSelectionWidget:
             "padding:6px 8px;border-radius:4px;color:#4b5563;font-size:13px;"
             "line-height:1.4;overflow-wrap:anywhere;margin:6px 0 8px 0'>"
             "Every source class starts <b>not selected</b>.<br>"
+            "The Source classes tab only shows classes not yet in the final selection. "
+            "Manage selected classes in the Final classes overview; removing a final class makes its source classes available here again.<br>"
             "Select individual classes (checkboxes) or class groups (buttons) on the left and choose an action on the right to move them to the final selection.<br>"
             "You can see the final classes on the bottom and have the option to edit them as needed there.<br>"
             "Use the <i>Not selected</i> section in the Final classes overview for bulk actions, including merging everything "
@@ -468,21 +473,6 @@ class ClassSelectionWidget:
             layout=widgets.Layout(width="100%", min_width="0"),
         )
         self.search.observe(lambda _: self._refresh_source_tree(), names="value")
-        self.source_status_filter = widgets.Dropdown(
-            options=[
-                ("All", "all"),
-                ("Not selected", "not_selected"),
-                ("Selected", "selected"),
-            ],
-            value="all",
-            description="Show:",
-            style={"description_width": "45px"},
-            layout=widgets.Layout(width="100%", min_width="0"),
-        )
-        self.source_status_filter.observe(
-            lambda _: self._refresh_source_tree(), names="value"
-        )
-
         self.expand_all_button = widgets.Button(
             description="Expand all",
             icon="plus-square",
@@ -666,12 +656,11 @@ class ClassSelectionWidget:
                 widgets.HTML(
                     "<div class='wc-section-title'>Source classes</div>"
                     "<div style='font-size:12px;color:#666;margin-bottom:6px'>"
-                    "Browse the available classes below. Select the class(es) you want to group/remove.<br>"
+                    "Only classes not yet in the final selection are shown. Select the class(es) you want to keep or combine.<br>"
                     "Alternatively, click a group (button) such as <i>cereals</i> to use it as a shortcut."
                     "</div>"
                 ),
                 self.search,
-                self.source_status_filter,
                 source_toolbar,
                 self.source_tree_box,
             ],
@@ -823,16 +812,11 @@ class ClassSelectionWidget:
 
     def _visible_codes_for_search(self) -> set[int]:
         term = self.search.value.strip().casefold()
-        status = self.source_status_filter.value
         return {
             source.ewoc_code
             for source in self.sources
             if self._source_matches_search(source, term)
-            and (
-                status == "all"
-                or (status == "not_selected" and self.assignments[source.ewoc_code] == EXCLUDED)
-                or (status == "selected" and self.assignments[source.ewoc_code] != EXCLUDED)
-            )
+            and self.assignments[source.ewoc_code] == EXCLUDED
         }
 
     def _format_source_assignment(self, code: int) -> str:
@@ -1037,9 +1021,12 @@ class ClassSelectionWidget:
         search_active = bool(self.search.value.strip())
         self._source_checkboxes = {}
         self._branch_toggles = {}
+        available_tree = self._build_hierarchy_tree(
+            [source for source in self.sources if self.assignments[source.ewoc_code] == EXCLUDED]
+        )
 
         root_widgets: List[widgets.Widget] = []
-        for label, node in self._tree["children"].items():
+        for label, node in available_tree["children"].items():
             rendered = self._render_tree_node(
                 label,
                 node,
@@ -1051,7 +1038,12 @@ class ClassSelectionWidget:
                 root_widgets.append(rendered)
 
         if not root_widgets:
-            root_widgets = [widgets.HTML("<i>No source classes match the search.</i>")]
+            text = (
+                "No not-selected source classes match the search."
+                if search_active
+                else "All source classes are in the final selection."
+            )
+            root_widgets = [widgets.HTML(f"<i>{text}</i>")]
         self.source_tree_box.children = root_widgets
         self._refresh_source_selection_status()
         self._refresh_context_actions()
@@ -1768,7 +1760,6 @@ class ClassSelectionWidget:
         self._active_branch_codes = tuple()
         self._expanded_group_names.clear()
         self.search.value = ""
-        self.source_status_filter.value = "all"
         self._set_message("Reset: all source classes are unselected again.")
         self._refresh_all()
 
