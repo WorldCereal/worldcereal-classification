@@ -109,6 +109,7 @@ def visualize_products(
     luts: Optional[dict[str, dict]] = None,
     interactive_mode: bool = False,
     port: int = 8889,
+    mask_cropland: bool = True,
 ):
     """Visualize WorldCereal map products.
 
@@ -123,6 +124,11 @@ def visualize_products(
         If True, display interactively using leafmap. Default is False.
     port : int, optional
         Port number for leafmap interactive display. Default is 8889.
+    mask_cropland : bool, optional
+        Whether the crop type product was generated with cropland masking
+        enabled. Only then does the raster contain the ``no_cropland`` value
+        (254), so the corresponding legend entry is only added when True.
+        Ignored for cropland products. Default is True.
     """
 
     if not paths:
@@ -165,9 +171,9 @@ def visualize_products(
         nodata = _get_nodata(product)
 
         colormap = _get_colormap(product, lut)
-        # Adjust LUT and colormap for crop type product
-        if product.startswith("croptype"):
-            # add no cropland class
+        # The no-cropland value (254) only occurs in crop type products
+        # generated with cropland masking enabled.
+        if product.startswith("croptype") and mask_cropland:
             lut["no_cropland"] = 254
             colormap[254] = (186, 186, 186, 255)  # no cropland color
         # add no data color to lut and colormap
