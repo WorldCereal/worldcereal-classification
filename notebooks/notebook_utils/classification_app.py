@@ -5399,7 +5399,9 @@ class WorldCerealClassificationApp:
             allowed_values = [value for _, value in options]
             no_products_available = not allowed_values
 
-            if "both" in allowed_values:
+            if is_default_mode and "cropland" in allowed_values:
+                mode_default = "cropland"
+            elif "both" in allowed_values:
                 mode_default = "both"
             elif "croptype" in allowed_values:
                 mode_default = "croptype"
