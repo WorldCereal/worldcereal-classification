@@ -1,10 +1,13 @@
 import logging
 from calendar import monthrange
+from io import BytesIO
 from typing import List
 
-import matplotlib.pyplot as plt
 import pandas as pd
+from IPython.display import Image, display
 from loguru import logger
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from openeo_gfmap import BoundingBoxExtent
 from pyproj import Transformer
@@ -26,7 +29,7 @@ def plot_worldcereal_seasons(
     extent: BoundingBoxExtent,
     tag: str = "",
 ):
-    """Method to plot WorldCereal seasons in a matplotlib plot.
+    """Display WorldCereal seasons as a PNG rendered with an Agg canvas.
     Parameters
     ----------
     seasons : dict
@@ -53,8 +56,10 @@ def plot_worldcereal_seasons(
     location = f"lat={lat:.2f}, lon={lon:.2f}"
 
     # prepare figure
-    fig, ax = plt.subplots()
-    plt.title(f"WorldCereal seasons {tag} ({location})")
+    fig = Figure()
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
+    ax.set_title(f"WorldCereal seasons {tag} ({location})")
     ax.set_ylim((0.4, len(seasons) + 0.5))
     ax.set_xlim((0, 13))
     ax.set_yticks(range(1, len(seasons) + 1))
@@ -113,7 +118,7 @@ def plot_worldcereal_seasons(
 
         # add labels to plot
         label_start = sos.strftime("%B %d")
-        plt.text(
+        ax.text(
             start - 0.2,
             idx + 0.65,
             label_start,
@@ -123,7 +128,7 @@ def plot_worldcereal_seasons(
             va="center",
         )
         label_end = eos.strftime("%B %d")
-        plt.text(
+        ax.text(
             end + 0.2,
             idx + 0.65,
             label_end,
@@ -133,7 +138,7 @@ def plot_worldcereal_seasons(
             va="center",
         )
         label_center = center_date.strftime("%B")
-        plt.text(
+        ax.text(
             center,
             idx + 1.3,
             f"Center: {label_center}",
@@ -146,8 +151,9 @@ def plot_worldcereal_seasons(
 
         idx += 1
 
-    # display plot
-    plt.show()
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight")
+    display(Image(data=buffer.getvalue()))
 
 
 def retrieve_worldcereal_seasons(
@@ -190,7 +196,7 @@ def retrieve_worldcereal_seasons(
 
 
 def valid_time_distribution(df):
-    """Plot the distribution of valid_time in a dataframe as a histogram.
+    """Display the valid_time histogram as a PNG rendered with an Agg canvas.
     Parameters
     ----------
     df : pd.DataFrame
@@ -235,10 +241,15 @@ def valid_time_distribution(df):
     # Plotting the histogram
     # Safely align month counts with calendar order, filling missing months with 0
     month_counts = df["month"].value_counts().reindex(month_order).fillna(0)
-    month_counts.plot(kind="bar")
-    plt.title("Distribution of training data by month")
-    plt.xlabel("Month")
-    plt.ylabel("Count")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
+    fig = Figure()
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
+    month_counts.plot(kind="bar", ax=ax)
+    ax.set_title("Distribution of training data by month")
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Count")
+    ax.tick_params(axis="x", labelrotation=45)
+    fig.tight_layout()
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight")
+    display(Image(data=buffer.getvalue()))
