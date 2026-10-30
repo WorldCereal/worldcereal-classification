@@ -141,6 +141,7 @@ class WorldCerealClassificationApp:
         self.tab8_landcover_head_url: Optional[str] = None
         self.tab8_croptype_head_url: Optional[str] = None
         self.tab8_product_type: Optional[str] = None
+        self.tab8_mask_cropland: Optional[bool] = None
         self.tab9_merged_paths: Dict[str, Path] = {}
 
         self.seasonal_model_path: Optional[str] = None
@@ -4402,6 +4403,7 @@ class WorldCerealClassificationApp:
 
             self.tab8_results = path
             self._load_model_metadata(path)
+            self.tab8_mask_cropland = run_settings.get("mask_cropland")
             print(f"\nSuccessfully loaded output directory: {path}")
             print(
                 "All original production settings restored. Starting map production..."
@@ -4592,6 +4594,7 @@ class WorldCerealClassificationApp:
             with log_out:
                 print(f"Cropland masking is disabled because {reason}")
         self.tab8_product_type = product_type
+        self.tab8_mask_cropland = mask_cropland
 
         # model selection
         # prefer the seasonal model suite derived to match this head's excluded
@@ -4730,7 +4733,7 @@ class WorldCerealClassificationApp:
             settings={
                 "enable_cropland_head": enable_cropland_head,
                 "enable_croptype_head": enable_croptype_head,
-                "enforce_cropland_gate": mask_cropland,
+                "mask_cropland": mask_cropland,
                 "export_class_probs": export_class_probs,
                 "enable_cropland_postprocess": cropland_pp_enabled,
                 "cropland_postprocess_method": cropland_pp_method,
@@ -4973,6 +4976,10 @@ class WorldCerealClassificationApp:
             self.tab8_results = path
             self.tab9_merged_paths = {}
             self._load_model_metadata(path)
+            run_settings = self._load_run_settings(path)
+            self.tab8_mask_cropland = (
+                run_settings.get("mask_cropland") if run_settings else None
+            )
             print(f"Results folder loaded: {path}")
             print("Model configuration restored from results folder.")
 
@@ -5073,10 +5080,18 @@ class WorldCerealClassificationApp:
                 print(f"Failed retrieving product LUTs: {exc}")
 
             try:
+                # Unknown (e.g. folder without run settings) falls back to the
+                # production default of masking crop type with cropland.
+                mask_cropland = (
+                    self.tab8_mask_cropland
+                    if self.tab8_mask_cropland is not None
+                    else True
+                )
                 result = visualize_products(
                     self.tab9_merged_paths,
                     luts=luts,
                     interactive_mode=interactive_mode,
+                    mask_cropland=mask_cropland,
                 )
                 if interactive_mode and result is not None:
                     display(result)
@@ -5677,9 +5692,14 @@ class WorldCerealClassificationApp:
             return None
         try:
             with open(settings_path) as f:
-                return json.load(f)
+                settings = json.load(f)
         except Exception:
             return None
+        # Older runs stored the cropland masking flag under a legacy key that
+        # does not match the production kwarg name.
+        if "mask_cropland" not in settings and "enforce_cropland_gate" in settings:
+            settings["mask_cropland"] = settings.pop("enforce_cropland_gate")
+        return settings
 
     def _load_model_metadata(self, results_dir: Path) -> bool:
         """Restore model configuration from a previously saved results folder.
