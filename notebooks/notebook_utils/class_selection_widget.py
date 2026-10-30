@@ -374,6 +374,10 @@ class ClassSelectionWidget:
             .wc-class-selection-widget .wc-groups-scroll > .widget-vbox { max-width: 100% !important; }
 
             /* Make the legend hierarchy visually legible without making leaf classes noisy. */
+            .wc-class-selection-widget .wc-source-branch,
+            .wc-class-selection-widget .wc-final-group-header {
+                text-align: left !important;
+            }
             .wc-class-selection-widget .wc-tree-children {
                 border-left: 2px solid #d9dee5;
                 padding-left: 8px !important;
@@ -887,6 +891,7 @@ class ClassSelectionWidget:
             if path == self._active_branch_path
             else level_colors[depth]
         )
+        toggle.add_class("wc-source-branch")
         toggle.add_class(f"wc-tree-level-{depth}")
         children_box.layout.display = "flex" if expanded else "none"
 
@@ -1390,6 +1395,7 @@ class ClassSelectionWidget:
             layout=widgets.Layout(width="100%", max_width="100%", overflow="hidden"),
         )
         header.style.button_color = "#f3f4f6"
+        header.add_class("wc-final-group-header")
 
         member_select = widgets.SelectMultiple(
             options=[
