@@ -24,6 +24,10 @@ Design principles
 * The Source classes tab only displays classes not yet in the final list.
   Selected classes are managed in the Final classes overview; removing a final
   class makes its source classes available again.
+* One source box is active at a time. Groups act on all remaining underlying
+  source classes, including descendants hidden by search.
+* Ignored classes stay hidden and excluded from all actions and outputs until
+  the widget is reset.
 * The WorldCereal legend hierarchy guides users when composing broader groups.
 * Users explicitly select, combine, or leave out classes. Bulk actions let the
     remaining not-selected classes be kept individually or grouped into a
@@ -66,6 +70,7 @@ DEMO_CROPS = [
 
 EXCLUDED = "__EXCLUDED__"
 LEGEND_LEVELS = [f"level_{i}" for i in range(1, 6)]
+SOURCE_LEVEL_COLORS = ("#dceedd", "#dceafb", "#fff2c6", "#f8dddd", "#eaddf5")
 
 
 @dataclass(frozen=True)
@@ -157,9 +162,11 @@ class ClassSelectionWidget:
 
         # Source-tree state is kept separately from the widgets so searches and
         # redraws do not lose selections or expansion state.
-        self._selected_source_codes: set[int] = set()
+        self._ignored_source_codes: set[int] = set()
+        self._active_source_code: Optional[int] = None
         self._expanded_paths: set[Tuple[str, ...]] = set()
-        self._source_checkboxes: Dict[int, widgets.Checkbox] = {}
+        self._source_buttons: Dict[int, widgets.Button] = {}
+        self._branch_buttons: Dict[Tuple[str, ...], widgets.Button] = {}
         self._branch_toggles: Dict[Tuple[str, ...], widgets.ToggleButton] = {}
         self._active_branch_path: Optional[Tuple[str, ...]] = None
         self._active_branch_label: Optional[str] = None
@@ -349,16 +356,43 @@ class ClassSelectionWidget:
             }
             /* Let long source rows grow past the box width instead of wrapping,
                so a horizontal scrollbar appears only when it's actually needed. */
-            .wc-class-selection-widget .wc-source-scroll .widget-vbox,
-            .wc-class-selection-widget .wc-source-scroll .widget-hbox,
-            .wc-class-selection-widget .wc-source-scroll .jupyter-widgets {
-                min-width: 100% !important;
-                width: max-content !important;
+            .wc-class-selection-widget .wc-source-item {
+                min-width: max-content !important;
+                width: 100% !important;
                 max-width: none !important;
             }
-            .wc-class-selection-widget .wc-source-scroll .widget-label {
+            .wc-class-selection-widget .wc-source-label {
+                flex: 1 0 auto !important;
+                width: auto !important;
                 white-space: nowrap !important;
-                overflow-wrap: normal !important;
+                text-align: left !important;
+                margin: 2px !important;
+                padding: 0 10px !important;
+            }
+            /* Keep arrows in a gutter so sibling class and group labels align. */
+            .wc-class-selection-widget .wc-source-row {
+                margin: 0 0 0 -30px !important;
+                padding: 0 !important;
+                border: 0 !important;
+                gap: 0 !important;
+                width: calc(100% + 30px) !important;
+            }
+            .wc-class-selection-widget .wc-source-node {
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+            }
+            .wc-class-selection-widget .wc-source-disclosure {
+                flex: 0 0 30px !important;
+                width: 30px !important;
+                min-width: 30px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                text-align: center !important;
+            }
+            .wc-class-selection-widget .wc-source-active {
+                outline: 2px solid #2563eb !important;
+                outline-offset: -2px;
             }
             .wc-class-selection-widget .wc-groups-scroll {
                 overflow-x: hidden !important;
@@ -379,8 +413,8 @@ class ClassSelectionWidget:
                 text-align: left !important;
             }
             .wc-class-selection-widget .wc-tree-children {
-                border-left: 2px solid #d9dee5;
-                padding-left: 8px !important;
+                margin-left: 26px !important;
+                width: calc(100% - 26px) !important;
             }
             .wc-class-selection-widget .wc-tree-level-1 {
                 font-weight: 700 !important;
@@ -388,19 +422,23 @@ class ClassSelectionWidget:
             }
             .wc-class-selection-widget .wc-tree-level-2 {
                 font-weight: 650 !important;
-                border-left: 4px solid #698369 !important;
+                border-left: 4px solid #356b9a !important;
             }
             .wc-class-selection-widget .wc-tree-level-3 {
                 font-weight: 600 !important;
                 border-left: 4px solid #b39a45 !important;
             }
-            .wc-class-selection-widget .wc-tree-level-4,
+            .wc-class-selection-widget .wc-tree-level-4 {
+                font-weight: 550 !important;
+                border-left: 4px solid #a34a4a !important;
+            }
             .wc-class-selection-widget .wc-tree-level-5 {
                 font-weight: 550 !important;
-                border-left: 4px solid #c9c1a0 !important;
+                border-left: 4px solid #79539b !important;
             }
             .wc-class-selection-widget .wc-source-leaf {
-                padding: 2px 0 !important;
+                text-align: left !important;
+                font-weight: 400 !important;
             }
 
             /* Distinct functional zones: source -> selection/actions -> result. */
@@ -446,7 +484,11 @@ class ClassSelectionWidget:
             "Every source class starts <b>not selected</b>.<br>"
             "The Source classes tab only shows classes not yet in the final selection. "
             "Manage selected classes in the Final classes overview; removing a final class makes its source classes available here again.<br>"
-            "Select individual classes (checkboxes) or class groups (buttons) on the left and choose an action on the right to move them to the final selection.<br>"
+            "Click a class or group box to choose an action. Colours indicate hierarchy levels. "
+            "Bold group boxes have an arrow to expand/collapse their indented children; individual classes use normal text and an empty button.<br>"
+            "Group actions affect all remaining source classes underneath them, including those hidden by search.<br>"
+            "To merge across groups, create a final class first, then add other classes or groups to that existing final class.<br>"
+            "Use <b>Ignore</b> to hide classes and exclude them from output and bulk actions until you reset this widget.<br>"
             "You can see the final classes on the bottom and have the option to edit them as needed there.<br>"
             "Use the <i>Not selected</i> section in the Final classes overview for bulk actions, including merging everything "
             "you haven't touched into one final class."
@@ -488,9 +530,9 @@ class ClassSelectionWidget:
             layout=widgets.Layout(width="125px", margin="0 6px 6px 0"),
         )
         self.clear_source_selection_button = widgets.Button(
-            description="Clear",
+            description="Clear selection",
             icon="eraser",
-            layout=widgets.Layout(width="90px", margin="0 0 6px 0"),
+            layout=widgets.Layout(width="140px", margin="0 0 6px 0"),
         )
         self.expand_all_button.on_click(self._on_expand_all)
         self.collapse_all_button.on_click(self._on_collapse_all)
@@ -505,7 +547,7 @@ class ClassSelectionWidget:
                 max_height="280px",
                 overflow="auto auto",
                 border="1px solid #d1d5db",
-                padding="6px 8px",
+                padding="6px 8px 6px 38px",
                 min_width="0",
             ),
         )
@@ -526,10 +568,10 @@ class ClassSelectionWidget:
             layout=widgets.Layout(width="200px", min_width="0"),
         )
         self.assign_button = widgets.Button(
-            description="Merge",
+            description="Add to class",
             icon="arrow-right",
             button_style="primary",
-            layout=widgets.Layout(width="100px", margin="0 6px 6px 0"),
+            layout=widgets.Layout(width="130px", margin="0 6px 6px 0"),
         )
         self.new_group_button = widgets.Button(
             description="Combine",
@@ -537,10 +579,11 @@ class ClassSelectionWidget:
             button_style="success",
             layout=widgets.Layout(width="100px", margin="0 6px 6px 0"),
         )
-        self.exclude_button = widgets.Button(
-            description="Remove",
-            icon="trash",
+        self.ignore_button = widgets.Button(
+            description="Ignore",
+            icon="ban",
             button_style="danger",
+            tooltip="Hide these source classes and exclude them until the widget is reset",
             layout=widgets.Layout(width="100px", margin="0 6px 6px 0"),
         )
         self.keep_individual_button = widgets.Button(
@@ -551,22 +594,8 @@ class ClassSelectionWidget:
         )
         self.assign_button.on_click(self._on_assign)
         self.new_group_button.on_click(self._on_new_group)
-        self.exclude_button.on_click(self._on_exclude)
+        self.ignore_button.on_click(self._on_ignore)
         self.keep_individual_button.on_click(self._on_keep_individual)
-
-        self.branch_context = widgets.HTML()
-        self.branch_select_button = widgets.Button(
-            description="Select classes in branch",
-            icon="check-square-o",
-            layout=widgets.Layout(width="185px", margin="0 6px 6px 0"),
-        )
-        self.branch_group_button = widgets.Button(
-            description="Create hierarchy class",
-            icon="object-group",
-            layout=widgets.Layout(width="205px", margin="0 0 6px 0"),
-        )
-        self.branch_select_button.on_click(self._on_select_active_branch)
-        self.branch_group_button.on_click(self._on_group_active_branch)
 
         self.context_actions_box = widgets.VBox(
             [],
@@ -646,6 +675,7 @@ class ClassSelectionWidget:
             [
                 self.expand_all_button,
                 self.collapse_all_button,
+                self.clear_source_selection_button,
             ],
             layout=widgets.Layout(
                 width="100%",
@@ -660,8 +690,9 @@ class ClassSelectionWidget:
                 widgets.HTML(
                     "<div class='wc-section-title'>Source classes</div>"
                     "<div style='font-size:12px;color:#666;margin-bottom:6px'>"
-                    "Only classes not yet in the final selection are shown. Select the class(es) you want to keep or combine.<br>"
-                    "Alternatively, click a group (button) such as <i>cereals</i> to use it as a shortcut."
+                    "Click a box to choose an action. Colours indicate hierarchy levels. "
+                    "Bold boxes with arrows are groups; normal-text boxes with empty buttons are individual classes.<br>"
+                    "Only remaining, non-ignored source classes are shown."
                     "</div>"
                 ),
                 self.search,
@@ -793,7 +824,12 @@ class ClassSelectionWidget:
             self._expanded_paths.add((label,))
 
     def _selected_codes(self) -> List[int]:
-        return sorted(self._selected_source_codes)
+        codes = (
+            (self._active_source_code,)
+            if self._active_source_code is not None
+            else self._active_branch_codes
+        )
+        return sorted(set(codes) & set(self._not_selected_codes()))
 
     def _groups(self) -> List[str]:
         return sorted(
@@ -803,7 +839,8 @@ class ClassSelectionWidget:
 
     def _not_selected_codes(self) -> List[int]:
         return sorted(
-            code for code, group in self.assignments.items() if group == EXCLUDED
+            code for code, group in self.assignments.items()
+            if group == EXCLUDED and code not in self._ignored_source_codes
         )
 
     def _source_matches_search(self, source: SourceClass, term: str) -> bool:
@@ -816,45 +853,55 @@ class ClassSelectionWidget:
 
     def _visible_codes_for_search(self) -> set[int]:
         term = self.search.value.strip().casefold()
+        available_codes = set(self._not_selected_codes())
         return {
             source.ewoc_code
             for source in self.sources
             if self._source_matches_search(source, term)
-            and self.assignments[source.ewoc_code] == EXCLUDED
+            and source.ewoc_code in available_codes
         }
 
-    def _format_source_assignment(self, code: int) -> str:
+    def _make_source_row(self, code: int, depth: int) -> widgets.HBox:
         source = self._source_lookup[code]
-        group = self.assignments[code]
         count_part = f"  ({source.count:,})" if self.sample_df is not None else ""
-        if group == EXCLUDED:
-            return f"{source.label}{count_part}  · not selected"
-        return f"{source.label}{count_part}  → {group}"
-
-    def _make_source_checkbox(self, code: int) -> widgets.Checkbox:
-        checkbox = widgets.Checkbox(
-            value=code in self._selected_source_codes,
-            description=self._format_source_assignment(code),
-            indent=False,
+        button = widgets.Button(
+            description=f"{source.label}{count_part}",
+            tooltip=f"Choose an action for {source.label} (EWOC {code})",
             layout=widgets.Layout(
-                width="100%", max_width="100%", overflow="hidden", flex="0 0 auto"
+                min_width="0", flex="1 0 auto"
             ),
         )
+        depth = min(depth, len(SOURCE_LEVEL_COLORS))
+        button.style.button_color = SOURCE_LEVEL_COLORS[depth - 1]
+        button.add_class("wc-source-label")
+        button.add_class(f"wc-tree-level-{depth}")
+        button.add_class("wc-source-leaf")
+        if self._active_source_code == code:
+            button.add_class("wc-source-active")
 
-        def on_change(change, ewoc_code=code):
-            if change["new"]:
-                self._selected_source_codes.add(ewoc_code)
-            else:
-                self._selected_source_codes.discard(ewoc_code)
+        def on_click(_button):
+            self._clear_selected_after_action()
+            self._active_source_code = code
+            self._refresh_source_highlights()
             self._refresh_source_selection_status()
             self._refresh_context_actions()
 
-        checkbox.observe(on_change, names="value")
-        checkbox.add_class("wc-source-leaf")
-        self._source_checkboxes[code] = checkbox
-        return checkbox
+        button.on_click(on_click)
+        self._source_buttons[code] = button
+        placeholder = widgets.Button(
+            disabled=True,
+            layout=widgets.Layout(width="30px", flex="0 0 30px"),
+        )
+        placeholder.add_class("wc-source-disclosure")
+        row = widgets.HBox(
+            [placeholder, button],
+            layout=widgets.Layout(width="100%", overflow="visible"),
+        )
+        row.add_class("wc-source-item")
+        row.add_class("wc-source-row")
+        return row
 
-    def _make_branch_toggle(
+    def _make_branch_row(
         self,
         path: Tuple[str, ...],
         label: str,
@@ -862,54 +909,70 @@ class ClassSelectionWidget:
         children_box: widgets.VBox,
         force_expanded: bool,
         on_first_expand: Optional[Callable[[], None]] = None,
-    ) -> widgets.ToggleButton:
+    ) -> widgets.HBox:
         source_count = len(node["descendant_codes"])
         sample_count = node["sample_count"]
+        suffix = f"{source_count} class{'es' if source_count != 1 else ''}"
         if self.sample_df is not None:
-            suffix = f"{source_count} classes, {sample_count:,} samples"
-        else:
-            suffix = f"{source_count} classes"
+            suffix += f", {sample_count:,} sample{'s' if sample_count != 1 else ''}"
 
         expanded = force_expanded or path in self._expanded_paths
+        button = widgets.Button(
+            description=f"{label}  ({suffix})",
+            tooltip="Choose an action for all remaining source classes in this group",
+            layout=widgets.Layout(min_width="0", flex="1 0 auto"),
+        )
+        depth = min(len(path), len(SOURCE_LEVEL_COLORS))
+        button.style.button_color = SOURCE_LEVEL_COLORS[depth - 1]
+        button.add_class("wc-source-label")
+        button.add_class("wc-source-branch")
+        button.add_class(f"wc-tree-level-{depth}")
+        if path == self._active_branch_path:
+            button.add_class("wc-source-active")
+        button.on_click(lambda _: self._set_active_branch(path, label, node))
+        self._branch_buttons[path] = button
+
         toggle = widgets.ToggleButton(
             value=expanded,
-            description=f"{label}  ({suffix})",
-            icon="chevron-down" if expanded else "chevron-right",
-            tooltip="Click to expand/collapse and make this hierarchy branch active",
-            layout=widgets.Layout(width="100%", max_width="100%", overflow="hidden"),
+            description="v" if expanded else ">",
+            tooltip=f"Expand/collapse {label}",
+            layout=widgets.Layout(width="30px", flex="0 0 30px"),
         )
-        depth = min(len(path), 5)
-        level_colors = {
-            1: "#e2ebe3",
-            2: "#edf3e9",
-            3: "#f6f1d9",
-            4: "#faf7e9",
-            5: "#fbfbf8",
-        }
-        toggle.style.button_color = (
-            "#dbeafe"
-            if path == self._active_branch_path
-            else level_colors[depth]
-        )
-        toggle.add_class("wc-source-branch")
-        toggle.add_class(f"wc-tree-level-{depth}")
+        toggle.add_class("wc-source-disclosure")
         children_box.layout.display = "flex" if expanded else "none"
 
-        def on_toggle(change, current_path=path, branch_label=label, branch_node=node):
+        def on_toggle(change):
             is_open = bool(change["new"])
             if is_open:
-                self._expanded_paths.add(current_path)
+                self._expanded_paths.add(path)
                 if on_first_expand is not None:
                     on_first_expand()
             else:
-                self._expanded_paths.discard(current_path)
-            toggle.icon = "chevron-down" if is_open else "chevron-right"
+                self._expanded_paths.discard(path)
+            toggle.description = "v" if is_open else ">"
             children_box.layout.display = "flex" if is_open else "none"
-            self._set_active_branch(current_path, branch_label, branch_node)
 
         toggle.observe(on_toggle, names="value")
         self._branch_toggles[path] = toggle
-        return toggle
+        row = widgets.HBox(
+            [toggle, button],
+            layout=widgets.Layout(width="100%", overflow="visible"),
+        )
+        row.add_class("wc-source-item")
+        row.add_class("wc-source-row")
+        return row
+
+    def _refresh_source_highlights(self) -> None:
+        for code, button in self._source_buttons.items():
+            if code == self._active_source_code:
+                button.add_class("wc-source-active")
+            else:
+                button.remove_class("wc-source-active")
+        for path, button in self._branch_buttons.items():
+            if path == self._active_branch_path:
+                button.add_class("wc-source-active")
+            else:
+                button.remove_class("wc-source-active")
 
     def _set_active_branch(
         self,
@@ -917,21 +980,11 @@ class ClassSelectionWidget:
         label: str,
         node: dict,
     ) -> None:
+        self._clear_selected_after_action()
         self._active_branch_path = path
         self._active_branch_label = label
         self._active_branch_codes = tuple(sorted(node["descendant_codes"]))
-        level_colors = {
-            1: "#e2ebe3",
-            2: "#edf3e9",
-            3: "#f6f1d9",
-            4: "#faf7e9",
-            5: "#fbfbf8",
-        }
-        for toggle_path, toggle in self._branch_toggles.items():
-            depth = min(len(toggle_path), 5)
-            toggle.style.button_color = (
-                "#dbeafe" if toggle_path == path else level_colors[depth]
-            )
+        self._refresh_source_highlights()
         self._refresh_source_selection_status()
         self._refresh_context_actions()
 
@@ -944,7 +997,7 @@ class ClassSelectionWidget:
         search_active: bool,
     ) -> Optional[widgets.Widget]:
         # descendant_codes/sample_count are pre-aggregated on the tree, so we can
-        # decide visibility and the checkbox-collapse shortcut without touching
+        # decide visibility and the leaf shortcut without touching
         # (let alone building widgets for) any collapsed descendant branch.
         subtree_visible = node["descendant_codes"] & visible_codes
         if not subtree_visible:
@@ -956,7 +1009,7 @@ class ClassSelectionWidget:
             for child in node["children"].values()
         )
         if direct_visible and not has_visible_children and len(direct_visible) == 1:
-            return self._make_source_checkbox(direct_visible[0])
+            return self._make_source_row(direct_visible[0], len(path))
 
         indent_px = 26
         children_box = widgets.VBox(
@@ -965,13 +1018,13 @@ class ClassSelectionWidget:
                 width=f"calc(100% - {indent_px}px)",
                 margin=f"3px 0 4px {indent_px}px",
                 min_width="0",
-                overflow="hidden",
+                overflow="visible",
                 align_items="flex-start",
             ),
         )
         children_box.add_class("wc-tree-children")
 
-        # Building all descendant checkboxes/toggles up front does not scale to
+        # Building all descendant buttons/toggles up front does not scale to
         # the full legend. Only build a branch's children the first time it is
         # actually expanded (either already-expanded, forced by search, or on
         # first click of its toggle).
@@ -985,7 +1038,7 @@ class ClassSelectionWidget:
             child_widgets: List[widgets.Widget] = []
             for code in node["source_codes"]:
                 if code in visible_codes:
-                    child_widgets.append(self._make_source_checkbox(code))
+                    child_widgets.append(self._make_source_row(code, len(path) + 1))
             for child_label, child_node in node["children"].items():
                 rendered = self._render_tree_node(
                     child_label,
@@ -1002,7 +1055,7 @@ class ClassSelectionWidget:
         if expanded:
             build_children()
 
-        toggle = self._make_branch_toggle(
+        row = self._make_branch_row(
             path=path,
             label=label,
             node=node,
@@ -1010,25 +1063,41 @@ class ClassSelectionWidget:
             force_expanded=search_active,
             on_first_expand=build_children,
         )
-        return widgets.VBox(
-            [toggle, children_box],
+        container = widgets.VBox(
+            [row, children_box],
             layout=widgets.Layout(
                 width="100%",
                 min_width="0",
-                overflow="hidden",
+                overflow="visible",
                 align_items="flex-start",
                 flex="0 0 auto",
             ),
         )
+        container.add_class("wc-source-node")
+        return container
 
     def _refresh_source_tree(self) -> None:
         visible_codes = self._visible_codes_for_search()
         search_active = bool(self.search.value.strip())
-        self._source_checkboxes = {}
+        self._source_buttons = {}
+        self._branch_buttons = {}
         self._branch_toggles = {}
+        available_codes = set(self._not_selected_codes())
         available_tree = self._build_hierarchy_tree(
-            [source for source in self.sources if self.assignments[source.ewoc_code] == EXCLUDED]
+            [source for source in self.sources if source.ewoc_code in available_codes]
         )
+        if self._active_source_code is not None and self._active_source_code not in visible_codes:
+            self._clear_selected_after_action()
+        elif self._active_branch_path is not None:
+            node = available_tree
+            for part in self._active_branch_path:
+                node = node["children"].get(part)
+                if node is None:
+                    break
+            if node is None or not node["descendant_codes"] & visible_codes:
+                self._clear_selected_after_action()
+            else:
+                self._active_branch_codes = tuple(sorted(node["descendant_codes"]))
 
         root_widgets: List[widgets.Widget] = []
         for label, node in available_tree["children"].items():
@@ -1044,9 +1113,9 @@ class ClassSelectionWidget:
 
         if not root_widgets:
             text = (
-                "No not-selected source classes match the search."
+                "No remaining source classes match the search."
                 if search_active
-                else "All source classes are in the final selection."
+                else "No source classes remain. All are selected or ignored."
             )
             root_widgets = [widgets.HTML(f"<i>{text}</i>")]
         self.source_tree_box.children = root_widgets
@@ -1065,8 +1134,10 @@ class ClassSelectionWidget:
                 preview += f", +{len(labels) - 4} more"
             header = (
                 f"<b>{len(selected)} source class"
-                f"{'es' if len(selected) != 1 else ''}</b> selected"
+                f"{'es' if len(selected) != 1 else ''}</b>"
             )
+            if self._active_branch_label:
+                header = f"<b>Group: {escape(self._active_branch_label)}</b><br>{header}"
             if self.sample_df is not None:
                 sample_count = sum(lookup[code].count for code in selected)
                 header += f" <span style='color:#666'>· {sample_count:,} samples</span>"
@@ -1076,51 +1147,14 @@ class ClassSelectionWidget:
             )
             return
 
-        if self._active_branch_label and self._active_branch_codes:
-            codes = [code for code in self._active_branch_codes if code in self.assignments]
-            labels = [lookup[code].label for code in codes]
-            preview = ", ".join(escape(label) for label in labels[:4])
-            if len(labels) > 4:
-                preview += f", +{len(labels) - 4} more"
-            count_line = f"{len(codes)} source class{'es' if len(codes) != 1 else ''}"
-            if self.sample_df is not None:
-                sample_count = sum(lookup[code].count for code in codes)
-                count_line += f" · {sample_count:,} samples"
-            self.source_selection_status.value = (
-                f"<div style='font-size:13px'><b>Group: "
-                f"{escape(self._active_branch_label)}</b><br>"
-                f"<span style='font-size:12px;color:#666'>{count_line}</span><br>"
-                f"<span style='font-size:12px;color:#666'>{preview}</span></div>"
-            )
-            return
-
         self.source_selection_status.value = (
             "<div style='font-size:12px;color:#666'>"
-            "Nothing selected yet. Select source classes with the checkboxes, or click a group."
+            "Click a source class or group box to choose an action."
             "</div>"
         )
 
-    def _suggest_group_name(self, codes: Sequence[int]) -> str:
-        """Suggest the deepest common legend parent for a multi-selection."""
-        if len(codes) < 2:
-            return ""
-        paths = [self._source_lookup[int(code)].hierarchy_path for code in codes]
-        common: List[str] = []
-        for parts in zip(*paths):
-            if len(set(parts)) == 1:
-                common.append(parts[0])
-            else:
-                break
-        if not common:
-            return ""
-        candidate = common[-1]
-        source_labels = {self._source_lookup[int(code)].label for code in codes}
-        return "" if candidate in source_labels else candidate
-
-    def _secondary_selection_actions(
-        self, selected: Sequence[int]
-    ) -> List[widgets.Widget]:
-        """Return the "move to an existing final class" action, when applicable."""
+    def _secondary_selection_actions(self) -> List[widgets.Widget]:
+        """Return the "add to an existing final class" action, when applicable."""
         children: List[widgets.Widget] = []
 
         if self._groups():
@@ -1128,7 +1162,7 @@ class ClassSelectionWidget:
                 [
                     widgets.HTML(
                         "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
-                        "<b>Move to an existing final class</b><br>"
+                        "<b>Add to an existing final class</b><br>"
                         "</div>"
                     ),
                     self.group_dropdown,
@@ -1145,61 +1179,23 @@ class ClassSelectionWidget:
         """Show all relevant actions for the current selection, with concise guidance."""
         children: List[widgets.Widget] = []
         selected = self._selected_codes()
-        lookup = self._source_lookup
 
-        # Individual class selection takes precedence over an older active branch,
-        # avoiding two competing sets of actions on screen at the same time.
         if selected:
-            labels = [lookup[code].label for code in selected]
-            preview = ", ".join(escape(label) for label in labels[:3])
-            if len(labels) > 3:
-                preview += f", +{len(labels) - 3} more"
-
-            if len(selected) == 1:
-                code = selected[0]
-                current = self.assignments[code]
-                is_excluded = current == EXCLUDED
-
-                if is_excluded:
-                    children.extend(
-                        [
-                            widgets.HTML(
-                                "<div style='font-size:12px;color:#555;margin:0 0 4px 0'>"
-                                "<b>Keep as individual final class</b><br>"
-                                "</div>"
-                            ),
-                            widgets.HBox(
-                                [self.keep_individual_button],
-                                layout=widgets.Layout(width="100%", overflow="hidden"),
-                            ),
-                        ]
+            if self._active_branch_path is not None:
+                children.append(
+                    widgets.HTML(
+                        "<div style='font-size:12px;color:#555;margin-bottom:8px'>"
+                        f"Applies to all {len(selected)} remaining source "
+                        f"class{'es' if len(selected) != 1 else ''} in this group, "
+                        "including descendants hidden by search. Selected and ignored classes are not affected."
+                        "</div>"
                     )
-                else:
-                    children.extend(
-                        [
-                            widgets.HTML(
-                                "<div style='font-size:12px;color:#555;margin:0 0 4px 0'>"
-                                "<b>Leave class out of final list</b><br>"
-                                "</div>"
-                            ),
-                            widgets.HBox(
-                                [self.exclude_button],
-                                layout=widgets.Layout(width="100%", overflow="hidden"),
-                            ),
-                        ]
-                    )
-
-                # For one class, grouping is intentionally not offered: a class cannot
-                # meaningfully be grouped with itself. Moving to an existing class is useful.
-                children.extend(self._secondary_selection_actions(selected))
-            else:
-                suggestion = self._suggest_group_name(selected)
+                )
+            if len(selected) > 1:
+                suggestion = self._active_branch_label or ""
                 if not self.new_group_name.value or self.new_group_name.value == self._last_auto_group_name:
                     self.new_group_name.value = suggestion
                     self._last_auto_group_name = suggestion
-
-                any_not_selected = any(self.assignments[c] == EXCLUDED for c in selected)
-                all_not_selected = all(self.assignments[c] == EXCLUDED for c in selected)
 
                 children.extend(
                     [
@@ -1216,96 +1212,33 @@ class ClassSelectionWidget:
                     ]
                 )
 
-                if any_not_selected:
-                    children.extend(
-                        [
-                            widgets.HTML(
-                                "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
-                                "<b>Keep each selected class individually</b><br>"
-                                "</div>"
-                            ),
-                            widgets.HBox(
-                                [self.keep_individual_button],
-                                layout=widgets.Layout(width="100%", overflow="hidden"),
-                            ),
-                        ]
-                    )
-
-                if not all_not_selected:
-                    children.extend(
-                        [
-                            widgets.HTML(
-                                "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
-                                "<b>Leave out of final list</b><br>"
-                                "</div>"
-                            ),
-                            widgets.HBox(
-                                [self.exclude_button],
-                                layout=widgets.Layout(width="100%", overflow="hidden"),
-                            ),
-                        ]
-                    )
-
-                children.extend(self._secondary_selection_actions(selected))
-
-        elif self._active_branch_label and self._active_branch_codes:
-            codes = [code for code in self._active_branch_codes if code in self.assignments]
-            already_grouped = bool(codes) and all(
-                self.assignments[code] == self._active_branch_label for code in codes
+            keep_text = (
+                "Keep each source class separately"
+                if len(selected) > 1 else "Keep as an individual final class"
             )
-            member_labels = [lookup[code].label for code in codes]
-            preview = ", ".join(escape(label) for label in member_labels[:4])
-            if len(member_labels) > 4:
-                preview += f", +{len(member_labels) - 4} more"
-
-            if len(codes) >= 2:
-                if already_grouped:
-                    children.append(
-                        widgets.HTML(
-                            f"<div style='font-size:12px;color:#166534;margin-bottom:8px'>✓ These classes already form the final class <b>{escape(self._active_branch_label)}</b>.</div>"
-                        )
-                    )
-                else:
-                    children.extend(
-                        [
-                            widgets.HTML(
-                                "<div style='font-size:12px;color:#555;margin-bottom:4px'>"
-                                "<b>Combine all classes in this group.</b><br>"
-                                "</div>"
-                            ),
-                        ]
-                    )
-                    self.branch_group_button.description = f'Create "{self._active_branch_label}" class'
-                    self.branch_group_button.disabled = False
-                    self.branch_group_button.button_style = "success"
-                    children.append(
-                        widgets.HBox(
-                            [self.branch_group_button],
-                            layout=widgets.Layout(width="100%", overflow="hidden"),
-                        )
-                    )
-
-                self.branch_select_button.description = "Select classes"
-                self.branch_select_button.disabled = not bool(codes)
-                children.extend(
-                    [
-                        widgets.HTML(
-                            "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
-                            "<b>Select all classes in this group</b><br>"
-                            "</div>"
-                        ),
-                        widgets.HBox(
-                            [self.branch_select_button],
-                            layout=widgets.Layout(width="100%", overflow="hidden"),
-                        ),
-                    ]
-                )
-            else:
-                children.append(
+            self.keep_individual_button.description = (
+                "Keep each separately" if len(selected) > 1 else "Keep as individual class"
+            )
+            children.extend(
+                [
                     widgets.HTML(
-                        "<div style='font-size:12px;color:#666'>This group contains only one class, so there is nothing to combine.</div>"
-                    )
-                )
+                        "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
+                        f"<b>{keep_text}</b></div>"
+                    ),
+                    self.keep_individual_button,
+                ]
+            )
+            children.extend(self._secondary_selection_actions())
+            children.extend(
+                [
+                    widgets.HTML(
+                        "<div style='font-size:12px;color:#555;margin:8px 0 4px 0'>"
+                        "<b>Ignore</b><br>Hide and exclude from output and bulk actions. "
+                        "Only Reset brings these source classes back.</div>"
+                    ),
+                    self.ignore_button,
+                ]
+            )
 
         else:
             children.append(
@@ -1317,26 +1250,6 @@ class ClassSelectionWidget:
             )
 
         self.context_actions_box.children = children
-
-    def _on_select_active_branch(self, _=None) -> None:
-        codes = [code for code in self._active_branch_codes if code in self.assignments]
-        if not codes:
-            self._set_message("No source classes in the active branch.", error=True)
-            return
-        self._selected_source_codes.update(codes)
-        for code, checkbox in self._source_checkboxes.items():
-            checkbox.value = code in self._selected_source_codes
-        self._refresh_source_selection_status()
-        self._refresh_context_actions()
-
-    def _on_group_active_branch(self, _=None) -> None:
-        if not self._active_branch_label:
-            self._set_message("Select a hierarchy branch first.", error=True)
-            return
-        self._group_hierarchy_node(
-            self._active_branch_label,
-            self._active_branch_codes,
-        )
 
     def _on_expand_all(self, _=None) -> None:
         def collect(node: dict, path: Tuple[str, ...]):
@@ -1354,9 +1267,8 @@ class ClassSelectionWidget:
         self._refresh_source_tree()
 
     def _on_clear_source_selection(self, _=None) -> None:
-        self._selected_source_codes.clear()
-        for checkbox in self._source_checkboxes.values():
-            checkbox.value = False
+        self._clear_selected_after_action()
+        self._refresh_source_highlights()
         self._refresh_source_selection_status()
         self._refresh_context_actions()
 
@@ -1600,6 +1512,16 @@ class ClassSelectionWidget:
             )
             cards.append(self._build_not_selected_section(not_selected))
 
+        if self._ignored_source_codes:
+            count = len(self._ignored_source_codes)
+            cards.append(
+                widgets.HTML(
+                    "<div style='font-size:12px;color:#666;margin:8px 0'>"
+                    f"Ignored: {count} source class{'es' if count != 1 else ''}. "
+                    "Excluded from output and bulk actions. Only Reset brings them back.</div>"
+                )
+            )
+
         self.final_groups_list_box.children = cards
 
     def _refresh_all(self) -> None:
@@ -1617,7 +1539,7 @@ class ClassSelectionWidget:
         )
 
     def _clear_selected_after_action(self) -> None:
-        self._selected_source_codes.clear()
+        self._active_source_code = None
         self._active_branch_path = None
         self._active_branch_label = None
         self._active_branch_codes = tuple()
@@ -1629,7 +1551,7 @@ class ClassSelectionWidget:
         codes = self._selected_codes()
         group = self.group_dropdown.value
         if not codes:
-            self._set_message("Select one or more source classes first.", error=True)
+            self._set_message("Click a source class or group box first.", error=True)
             return
         if not group:
             self._set_message("Select a target group first.", error=True)
@@ -1644,7 +1566,7 @@ class ClassSelectionWidget:
         codes = self._selected_codes()
         name = self.new_group_name.value.strip()
         if not codes:
-            self._set_message("Select one or more source classes first.", error=True)
+            self._set_message("Click a source class or group box first.", error=True)
             return
         if not name:
             self._set_message("Provide a name for the new final class.", error=True)
@@ -1661,21 +1583,24 @@ class ClassSelectionWidget:
         )
         self._refresh_all()
 
-    def _on_exclude(self, _=None) -> None:
+    def _on_ignore(self, _=None) -> None:
         codes = self._selected_codes()
         if not codes:
-            self._set_message("Select one or more source classes first.", error=True)
+            self._set_message("Click a source class or group box first.", error=True)
             return
+        self._ignored_source_codes.update(codes)
         for code in codes:
             self.assignments[code] = EXCLUDED
         self._clear_selected_after_action()
-        self._set_message(f"Left {len(codes)} source class(es) out of the final list.")
+        self._set_message(
+            f"Ignored {len(codes)} source class(es). Only Reset brings them back."
+        )
         self._refresh_all()
 
     def _on_keep_individual(self, _=None) -> None:
         codes = self._selected_codes()
         if not codes:
-            self._set_message("Select one or more source classes first.", error=True)
+            self._set_message("Click a source class or group box first.", error=True)
             return
         lookup = self._source_lookup
         for code in codes:
@@ -1719,28 +1644,6 @@ class ClassSelectionWidget:
         self._set_message(f"Merged {len(codes)} remaining source class(es) into '{name}'.")
         self._refresh_all()
 
-    def _group_hierarchy_node(
-        self,
-        label: str,
-        codes: Sequence[int],
-    ) -> None:
-        valid_codes = [int(code) for code in codes if int(code) in self.assignments]
-        if len(valid_codes) < 2:
-            self._set_message(
-                f"'{label}' does not contain multiple source classes to group.",
-                error=True,
-            )
-            return
-        for code in valid_codes:
-            self.assignments[code] = label
-        self._clear_selected_after_action()
-        message = f"Created final class '{label}' from {len(valid_codes)} source classes"
-        if self.sample_df is not None:
-            sample_count = sum(self._source_lookup[code].count for code in valid_codes)
-            message += f" ({sample_count:,} samples)"
-        self._set_message(f"{message}.")
-        self._refresh_all()
-
     def _on_apply(self, _=None) -> None:
         try:
             self.apply_selection()
@@ -1759,11 +1662,11 @@ class ClassSelectionWidget:
         self.croptypes = pd.DataFrame()
         self.included_croptypes = pd.DataFrame()
         self.dropped_croptypes = pd.DataFrame()
-        self._selected_source_codes.clear()
+        self._ignored_source_codes.clear()
         self._last_auto_group_name = ""
-        self._active_branch_path = None
-        self._active_branch_label = None
-        self._active_branch_codes = tuple()
+        self.new_group_name.value = ""
+        self.bulk_label_input.value = ""
+        self._clear_selected_after_action()
         self._expanded_group_names.clear()
         self.search.value = ""
         self._set_message("Reset: all source classes are unselected again.")
@@ -1787,7 +1690,7 @@ class ClassSelectionWidget:
         return pd.DataFrame(rows)
 
     def mapping_dataframe(self, include_excluded: bool = True) -> pd.DataFrame:
-        """Return the current source-to-final-class mapping."""
+        """Return the mapping, treating ignored and undecided classes as excluded."""
         lookup = self._source_lookup
         rows = []
         for code, group in self.assignments.items():
@@ -1836,7 +1739,8 @@ class ClassSelectionWidget:
     def apply_to_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply the final class list and return a dataframe.
 
-        Excluded EWOC classes are removed. Every remaining sample receives an
+        Excluded EWOC classes (including ignored classes) are removed.
+        Every remaining sample receives an
         explicit ``downstream_class``. No implicit ``other`` class is created.
         """
         if "ewoc_code" not in df.columns:
