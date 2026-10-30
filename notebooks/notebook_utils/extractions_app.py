@@ -1670,7 +1670,8 @@ class WorldCerealExtractionsApp:
             except Exception as e:
                 print(f"❌ Error clearing CDSE authentication: {str(e)}")
                 traceback.print_exc()
-        self._update_cdse_auth_ui()
+        # Refresh full tab state so the run button reflects the auth change
+        self._update_tab3_state()
 
     def _on_authenticate_cdse_click(self, button):
         """Trigger CDSE device authentication flow."""
@@ -1702,7 +1703,8 @@ class WorldCerealExtractionsApp:
             else:
                 print("❌ CDSE authentication failed or was cancelled.")
                 print("Please try authenticating again.")
-        self._update_cdse_auth_ui()
+        # Refresh full tab state so the run button reflects the auth change
+        self._update_tab3_state()
 
     def _needs_cdse_authentication(self) -> bool:
         if self.cdse_auth_cleared:
