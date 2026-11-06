@@ -573,10 +573,36 @@ class HeadSpec:
     head_type: str = "linear"
     hidden_dim: int = 256
     dropout: float = 0.0
+    state_dict_prefix: Optional[str] = None
 
     @property
     def num_classes(self) -> int:
         return len(self.class_names)
+
+
+_DEFAULT_HEAD_STATE_DICT_PREFIXES = {
+    "landcover": "head.landcover_head",
+    "croptype": "head.crop_head",
+}
+
+
+def _extract_head_state_dict(
+    state_dict: Mapping[str, Any], task: str, prefix: Optional[str] = None
+) -> Dict[str, Any]:
+    """Return the weights of one head, keyed relative to the head module.
+
+    Head-only checkpoints are returned unchanged. Full seasonal model
+    checkpoints (backbone plus heads) are reduced to the keys under the
+    head's prefix, with that prefix stripped.
+    """
+    prefix = (prefix or _DEFAULT_HEAD_STATE_DICT_PREFIXES[task]).rstrip(".") + "."
+    if not any(key.startswith(prefix) for key in state_dict):
+        return dict(state_dict)
+    return {
+        key[len(prefix) :]: value
+        for key, value in state_dict.items()
+        if key.startswith(prefix)
+    }
 
 
 def _backbone_fingerprint_from_artifact(artifact: "ModelArtifact") -> str:
@@ -609,6 +635,7 @@ def _select_optional_head_spec(
                 head_type=str(head.get("head_type", "linear")),
                 hidden_dim=int(head.get("hidden_dim", 256)),
                 dropout=float(head.get("dropout", 0.0)),
+                state_dict_prefix=head.get("state_dict_prefix"),
             )
     return None
 
@@ -830,13 +857,19 @@ class SeasonalModelBundle:
             else self.model.head.crop_head
         )
 
-        # Load custom weights
+        # Load custom weights. A mismatch must fail: a partially loaded head
+        # keeps its random initialisation and silently produces garbage.
         assert module is not None, f"Module for {task} head is None after replacement"
-        missing, unexpected = module.load_state_dict(state_dict, strict=False)
-        if missing or unexpected:
-            logger.warning(
-                f"Custom {task} head state dict mismatch. Missing={missing}, unexpected={unexpected}"
-            )
+        head_state_dict = _extract_head_state_dict(
+            state_dict, task, head_spec.state_dict_prefix
+        )
+        try:
+            module.load_state_dict(head_state_dict, strict=True)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"Custom {task} head weights in {source} do not match the head "
+                f"architecture: {exc}"
+            ) from exc
 
         # Update spec
         if is_landcover:

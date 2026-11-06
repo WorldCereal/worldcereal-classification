@@ -4607,8 +4607,9 @@ class WorldCerealClassificationApp:
             croptype_head_zip = None
         else:
             # Custom/full workflows: crop type comes from the custom trained head;
-            # the cropland layer (or mask) comes from the seasonal model's
-            # landcover head, only when compatible.
+            # the cropland layer (or mask) comes from the landcover head that is
+            # already part of the seasonal model, so no landcover override is
+            # passed. Cropland is disabled above when that head is incompatible.
             if not enable_croptype_head:
                 with log_out:
                     print(
@@ -4616,9 +4617,7 @@ class WorldCerealClassificationApp:
                         "Select 'Crop type only' or 'Cropland + crop type'."
                     )
                 return
-            landcover_head_zip = (
-                custom_seasonal_model_url if landcover_compatible else None
-            )
+            landcover_head_zip = None
             croptype_head_zip = self.tab7_head_url
         # save model URL's for later use
         self.tab8_seasonal_model_url = custom_seasonal_model_url
