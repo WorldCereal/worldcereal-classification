@@ -366,7 +366,7 @@ class RdmInteraction:
 
         for ref_id in ref_ids:
             itemUrl = f"{self.RDM_ENDPOINT}/collections/{ref_id}/items/codestats"
-            itemsResponse = requests.get(itemUrl)
+            itemsResponse = requests.get(itemUrl, timeout=30)
             res = itemsResponse.json()
             if "ewocStats" in res:
                 stats = res["ewocStats"]
@@ -854,7 +854,7 @@ class RdmInteraction:
         filename = download_link.split("/")[-1]
         outfile = Path(dst_path) / filename
         Path(dst_path).mkdir(parents=True, exist_ok=True)
-        response = requests.get(download_link)
+        response = requests.get(download_link, timeout=30)
         if response.status_code != 200:
             raise Exception(
                 f"Error downloading harmonization PDF for collection {ref_id}: {response.text}"
