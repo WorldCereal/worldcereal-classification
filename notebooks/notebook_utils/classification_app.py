@@ -5719,6 +5719,11 @@ class WorldCerealClassificationApp:
         self.tab8_product_type = metadata.get("product_type")
         self.tab8_seasonal_model_url = metadata.get("seasonal_model")
         self.tab8_landcover_head_url = metadata.get("landcover_head")
+        # Older runs stored the seasonal model itself as landcover override.
+        # Its landcover head is already loaded with the seasonal model, and
+        # loading the full checkpoint as a head override leaves it random.
+        if self.tab8_landcover_head_url == self.tab8_seasonal_model_url:
+            self.tab8_landcover_head_url = None
         self.tab8_croptype_head_url = metadata.get("croptype_head")
         self.excluded_modalities = list(metadata.get("excluded_modalities") or [])
         # Run metadata is for resuming/visualizing that run, not for replacing
