@@ -1067,6 +1067,85 @@ class WorldCerealJobManager(MultiBackendJobManager):
             status_callback=status_callback,
         )
 
+    def export_graphs(
+        self,
+        *,
+        product_type: Optional[WorldCerealProductType] = WorldCerealProductType.CROPLAND,
+        target_epsg: Optional[int] = None,
+        s1_orbit_state: Optional[Literal["ASCENDING", "DESCENDING"]] = None,
+        compositing_window: Literal["month", "dekad"] = "month",
+        seasonal_preset: str = DEFAULT_SEASONAL_WORKFLOW_PRESET,
+        workflow_config: Optional[WorldCerealWorkflowConfig] = None,
+        export_dir: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Build and persist OpenEO process graphs without submitting jobs.
+
+        This is intended for advanced users who need a graph snapshot for offline
+        inspection/editing or manual submission on a different backend.
+        """
+        if self.task != WorldCerealTask.CLASSIFICATION:
+            raise ValueError(
+                "Graph export is currently supported for classification workflows only."
+            )
+        product_type = product_type or WorldCerealProductType.CROPLAND
+
+        if self.prepared_grid is None:
+            self.prepared_grid = self._prepare_production_grid(
+                self._aoi_gdf,
+                self._grid_size,
+            )
+
+        export_root = (
+            Path(export_dir)
+            if export_dir is not None
+            else self.output_dir / "exported_graphs"
+        )
+        export_root.mkdir(parents=True, exist_ok=True)
+
+        for index, row in self.prepared_grid.iterrows():
+            temporal_extent = self._row_temporal_extent(row)
+            spatial_extent = self._row_spatial_extent(row)
+            graph = create_inference_process_graph(
+                spatial_extent=spatial_extent,
+                temporal_extent=temporal_extent,
+                product_type=product_type,
+                s1_orbit_state=s1_orbit_state,
+                target_epsg=target_epsg or int(row["epsg_utm"]),
+                compositing_window=compositing_window,
+                seasonal_preset=seasonal_preset,
+                workflow_config=workflow_config,
+                row=row,
+                skip_disabled_sensor_inputs=False,
+            )
+
+            if not graph:
+                continue
+            tile_name = str(row.get("tile_name", f"tile_{index}"))
+            payload = {
+                "kind": "worldcereal_classification_graph",
+                "product_type": product_type.value,
+                "tile_name": tile_name,
+                "spatial_extent": {
+                    "west": spatial_extent.west,
+                    "south": spatial_extent.south,
+                    "east": spatial_extent.east,
+                    "north": spatial_extent.north,
+                    "epsg": spatial_extent.epsg,
+                },
+                "temporal_extent": {
+                    "start_date": temporal_extent.start_date,
+                    "end_date": temporal_extent.end_date,
+                },
+                "workflow_config": (
+                    workflow_config.to_dict() if workflow_config is not None else None
+                ),
+                "process_graph": json.loads(graph[0].to_json(indent=2)),
+            }
+            output_path = export_root / f"{tile_name}.json"
+            output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        return export_root
+
     def run_jobs(self, **kwargs: Any) -> Optional[CsvJobDatabase]:
         """Dispatch to the task-specific run method."""
         if self.task == WorldCerealTask.INPUTS:
