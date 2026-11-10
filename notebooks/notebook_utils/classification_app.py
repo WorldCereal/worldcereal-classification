@@ -371,24 +371,24 @@ class WorldCerealClassificationApp:
         workflow_mode_radio.layout = widgets.Layout(width="100%")
         workflow_mode_radio.style = {"description_width": "90px"}
 
-        exclude_s1_checkbox = widgets.Checkbox(
-            value=False,
+        include_s1_checkbox = widgets.Checkbox(
+            value=True,
             description="Sentinel-1",
         )
-        exclude_s2_checkbox = widgets.Checkbox(
-            value=False,
+        include_s2_checkbox = widgets.Checkbox(
+            value=True,
             description="Sentinel-2",
         )
-        exclude_meteo_checkbox = widgets.Checkbox(
-            value=False,
+        include_meteo_checkbox = widgets.Checkbox(
+            value=True,
             description="Meteorological data",
         )
-        exclude_dem_checkbox = widgets.Checkbox(
-            value=False,
+        include_dem_checkbox = widgets.Checkbox(
+            value=True,
             description="DEM and slope",
         )
-        disable_latlon_checkbox = widgets.Checkbox(
-            value=False,
+        include_latlon_checkbox = widgets.Checkbox(
+            value=True,
             description="Location (lat/lon)",
         )
         modality_message = widgets.HTML()
@@ -396,13 +396,14 @@ class WorldCerealClassificationApp:
             [
                 widgets.HTML("<h3>Training model setup</h3>"),
                 widgets.HTML(
-                    "Choose inputs to IGNORE during model training."
+                    "Checked inputs are included during model training. "
+                    "Uncheck any inputs you want to exclude."
                 ),
-                exclude_s1_checkbox,
-                exclude_s2_checkbox,
-                exclude_meteo_checkbox,
-                exclude_dem_checkbox,
-                disable_latlon_checkbox,
+                include_s1_checkbox,
+                include_s2_checkbox,
+                include_meteo_checkbox,
+                include_dem_checkbox,
+                include_latlon_checkbox,
                 modality_message,
             ]
         )
@@ -417,24 +418,24 @@ class WorldCerealClassificationApp:
 
         self.tab0_widgets = {
             "workflow_mode_radio": workflow_mode_radio,
-            "exclude_s1_checkbox": exclude_s1_checkbox,
-            "exclude_s2_checkbox": exclude_s2_checkbox,
-            "exclude_meteo_checkbox": exclude_meteo_checkbox,
-            "exclude_dem_checkbox": exclude_dem_checkbox,
-            "disable_latlon_checkbox": disable_latlon_checkbox,
+            "include_s1_checkbox": include_s1_checkbox,
+            "include_s2_checkbox": include_s2_checkbox,
+            "include_meteo_checkbox": include_meteo_checkbox,
+            "include_dem_checkbox": include_dem_checkbox,
+            "include_latlon_checkbox": include_latlon_checkbox,
             "modality_message": modality_message,
             "training_setup": training_setup,
             "select_button": select_button,
         }
 
         workflow_mode_radio.observe(self._on_workflow_mode_change, names="value")
-        exclude_s1_checkbox.observe(self._on_excluded_modalities_change, names="value")
-        exclude_s2_checkbox.observe(self._on_excluded_modalities_change, names="value")
-        exclude_meteo_checkbox.observe(
+        include_s1_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        include_s2_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        include_meteo_checkbox.observe(
             self._on_excluded_modalities_change, names="value"
         )
-        exclude_dem_checkbox.observe(self._on_excluded_modalities_change, names="value")
-        disable_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
+        include_dem_checkbox.observe(self._on_excluded_modalities_change, names="value")
+        include_latlon_checkbox.observe(self._on_disable_latlon_change, names="value")
         select_button.on_click(self._on_workflow_mode_select)
 
         children = [
@@ -453,34 +454,34 @@ class WorldCerealClassificationApp:
             self.excluded_modalities = []
             self.disable_latlon = False
             for key in (
-                "exclude_s1_checkbox",
-                "exclude_s2_checkbox",
-                "exclude_meteo_checkbox",
-                "exclude_dem_checkbox",
-                "disable_latlon_checkbox",
+                "include_s1_checkbox",
+                "include_s2_checkbox",
+                "include_meteo_checkbox",
+                "include_dem_checkbox",
+                "include_latlon_checkbox",
             ):
                 checkbox = self.tab0_widgets.get(key)
-                if checkbox is not None and checkbox.value:
-                    checkbox.value = False
+                if checkbox is not None and not checkbox.value:
+                    checkbox.value = True
         self._update_training_setup_state()
 
     def _on_excluded_modalities_change(self, change=None):
         modality_checkboxes = {
-            "s1": "exclude_s1_checkbox",
-            "s2": "exclude_s2_checkbox",
-            "meteo": "exclude_meteo_checkbox",
-            "dem": "exclude_dem_checkbox",
+            "s1": "include_s1_checkbox",
+            "s2": "include_s2_checkbox",
+            "meteo": "include_meteo_checkbox",
+            "dem": "include_dem_checkbox",
         }
         self.excluded_modalities = [
             modality
             for modality, key in modality_checkboxes.items()
             if self.tab0_widgets.get(key) is not None
-            and self.tab0_widgets[key].value
+            and not self.tab0_widgets[key].value
         ]
         self._update_training_setup_state()
 
     def _on_disable_latlon_change(self, change):
-        self.disable_latlon = change["new"]
+        self.disable_latlon = not change["new"]
         self._update_training_setup_state()
 
     def _has_compatible_landcover_head(self) -> bool:
