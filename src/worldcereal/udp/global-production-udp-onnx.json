@@ -912,7 +912,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_classification"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -985,7 +986,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_ndvi"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -1174,7 +1176,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_embeddings"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -1211,7 +1214,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_embeddings_scale"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -1240,7 +1244,7 @@
     "soft-errors": "true",
     "stac-version": "1.1",
     "derived-from-document-experimental": true,
-    "image-name": "registry.internal/staging/openeo-geotrellis-kube-python311:20261109-1391",
+    "image-name": "registry.internal/staging/openeo-geotrellis-kube-python311:20261120-1456",
     "concurrent_save_results": 3,
     "force-s3proxy": true,
     "etl_organization_id": 2059,

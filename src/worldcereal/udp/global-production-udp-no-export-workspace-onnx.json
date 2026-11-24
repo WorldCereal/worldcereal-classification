@@ -912,7 +912,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_classification"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -973,7 +974,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_ndvi"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -1150,7 +1152,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_embeddings"
-          }
+          },
+          "compression": "zstd"
         }
       }
     },
@@ -1175,7 +1178,8 @@
         "options": {
           "filename_prefix": {
             "from_parameter": "filename_prefix_embeddings_scale"
-          }
+          },
+          "compression": "zstd"
         }
       },
       "result": true
