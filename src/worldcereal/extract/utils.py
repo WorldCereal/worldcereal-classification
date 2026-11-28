@@ -42,7 +42,23 @@ stream_handler.addFilter(ManagerLoggerFilter())
 @lru_cache(maxsize=1)
 def get_s2_grid() -> gpd.GeoDataFrame:
     """Load and cache the S2 grid when an extraction workflow needs it."""
-    return load_s2_grid()
+    grid = load_s2_grid()
+    # The published GFMAP grid carries only `tile` and `geometry`, while callers such as
+    # generate_output_path_patch_worldcereal read `epsg`. Derive it from the MGRS tile id
+    # rather than failing the download after a job has already been paid for.
+    if "epsg" not in grid.columns:
+        grid = grid.assign(epsg=grid.tile.map(_epsg_from_mgrs_tile))
+    return grid
+
+
+def _epsg_from_mgrs_tile(tile: str) -> int:
+    """UTM EPSG code for an MGRS tile id, e.g. '11RNQ' -> 32611.
+
+    Latitude bands run C..X skipping I and O; N and above is the northern hemisphere.
+    """
+    zone = int(str(tile)[:2])
+    northern = str(tile)[2].upper() >= "N"
+    return (32600 if northern else 32700) + zone
 
 
 def buffer_geometry(

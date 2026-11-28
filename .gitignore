@@ -23,6 +23,7 @@ config.json
 # C extensions
 *.so
 *.gz
+*.sh
 # Distribution / packaging
 .Python
 build/
